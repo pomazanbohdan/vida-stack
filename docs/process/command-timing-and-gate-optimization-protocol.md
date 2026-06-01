@@ -86,6 +86,18 @@ When a gate is slow or repeatedly blocks iteration, classify it with exactly one
 | `remove_or_replace_stale_check` | The gate asserts obsolete text, legacy paths, hidden output, or deprecated behavior. | Replace it with the current contract and prove the new assertion locally. |
 | `create_runtime_defect` | The slow operation is a runtime/operator-surface defect. | Create or update the defect under the relevant runtime/operator-efficiency epic. |
 
+## Build Profile Decision Ladder
+
+Use this ladder before starting a Rust proof, runtime smoke, release install, or script gate:
+
+1. `debug_source_proof`: default for active repair loops. Use focused `cargo test -p vida <filter> -- --nocapture --test-threads=1`, `cargo test -p vida --no-run`, `cargo build -p vida`, `cargo fmt -p vida -- --check`, and `git diff --check`. This is the normal proof class for code correctness while a batch is still being assembled.
+2. `debug_runtime_smoke`: use `target/debug/vida ...` only after the debug binary proves it can open the current project state with an authoritative read such as `target/debug/vida status --json`. If the debug binary cannot open the state store, classify that as `debug_runtime_incompatible` and do not use it for runtime closure.
+3. `installed_runtime_validation`: use the environment-resolved `vida ...` when the acceptance target is specifically the operator-facing launcher, installed binary path, state compatibility, command timing, or downstream project behavior through the user's normal PATH.
+4. `release_install_gate`: run `vida release install --json` only for installed-runtime acceptance, release admission, packaging/installer proof, explicit user order, or when debug runtime smoke is invalid and the current closure must validate the installed launcher. It is not a per-micro-edit proof.
+5. `release_packaging_gate`: run full release/installer/package smoke after the coherent batch is complete, not while more related code edits are still expected.
+
+When a release install is considered, first record why `debug_source_proof` and, when applicable, `debug_runtime_smoke` are insufficient. If the reason is only "the code changed", use the debug proof class instead.
+
 ## Diagnostic Update Format
 
 Every runtime self-diagnostic, post-push diagnostic, PR CI diagnostic, long-gate diagnostic, or operator-friction audit must append or update a timing section using this format:
@@ -156,6 +168,7 @@ The checklist is required even when build, release, commit, push, or CI proof is
 9. Cargo accepts a single test-name filter before `--`; do not pass multiple focused test filters as extra positional arguments. For a focused Rust proof batch, run separate `cargo test` commands, use a script/loop wrapper with timing per filter, or select a broader valid substring/module filter that intentionally covers the batch.
 10. For VIDA runtime recovery diagnostics, prefer the fastest authoritative inspection surface that exposes the needed evidence. If a timeout/recovery path only needs task metadata or current owned scope, use `vida task show <task-id> --json` before heavier lane or run-graph projections.
 11. If a long test shard or runtime command is killed because it exceeds the local tool timeout, immediately record the command, duration, missing artifact gap, and replacement proof strategy in the post-pool checklist.
+12. Prefer `scripts/vida-dev-gate.ps1` for local Windows proof loops that need consistent timing records. Use `-Mode quick` for debug source proof, `-Mode runtime-smoke` for debug-runtime state compatibility, and `-Mode release-install` only when installed runtime validation is the bounded acceptance target.
 
 ## Prohibited Patterns
 
@@ -175,6 +188,7 @@ As of this protocol slice, the following observations are known from the active 
 3. `vida task create` and `vida task update` observed around `14000 ms`.
 4. PR `validate` CI remained blocked for multiple minutes inside `cargo test --workspace --locked -- --test-threads=1`.
 5. Local `cargo test -p vida runtime_dispatch_state --locked -- --test-threads=1` exceeded the 120-second host-tool timeout during active runtime repair without a preserved foreground result; future runs of this shard should be log-backed or split further before becoming a blocking local gate.
+6. `vida release install --json` took about 84 seconds in the 2026-06-01 bridge-adapter repair loop. The release install was useful only for installed-runtime validation; subsequent debug runtime smoke showed `target/debug/vida status --json` can be a faster validation step when the debug binary is state-store compatible.
 
 These observations do not prove one root cause. They prove that timing diagnostics must cover both local runtime commands and CI/test gates.
 
@@ -182,10 +196,10 @@ These observations do not prove one root cause. They prove that timing diagnosti
 artifact_path: process/command-timing-and-gate-optimization-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-05-26
+artifact_revision: 2026-06-01
 schema_version: '1'
 status: canonical
 source_path: docs/process/command-timing-and-gate-optimization-protocol.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-05-26T00:00:00+03:00
+updated_at: 2026-06-01T17:45:00+03:00
 changelog_ref: command-timing-and-gate-optimization-protocol.changelog.jsonl

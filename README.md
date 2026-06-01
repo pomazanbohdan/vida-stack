@@ -166,15 +166,18 @@ This copies the current project bootstrap surfaces into the working directory:
 
 ### Local developer binary contract
 
-For local framework development, keep the system launcher on a release build and keep proofs/tests on the debug profile:
+For local framework development, keep the active repair loop on the debug profile. Update the system launcher from the release profile only when the bounded acceptance target requires installed-runtime validation, packaging, or release admission:
 
 Linux/macOS:
 
 ```bash
+cargo test -p vida -- --nocapture
+
+# Optional installed-runtime gate after focused proof is green.
 cargo build -p vida --release
 install -D -m 755 target/release/vida ~/.local/share/vida-stack/current/bin/vida
 export PATH="$HOME/.local/share/vida-stack/current/bin:$PATH"
-cargo test -p vida -- --nocapture
+vida status --json
 ```
 
 Windows PowerShell:
@@ -190,13 +193,15 @@ cargo build -p vida
 cargo test -p vida --no-run
 cargo test -p vida --bin vida read_only_open -- --nocapture
 
-# Build and install the operator-facing launcher from the release profile.
-cargo build --release -p vida
-Copy-Item .\target\release\vida.exe "$env:LOCALAPPDATA\vida-stack\current\bin\vida.exe" -Force
-vida orchestrator-init --json
+# Smoke the debug runtime before using it for stateful runtime validation.
+.\target\debug\vida.exe status --json
+
+# Build and install the operator-facing launcher only for installed-runtime or release gates.
+vida release install --json
+vida status --json
 ```
 
-This keeps the operator-facing `vida` in `~/.local/share/vida-stack/current/bin` on Unix-like systems or `%LOCALAPPDATA%\vida-stack\current\bin` on Windows aligned with the release binary while preserving faster and more inspectable local proof runs on the debug build.
+This keeps ordinary proof runs fast and inspectable. The operator-facing `vida` in `~/.local/share/vida-stack/current/bin` on Unix-like systems or `%LOCALAPPDATA%\vida-stack\current\bin` on Windows should be refreshed from the release profile only when the installed launcher itself is part of the proof.
 
 On Windows, Application Control, Smart App Control, or Device Guard may block any newly generated or downloaded executable, including Cargo build scripts under `target\debug\build\*\build-script-build.exe`, integration-test binaries under `target\debug\deps\*.exe`, and release binaries installed under `%LOCALAPPDATA%\vida-stack\current\bin`. If that policy is active, local Windows `cargo build`, `cargo test`, and installer smoke may fail before VIDA code runs. Use WSL/Linux or GitHub Actions for proof builds, or allowlist/sign the release binaries before making them the active system runtime.
 
@@ -405,10 +410,10 @@ For detailed rules, read [CONTRIBUTING.md](CONTRIBUTING.md).
 artifact_path: project/repository/readme
 artifact_type: repository_doc
 artifact_version: '1'
-artifact_revision: '2026-05-01'
+artifact_revision: '2026-06-01'
 schema_version: '1'
 status: canonical
 source_path: README.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-05-01T15:20:00Z'
+updated_at: '2026-06-01T17:45:00+03:00'
 changelog_ref: README.changelog.jsonl
