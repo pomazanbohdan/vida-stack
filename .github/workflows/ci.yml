@@ -259,11 +259,11 @@ jobs:
           cache-workspace-crates: "true"
           cache-on-failure: "true"
 
-      - name: Build workspace
+      - name: Build runtime entrypoints
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --workspace --locked
+          cargo build --locked -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
 
   package-linux:
     name: Package Linux release
