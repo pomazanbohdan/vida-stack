@@ -7642,10 +7642,18 @@ host_environment:
     }
 
     fn write_fake_codex_delayed_success(path: &Path) {
+        write_fake_codex_delayed_success_with_seconds(path, 2);
+    }
+
+    fn write_fake_codex_delayed_success_with_seconds(path: &Path, seconds: u64) {
         #[cfg(windows)]
-        let script = "Write-Output '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\r\nStart-Sleep -Seconds 2\r\nWrite-Output '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\r\n";
+        let script = format!(
+            "Write-Output '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\r\nStart-Sleep -Seconds {seconds}\r\nWrite-Output '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}}}'\r\n"
+        );
         #[cfg(not(windows))]
-        let script = "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nsleep 2\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n";
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\nsleep {seconds}\nprintf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}}}'\n"
+        );
         fs::write(path, script).expect("fake codex should write");
         make_fake_codex_executable(path);
     }
@@ -11232,7 +11240,7 @@ host_environment:
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
         let fake_codex = fake_codex_path(&fake_bin);
-        write_fake_codex_delayed_success(&fake_codex);
+        write_fake_codex_delayed_success_with_seconds(&fake_codex, 10);
         configure_fake_codex_dispatch(harness.path(), &fake_codex);
         let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
