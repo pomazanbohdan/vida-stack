@@ -25,6 +25,13 @@ dev_team:
   work_item_flow_bindings:
     epic: default_delivery
     defect: defect_repair_verified
+    runtime_defect: runtime_defect_remediation
+    pull_request: pr_repair_verified
+    pr_repair: pr_repair_verified
+    architecture: architecture_design
+    release_readiness: release_readiness_gate
+    service_tui: service_tui_orchestration
+    internal_agent_development: hook_enabled_internal_agent_development
     task: default_delivery
     debug: debug_fast
   flows:
@@ -95,6 +102,32 @@ Selection order:
 
 No runtime code may hardcode `default_delivery` as a semantic default. That id is a config value only.
 
+## Standard Flow Presets
+
+The root project config and generated template must keep the same standard flow presets unless a project explicitly opts out through a later accepted override contract:
+
+| Work item | Flow id | Required role semantics |
+| --- | --- | --- |
+| `epic`, `task` | `default_delivery` | analyst, test author when required, developer, coach, verifier, prover, release closure |
+| `defect` | `defect_repair_verified` | analyst, test author, developer, coach, verifier |
+| `runtime_defect` | `runtime_defect_remediation` | runtime-surface analyst, regression author, developer, verifier, prover |
+| `pull_request`, `pr_repair` | `pr_repair_verified` | PR triage analyst, CI/review verifier, repair/integration developer, coach, proof/disposition prover |
+| `architecture` | `architecture_design` | analyst with user approval pause, execution-preparation worker, verifier |
+| `release_readiness` | `release_readiness_gate` | verifier, prover |
+| `service_tui` | `service_tui_orchestration` | analyst, developer, verifier |
+| `internal_agent_development` | `hook_enabled_internal_agent_development` | analyst, developer, coach, verifier |
+
+Every standard flow preset must be data-driven:
+
+- It must be reachable through `dev_team.work_item_flow_bindings`.
+- It must define ordered `steps`.
+- Write-producing or review-producing steps must use a configured `command_template.surface`, normally `vida agent-init`.
+- Flow-level `adapter_projection.host_agent_bridge_contract` must remain explicit.
+- Process carriers must remain explicit through `process_carrier_requires_explicit_backend: true`.
+- Hook references must resolve to `docs/product/spec/hook-templates.yaml`.
+
+The PR preset is the canonical route for open pull-request handling. It may close stale/invalid PRs, merge valid PRs, or return a repair task, but only after triage, CI/review evidence, coach review, and final proof/disposition are represented in the flow evidence.
+
 ## Host-Agent Adapter Projection
 
 Flow and step-level `adapter_projection` may require the generic host-agent bridge contract. Valid adapters are configured under `host_environment.host_agent_bridge_contract` and can include Codex host tools, Codex CLI process agents, Claude Code subagents, Pi plugin sub-agents, Vibe Kanban agents, OpenCode subagents, or custom adapters.
@@ -104,6 +137,8 @@ Process execution remains a child-process carrier and must be selected explicitl
 ## User Approval Gates
 
 Phase 1 schema allows `requires_user_approval` and `approval_policy` on any ordered step. Runtime execution must treat these fields as a pause contract only after a later approval-gate implementation slice wires approval state, edit/rework loops, and resume commands.
+
+The default delivery and architecture design presets use this field to model a user-editable analysis/specification document before downstream implementation roles continue. Approval hooks are diagnostic records until the approval-state implementation is accepted.
 
 ## Lifecycle Hooks
 
@@ -122,6 +157,7 @@ Phase 1 schema allows `requires_user_approval` and `approval_policy` on any orde
 cargo test -p vida development_flow_catalog -- --nocapture --test-threads=1
 cargo test -p vida lifecycle_hook_contract -- --nocapture --test-threads=1
 cargo test -p vida dev_team_sequence_uses_configured_flow_ordered_step_overrides -- --nocapture --test-threads=1
+cargo test -p vida project_routing_shape_defines_configurable_pr_and_specialized_flow_presets -- --nocapture --test-threads=1
 vida taskflow consume agent-system --json
 vida docflow check --root . docs/product/spec/development-flow-catalog-schema-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md
 ```

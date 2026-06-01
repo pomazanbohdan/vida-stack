@@ -518,7 +518,10 @@ agent_extensions:
     - party_chat_council_small
     - party_chat_council_large
     - party_chat_council_modern_full
-  enabled_hook_templates: []
+  enabled_hook_templates:
+    - command_timing_summary
+    - approval_wait
+    - approval_complete
   default_flow_set: verified
   role_selection:
     mode: auto
@@ -554,6 +557,13 @@ dev_team:
   work_item_flow_bindings:
     epic: default_delivery
     defect: defect_repair_verified
+    runtime_defect: runtime_defect_remediation
+    pull_request: pr_repair_verified
+    pr_repair: pr_repair_verified
+    architecture: architecture_design
+    release_readiness: release_readiness_gate
+    service_tui: service_tui_orchestration
+    internal_agent_development: hook_enabled_internal_agent_development
     task: default_delivery
     debug: debug_fast
   validation:
@@ -821,6 +831,297 @@ dev_team:
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_conformance_review, rework_or_approve_decision]
+        - role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [verification_evidence]
+    pr_repair_verified:
+      enabled: true
+      description: Pull-request processing flow that classifies open PRs, validates CI/review state, repairs or supersedes valuable changes, and gates merge/closure through independent proof.
+      flow_class: development
+      work_item_bindings:
+        - pull_request
+        - pr_repair
+      sequential: true
+      allow_parallel_handoffs: false
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - step_id: pr-triage
+          role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [pr_inventory, mergeability_matrix, recommended_disposition]
+        - step_id: pr-ci-review
+          role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [ci_status_summary, review_comment_risk_map]
+        - step_id: pr-repair-or-integrate
+          role_id: developer
+          runtime_role: worker
+          task_class: implementation
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files_or_close_plan, verification_notes]
+        - step_id: pr-coach
+          role_id: coach_implementation_gate
+          runtime_role: coach
+          task_class: coach
+          command_template:
+            surface: vida agent-init
+            args: [--role, coach, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [merge_or_close_decision, rework_or_approve_decision]
+        - step_id: pr-proof
+          role_id: prover
+          runtime_role: prover
+          task_class: release_readiness
+          command_template:
+            surface: vida agent-init
+            args: [--role, prover, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [final_pr_disposition, proof_summary]
+    runtime_defect_remediation:
+      enabled: true
+      description: Runtime-defect remediation flow for VIDA/TaskFlow blockers, with failing proof, implementation, recovery validation, and release-readiness closure.
+      flow_class: development
+      work_item_bindings:
+        - runtime_defect
+      sequential: true
+      allow_parallel_handoffs: false
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [runtime_surface_matrix, blocker_contract]
+        - role_id: test_author
+          runtime_role: worker
+          task_class: regression_test
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [failing_runtime_regression, proof_command]
+        - role_id: developer
+          runtime_role: worker
+          task_class: implementation
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files, runtime_recovery_evidence]
+        - role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [status_lane_recovery_parity, verification_evidence]
+        - role_id: prover
+          runtime_role: prover
+          task_class: release_readiness
+          command_template:
+            surface: vida agent-init
+            args: [--role, prover, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [closure_readiness_decision, proof_summary]
+    architecture_design:
+      enabled: true
+      description: Architecture design flow with xhigh execution preparation before implementation, user approval gate, and verifier/prover closure.
+      flow_class: development
+      work_item_bindings:
+        - architecture
+      sequential: true
+      allow_parallel_handoffs: false
+      lifecycle_hook_templates:
+        - command_timing_summary
+        - approval_wait
+        - approval_complete
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary, approval_wait, approval_complete]
+          requires_user_approval: true
+          proof_gates:
+            required_outputs: [architecture_problem_statement, accepted_constraints]
+        - role_id: developer
+          runtime_role: worker
+          task_class: execution_preparation
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [implementation_plan, owned_write_scope]
+        - role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [architecture_review_evidence]
+    release_readiness_gate:
+      enabled: true
+      description: Standalone release-readiness flow for proof consolidation, CI/install evidence, risk review, and release-or-hold decision.
+      flow_class: release
+      work_item_bindings:
+        - release_readiness
+      sequential: true
+      allow_parallel_handoffs: false
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [ci_install_test_summary, residual_risks]
+        - role_id: prover
+          runtime_role: prover
+          task_class: release_readiness
+          command_template:
+            surface: vida agent-init
+            args: [--role, prover, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [release_or_hold_decision, closure_receipt]
+    service_tui_orchestration:
+      enabled: true
+      description: Service/TUI orchestration flow for local service, activation wizard, and operator console slices after stabilization approval.
+      flow_class: development
+      work_item_bindings:
+        - service_tui
+      sequential: true
+      allow_parallel_handoffs: false
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [service_tui_scope, fixture_contract]
+        - role_id: developer
+          runtime_role: worker
+          task_class: implementation
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files, ui_or_service_smoke]
+        - role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [fixture_snapshot_or_smoke_evidence]
+    hook_enabled_internal_agent_development:
+      enabled: true
+      description: Internal-agent development flow that requires host-tool bridge projection, hook telemetry, implementation proof, coach review, and independent verifier closure.
+      flow_class: development
+      work_item_bindings:
+        - internal_agent_development
+      sequential: true
+      allow_parallel_handoffs: false
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [host_bridge_contract, agent_runtime_boundary]
+        - role_id: developer
+          runtime_role: worker
+          task_class: implementation
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files, host_bridge_receipt_evidence]
+        - role_id: coach_implementation_gate
+          runtime_role: coach
+          task_class: coach
+          command_template:
+            surface: vida agent-init
+            args: [--role, coach, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [implementation_conformance_review]
         - role_id: tester
           runtime_role: verifier
           task_class: verification

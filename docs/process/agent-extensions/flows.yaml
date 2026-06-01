@@ -179,6 +179,132 @@ flow_sets:
         stage: execution
         inclusion_rule: always
         completion_blocker: pending_verification_evidence
+  - flow_id: pr_repair_verified
+    schema_version: 1
+    flow_class: development
+    description: Pull-request processing flow with PR triage, CI/review analysis, repair or supersede implementation, coach gate, and proof disposition.
+    work_item_bindings: pull_request,pr_repair
+    role_chain: business_analyst,verifier,worker,coach,prover
+    lifecycle_hook_templates: command_timing_summary
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
+    lane_templates:
+      - lane_id: pr-triage
+        dispatch_target: specification
+        dispatch_alias: pr_triage
+        task_class: specification
+        command_template:
+          surface: vida agent-init
+          args: --role business_analyst {{task_id}} --json
+        lifecycle_hook_templates: command_timing_summary
+        packet_template_kind: delivery_task_packet
+        closure_class: law
+        stage: triage
+        inclusion_rule: always
+        completion_blocker: pending_pr_triage_evidence
+      - lane_id: pr-ci-review
+        dispatch_target: verification
+        dispatch_alias: pr_ci_review
+        task_class: verification
+        command_template:
+          surface: vida agent-init
+          args: --role verifier {{task_id}} --json
+        lifecycle_hook_templates: command_timing_summary
+        packet_template_kind: verifier_proof_packet
+        closure_class: proof
+        stage: verification
+        inclusion_rule: always
+        completion_blocker: pending_pr_ci_review_evidence
+      - lane_id: pr-repair-or-integrate
+        dispatch_target: implementer
+        dispatch_alias: pr_repair_or_integrate
+        task_class: implementation
+        command_template:
+          surface: vida agent-init
+          args: --role worker {{task_id}} --json
+        lifecycle_hook_templates: command_timing_summary
+        packet_template_kind: delivery_task_packet
+        closure_class: implementation
+        stage: execution
+        inclusion_rule: when_repair_or_integration_required
+        completion_blocker: pending_pr_repair_evidence
+      - lane_id: pr-coach
+        dispatch_target: coach
+        dispatch_alias: pr_coach
+        task_class: coach
+        command_template:
+          surface: vida agent-init
+          args: --role coach {{task_id}} --json
+        lifecycle_hook_templates: command_timing_summary
+        packet_template_kind: coach_review_packet
+        closure_class: proof
+        stage: execution
+        inclusion_rule: always
+        completion_blocker: pending_pr_coach_evidence
+      - lane_id: pr-proof
+        dispatch_target: proof
+        dispatch_alias: pr_proof
+        task_class: release_readiness
+        command_template:
+          surface: vida agent-init
+          args: --role prover {{task_id}} --json
+        lifecycle_hook_templates: command_timing_summary
+        packet_template_kind: verifier_proof_packet
+        closure_class: proof
+        stage: closure
+        inclusion_rule: always
+        completion_blocker: pending_pr_disposition_evidence
+  - flow_id: runtime_defect_remediation
+    schema_version: 1
+    flow_class: development
+    description: Runtime-defect remediation flow for VIDA/TaskFlow blockers, with surface matrix analysis, regression proof, implementation, recovery validation, and closure proof.
+    work_item_bindings: runtime_defect
+    role_chain: business_analyst,worker,worker,verifier,prover
+    lifecycle_hook_templates: command_timing_summary
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
+  - flow_id: architecture_design
+    schema_version: 1
+    flow_class: development
+    description: Architecture design flow with analysis approval pause, execution preparation, and verifier review before implementation dispatch.
+    work_item_bindings: architecture
+    role_chain: business_analyst,worker,verifier
+    lifecycle_hook_templates: command_timing_summary,approval_wait,approval_complete
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
+  - flow_id: release_readiness_gate
+    schema_version: 1
+    flow_class: release
+    description: Standalone release-readiness flow for CI/install evidence, risk review, and release-or-hold proof.
+    work_item_bindings: release_readiness
+    role_chain: verifier,prover
+    lifecycle_hook_templates: command_timing_summary
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
+  - flow_id: service_tui_orchestration
+    schema_version: 1
+    flow_class: development
+    description: Service and TUI orchestration flow for local service, activation wizard, and operator console slices.
+    work_item_bindings: service_tui
+    role_chain: business_analyst,worker,verifier
+    lifecycle_hook_templates: command_timing_summary
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
+  - flow_id: hook_enabled_internal_agent_development
+    schema_version: 1
+    flow_class: development
+    description: Internal-agent development flow requiring host bridge projection, hook telemetry, implementation proof, coach review, and verifier closure.
+    work_item_bindings: internal_agent_development
+    role_chain: business_analyst,worker,coach,verifier
+    lifecycle_hook_templates: command_timing_summary
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
   - flow_id: party_chat_council_small
     description: Small Party Chat board for bounded architecture and conflict decisions.
     role_chain: party_chat_facilitator,party_chat_architect,party_chat_runtime_systems,party_chat_quality_verification,party_chat_delivery_cost

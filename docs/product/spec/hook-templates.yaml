@@ -16,3 +16,32 @@ hook_templates:
         - started_at
         - elapsed_ms
         - exit_code
+  - template_id: approval_wait
+    hook_class: flow_lifecycle
+    description: Record that a configured flow step is waiting for explicit user approval before the next role may run.
+    phases:
+      - pre_transition
+      - wait
+    diagnostic_only: true
+    fail_closed_on_hook_error: false
+    output_contract:
+      record_kind: approval_wait_record
+      required_fields:
+        - flow_id
+        - step_id
+        - approval_policy
+        - started_at
+  - template_id: approval_complete
+    hook_class: flow_lifecycle
+    description: Record the user's approval or rework decision for a configured approval-gated flow step.
+    phases:
+      - post_transition
+    diagnostic_only: true
+    fail_closed_on_hook_error: false
+    output_contract:
+      record_kind: approval_complete_record
+      required_fields:
+        - flow_id
+        - step_id
+        - decision
+        - completed_at
