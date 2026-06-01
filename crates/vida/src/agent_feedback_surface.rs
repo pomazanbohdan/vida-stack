@@ -230,9 +230,7 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "failed-result defect descriptions",
             "failed-result defect description",
             "failed-result wording",
-            "failed-result",
             "failed result wording",
-            "failed result",
             "records failure",
             "recorded failure",
             "recording failure",
@@ -1491,6 +1489,20 @@ mod tests {
             .expect("ignored meta language should render")
             .iter()
             .any(|phrase| phrase == "contextual failed-result defect descriptions"));
+    }
+
+    #[test]
+    fn close_feedback_inference_preserves_concrete_failed_result_reasons() {
+        let reason = "Task failed result after verification.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "failure");
+        assert_eq!(score, 35);
+        assert_eq!(inference["outcome"], "failure");
+        assert_eq!(inference["failure_markers"], serde_json::json!(["failed"]));
+        assert_eq!(inference["ignored_meta_language"], serde_json::json!([]));
     }
 
     #[test]
