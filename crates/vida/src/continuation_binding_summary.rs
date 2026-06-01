@@ -329,6 +329,19 @@ pub(crate) fn dispatch_summary_has_clean_ready_downstream_handoff(
     })
 }
 
+fn dispatch_summary_has_clean_completed_lane(
+    receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    run_id: &str,
+) -> bool {
+    receipt.is_some_and(|receipt| {
+        receipt.run_id == run_id
+            && receipt.dispatch_status == "executed"
+            && receipt.lane_status == "lane_completed"
+            && receipt.blocker_code.is_none()
+            && receipt.downstream_dispatch_blockers.is_empty()
+    })
+}
+
 fn continuation_next_actions_for_run(
     run_id: &str,
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
@@ -665,6 +678,37 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                     continuation_next_actions.clone(),
                 );
             }
+        }
+
+        if latest_run_graph_task_closed
+            && dispatch_summary_has_clean_completed_lane(
+                latest_run_graph_dispatch_receipt,
+                status.run_id.as_str(),
+            )
+        {
+            return serde_json::json!({
+                "status": "idle",
+                "continuation_allowed": false,
+                "continuation_required_now": false,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": format!(
+                    "Latest run `{}` belongs to a closed task and has clean completed lane evidence.",
+                    status.run_id
+                ),
+                "primary_path": "idle_project_ready",
+                "sequential_vs_parallel_posture": "not_applicable_no_active_work",
+                "pause_boundary_gate": "allowed_no_active_work",
+                "ambiguity_reason": serde_json::Value::Null,
+                "stale_run_graph_status": {
+                    "task_id": status.task_id,
+                    "run_id": status.run_id,
+                    "active_node": status.active_node,
+                    "status": status.status,
+                    "lifecycle_stage": status.lifecycle_stage,
+                },
+                "next_actions": []
+            });
         }
 
         if status.status != "completed" {
@@ -1250,6 +1294,51 @@ mod tests {
             summary["why_this_unit"],
             "Latest runtime state is still active for task `taskflow-case-18-rollout-regression-gate` at node `coach`."
         );
+    }
+
+    #[test]
+    fn closed_task_with_clean_completed_lane_does_not_bind_latest_status() {
+        let task_id = "closed-clean-lane-task";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            task_id,
+            "test_author",
+            "implementation",
+        );
+        status.run_id = task_id.to_string();
+        status.task_id = task_id.to_string();
+        status.active_node = "test_author".to_string();
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "test_author_ready".to_string();
+
+        let mut receipt = exception_takeover_dispatch(task_id);
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = "lane_completed".to_string();
+        receipt.blocker_code = None;
+        receipt.downstream_dispatch_target = Some("coach".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+        receipt.downstream_dispatch_blockers = Vec::new();
+
+        let summary = build_continuation_binding_summary_with_idle_policy(
+            None,
+            Some(&status),
+            None,
+            Some(&receipt),
+            None,
+            false,
+            false,
+            true,
+        );
+
+        assert_eq!(summary["status"], "idle");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+        assert_eq!(summary["binding_source"], serde_json::Value::Null);
+        assert_eq!(
+            summary["sequential_vs_parallel_posture"],
+            "not_applicable_no_active_work"
+        );
+        assert_eq!(summary["stale_run_graph_status"]["task_id"], task_id);
     }
 
     #[test]
