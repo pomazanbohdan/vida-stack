@@ -1,0 +1,13 @@
+[profile.default]
+test-threads = "num-cpus"
+slow-timeout = { period = "60s", terminate-after = 5 }
+retries = 0
+
+[profile.ci]
+inherits = "default"
+fail-fast = false
+retries = { backoff = "exponential", count = 2, delay = "1s", max-delay = "10s", jitter = true }
+
+[test-groups]
+db = { max-threads = 2 }
+serial-integration = { max-threads = 1 }
