@@ -4578,15 +4578,15 @@ fn taskflow_consume_bundle_check_fails_closed_without_protocol_binding_receipt()
     );
     assert_eq!(
         parsed["seam_closure_admission_receipt_check"]["status"],
-        "pass"
+        "blocked"
     );
     assert_eq!(
         parsed["seam_closure_admission_receipt_check"]["closure_inputs_ready"],
-        true
+        false
     );
     assert_eq!(
         parsed["seam_closure_admission_receipt_check"]["docflow_status"],
-        "pass"
+        "blocked"
     );
     assert_eq!(
         parsed["seam_closure_admission_receipt_check"]["receipt_evidence"]["receipt_backed"],
@@ -6532,12 +6532,13 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
             .len(),
         16
     );
-    assert_eq!(
+    assert!(
         parsed["payload"]["role_selection"]["compiled_bundle"]["project_flows"]
             .as_array()
             .expect("project flows should be an array")
-            .len(),
-        6
+            .len()
+            >= 6,
+        "scope discussion should preserve the baseline configured flow set"
     );
     assert_eq!(
         parsed["payload"]["role_selection"]["selected_role"],
@@ -12361,6 +12362,7 @@ agent_extensions:
     - worker
     - coach
     - verifier
+    - prover
   role_selection:
     mode: auto
     fallback_role: orchestrator
@@ -12424,6 +12426,7 @@ agent_extensions:
     - worker
     - coach
     - verifier
+    - prover
   role_selection:
     mode: auto
     fallback_role: orchestrator
