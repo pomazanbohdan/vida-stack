@@ -38,18 +38,18 @@ Default feature-delivery flow:
 25. Do not manually prune backing-store subdirectories such as `manifest/`, `wal/`, `vlog/`, `sstables/`, or `runtime-consumption/` from a long-lived state root; if that state root is broken, use an explicit reset/reinit workflow instead of partial deletion.
 26. Treat generated files under `.vida/data/state/**` as runtime operational artifacts rather than reviewable product changes unless a bounded task explicitly targets state-store fixtures or runtime-state debugging.
 27. For Windows local framework development, keep `C:\Users\<user>\.bun\bin` ahead of blocked host-bundled tools when needed; install ripgrep with `bun add -g @vscode/ripgrep`, copy its `rg.exe` into `.bun\bin`, and install the release `vida.exe` only when installed-runtime validation or release admission is the active proof target.
-28. Use the Windows proof ladder in cost order: focused debug proof (`cargo fmt -p vida -- --check`, `cargo test -p vida <filter> -- --nocapture --test-threads=1`, `cargo test -p vida --no-run`, or `cargo build -p vida`), debug runtime smoke (`target\debug\vida.exe status --json`) if current state-store compatibility is needed, then installed runtime validation (`vida status --json` or the exact operator command), and only then `vida release install --json` for installed launcher or release-admission proof. Treat Windows Application Control failures for generated integration-test binaries under `target\debug\deps\*.exe` as host policy blockers unless the policy is changed.
+28. Use the Windows proof ladder in cost order: script/docs-only proof through `scripts\vida-dev-gate.ps1 -Mode script-check -Json`, cheap source proof through `scripts\vida-dev-gate.ps1 -Mode quick -Json`, focused regression proof through `scripts\vida-dev-gate.ps1 -Mode focused-nextest -TestFilter <filter> -Json`, local workspace proof through `scripts\vida-dev-gate.ps1 -Mode workspace-nextest -Json` when the coherent batch is assembled, debug runtime smoke through `scripts\vida-dev-gate.ps1 -Mode runtime-smoke -Json` if current state-store compatibility is needed, then installed runtime validation (`vida status --json` or the exact operator command), and only then `vida release install --json` for installed launcher or release-admission proof. Treat Windows Application Control failures for generated integration-test binaries under `target\debug\deps\*.exe` or nextest-launched test binaries as host policy blockers unless the policy is changed.
 29. After Windows release install, smoke a disposable state root with `vida boot --state-dir <temp-dir>` and `vida status --state-dir <temp-dir> --summary --json` so SurrealKV filesystem compatibility is proven outside the long-lived project state.
-30. For repeatable local gate timing, prefer `scripts\vida-dev-gate.ps1 -Mode quick`, `scripts\vida-dev-gate.ps1 -Mode runtime-smoke`, or `scripts\vida-dev-gate.ps1 -Mode release-install -Json` instead of ad hoc command chains.
+30. For repeatable local gate timing, prefer `scripts\vida-dev-gate.ps1 -Mode script-check -Json`, `scripts\vida-dev-gate.ps1 -Mode quick -Json`, `scripts\vida-dev-gate.ps1 -Mode focused-nextest -TestFilter <filter> -Json`, `scripts\vida-dev-gate.ps1 -Mode workspace-nextest -Json`, `scripts\vida-dev-gate.ps1 -Mode runtime-smoke -Json`, or `scripts\vida-dev-gate.ps1 -Mode release-install -Json` instead of ad hoc command chains.
 
 -----
 artifact_path: process/project-operations
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-01'
+artifact_revision: '2026-06-02'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-operations.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-06-01T17:45:00+03:00
+updated_at: 2026-06-02T01:22:00+03:00
 changelog_ref: project-operations.changelog.jsonl

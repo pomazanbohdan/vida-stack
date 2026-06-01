@@ -94,11 +94,12 @@ When a gate is slow or repeatedly blocks iteration, classify it with exactly one
 
 Use this ladder before starting a Rust proof, runtime smoke, release install, or script gate:
 
-1. `debug_source_proof`: default for active repair loops. Use focused `cargo test -p vida <filter> -- --nocapture --test-threads=1`, `cargo test -p vida --no-run`, `cargo build -p vida`, `cargo fmt -p vida -- --check`, and `git diff --check`. This is the normal proof class for code correctness while a batch is still being assembled.
-2. `debug_runtime_smoke`: use `target/debug/vida ...` only after the debug binary proves it can open the current project state with an authoritative read such as `target/debug/vida status --json`. If the debug binary cannot open the state store, classify that as `debug_runtime_incompatible` and do not use it for runtime closure.
-3. `installed_runtime_validation`: use the environment-resolved `vida ...` when the acceptance target is specifically the operator-facing launcher, installed binary path, state compatibility, command timing, or downstream project behavior through the user's normal PATH.
-4. `release_install_gate`: run `vida release install --json` only for installed-runtime acceptance, release admission, packaging/installer proof, explicit user order, or when debug runtime smoke is invalid and the current closure must validate the installed launcher. It is not a per-micro-edit proof.
-5. `release_packaging_gate`: run full release/installer/package smoke after the coherent batch is complete, not while more related code edits are still expected.
+1. `script_or_doc_proof`: default for process, docs, and script-only edits that do not need Cargo. Use `scripts/vida-dev-gate.ps1 -Mode script-check -Json` on Windows, or equivalent `git diff --check` plus script parser checks on Unix-like hosts.
+2. `debug_source_proof`: default for active Rust repair loops. Use `scripts/vida-dev-gate.ps1 -Mode quick -Json` on Windows, or the equivalent direct `cargo fmt -p vida -- --check`, `cargo check --locked -p vida`, and `git diff --check` on Unix-like hosts. This is the normal cheap compile-aware proof class for code correctness while a batch is still being assembled. Use `scripts/vida-dev-gate.ps1 -Mode focused-nextest -TestFilter <filter> -Json` or direct `cargo nextest run --locked -p vida --profile default <filter>` only when the bounded slice needs a regression test proof.
+3. `debug_runtime_smoke`: use `target/debug/vida ...` only after the debug binary proves it can open the current project state with an authoritative read such as `target/debug/vida status --json`. If the debug binary cannot open the state store, classify that as `debug_runtime_incompatible` and do not use it for runtime closure.
+4. `installed_runtime_validation`: use the environment-resolved `vida ...` when the acceptance target is specifically the operator-facing launcher, installed binary path, state compatibility, command timing, or downstream project behavior through the user's normal PATH.
+5. `release_install_gate`: run `vida release install --json` only for installed-runtime acceptance, release admission, packaging/installer proof, explicit user order, or when debug runtime smoke is invalid and the current closure must validate the installed launcher. It is not a per-micro-edit proof.
+6. `release_packaging_gate`: run full release/installer/package smoke after the coherent batch is complete, not while more related code edits are still expected.
 
 When a release install is considered, first record why `debug_source_proof` and, when applicable, `debug_runtime_smoke` are insufficient. If the reason is only "the code changed", use the debug proof class instead.
 
@@ -169,10 +170,10 @@ The checklist is required even when build, release, commit, push, or CI proof is
 6. For browser/simulator/emulator validation, record launch/setup time separately from user-flow validation time.
 7. For long local gates that may exceed the host-tool timeout, redirect stdout/stderr to a deterministic log file and print that path before starting the gate. A timed-out host tool call without a log artifact is itself an optimization defect because it forces reruns.
 8. For Rust workspace proof during active repair, prefer focused filters and package shards first, then run the workspace-wide gate once the coherent batch is assembled. If the workspace gate exceeds the local tool timeout, rerun it through a log-backed script or background job rather than repeating foreground calls that can lose output.
-9. Cargo accepts a single test-name filter before `--`; do not pass multiple focused test filters as extra positional arguments. For a focused Rust proof batch, run separate `cargo test` commands, use a script/loop wrapper with timing per filter, or select a broader valid substring/module filter that intentionally covers the batch.
+9. Nextest accepts focused filters, but each proof record should still have one intentional filter expression or one broader module/package scope. Do not hide unrelated focused proofs inside opaque command chains; use the dev-gate JSON output or separate timed commands so each filter has an auditable duration and result.
 10. For VIDA runtime recovery diagnostics, prefer the fastest authoritative inspection surface that exposes the needed evidence. If a timeout/recovery path only needs task metadata or current owned scope, use `vida task show <task-id> --json` before heavier lane or run-graph projections.
 11. If a long test shard or runtime command is killed because it exceeds the local tool timeout, immediately record the command, duration, missing artifact gap, and replacement proof strategy in the post-pool checklist.
-12. Prefer `scripts/vida-dev-gate.ps1` for local Windows proof loops that need consistent timing records and deterministic Cargo cache behavior. Use `-Mode quick` for debug source proof, `-Mode runtime-smoke` for debug-runtime state compatibility, and `-Mode release-install` only when installed runtime validation is the bounded acceptance target. Use `-Mode target-dir-policy -Json` as the cheap policy probe before running Cargo from a new linked worktree. With `-Json`, every operation record must include `target_dir_policy` and `effective_cargo_target_dir`.
+12. Prefer `scripts/vida-dev-gate.ps1` for local Windows proof loops that need consistent timing records and deterministic Cargo cache behavior. Use `-Mode script-check` for no-Cargo script/docs proof, `-Mode quick` for cheap source proof through fmt plus `cargo check`, `-Mode focused-nextest -TestFilter <filter>` for bounded regression proof, `-Mode workspace-nextest` for a log-backed local workspace test gate, `-Mode runtime-smoke` for debug-runtime state compatibility, and `-Mode release-install` only when installed runtime validation is the bounded acceptance target. Use `-Mode target-dir-policy -Json` as the cheap policy probe before running Cargo from a new linked worktree. Pass `-Jobs <n>` only when the local machine or task class needs an explicit nextest concurrency cap. With `-Json`, every operation record must include `target_dir_policy` and `effective_cargo_target_dir`.
 
 ## Prohibited Patterns
 
@@ -193,6 +194,9 @@ As of this protocol slice, the following observations are known from the active 
 4. PR `validate` CI remained blocked for multiple minutes inside `cargo test --workspace --locked -- --test-threads=1`.
 5. Local `cargo test -p vida runtime_dispatch_state --locked -- --test-threads=1` exceeded the 120-second host-tool timeout during active runtime repair without a preserved foreground result; future runs of this shard should be log-backed or split further before becoming a blocking local gate.
 6. `vida release install --json` took about 84 seconds in the 2026-06-01 bridge-adapter repair loop. The release install was useful only for installed-runtime validation; subsequent debug runtime smoke showed `target/debug/vida status --json` can be a faster validation step when the debug binary is state-store compatible.
+7. The 2026-06-01 CI migration proved the fastest reliable test shape is `cargo nextest archive` plus four `slice:m/n` shards, but archived nextest runs do not carry workspace support binaries automatically. Test shards that depend on `CARGO_BIN_EXE_*` helpers must restore a support-binary artifact before execution.
+8. In the same CI window, Linux runtime entrypoint build completed in under one minute, macOS in about six minutes, and Windows in about seven minutes after the gate was narrowed to deliverable runtime entrypoints. Cross-platform build remains a downstream proof gate, not the first defect-discovery gate.
+9. A cold local `scripts/vida-dev-gate.ps1 -Mode quick -Json` run spent about `79758 ms` in `cargo check --locked -p vida`; this is acceptable only as compile-aware source proof. Docs/script-only edits must use `-Mode script-check` first so local proof does not pay a Cargo compile cost unnecessarily.
 
 These observations do not prove one root cause. They prove that timing diagnostics must cover both local runtime commands and CI/test gates.
 
@@ -200,10 +204,10 @@ These observations do not prove one root cause. They prove that timing diagnosti
 artifact_path: process/command-timing-and-gate-optimization-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-06-01
+artifact_revision: 2026-06-02
 schema_version: '1'
 status: canonical
 source_path: docs/process/command-timing-and-gate-optimization-protocol.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-06-01T17:45:00+03:00
+updated_at: 2026-06-02T01:15:00+03:00
 changelog_ref: command-timing-and-gate-optimization-protocol.changelog.jsonl

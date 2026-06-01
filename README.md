@@ -171,10 +171,11 @@ For local framework development, keep the active repair loop on the debug profil
 Linux/macOS:
 
 ```bash
-cargo test -p vida -- --nocapture
+cargo nextest run --locked -p vida --profile default
+cargo nextest run --locked --workspace --profile ci
 
 # Optional installed-runtime gate after focused proof is green.
-cargo build -p vida --release
+cargo build --locked -p vida --release
 install -D -m 755 target/release/vida ~/.local/share/vida-stack/current/bin/vida
 export PATH="$HOME/.local/share/vida-stack/current/bin:$PATH"
 vida status --json
@@ -188,13 +189,11 @@ bun add -g @vscode/ripgrep
 Copy-Item "$env:USERPROFILE\.bun\install\global\node_modules\@vscode\ripgrep\bin\rg.exe" "$env:USERPROFILE\.bun\bin\rg.exe" -Force
 rg --version
 
-# Compile and smoke the debug profile.
-cargo build -p vida
-cargo test -p vida --no-run
-cargo test -p vida --bin vida read_only_open -- --nocapture
+# Fast package-scoped proof through the repo gate.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
 
 # Smoke the debug runtime before using it for stateful runtime validation.
-.\target\debug\vida.exe status --json
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode runtime-smoke -Json
 
 # Build and install the operator-facing launcher only for installed-runtime or release gates.
 vida release install --json
@@ -204,8 +203,17 @@ vida status --json
 For timed Windows proof loops, prefer the repo script:
 
 ```powershell
-# Fast debug source proof: fmt plus focused test, or --no-run when no filter is supplied.
-powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -TestFilter close_feedback_inference -Json
+# Script/docs-only proof without Cargo.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json
+
+# Fast debug source proof: fmt plus cargo check.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
+
+# Focused regression proof through nextest.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode focused-nextest -TestFilter close_feedback_inference -Json
+
+# Local workspace test gate mirroring CI's nextest profile.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode workspace-nextest -Json
 
 # Cheap policy probe for a checkout or linked worktree before running Cargo.
 powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode target-dir-policy -Json
@@ -219,9 +227,11 @@ powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release
 
 `scripts/vida-dev-gate.ps1` keeps Cargo output visible and deterministic by setting `CARGO_TARGET_DIR` when the caller has not already set it. Normal checkouts use `.vida\cargo-target`; linked worktrees under `.vida\worktrees\...` share the owner checkout's `.vida\cargo-target` so each worktree does not cold-build its own `target` tree. If the caller provides `CARGO_TARGET_DIR`, the script respects it and reports that policy in JSON timing records.
 
+Local test gates use `cargo nextest`; install it before using the script on a fresh host.
+
 This keeps ordinary proof runs fast and inspectable. The operator-facing `vida` in `~/.local/share/vida-stack/current/bin` on Unix-like systems or `%LOCALAPPDATA%\vida-stack\current\bin` on Windows should be refreshed from the release profile only when the installed launcher itself is part of the proof.
 
-On Windows, Application Control, Smart App Control, or Device Guard may block any newly generated or downloaded executable, including Cargo build scripts under `target\debug\build\*\build-script-build.exe`, integration-test binaries under `target\debug\deps\*.exe`, and release binaries installed under `%LOCALAPPDATA%\vida-stack\current\bin`. If that policy is active, local Windows `cargo build`, `cargo test`, and installer smoke may fail before VIDA code runs. Use WSL/Linux or GitHub Actions for proof builds, or allowlist/sign the release binaries before making them the active system runtime.
+On Windows, Application Control, Smart App Control, or Device Guard may block any newly generated or downloaded executable, including Cargo build scripts under `target\debug\build\*\build-script-build.exe`, integration-test binaries under `target\debug\deps\*.exe`, nextest-launched test binaries, and release binaries installed under `%LOCALAPPDATA%\vida-stack\current\bin`. If that policy is active, local Windows `cargo build`, `cargo nextest`, and installer smoke may fail before VIDA code runs. Use WSL/Linux or GitHub Actions for proof builds, or allowlist/sign the release binaries before making them the active system runtime.
 
 Known `v0.9.3` Windows host state from the 2026-05-01 release wave:
 

@@ -415,7 +415,7 @@ At the current repository cut:
 19. The local developer host then disabled Smart App Control by setting `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState=0` and applying `CiTool.exe -r`; `vida --version`, `taskflow --help`, and `docflow --help` now execute through the Windows launchers.
 20. The runtime bundle retrieval-trust blocker found during the release wave was fixed by allowing bundle trust evidence to cite the latest recorded final snapshot when no admissible final snapshot exists yet.
 21. `vida taskflow consume bundle check --json` run through the WSL-built `0.9.3` binary returned `blocker_codes=[]` and `check.ok=true`.
-22. The broad Ubuntu CI `cargo test --workspace --locked -- --test-threads=1` still has a separate test-debt failure set in runtime-state/unit tests; release packaging, platform builds, and Windows installer smoke are green.
+22. During the `v0.9.3` release wave, the broad Ubuntu CI `cargo test --workspace --locked -- --test-threads=1` still had a separate test-debt failure set in runtime-state/unit tests while release packaging, platform builds, and Windows installer smoke were green. Current local and CI test guidance is owned by `docs/process/command-timing-and-gate-optimization-protocol.md` and the nextest-backed gates.
 
 ## Development Session Materialization Boundary
 
@@ -498,10 +498,10 @@ Operator boundary:
 artifact_path: process/codex-agent-configuration-guide
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-05-01'
+artifact_revision: '2026-06-02'
 schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: 2026-05-04T16:05:39.1055985Z
+updated_at: 2026-06-02T01:31:00+03:00
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl

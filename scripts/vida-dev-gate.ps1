@@ -1,7 +1,8 @@
 param(
-    [ValidateSet("quick", "runtime-smoke", "release-install", "target-dir-policy")]
+    [ValidateSet("script-check", "quick", "focused-nextest", "workspace-nextest", "runtime-smoke", "release-install", "target-dir-policy")]
     [string]$Mode = "quick",
     [string]$TestFilter = "",
+    [int]$Jobs = 0,
     [switch]$Json
 )
 
@@ -98,6 +99,26 @@ function Invoke-Timed {
     }
 }
 
+function New-NextestCommand {
+    param(
+        [string[]]$Args
+    )
+
+    $command = New-Object System.Collections.Generic.List[string]
+    $command.Add("cargo")
+    $command.Add("nextest")
+    $command.Add("run")
+    $command.Add("--locked")
+    foreach ($arg in $Args) {
+        $command.Add($arg)
+    }
+    if ($Jobs -gt 0) {
+        $command.Add("-j")
+        $command.Add([string]$Jobs)
+    }
+    return $command.ToArray()
+}
+
 Push-Location $RootDir
 try {
     if ($Mode -eq "target-dir-policy") {
@@ -113,13 +134,28 @@ try {
             effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
             artifact_refs = @()
         })
+    } elseif ($Mode -eq "script-check") {
+        Invoke-Timed "git-diff-check" @("git", "diff", "--check")
+        Invoke-Timed "powershell-dev-gate-parse" @(
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/vida-dev-gate.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
+        )
     } elseif ($Mode -eq "quick") {
         Invoke-Timed "cargo-fmt-check" @("cargo", "fmt", "-p", "vida", "--", "--check")
-        if ($TestFilter.Trim().Length -gt 0) {
-            Invoke-Timed "cargo-test-focused" @("cargo", "test", "-p", "vida", $TestFilter, "--", "--nocapture", "--test-threads=1")
-        } else {
-            Invoke-Timed "cargo-test-no-run" @("cargo", "test", "-p", "vida", "--no-run")
+        Invoke-Timed "cargo-check-vida" @("cargo", "check", "--locked", "-p", "vida")
+    } elseif ($Mode -eq "focused-nextest") {
+        if ($TestFilter.Trim().Length -eq 0) {
+            Write-Error "-Mode focused-nextest requires -TestFilter <filter>."
+            exit 2
         }
+        if ($TestFilter.Trim().Length -gt 0) {
+            Invoke-Timed "nextest-focused" (New-NextestCommand @("-p", "vida", "--profile", "default", $TestFilter))
+        }
+    } elseif ($Mode -eq "workspace-nextest") {
+        Invoke-Timed "nextest-workspace" (New-NextestCommand @("--workspace", "--profile", "ci"))
     } elseif ($Mode -eq "runtime-smoke") {
         Invoke-Timed "cargo-build-debug" @("cargo", "build", "-p", "vida")
         Invoke-Timed "debug-vida-status" @($DebugVidaPath, "status", "--json")
