@@ -351,6 +351,17 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
     ignored
 }
 
+fn has_contrastive_blocker_clause(normalized: &str, blocker_keywords: &[&str]) -> bool {
+    normalized
+        .split_once(", but ")
+        .or_else(|| normalized.split_once(" but "))
+        .is_some_and(|(_, blocker_clause)| {
+            blocker_keywords
+                .iter()
+                .any(|keyword| blocker_clause.contains(keyword))
+        })
+}
+
 fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
     let blocker_keywords = ["blocked", "blocker", "approval_wait", "awaiting_approval"];
     let meta_keywords = [
@@ -390,7 +401,11 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
             let has_meta_keyword = meta_keywords
                 .iter()
                 .any(|keyword| normalized.contains(keyword));
-            if has_blocker_keyword && has_meta_keyword && !starts_with_blocked_status {
+            if has_blocker_keyword
+                && has_meta_keyword
+                && !starts_with_blocked_status
+                && !has_contrastive_blocker_clause(&normalized, &blocker_keywords)
+            {
                 Some(normalized)
             } else {
                 None
@@ -1305,6 +1320,19 @@ mod tests {
             phrase
                 == "closed after implementing docflow check json mode and validating direct cli plus vida proxy integration coverage for help, blocked, pass, and installed runtime smoke"
         }));
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_contrastive_blocked_clause_after_meta_language() {
+        let reason = "Closed after implementing, but still blocked pending operator approval";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+        assert!(!super::ignored_canonical_close_meta_language(reason)
+            .iter()
+            .any(|phrase| phrase.contains("still blocked pending operator approval")));
     }
 
     #[test]
