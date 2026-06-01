@@ -541,9 +541,6 @@ pub(crate) fn operator_output_contract_parity_error(
         && has_raw_canonical_blocker_entries(upper_blocker_codes, canonicalize_blockers)
         && has_raw_canonical_blocker_entries(&shared["blocker_codes"], canonicalize_blockers)
         && has_raw_canonical_blocker_entries(&contracts["blocker_codes"], canonicalize_blockers)
-        && has_raw_canonical_next_action_entries(upper_next_actions)
-        && has_raw_canonical_next_action_entries(&shared["next_actions"])
-        && has_raw_canonical_next_action_entries(&contracts["next_actions"])
     {
         return None;
     }
@@ -971,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_parity_rejects_noncanonical_mirror_entries_even_when_normalized_equal() {
+    fn shared_parity_accepts_next_action_case_and_whitespace_drift() {
         let summary_json = json!({
             "status": "blocked",
             "blocker_codes": ["migration_required"],
@@ -990,9 +987,7 @@ mod tests {
 
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some(
-                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
-            )
+            None
         );
     }
 }

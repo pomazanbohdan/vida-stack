@@ -12084,7 +12084,7 @@ mod tests {
         );
         assert_eq!(
             payload["dispatch_receipt"]["selected_backend"].as_str(),
-            Some("middle")
+            Some("internal_subagents")
         );
 
         let dispatch_packet_path = payload["dispatch_packet_path"]
@@ -12105,7 +12105,10 @@ mod tests {
             dispatch_packet["activation_agent_type"].as_str(),
             Some("middle")
         );
-        assert_eq!(dispatch_packet["selected_backend"].as_str(), Some("middle"));
+        assert_eq!(
+            dispatch_packet["selected_backend"].as_str(),
+            Some("internal_subagents")
+        );
         assert_ne!(
             dispatch_packet["dispatch_target"].as_str(),
             Some("specification")

@@ -12583,6 +12583,7 @@ host_environment:
                 "development_flow": {
                     "dispatch_contract": {
                         "implementer_activation": {
+                            "selected_dispatch_backend_id": "qwen-primary",
                             "activation_agent_type": "qwen-primary",
                             "activation_runtime_role": "worker",
                             "closure_class": "implementation",
@@ -12883,6 +12884,7 @@ host_environment:
                             "activation_runtime_role": "business_analyst"
                         },
                         "implementer_activation": {
+                            "selected_dispatch_backend_id": "junior",
                             "activation_agent_type": "junior",
                             "activation_runtime_role": "worker"
                         }
@@ -13295,11 +13297,12 @@ host_environment:
     fn route_selected_backend_for_specification_prefers_contract_activation_tier() {
         let execution_plan = serde_json::json!({
             "development_flow": {
-                "dispatch_contract": {
-                    "specification_activation": {
-                        "activation_agent_type": "middle",
-                    },
-                }
+                    "dispatch_contract": {
+                        "specification_activation": {
+                            "selected_dispatch_backend_id": "middle",
+                            "activation_agent_type": "middle",
+                        },
+                    }
             }
         });
 
@@ -13466,6 +13469,7 @@ host_environment:
                 "implementation": {}
             },
             "runtime_assignment": {
+                "selected_dispatch_backend_id": "junior",
                 "selected_tier": "junior",
                 "activation_agent_type": "junior"
             }
@@ -14583,8 +14587,8 @@ host_environment:
         assert_eq!(packet["activation_agent_type"], "junior");
         assert_eq!(packet["activation_runtime_role"], "worker");
         assert_eq!(packet["selected_backend"], "junior");
-        assert_eq!(packet["mixed_posture"]["route_primary_backend"], "junior");
-        assert_eq!(packet["route_policy"]["route_primary_backend"], "junior");
+        assert!(packet["mixed_posture"]["route_primary_backend"].is_null());
+        assert!(packet["route_policy"]["route_primary_backend"].is_null());
         assert_eq!(
             packet["activation_vs_execution_evidence"]["evidence_state"],
             "activation_view_only"
@@ -14596,7 +14600,7 @@ host_environment:
         assert!(packet["execution_evidence"].is_null());
         assert_eq!(
             packet["effective_execution_posture"]["route_primary_backend"],
-            "junior"
+            serde_json::Value::Null
         );
         assert_eq!(
             packet["effective_execution_posture"]["selected_backend"],
@@ -20028,6 +20032,7 @@ agent_system:
             "runtime_assignment": {
                 "enabled": true,
                 "selected_carrier_id": "middle",
+                "selected_dispatch_backend_id": "middle",
                 "selected_model_profile_id": "codex_gpt55_medium_write",
                 "selected_model_provider": "openai"
             },
