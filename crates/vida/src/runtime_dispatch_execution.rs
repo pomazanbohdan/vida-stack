@@ -2258,6 +2258,43 @@ fn dispatch_packet_string_field(dispatch_packet_path: &str, field: &str) -> Opti
         })
 }
 
+fn host_tool_bridge_request_id_segment(value: &str) -> String {
+    let mut segment = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while segment.contains("--") {
+        segment = segment.replace("--", "-");
+    }
+    segment
+        .trim_matches('-')
+        .chars()
+        .take(96)
+        .collect::<String>()
+}
+
+fn host_tool_bridge_request_id(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    dispatch_packet_path: &str,
+) -> String {
+    let packet_segment = Path::new(dispatch_packet_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(host_tool_bridge_request_id_segment)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "packet".to_string());
+    format!(
+        "{}-{}-{}-host-tool-bridge",
+        receipt.run_id, receipt.dispatch_target, packet_segment
+    )
+}
+
 fn materialize_host_tool_bridge_request(
     project_root: &Path,
     selected_cli_entry: Option<&serde_yaml::Value>,
@@ -2267,10 +2304,7 @@ fn materialize_host_tool_bridge_request(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     _role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Result<serde_json::Value, String> {
-    let request_id = format!(
-        "{}-{}-host-tool-bridge",
-        receipt.run_id, receipt.dispatch_target
-    );
+    let request_id = host_tool_bridge_request_id(receipt, dispatch_packet_path);
     let paths = host_tool_bridge_artifact_paths(project_root, selected_cli_entry, &request_id);
     let mut replace_existing_request = false;
     if let Some(existing) = read_existing_host_bridge_request(&paths.request_path)? {
@@ -4265,9 +4299,9 @@ mod tests {
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
         dispatch_packet_prompt, execute_external_agent_lane_dispatch,
         external_provider_output_confirms_execution,
-        external_provider_output_confirms_execution_for_mode,
-        internal_codex_output_confirms_execution, internal_host_activation_only_blocker_code,
-        internal_host_app_bridge_requires_fail_closed,
+        external_provider_output_confirms_execution_for_mode, host_tool_bridge_artifact_paths,
+        host_tool_bridge_request_id, internal_codex_output_confirms_execution,
+        internal_host_activation_only_blocker_code, internal_host_app_bridge_requires_fail_closed,
         internal_host_windows_sandbox_preflight_blocker,
         internal_host_windows_sandbox_recovery_actions, mark_dispatch_result_execution_evidence,
         materialize_host_tool_bridge_request, parse_external_provider_output,
@@ -4957,12 +4991,7 @@ host_tool_bridge:
             "vida-host-bridge-stale-request-{}-{nanos}",
             std::process::id()
         ));
-        let stale_request_path = project_root
-            .join(".vida/data/state/host-tool-bridge/requests")
-            .join("run-host-bridge-implementer-host-tool-bridge.json");
-        std::fs::create_dir_all(stale_request_path.parent().expect("stale request parent"))
-            .expect("create stale request parent");
-        std::fs::write(&stale_request_path, "{}").expect("write stale request");
+        let dispatch_packet_path = project_root.join(".vida/dispatch.json");
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "run-host-bridge".to_string(),
             dispatch_target: "implementer".to_string(),
@@ -4998,14 +5027,27 @@ host_tool_bridge:
             selected_backend: Some("internal_subagents".to_string()),
             recorded_at: "2026-06-01T00:00:00Z".to_string(),
         };
+        let stale_request_path = host_tool_bridge_artifact_paths(
+            &project_root,
+            None,
+            &host_tool_bridge_request_id(
+                &receipt,
+                dispatch_packet_path
+                    .to_str()
+                    .expect("dispatch packet path should render"),
+            ),
+        )
+        .request_path;
+        std::fs::create_dir_all(stale_request_path.parent().expect("stale request parent"))
+            .expect("create stale request parent");
+        std::fs::write(&stale_request_path, "{}").expect("write stale request");
 
         let error = materialize_host_tool_bridge_request(
             &project_root,
             None,
-            &project_root
-                .join(".vida/dispatch.json")
-                .display()
-                .to_string(),
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
             "internal_subagents",
             "junior",
             &receipt,
@@ -5021,7 +5063,7 @@ host_tool_bridge:
     }
 
     #[test]
-    fn host_tool_bridge_request_rotates_stale_same_target_packet() {
+    fn host_tool_bridge_request_uses_distinct_paths_for_repeated_target_packets() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -5071,7 +5113,7 @@ host_tool_bridge:
         std::fs::write(&result_path, "{}").expect("write stale result");
         std::fs::write(&receipt_path, "{}").expect("write stale receipt");
 
-        let rotated_request = materialize_host_tool_bridge_request(
+        let second_request = materialize_host_tool_bridge_request(
             &project_root,
             None,
             second_packet_path
@@ -5082,17 +5124,36 @@ host_tool_bridge:
             &receipt,
             &role_selection,
         )
-        .expect("second bridge request should rotate stale packet");
+        .expect("second bridge request should materialize with a distinct packet id");
 
         assert_eq!(
-            rotated_request["packet_path"],
+            second_request["packet_path"],
             second_packet_path
                 .to_str()
                 .expect("second packet path should render")
         );
-        assert_eq!(rotated_request["owned_paths"][0], "second.rs");
-        assert!(!result_path.exists(), "stale result should be removed");
-        assert!(!receipt_path.exists(), "stale receipt should be removed");
+        assert_eq!(second_request["owned_paths"][0], "second.rs");
+        assert_ne!(first_request["request_id"], second_request["request_id"]);
+        assert_ne!(
+            first_request["request_path"],
+            second_request["request_path"]
+        );
+        assert!(first_request["request_id"]
+            .as_str()
+            .expect("first request id should render")
+            .contains("dispatch-a"));
+        assert!(second_request["request_id"]
+            .as_str()
+            .expect("second request id should render")
+            .contains("dispatch-b"));
+        assert!(
+            result_path.exists(),
+            "first result path should remain owned by first packet"
+        );
+        assert!(
+            receipt_path.exists(),
+            "first receipt path should remain owned by first packet"
+        );
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
