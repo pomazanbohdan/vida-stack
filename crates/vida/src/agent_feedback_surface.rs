@@ -351,6 +351,37 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
     ignored
 }
 
+fn has_contrastive_blocker_clause(normalized: &str) -> bool {
+    let concrete_blocker_phrases = [
+        "still blocked",
+        "remains blocked",
+        "remained blocked",
+        "is blocked",
+        "stays blocked",
+        "blocked pending",
+        "blocked by",
+        "blocked on",
+        "blocker:",
+        "blocker_code",
+        "blocker code",
+        "approval required",
+        "pending approval",
+        "pending operator approval",
+        "awaiting approval",
+        "approval_wait",
+        "awaiting_approval",
+    ];
+
+    normalized
+        .split_once(", but ")
+        .or_else(|| normalized.split_once(" but "))
+        .is_some_and(|(_, blocker_clause)| {
+            concrete_blocker_phrases
+                .iter()
+                .any(|phrase| blocker_clause.contains(phrase))
+        })
+}
+
 fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
     let blocker_keywords = ["blocked", "blocker", "approval_wait", "awaiting_approval"];
     let meta_keywords = [
@@ -390,7 +421,11 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
             let has_meta_keyword = meta_keywords
                 .iter()
                 .any(|keyword| normalized.contains(keyword));
-            if has_blocker_keyword && has_meta_keyword && !starts_with_blocked_status {
+            if has_blocker_keyword
+                && has_meta_keyword
+                && !starts_with_blocked_status
+                && !has_contrastive_blocker_clause(&normalized)
+            {
                 Some(normalized)
             } else {
                 None
@@ -1305,6 +1340,34 @@ mod tests {
             phrase
                 == "closed after implementing docflow check json mode and validating direct cli plus vida proxy integration coverage for help, blocked, pass, and installed runtime smoke"
         }));
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_contrastive_blocked_clause_after_meta_language() {
+        let reason = "Closed after implementing, but still blocked pending operator approval";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+        assert!(!super::ignored_canonical_close_meta_language(reason)
+            .iter()
+            .any(|phrase| phrase.contains("still blocked pending operator approval")));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_contrastive_coverage_wording() {
+        let reason =
+            "Closed after implementing JSON mode, but kept coverage for help, blocked, pass.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
     }
 
     #[test]
