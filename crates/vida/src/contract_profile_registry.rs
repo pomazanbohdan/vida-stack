@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContractProfileId {
-    Release1,
+    OperatorContracts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,7 +11,7 @@ pub(crate) struct ContractProfile {
 
 pub(crate) fn selected_contract_profile() -> ContractProfile {
     ContractProfile {
-        id: ContractProfileId::Release1,
+        id: ContractProfileId::OperatorContracts,
         name: "release-1",
     }
 }
@@ -25,9 +25,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn selected_contract_profile_defaults_to_release1() {
+    fn selected_contract_profile_defaults_to_operator_contracts_profile() {
         let profile = selected_contract_profile();
-        assert_eq!(profile.id, ContractProfileId::Release1);
+        assert_eq!(profile.id, ContractProfileId::OperatorContracts);
         assert_eq!(profile.name, "release-1");
     }
 }

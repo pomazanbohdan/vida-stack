@@ -9,21 +9,23 @@ use crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC;
 
 pub(crate) fn blocker_code(code: BlockerCode) -> Option<String> {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => crate::release1_contracts::blocker_code_value(code),
+        ContractProfileId::OperatorContracts => crate::release1_contracts::blocker_code_value(code),
     }
 }
 
 pub(crate) fn blocker_code_str(code: BlockerCode) -> &'static str {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => crate::release1_contracts::blocker_code_str(code),
+        ContractProfileId::OperatorContracts => crate::release1_contracts::blocker_code_str(code),
     }
 }
 
 pub(crate) fn canonical_blocker_codes(entries: &[String]) -> Vec<String> {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => crate::release1_contracts::canonical_blocker_code_list(
-            entries.iter().map(String::as_str),
-        ),
+        ContractProfileId::OperatorContracts => {
+            crate::release1_contracts::canonical_blocker_code_list(
+                entries.iter().map(String::as_str),
+            )
+        }
     }
 }
 
@@ -33,7 +35,7 @@ where
     S: AsRef<str>,
 {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::release1_contracts::canonical_blocker_code_list(entries)
         }
     }
@@ -41,7 +43,7 @@ where
 
 pub(crate) fn release_contract_status(ready: bool) -> &'static str {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::release1_contracts::release1_contract_status_str(ready)
         }
     }
@@ -49,7 +51,7 @@ pub(crate) fn release_contract_status(ready: bool) -> &'static str {
 
 pub(crate) fn boot_compatibility_is_backward_compatible(classification: &str) -> bool {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::release1_contracts::canonical_compatibility_class_str(classification)
                 == Some(crate::release1_contracts::CompatibilityClass::BackwardCompatible.as_str())
         }
@@ -58,7 +60,7 @@ pub(crate) fn boot_compatibility_is_backward_compatible(classification: &str) ->
 
 pub(crate) fn canonical_compatibility_class_str(value: &str) -> Option<&'static str> {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::release1_contracts::canonical_compatibility_class_str(value)
         }
     }
@@ -70,7 +72,7 @@ pub(crate) fn evaluate_policy_gate_protocol_binding(
     runtime_ready: bool,
 ) -> Option<String> {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::release1_contracts::evaluate_policy_gate_protocol_binding(
                 policy_gate,
                 receipt_hint,
@@ -88,7 +90,7 @@ pub(crate) fn render_operator_contract_envelope(
     artifact_refs: Value,
 ) -> Value {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::operator_contracts::render_operator_contract_envelope(
                 &RELEASE1_OPERATOR_CONTRACT_SPEC,
                 status,
@@ -102,7 +104,7 @@ pub(crate) fn render_operator_contract_envelope(
 
 pub(crate) fn operator_contract_status_is_blocked(value: &Value) -> bool {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::operator_contracts::operator_contract_status_is_blocked(
                 &RELEASE1_OPERATOR_CONTRACT_SPEC,
                 value,
@@ -113,7 +115,7 @@ pub(crate) fn operator_contract_status_is_blocked(value: &Value) -> bool {
 
 pub(crate) fn canonical_approval_status_str(value: &str) -> Option<&'static str> {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::release1_contracts::canonical_approval_status_str(value)
         }
     }
@@ -121,7 +123,9 @@ pub(crate) fn canonical_approval_status_str(value: &str) -> Option<&'static str>
 
 pub(crate) fn canonical_gate_level_str(value: &str) -> Option<&'static str> {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => crate::release1_contracts::canonical_gate_level_str(value),
+        ContractProfileId::OperatorContracts => {
+            crate::release1_contracts::canonical_gate_level_str(value)
+        }
     }
 }
 
@@ -131,7 +135,7 @@ pub(crate) fn operator_contracts_consistency_error(
     next_actions: &[String],
 ) -> Option<String> {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::operator_contracts::release1_operator_contracts_consistency_error(
                 status,
                 blocker_codes,
@@ -145,7 +149,7 @@ pub(crate) fn shared_operator_output_contract_parity_error(
     summary_json: &Value,
 ) -> Option<&'static str> {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::operator_contracts::shared_operator_output_contract_parity_error(summary_json)
         }
     }
@@ -153,7 +157,7 @@ pub(crate) fn shared_operator_output_contract_parity_error(
 
 pub(crate) fn classify_compatibility_boundary(value: &str) -> CompatibilityBoundary {
     match selected_contract_profile_id() {
-        ContractProfileId::Release1 => {
+        ContractProfileId::OperatorContracts => {
             crate::release1_contracts::classify_compatibility_boundary(value)
         }
     }
@@ -164,7 +168,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn release_contract_status_defaults_to_release1_vocabulary() {
+    fn release_contract_status_defaults_to_operator_contract_vocabulary() {
         assert_eq!(release_contract_status(true), "pass");
         assert_eq!(release_contract_status(false), "blocked");
     }
