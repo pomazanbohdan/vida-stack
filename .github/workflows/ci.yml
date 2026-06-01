@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -14,75 +17,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-rust:
-    name: Build Rust (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
-
-      - name: Configure sccache
-        shell: bash
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: vida-ci-${{ runner.os }}
-          add-job-id-key: "false"
-          workspaces: . -> target
-          cache-targets: "true"
-          cache-workspace-crates: "true"
-          cache-on-failure: "true"
-
-      - name: Build workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-            cargo build --locked --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
-          else
-            cargo build --workspace --locked
-          fi
-
-      - name: Build Windows release assets
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        run: |
-          set -euo pipefail
-          export VIDA_RELEASE_SUFFIX=windows-x86_64
-          export VIDA_RELEASE_SKIP_BUILD=1
-          bash scripts/build-release.sh
-
-      - name: Upload Windows release assets
-        if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v6
-        with:
-          name: windows-release-assets
-          path: |
-            dist/vida-stack-v*-windows-x86_64.zip
-            dist/vida-stack-v*-windows-x86_64.manifest.json
-            dist/vida-install.ps1
-          if-no-files-found: error
-
   nextest-archive:
+    name: Test archive
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -120,6 +56,15 @@ jobs:
         run: |
           set -euo pipefail
           cargo nextest archive --workspace --locked --profile ci --archive-file nextest-tests.tar.zst
+          test -x target/debug/vida
+          test -x target/debug/taskflow
+          test -x target/debug/docflow
+          test -x target/debug/vida-pi-agent
+          mkdir -p nextest-support-bin
+          cp target/debug/vida nextest-support-bin/
+          cp target/debug/taskflow nextest-support-bin/
+          cp target/debug/docflow nextest-support-bin/
+          cp target/debug/vida-pi-agent nextest-support-bin/
 
       - name: Upload nextest archive
         uses: actions/upload-artifact@v6
@@ -128,7 +73,15 @@ jobs:
           path: nextest-tests.tar.zst
           if-no-files-found: error
 
+      - name: Upload nextest support binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: nextest-support-bin
+          path: nextest-support-bin/*
+          if-no-files-found: error
+
   nextest-shard:
+    name: Test shard ${{ matrix.partition }}/4
     needs: nextest-archive
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -153,6 +106,23 @@ jobs:
         with:
           name: nextest-tests
 
+      - name: Download nextest support binaries
+        uses: actions/download-artifact@v6
+        with:
+          name: nextest-support-bin
+          path: nextest-support-bin
+
+      - name: Restore support binaries expected by CLI smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/debug
+          cp nextest-support-bin/vida target/debug/
+          cp nextest-support-bin/taskflow target/debug/
+          cp nextest-support-bin/docflow target/debug/
+          cp nextest-support-bin/vida-pi-agent target/debug/
+          chmod +x target/debug/vida target/debug/taskflow target/debug/docflow target/debug/vida-pi-agent
+
       - name: Run nextest shard
         shell: bash
         run: |
@@ -160,6 +130,7 @@ jobs:
           cargo nextest run --archive-file nextest-tests.tar.zst --workspace-remap "$PWD" --profile ci --partition "slice:${{ matrix.partition }}/4"
 
   validate-smoke:
+    name: Test smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -229,7 +200,8 @@ jobs:
           cargo run -p vida -- project-activator --json >/tmp/ci-project-activator.json
           cargo run -p vida -- protocol view bootstrap/router >/tmp/ci-protocol-router.txt
 
-  validate:
+  test-gate:
+    name: Test gate
     needs:
       - nextest-shard
       - validate-smoke
@@ -238,15 +210,61 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Check required validation jobs
+      - name: Check test jobs
         shell: bash
         run: |
           set -euo pipefail
           test "${{ needs.nextest-shard.result }}" = "success"
           test "${{ needs.validate-smoke.result }}" = "success"
 
-  release-package-linux:
-    needs: validate
+  build-runtime:
+    name: Build runtime (${{ matrix.os }})
+    needs: test-gate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-${{ runner.os }}
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
+
+      - name: Build workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --workspace --locked
+
+  package-linux:
+    name: Package Linux release
+    needs: build-runtime
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -335,8 +353,83 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 help > /tmp/vida-install-ps-help.txt
           test -s /tmp/vida-install-ps-help.txt
 
+      - name: Upload Linux release assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-release-assets
+          path: |
+            dist/vida-stack-v*.tar.gz
+            dist/vida-stack-v*.manifest.json
+            dist/vida-install.sh
+            dist/vida-install.ps1
+          if-no-files-found: error
+
+  package-windows:
+    name: Package Windows release
+    needs: build-runtime
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-${{ runner.os }}
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
+
+      - name: Build Windows release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          export VIDA_RELEASE_SUFFIX=windows-x86_64
+          bash scripts/build-release.sh
+
+      - name: Upload Windows release assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-release-assets
+          path: |
+            dist/vida-stack-v*-windows-x86_64.zip
+            dist/vida-stack-v*-windows-x86_64.manifest.json
+            dist/vida-install.ps1
+          if-no-files-found: error
+
+  install-smoke-linux:
+    name: Install smoke Linux
+    needs: package-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Download Linux release assets
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-release-assets
+          path: dist
+
       - name: Run local installer smoke
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -344,8 +437,9 @@ jobs:
           test -n "$ARCHIVE_PATH"
           bash scripts/local-installer-smoke.sh --archive "$ARCHIVE_PATH"
 
-  validate-windows-installer:
-    needs: build-rust
+  install-smoke-windows:
+    name: Install smoke Windows
+    needs: package-windows
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -421,3 +515,24 @@ jobs:
           if (-not (Test-Path -LiteralPath (Join-Path $projectDir "AGENTS.sidecar.md"))) { throw "AGENTS.sidecar.md was not bootstrapped" }
           if (-not (Test-Path -LiteralPath (Join-Path $projectDir "vida.config.yaml"))) { throw "vida.config.yaml was not bootstrapped" }
           if (-not (Test-Path -LiteralPath (Join-Path $projectDir "docs/product/spec/templates/feature-design-document.template.md"))) { throw "feature design template was not bootstrapped" }
+
+  ci-gate:
+    name: CI gate
+    needs:
+      - test-gate
+      - build-runtime
+      - install-smoke-linux
+      - install-smoke-windows
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check CI jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ needs.test-gate.result }}" = "success"
+          test "${{ needs.build-runtime.result }}" = "success"
+          test "${{ needs.install-smoke-linux.result }}" = "success"
+          test "${{ needs.install-smoke-windows.result }}" = "success"
