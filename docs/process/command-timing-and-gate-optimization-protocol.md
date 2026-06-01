@@ -59,6 +59,7 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 3. Any local proof gate over `120000 ms` that blocks ordinary development requires a gate-optimization diagnostic.
 4. Long-running commands are allowed only when their admission role is explicit: workspace proof, CI proof, build proof, release proof, install proof, simulator/browser proof, or external-provider probe.
 5. A repeated slow command is stronger evidence than a single slow command. Three repeated observations in one active case require TaskFlow actualization unless the task already exists.
+6. GitHub Actions jobs that can block PR, main, release, or installer admission must set an explicit `timeout-minutes` bound. An unbounded CI job that remains running without logs is a gate defect; add the timeout first, then rerun or repair the underlying failing step from bounded evidence.
 
 ## Command Execution Rules
 
@@ -70,6 +71,7 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 6. Scripts should expose JSON or structured status when their output is consumed by agents, runtime diagnostics, CI, or TaskFlow notes.
 7. If a command is expected to run longer than two minutes, state that expectation before running it and identify what smaller proof has already passed.
 8. Do not repeatedly rerun a long gate to discover hidden failure details; repair output/artifact capture first.
+9. If a CI run is superseded by a newer pushed commit, cancel the stale run once the newer run is queued or running so runner capacity and status surfaces reflect the current head.
 
 ## Gate Decision Model
 
