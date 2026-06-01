@@ -60,11 +60,13 @@ jobs:
           test -x target/debug/taskflow
           test -x target/debug/docflow
           test -x target/debug/vida-pi-agent
+          test -x target/debug/vida-pi-agent-fake-pi
           mkdir -p nextest-support-bin
           cp target/debug/vida nextest-support-bin/
           cp target/debug/taskflow nextest-support-bin/
           cp target/debug/docflow nextest-support-bin/
           cp target/debug/vida-pi-agent nextest-support-bin/
+          cp target/debug/vida-pi-agent-fake-pi nextest-support-bin/
 
       - name: Upload nextest archive
         uses: actions/upload-artifact@v6
@@ -121,7 +123,8 @@ jobs:
           cp nextest-support-bin/taskflow target/debug/
           cp nextest-support-bin/docflow target/debug/
           cp nextest-support-bin/vida-pi-agent target/debug/
-          chmod +x target/debug/vida target/debug/taskflow target/debug/docflow target/debug/vida-pi-agent
+          cp nextest-support-bin/vida-pi-agent-fake-pi target/debug/
+          chmod +x target/debug/vida target/debug/taskflow target/debug/docflow target/debug/vida-pi-agent target/debug/vida-pi-agent-fake-pi
 
       - name: Run nextest shard
         shell: bash
