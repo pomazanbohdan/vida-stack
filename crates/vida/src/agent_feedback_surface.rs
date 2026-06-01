@@ -226,6 +226,13 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "failed/tampered parent-adapter results",
             "failed or tampered parent adapter results",
             "failed or tampered parent-adapter results",
+            "contextual failed-result defect descriptions",
+            "failed-result defect descriptions",
+            "failed-result defect description",
+            "failed-result wording",
+            "failed-result",
+            "failed result wording",
+            "failed result",
             "records failure",
             "recorded failure",
             "recording failure",
@@ -1466,6 +1473,24 @@ mod tests {
             .expect("ignored meta language should render")
             .iter()
             .any(|phrase| phrase == "failed/tampered parent adapter results"));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_failed_result_hyphenated_context() {
+        let reason = "Fixed task-close feedback inference for contextual failed-result defect descriptions. Proofs passed: cargo test -p vida close_feedback_inference_ignores_failed_result_defect_description -- --nocapture --test-threads=1; cargo test -p vida close_feedback_inference -- --nocapture --test-threads=1; cargo fmt -p vida -- --check; git diff --check. Commit 6c0cc646e pushed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "implementation");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 82);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase == "contextual failed-result defect descriptions"));
     }
 
     #[test]
