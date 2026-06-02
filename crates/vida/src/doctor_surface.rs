@@ -530,6 +530,14 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
+    if as_json && summary_only {
+        if let Some(cached) = read_fresh_admissible_doctor_json_projection(&state_dir, summary_only)
+        {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+    }
+
     match super::StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
         DOCTOR_SURFACE_LOCK_TIMEOUT,
@@ -1310,10 +1318,90 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
 
 fn doctor_json_projection_name(summary_only: bool) -> &'static str {
     if summary_only {
-        "doctor-summary-latest"
+        "doctor-summary-v2-latest"
     } else {
         "doctor-full-latest"
     }
+}
+
+fn read_fresh_admissible_doctor_json_projection(
+    state_dir: &std::path::Path,
+    summary_only: bool,
+) -> Option<String> {
+    crate::operator_projection_cache::read_fresh_json_projection(
+        state_dir,
+        doctor_json_projection_name(summary_only),
+    )
+    .filter(|cached| cached_doctor_projection_admissible(state_dir, summary_only, cached))
+}
+
+fn cached_doctor_projection_admissible(
+    state_dir: &std::path::Path,
+    summary_only: bool,
+    cached: &str,
+) -> bool {
+    serde_json::from_str::<serde_json::Value>(cached)
+        .ok()
+        .is_some_and(|payload| {
+            payload
+                .get("surface")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|surface| surface == "vida doctor")
+                && payload
+                    .get("view")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|view| view == if summary_only { "summary" } else { "full" })
+                && payload
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+                && cached_doctor_projection_matches_current_session(state_dir, &payload)
+        })
+}
+
+fn cached_doctor_projection_matches_current_session(
+    state_dir: &std::path::Path,
+    payload: &serde_json::Value,
+) -> bool {
+    let cached_worktree_environment_id = payload["current_session"]["worktree_environment_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(cached_session_id) = payload["current_session"]["session_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return cached_worktree_environment_id.is_some_and(|cached_id| {
+            let Ok(owner_evidence) =
+                crate::orchestrator_session_surface::build_runtime_owner_evidence(state_dir, false)
+            else {
+                return false;
+            };
+            owner_evidence["current_session"]["worktree_environment_id"]
+                .as_str()
+                .map(str::trim)
+                .is_some_and(|current_id| current_id == cached_id)
+        });
+    };
+    let Ok(owner_evidence) =
+        crate::orchestrator_session_surface::build_runtime_owner_evidence(state_dir, false)
+    else {
+        return false;
+    };
+    if let Some(cached_id) = cached_worktree_environment_id {
+        if owner_evidence["current_session"]["worktree_environment_id"]
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|current_id| current_id == cached_id)
+        {
+            return true;
+        }
+    }
+    owner_evidence["current_session"]["session_id"]
+        .as_str()
+        .map(str::trim)
+        .is_some_and(|current_session_id| current_session_id == cached_session_id)
 }
 
 async fn doctor_dependency_graph_issues(
@@ -1325,7 +1413,8 @@ async fn doctor_dependency_graph_issues(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trace_evidence_summary, doctor_operator_blocker_codes,
+        build_trace_evidence_summary, cached_doctor_projection_admissible,
+        doctor_json_projection_name, doctor_operator_blocker_codes,
         final_snapshot_missing_release_admission_evidence, selected_effective_bundle_receipt_id,
     };
     use crate::contract_profile_adapter::{
@@ -1333,6 +1422,51 @@ mod tests {
     };
     use crate::operator_contracts::canonical_release1_operator_contract_status;
     use std::fs;
+
+    #[test]
+    fn doctor_summary_projection_cache_key_is_shape_versioned() {
+        assert_eq!(
+            doctor_json_projection_name(true),
+            "doctor-summary-v2-latest"
+        );
+        assert_eq!(doctor_json_projection_name(false), "doctor-full-latest");
+    }
+
+    #[test]
+    fn doctor_projection_cache_rejects_wrong_surface_or_view() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-doctor-cache-admissibility-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        let wrong_surface = serde_json::json!({
+            "surface": "vida status",
+            "view": "summary",
+            "status": "pass"
+        })
+        .to_string();
+        assert!(!cached_doctor_projection_admissible(
+            &root,
+            true,
+            &wrong_surface
+        ));
+        let wrong_view = serde_json::json!({
+            "surface": "vida doctor",
+            "view": "full",
+            "status": "pass"
+        })
+        .to_string();
+        assert!(!cached_doctor_projection_admissible(
+            &root,
+            true,
+            &wrong_view
+        ));
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn release1_operator_contracts_consistency_accepts_blocked_with_actions() {
