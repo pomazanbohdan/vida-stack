@@ -3642,7 +3642,7 @@ fn task_update_title_priority() {
 }
 
 #[test]
-fn validate_graph_broken_edge_matches_golden_fixture() {
+fn task_import_jsonl_invalid_graph_returns_json_envelope() {
     let state_dir = unique_state_dir();
     let jsonl_path = format!("{state_dir}/issues.jsonl");
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -3652,28 +3652,34 @@ fn validate_graph_broken_edge_matches_golden_fixture() {
     )
     .expect("write broken task jsonl");
 
-    let import_stdout =
-        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
-    assert_json_status_pass(&import_stdout);
-
-    let output = vida()
-        .args(["task", "validate-graph", "--json"])
+    let import_output = vida()
+        .args(["task", "import-jsonl", &jsonl_path, "--json"])
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
-        .expect("validate-graph should run");
-    assert!(!output.status.success());
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let actual_json: serde_json::Value =
-        serde_json::from_str(&stdout).expect("validate-graph json should parse");
-    assert_release1_shared_envelope_fields(&actual_json, "blocked validate-graph");
-    let expected =
-        include_str!("../../../tests/golden/taskflow/validate_graph_missing_dependency.json")
-            .trim_end();
-    assert_eq!(
-        serde_json::to_string_pretty(&actual_json["issues"]).expect("actual json should render"),
-        normalize_json_fixture(expected)
+        .expect("import-jsonl should run");
+    assert!(!import_output.status.success());
+    assert!(
+        !import_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&import_output.stderr)
     );
+    let actual_json: serde_json::Value = serde_json::from_slice(&import_output.stdout)
+        .expect("blocked import-jsonl json should parse");
+    assert_release1_shared_envelope_fields(&actual_json, "blocked import-jsonl");
+    assert_eq!(actual_json["status"], "blocked");
+    assert_eq!(actual_json["surface"], "vida task import-jsonl");
+    assert_eq!(
+        actual_json["blocker_codes"],
+        serde_json::json!(["dependency_graph_issues"])
+    );
+    assert!(actual_json["error"]
+        .as_str()
+        .expect("import error should render")
+        .contains("missing_dependency_target"));
+    assert!(actual_json["next_actions"][0]
+        .as_str()
+        .expect("next action should render")
+        .contains("vida task import-jsonl"));
 
     let _ = fs::remove_dir_all(&state_dir);
 }

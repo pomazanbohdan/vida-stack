@@ -92,6 +92,55 @@ fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
 }
 
+fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value {
+    let blocker_codes = vec![crate::release1_contracts::blocker_code_value(
+        crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+    )
+    .unwrap_or_else(|| "dependency_graph_issues".to_string())];
+    let next_actions = vec![
+        "Repair the JSONL dependency graph issues, then rerun `vida task import-jsonl <path> --json`."
+            .to_string(),
+    ];
+    let artifact_refs = serde_json::json!({
+        "surface": "vida task import-jsonl",
+        "source_path": path,
+    });
+    let shared_fields = serde_json::json!({
+        "status": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+    });
+    let operator_contracts = serde_json::json!({
+        "contract_id": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id,
+        "schema_version": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.schema_version,
+        "status": shared_fields["status"],
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
+        "blocker_codes": shared_fields["blocker_codes"],
+        "next_actions": shared_fields["next_actions"],
+        "artifact_refs": shared_fields["artifact_refs"],
+    });
+    serde_json::json!({
+        "status": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
+        "surface": "vida task import-jsonl",
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
+        "source_path": path,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "error": error,
+        "shared_fields": shared_fields,
+        "operator_contracts": operator_contracts,
+        "artifact_refs": artifact_refs,
+    })
+}
+
 fn task_next_lawful_projection_name() -> &'static str {
     "task-next-lawful-latest"
 }
@@ -4164,7 +4213,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::SUCCESS
                     }
                     Err(error) => {
-                        eprintln!("Failed to import tasks from JSONL: {error}");
+                        if command.json {
+                            let mut payload = task_import_jsonl_error_payload(
+                                &command.path.display().to_string(),
+                                &error.to_string(),
+                            );
+                            if let Err(render_error) =
+                                normalize_task_json_contract_arrays(&mut payload)
+                            {
+                                eprintln!(
+                                    "Failed to render task import-jsonl json: {render_error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&payload)
+                                    .expect("json import error should render")
+                            );
+                        } else {
+                            eprintln!("Failed to import tasks from JSONL: {error}");
+                        }
                         ExitCode::from(1)
                     }
                 },

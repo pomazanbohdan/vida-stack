@@ -361,6 +361,10 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "blocked task projection",
             "blocked projections",
             "blocked projection",
+            "structured blocked json",
+            "blocked json",
+            "stderr-only failure",
+            "stderr-only exit",
             "blocked coverage",
             "blocked path coverage",
             "blocked-path coverage",
@@ -1403,6 +1407,18 @@ mod tests {
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "verifier blocker closure regression fix"));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_structured_blocked_json_proof_context() {
+        let reason = "Added invalid graph JSON envelope coverage and repairs. Current CLI boundary now proves invalid JSONL import returns structured blocked JSON with dependency graph issue code; graph-summary invalid graph computation paths now also emit structured blocked JSON instead of stderr-only exit. Proof commands passed.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let ignored = super::ignored_canonical_close_meta_language(reason);
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "structured blocked json"));
+        assert!(ignored.iter().any(|phrase| phrase == "stderr-only exit"));
     }
 
     #[test]

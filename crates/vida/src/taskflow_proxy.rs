@@ -3691,6 +3691,38 @@ fn taskflow_graph_summary_operator_contracts(
     (shared_fields, operator_contracts, artifact_refs)
 }
 
+fn taskflow_graph_summary_blocked_payload(error_stage: &str, error: &str) -> serde_json::Value {
+    let blocker_codes = vec![crate::release1_contracts::blocker_code_value(
+        crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+    )
+    .unwrap_or_else(|| "dependency_graph_issues".to_string())];
+    let next_actions = vec![
+        "Run `vida task validate-graph --json` and repair the reported dependency graph issues before using graph-summary."
+            .to_string(),
+    ];
+    let (shared_fields, operator_contracts, artifact_refs) =
+        taskflow_graph_summary_operator_contracts(
+            crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
+            &blocker_codes,
+            &next_actions,
+            None,
+            None,
+            None,
+        );
+    serde_json::json!({
+        "status": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
+        "surface": "vida taskflow graph-summary",
+        "valid": false,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "error_stage": error_stage,
+        "error": error,
+        "shared_fields": shared_fields,
+        "operator_contracts": operator_contracts,
+        "artifact_refs": artifact_refs,
+    })
+}
+
 fn task_wave_label(
     task_id: &str,
     by_id: &BTreeMap<String, crate::state_store::TaskRecord>,
@@ -4591,7 +4623,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         match crate::state_store::StateStore::ready_tasks_scoped_from_rows(&all_tasks, None) {
             Ok(tasks) => tasks,
             Err(error) => {
-                eprintln!("Failed to compute ready tasks: {error}");
+                let payload =
+                    taskflow_graph_summary_blocked_payload("ready_tasks", &error.to_string());
+                println!("{}", render_taskflow_graph_summary_json(&payload));
                 return ExitCode::from(1);
             }
         };
@@ -4599,7 +4633,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     let critical_path = match crate::state_store::StateStore::critical_path_from_rows(&all_tasks) {
         Ok(path) => path,
         Err(error) => {
-            eprintln!("Failed to compute critical path: {error}");
+            let payload =
+                taskflow_graph_summary_blocked_payload("critical_path", &error.to_string());
+            println!("{}", render_taskflow_graph_summary_json(&payload));
             return ExitCode::from(1);
         }
     };
@@ -4616,7 +4652,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     ) {
         Ok(projection) => projection,
         Err(error) => {
-            eprintln!("Failed to compute scheduling projection: {error}");
+            let payload =
+                taskflow_graph_summary_blocked_payload("scheduling_projection", &error.to_string());
+            println!("{}", render_taskflow_graph_summary_json(&payload));
             return ExitCode::from(1);
         }
     };
