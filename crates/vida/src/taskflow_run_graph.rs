@@ -4225,7 +4225,11 @@ async fn try_existing_design_backed_implementation_override(
         .map(|path| design_doc_has_bounded_file_set(std::path::Path::new(path)).unwrap_or(false))
         .unwrap_or(false);
 
-    if !implementation_terms.is_empty() || !bounded_repair_terms.is_empty() {
+    let request_has_explicit_owned_scope =
+        !crate::runtime_dispatch_packets::explicit_request_scope_paths(request_text).is_empty();
+    if (!implementation_terms.is_empty() || !bounded_repair_terms.is_empty())
+        && (design_doc_has_bounded_scope || request_has_explicit_owned_scope)
+    {
         let matched_terms = if !implementation_terms.is_empty() {
             implementation_terms
         } else {
@@ -5944,15 +5948,34 @@ async fn preview_run_graph_dispatch_init_artifacts(
         &mut dispatch_receipt,
     )
     .await?;
-    let ctx = crate::RuntimeDispatchPacketContext::new(
+    set_dispatch_init_timeout_stage(timeout_stage, "write_runtime_dispatch_packet");
+    let mut ctx = crate::RuntimeDispatchPacketContext::new(
         store.root(),
         &role_selection,
         &dispatch_receipt,
         &taskflow_handoff_plan,
         &run_graph_bootstrap,
     );
-    set_dispatch_init_timeout_stage(timeout_stage, "write_runtime_dispatch_packet");
-    let dispatch_packet_path = crate::write_runtime_dispatch_packet(&ctx)?;
+    let dispatch_packet_path = match crate::write_runtime_dispatch_packet(&ctx) {
+        Ok(path) => path,
+        Err(error) if error.contains("missing required packet fields: owned_paths") => {
+            dispatch_receipt.dispatch_status = "blocked".to_string();
+            dispatch_receipt.lane_status = "lane_blocked".to_string();
+            dispatch_receipt.blocker_code = Some("missing_owned_write_scope".to_string());
+            dispatch_receipt.downstream_dispatch_ready = false;
+            dispatch_receipt.downstream_dispatch_blockers =
+                vec!["missing_owned_write_scope".to_string()];
+            ctx = crate::RuntimeDispatchPacketContext::new(
+                store.root(),
+                &role_selection,
+                &dispatch_receipt,
+                &taskflow_handoff_plan,
+                &run_graph_bootstrap,
+            );
+            crate::write_runtime_dispatch_packet(&ctx)?
+        }
+        Err(error) => return Err(error),
+    };
     dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
     set_dispatch_init_timeout_stage(timeout_stage, "read_dispatch_command_from_packet");
     dispatch_receipt.dispatch_command = dispatch_command_from_packet_path(&dispatch_packet_path)?;
@@ -8282,7 +8305,7 @@ mod tests {
         )
         .expect("recovery payload should render");
 
-        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["dispatch_receipt"]["dispatch_status"], "blocked");
         assert_eq!(payload["shared_fields"]["status"], "blocked");
         assert_eq!(payload["operator_contracts"]["status"], "blocked");
         assert_eq!(
@@ -10189,7 +10212,7 @@ mod tests {
                 task_id: "taskflow-runtime-run-binding-task-missing-actionability",
                 title: "Runtime run binding task missing actionability",
                 display_id: None,
-                description: "",
+                description: "Implement or adapt repo-owned WORKFLOW.md policy loading with typed config defaults and TUI-visible validation errors.",
                 issue_type: "task",
                 status: "in_progress",
                 priority: 1,
@@ -10335,6 +10358,58 @@ mod tests {
             payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
                 .as_str(),
             Some("docs/product/spec/existing-design-route-fix-design.md")
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_routes_unscoped_implementation_wording_through_analysis() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "feature-workflow-md-policy-loader",
+                title: "Add WORKFLOW policy loader",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create unscoped implementation task");
+
+        let payload = run_graph_dispatch_init(&store, "feature-workflow-md-policy-loader")
+            .await
+            .expect("dispatch init should materialize an analysis packet");
+
+        assert_eq!(payload["dispatch_receipt"]["dispatch_status"], "routed");
+        assert_eq!(payload["dispatch_receipt"]["dispatch_target"], "analysis");
+        assert!(payload["dispatch_receipt"]["blocker_code"].is_null());
+        let dispatch_packet_path = payload["dispatch_packet_path"]
+            .as_str()
+            .expect("dispatch packet path should be present");
+        let dispatch_packet =
+            crate::read_json_file_if_present(std::path::Path::new(dispatch_packet_path))
+                .expect("dispatch packet should load");
+        assert_eq!(dispatch_packet["dispatch_status"], "routed");
+        assert_eq!(dispatch_packet["dispatch_target"], "analysis");
+        assert_eq!(
+            dispatch_packet["delivery_task_packet"]["handoff_task_class"],
+            "analysis"
         );
     }
 
