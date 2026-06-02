@@ -115,6 +115,10 @@ use state_store_source_scan::{
     infer_mutability_class, infer_ownership_class, normalize_path, parse_source_metadata,
     record_id_for_slice_source,
 };
+pub(crate) use state_store_task_models::{
+    apply_provider_mapping_to_task_jsonl_record, provider_external_key, TaskContent,
+    TaskDependencyJsonlRecord, TaskJsonlRecord, TaskStorageRow, TaskStorageRowStored,
+};
 pub use state_store_task_models::{
     canonical_work_item_issue_type, task_work_item_kind, work_item_requires_parent,
     work_item_taxonomy_entry, BlockedTaskRecord, CreateTaskRequest, TaskBulkReparentResult,
@@ -123,9 +127,6 @@ pub use state_store_task_models::{
     TaskExecutionSemantics, TaskGraphIssue, TaskImportSummary, TaskPlannerMetadata,
     TaskProgressSummary, TaskRecord, TaskRelease1ContractStep, TaskSchedulingCandidate,
     TaskSchedulingProjection, TaskStoreSummary, TaskWorkItemKind, UpdateTaskRequest,
-};
-pub(crate) use state_store_task_models::{
-    TaskContent, TaskJsonlRecord, TaskStorageRow, TaskStorageRowStored,
 };
 #[cfg(test)]
 use state_store_taskflow_snapshot_codec::{
@@ -532,6 +533,154 @@ hierarchy: framework,contracts
         let ready = store.ready_tasks().await.expect("ready tasks");
         let ready_ids = ready.into_iter().map(|task| task.id).collect::<Vec<_>>();
         assert_eq!(ready_ids, vec!["vida-c", "vida-a"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn work_item_provider_mapping_import_resolves_external_parent_dependency() {
+        let root = unique_temp_root("vida-provider-mapping-import");
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let child = serde_json::json!({
+            "id": "vida-child",
+            "title": "Provider child",
+            "description": "story",
+            "status": "open",
+            "priority": 4,
+            "issue_type": "",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": [],
+            "provider_mapping": {
+                "provider": "jira",
+                "external_id": "PROJ-12",
+                "external_parent_id": "PROJ-1",
+                "provider_issue_type": "story",
+                "provider_status": "resolved",
+                "provider_priority": "p1"
+            },
+            "dependencies": []
+        });
+        let parent = serde_json::json!({
+            "id": "vida-parent",
+            "title": "Provider parent",
+            "description": "epic",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": [],
+            "provider_mapping": {
+                "provider": "jira",
+                "external_id": "PROJ-1",
+                "provider_issue_type": "epic",
+                "provider_status": "open"
+            },
+            "dependencies": []
+        });
+        fs::write(
+            &source,
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&child).expect("serialize child"),
+                serde_json::to_string(&parent).expect("serialize parent")
+            ),
+        )
+        .expect("write provider jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let summary = store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import provider tasks");
+        assert_eq!(summary.imported_count, 2);
+
+        let shown = store.show_task("vida-child").await.expect("show child");
+        assert_eq!(shown.issue_type, "task");
+        assert_eq!(shown.status, "closed");
+        assert_eq!(shown.priority, 1);
+        assert_eq!(
+            shown
+                .provider_mapping
+                .as_ref()
+                .map(|mapping| mapping.external_id.as_str()),
+            Some("PROJ-12")
+        );
+        assert!(shown.dependencies.iter().any(|dependency| {
+            dependency.edge_type == "parent-child" && dependency.depends_on_id == "vida-parent"
+        }));
+        let export_path = root.join("exported.jsonl");
+        let exported_count = store
+            .export_tasks_to_jsonl(&export_path)
+            .await
+            .expect("export provider tasks");
+        assert_eq!(exported_count, 2);
+        let exported = fs::read_to_string(&export_path).expect("read export");
+        let exported_child = exported
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("json export row"))
+            .find(|row| row["id"] == "vida-child")
+            .expect("exported child row");
+        assert_eq!(exported_child["provider_mapping"]["provider"], "jira");
+        assert_eq!(exported_child["provider_mapping"]["external_id"], "PROJ-12");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn work_item_provider_mapping_import_rejects_unresolved_external_parent() {
+        let root = unique_temp_root("vida-provider-mapping-missing-parent");
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let child = serde_json::json!({
+            "id": "vida-child",
+            "title": "Provider child",
+            "description": "story",
+            "status": "open",
+            "priority": 4,
+            "issue_type": "",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": [],
+            "provider_mapping": {
+                "provider": "jira",
+                "external_id": "PROJ-12",
+                "external_parent_id": "PROJ-404",
+                "provider_issue_type": "story"
+            },
+            "dependencies": []
+        });
+        fs::write(
+            &source,
+            format!(
+                "{}\n",
+                serde_json::to_string(&child).expect("serialize child")
+            ),
+        )
+        .expect("write provider jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let error = store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect_err("unresolved external parent should fail closed");
+        assert!(error.to_string().contains("unresolved external_parent_id"));
+        assert!(error.to_string().contains("provider=jira"));
+        assert!(error.to_string().contains("external_parent_id=PROJ-404"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -5507,6 +5656,7 @@ hierarchy: framework,contracts
                 labels: Vec::new(),
                 execution_semantics: TaskExecutionSemantics::default(),
                 planner_metadata: TaskPlannerMetadata::default(),
+                provider_mapping: None,
                 dependencies: Vec::new(),
             })
             .await

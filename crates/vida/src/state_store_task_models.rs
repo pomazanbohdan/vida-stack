@@ -55,6 +55,34 @@ pub struct TaskWorkItemKind {
     pub source_tiers: Vec<String>,
 }
 
+#[derive(
+    Debug, Default, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq,
+)]
+pub struct TaskProviderMapping {
+    #[serde(default)]
+    pub schema_version: u32,
+    pub provider: String,
+    pub external_id: String,
+    #[serde(default)]
+    pub external_url: Option<String>,
+    #[serde(default)]
+    pub external_parent_id: Option<String>,
+    #[serde(default)]
+    pub provider_issue_type: Option<String>,
+    #[serde(default)]
+    pub provider_status: Option<String>,
+    #[serde(default)]
+    pub provider_priority: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderWorkItemMappingVerdict {
+    pub canonical_issue_type: String,
+    pub canonical_status: Option<String>,
+    pub canonical_priority: Option<u32>,
+    pub external_parent_id: Option<String>,
+}
+
 pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
     WorkItemTaxonomyEntry {
         canonical_issue_type: "epic",
@@ -272,6 +300,140 @@ pub fn work_item_requires_parent(issue_type: &str) -> bool {
         .unwrap_or(true)
 }
 
+fn normalize_provider_mapping_value(value: &str) -> String {
+    normalize_work_item_issue_type(value)
+}
+
+fn provider_issue_type_map(provider: &str, issue_type: &str) -> Option<&'static str> {
+    let provider = normalize_provider_mapping_value(provider);
+    let issue_type = normalize_provider_mapping_value(issue_type);
+    match (provider.as_str(), issue_type.as_str()) {
+        ("vida", value) => work_item_taxonomy_entry(value).map(|entry| entry.canonical_issue_type),
+        ("jira", "epic") => Some("epic"),
+        ("jira", "story" | "task" | "subtask" | "sub_task") => Some("task"),
+        ("jira", "bug") => Some("defect"),
+        ("github" | "github_issues", "issue") => Some("task"),
+        ("github" | "github_issues", "pull_request" | "pr") => Some("pull_request"),
+        ("linear", "project" | "initiative" | "epic") => Some("epic"),
+        ("linear", "issue" | "task") => Some("task"),
+        ("linear", "bug") => Some("defect"),
+        ("azure_boards" | "azure", "epic") => Some("epic"),
+        ("azure_boards" | "azure", "feature" | "user_story" | "task") => Some("task"),
+        ("azure_boards" | "azure", "bug") => Some("defect"),
+        _ => None,
+    }
+}
+
+fn provider_status_map(status: &str) -> Option<&'static str> {
+    match normalize_provider_mapping_value(status).as_str() {
+        "" => None,
+        "open" | "new" | "todo" | "to_do" | "backlog" => Some("open"),
+        "in_progress" | "progress" | "started" | "doing" | "active" => Some("in_progress"),
+        "paused" | "blocked" => Some("paused"),
+        "done" | "closed" | "complete" | "completed" | "resolved" | "merged" => Some("closed"),
+        _ => None,
+    }
+}
+
+pub(crate) fn provider_external_key(
+    mapping: &TaskProviderMapping,
+) -> Result<(String, String), String> {
+    let provider = normalize_provider_mapping_value(&mapping.provider);
+    if provider.is_empty() {
+        return Err("provider mapping is missing provider".to_string());
+    }
+    let external_id = mapping.external_id.trim().to_string();
+    if external_id.is_empty() {
+        return Err("provider mapping is missing external_id".to_string());
+    }
+    Ok((provider, external_id))
+}
+
+fn provider_priority_map(priority: &str) -> Option<u32> {
+    match normalize_provider_mapping_value(priority).as_str() {
+        "" => None,
+        "0" | "p0" | "critical" | "highest" => Some(0),
+        "1" | "p1" | "high" => Some(1),
+        "2" | "p2" | "medium" | "normal" => Some(2),
+        "3" | "p3" | "low" => Some(3),
+        "4" | "p4" | "lowest" => Some(4),
+        _ => None,
+    }
+}
+
+pub fn map_provider_work_item(
+    mapping: &TaskProviderMapping,
+) -> Result<ProviderWorkItemMappingVerdict, String> {
+    let provider = mapping.provider.trim();
+    if provider.is_empty() {
+        return Err("provider mapping is missing provider".to_string());
+    }
+    let provider_issue_type = mapping
+        .provider_issue_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "provider mapping is missing provider_issue_type".to_string())?;
+    let canonical_issue_type = provider_issue_type_map(provider, provider_issue_type).ok_or_else(|| {
+        format!(
+            "unsupported provider work item type: provider={provider}, provider_issue_type={provider_issue_type}"
+        )
+    })?;
+    let canonical_status = match mapping
+        .provider_status
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(status) => Some(provider_status_map(status).ok_or_else(|| {
+            format!("unsupported provider work item status: provider={provider}, provider_status={status}")
+        })?.to_string()),
+        None => None,
+    };
+    let canonical_priority = match mapping
+        .provider_priority
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(priority) => Some(provider_priority_map(priority).ok_or_else(|| {
+            format!(
+                "unsupported provider work item priority: provider={provider}, provider_priority={priority}"
+            )
+        })?),
+        None => None,
+    };
+    Ok(ProviderWorkItemMappingVerdict {
+        canonical_issue_type: canonical_issue_type.to_string(),
+        canonical_status,
+        canonical_priority,
+        external_parent_id: mapping.external_parent_id.clone(),
+    })
+}
+
+pub(crate) fn apply_provider_mapping_to_task_jsonl_record(
+    record: &mut TaskJsonlRecord,
+) -> Result<(), String> {
+    let Some(mapping) = record.provider_mapping.as_mut() else {
+        return Ok(());
+    };
+    if mapping.schema_version == 0 {
+        mapping.schema_version = 1;
+    }
+    if mapping.external_id.trim().is_empty() {
+        return Err("provider mapping is missing external_id".to_string());
+    }
+    let verdict = map_provider_work_item(mapping)?;
+    record.issue_type = verdict.canonical_issue_type;
+    if let Some(status) = verdict.canonical_status {
+        record.status = status;
+    }
+    if let Some(priority) = verdict.canonical_priority {
+        record.priority = priority;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default, serde::Serialize, SurrealValue, Clone, PartialEq, Eq)]
 pub struct TaskExecutionSemantics {
     #[serde(default)]
@@ -403,6 +565,8 @@ pub(crate) struct TaskJsonlRecord {
     #[serde(default)]
     pub(crate) planner_metadata: TaskPlannerMetadata,
     #[serde(default)]
+    pub(crate) provider_mapping: Option<TaskProviderMapping>,
+    #[serde(default)]
     pub(crate) dependencies: Vec<TaskDependencyJsonlRecord>,
 }
 
@@ -445,6 +609,8 @@ pub(crate) struct TaskContent {
     pub(crate) execution_semantics: TaskExecutionSemantics,
     #[serde(default)]
     pub(crate) planner_metadata: TaskPlannerMetadata,
+    #[serde(default)]
+    pub(crate) provider_mapping: Option<TaskProviderMapping>,
     pub(crate) dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -472,6 +638,8 @@ pub(crate) struct TaskStorageRow {
     pub(crate) execution_semantics: TaskExecutionSemantics,
     #[serde(default)]
     pub(crate) planner_metadata: TaskPlannerMetadata,
+    #[serde(default)]
+    pub(crate) provider_mapping: Option<TaskProviderMapping>,
     pub(crate) dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -499,6 +667,8 @@ pub(crate) struct TaskStorageRowStored {
     pub(crate) execution_semantics: Option<TaskExecutionSemantics>,
     #[serde(default)]
     pub(crate) planner_metadata: Option<TaskPlannerMetadata>,
+    #[serde(default)]
+    pub(crate) provider_mapping: Option<TaskProviderMapping>,
     pub(crate) dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -526,6 +696,8 @@ pub struct TaskRecord {
     pub execution_semantics: TaskExecutionSemantics,
     #[serde(default)]
     pub planner_metadata: TaskPlannerMetadata,
+    #[serde(default)]
+    pub provider_mapping: Option<TaskProviderMapping>,
     pub dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -773,6 +945,7 @@ impl From<TaskJsonlRecord> for TaskContent {
             labels: value.labels,
             execution_semantics: value.execution_semantics,
             planner_metadata: value.planner_metadata,
+            provider_mapping: value.provider_mapping,
             dependencies: value
                 .dependencies
                 .into_iter()
@@ -804,6 +977,7 @@ impl From<TaskContent> for TaskStorageRow {
             labels: value.labels,
             execution_semantics: value.execution_semantics,
             planner_metadata: value.planner_metadata,
+            provider_mapping: value.provider_mapping,
             dependencies: value.dependencies,
         }
     }
@@ -831,6 +1005,7 @@ impl From<TaskStorageRow> for TaskRecord {
             labels: value.labels,
             execution_semantics: value.execution_semantics,
             planner_metadata: value.planner_metadata,
+            provider_mapping: value.provider_mapping,
             dependencies: value.dependencies,
         }
     }
@@ -858,6 +1033,7 @@ impl From<TaskStorageRowStored> for TaskStorageRow {
             labels: value.labels,
             execution_semantics: value.execution_semantics.unwrap_or_default(),
             planner_metadata: value.planner_metadata.unwrap_or_default(),
+            provider_mapping: value.provider_mapping,
             dependencies: value.dependencies,
         }
     }
@@ -885,6 +1061,7 @@ impl From<TaskRecord> for TaskStorageRow {
             labels: value.labels,
             execution_semantics: value.execution_semantics,
             planner_metadata: value.planner_metadata,
+            provider_mapping: value.provider_mapping,
             dependencies: value.dependencies,
         }
     }
@@ -907,9 +1084,10 @@ impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_work_item_issue_type, normalize_work_item_issue_type, task_work_item_kind,
-        work_item_requires_parent, work_item_taxonomy_entry, TaskPlannerMetadata, TaskStorageRow,
-        WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
+        apply_provider_mapping_to_task_jsonl_record, canonical_work_item_issue_type,
+        normalize_work_item_issue_type, task_work_item_kind, work_item_requires_parent,
+        work_item_taxonomy_entry, TaskDependencyJsonlRecord, TaskJsonlRecord, TaskPlannerMetadata,
+        TaskProviderMapping, TaskStorageRow, WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
     };
 
     #[test]
@@ -989,6 +1167,79 @@ mod tests {
         assert_eq!(kind.category, "defect");
         assert!(kind.parent_required);
         assert_eq!(kind.default_flow_binding, "defect_repair_verified");
+    }
+
+    fn provider_mapping_record(provider_issue_type: &str) -> TaskJsonlRecord {
+        TaskJsonlRecord {
+            id: "vida-story-1".to_string(),
+            title: "Story".to_string(),
+            display_id: None,
+            description: String::new(),
+            status: "open".to_string(),
+            priority: 4,
+            issue_type: String::new(),
+            created_at: "2026-03-08T00:00:00Z".to_string(),
+            created_by: "tester".to_string(),
+            updated_at: "2026-03-08T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: Default::default(),
+            planner_metadata: Default::default(),
+            provider_mapping: Some(TaskProviderMapping {
+                schema_version: 0,
+                provider: "jira".to_string(),
+                external_id: "PROJ-12".to_string(),
+                external_url: Some("https://jira.example/browse/PROJ-12".to_string()),
+                external_parent_id: Some("PROJ-1".to_string()),
+                provider_issue_type: Some(provider_issue_type.to_string()),
+                provider_status: Some("resolved".to_string()),
+                provider_priority: Some("p1".to_string()),
+            }),
+            dependencies: vec![TaskDependencyJsonlRecord {
+                issue_id: "vida-story-1".to_string(),
+                depends_on_id: "legacy-parent".to_string(),
+                edge_type: "blocks".to_string(),
+                created_at: "2026-03-08T00:00:00Z".to_string(),
+                created_by: "tester".to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn work_item_provider_mapping_normalizes_jira_story_without_losing_external_identity() {
+        let mut record = provider_mapping_record("story");
+
+        apply_provider_mapping_to_task_jsonl_record(&mut record).expect("provider mapping");
+
+        assert_eq!(record.issue_type, "task");
+        assert_eq!(record.status, "closed");
+        assert_eq!(record.priority, 1);
+        let mapping = record.provider_mapping.expect("provider mapping preserved");
+        assert_eq!(mapping.schema_version, 1);
+        assert_eq!(mapping.provider, "jira");
+        assert_eq!(mapping.external_id, "PROJ-12");
+        assert_eq!(mapping.external_parent_id.as_deref(), Some("PROJ-1"));
+        assert_eq!(mapping.provider_issue_type.as_deref(), Some("story"));
+        assert_eq!(mapping.provider_status.as_deref(), Some("resolved"));
+    }
+
+    #[test]
+    fn work_item_provider_mapping_rejects_unsupported_provider_type() {
+        let mut record = provider_mapping_record("initiative");
+
+        let error = apply_provider_mapping_to_task_jsonl_record(&mut record)
+            .expect_err("unsupported jira type should fail closed");
+
+        assert!(error.contains("unsupported provider work item type"));
+        assert!(error.contains("provider=jira"));
+        assert!(error.contains("provider_issue_type=initiative"));
     }
 
     #[test]

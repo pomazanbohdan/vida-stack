@@ -803,20 +803,115 @@ impl StateStore {
         let mut imported = 0usize;
         let mut unchanged = 0usize;
         let mut updated = 0usize;
+        let existing_tasks = self.all_tasks().await?;
+        let mut provider_external_to_task_id = BTreeMap::new();
+        for task in &existing_tasks {
+            let Some(mapping) = task.provider_mapping.as_ref() else {
+                continue;
+            };
+            let key = provider_external_key(mapping).map_err(|reason| {
+                StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "stored task {} has invalid provider mapping: {reason}",
+                        task.id
+                    ),
+                }
+            })?;
+            if let Some(previous_task_id) =
+                provider_external_to_task_id.insert(key.clone(), task.id.clone())
+            {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "duplicate provider mapping for provider={}, external_id={} between tasks {} and {}",
+                        key.0, key.1, previous_task_id, task.id
+                    ),
+                });
+            }
+        }
+        let mut records = Vec::new();
 
         for (index, record) in Deserializer::from_str(&raw)
             .into_iter::<TaskJsonlRecord>()
             .enumerate()
         {
-            let record = record.map_err(|error| StateStoreError::InvalidTaskJsonLine {
+            let mut record = record.map_err(|error| StateStoreError::InvalidTaskJsonLine {
                 line: index + 1,
                 reason: error.to_string(),
             })?;
+            apply_provider_mapping_to_task_jsonl_record(&mut record).map_err(|reason| {
+                StateStoreError::InvalidTaskRecord {
+                    reason: format!("line {} provider mapping blocked: {reason}", index + 1),
+                }
+            })?;
+            if let Some(mapping) = record.provider_mapping.as_ref() {
+                let key = provider_external_key(mapping).map_err(|reason| {
+                    StateStoreError::InvalidTaskRecord {
+                        reason: format!("line {} provider mapping blocked: {reason}", index + 1),
+                    }
+                })?;
+                if let Some(previous_task_id) =
+                    provider_external_to_task_id.insert(key.clone(), record.id.trim().to_string())
+                {
+                    return Err(StateStoreError::InvalidTaskRecord {
+                        reason: format!(
+                            "duplicate provider mapping for provider={}, external_id={} between tasks {} and {}",
+                            key.0,
+                            key.1,
+                            previous_task_id,
+                            record.id.trim()
+                        ),
+                    });
+                }
+            }
+            records.push((index + 1, record));
+        }
+
+        for (line, mut record) in records {
             let task_id = record.id.trim().to_string();
             if task_id.is_empty() {
                 return Err(StateStoreError::InvalidTaskRecord {
-                    reason: format!("line {} is missing task id", index + 1),
+                    reason: format!("line {line} is missing task id"),
                 });
+            }
+            if let Some(mapping) = record.provider_mapping.as_ref() {
+                if let Some(external_parent_id) = mapping
+                    .external_parent_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    let provider = provider_external_key(mapping)
+                        .map_err(|reason| StateStoreError::InvalidTaskRecord {
+                            reason: format!("line {line} provider mapping blocked: {reason}"),
+                        })?
+                        .0;
+                    let parent_key = (provider.clone(), external_parent_id.to_string());
+                    let parent_task_id = provider_external_to_task_id
+                        .get(&parent_key)
+                        .cloned()
+                        .ok_or_else(|| StateStoreError::InvalidTaskRecord {
+                            reason: format!(
+                                "line {line} provider mapping blocked: unresolved external_parent_id: provider={provider}, external_parent_id={external_parent_id}"
+                            ),
+                        })?;
+                    record
+                        .dependencies
+                        .retain(|dependency| dependency.edge_type != "parent-child");
+                    record.dependencies.push(TaskDependencyJsonlRecord {
+                        issue_id: task_id.clone(),
+                        depends_on_id: parent_task_id,
+                        edge_type: "parent-child".to_string(),
+                        created_at: record.updated_at.clone(),
+                        created_by: record.created_by.clone(),
+                        metadata: format!(
+                            "{{\"source\":\"provider_mapping\",\"external_parent_id\":\"{}\"}}",
+                            external_parent_id
+                                .replace('\\', "\\\\")
+                                .replace('"', "\\\"")
+                        ),
+                        thread_id: String::new(),
+                    });
+                }
             }
 
             let normalized_display_id = self
@@ -1465,6 +1560,7 @@ impl StateStore {
             labels: normalized_labels,
             execution_semantics,
             planner_metadata,
+            provider_mapping: None,
             dependencies,
         };
         if status == "closed" {
@@ -2285,6 +2381,7 @@ mod tests {
             labels: Vec::new(),
             execution_semantics: TaskExecutionSemantics::default(),
             planner_metadata: TaskPlannerMetadata::default(),
+            provider_mapping: None,
             dependencies: Vec::new(),
         }
     }

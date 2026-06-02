@@ -2139,6 +2139,7 @@ mod tests {
             labels: labels.iter().map(|label| label.to_string()).collect(),
             execution_semantics: TaskExecutionSemantics::default(),
             planner_metadata: state_store::TaskPlannerMetadata::default(),
+            provider_mapping: None,
             dependencies: Vec::new(),
         }
     }

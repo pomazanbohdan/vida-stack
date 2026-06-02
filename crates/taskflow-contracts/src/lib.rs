@@ -36,6 +36,18 @@ pub struct WorkItemKind {
     pub source_tiers: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkItemProviderMapping {
+    pub schema_version: u32,
+    pub provider: String,
+    pub external_id: String,
+    pub external_url: Option<String>,
+    pub external_parent_id: Option<String>,
+    pub provider_issue_type: Option<String>,
+    pub provider_status: Option<String>,
+    pub provider_priority: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyEdge {
     pub issue_id: TaskId,

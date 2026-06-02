@@ -431,6 +431,7 @@ mod tests {
             labels: Vec::new(),
             execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
             planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+            provider_mapping: None,
             dependencies: Vec::new(),
         }
     }

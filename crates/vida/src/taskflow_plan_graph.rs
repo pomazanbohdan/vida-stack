@@ -1939,6 +1939,7 @@ fn simulate_materialized_graph(
             labels: node.labels.clone(),
             execution_semantics: node.execution_semantics.clone(),
             planner_metadata: planner_metadata_from_node(node),
+            provider_mapping: None,
             dependencies,
         });
     }

@@ -1681,6 +1681,7 @@ fn build_split_mutation_preview(
             labels: source.labels.clone(),
             planner_metadata: source.planner_metadata.clone(),
             execution_semantics: inherited_semantics.clone(),
+            provider_mapping: None,
             dependencies,
         });
         planned_tasks.push(TaskMutationPlannedTask {
@@ -1833,6 +1834,7 @@ fn build_spawn_blocker_preview(
         labels: blocker_labels.clone(),
         planner_metadata: source.planner_metadata.clone(),
         execution_semantics: blocker_semantics.clone(),
+        provider_mapping: None,
         dependencies: blocker_parent_id
             .iter()
             .map(|parent_id| state_store::TaskDependencyRecord {
@@ -5756,6 +5758,7 @@ mod tests {
                 estimate: None,
                 lane_hint: None,
             },
+            provider_mapping: None,
             dependencies: Vec::new(),
         }
     }

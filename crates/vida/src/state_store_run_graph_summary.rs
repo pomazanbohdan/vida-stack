@@ -3299,6 +3299,7 @@ mod tests {
             labels: Vec::new(),
             execution_semantics: TaskExecutionSemantics::default(),
             planner_metadata: TaskPlannerMetadata::default(),
+            provider_mapping: None,
             dependencies: Vec::new(),
         }
     }

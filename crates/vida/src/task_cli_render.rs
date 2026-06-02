@@ -1095,6 +1095,7 @@ mod tests {
             labels: vec!["operator-dx".to_string()],
             execution_semantics: TaskExecutionSemantics::default(),
             planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+            provider_mapping: None,
             dependencies: Vec::new(),
         }
     }
