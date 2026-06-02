@@ -5788,6 +5788,20 @@ fn task_close_json_surfaces_canonical_feedback_blockers_without_masking_successf
         ],
         &state_dir,
     );
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-proof-context-close",
+            "Feedback proof context close",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
 
     let audit_close = run_with_state_lock_retry(|| {
         let mut command = vida();
@@ -5821,6 +5835,43 @@ fn task_close_json_surfaces_canonical_feedback_blockers_without_masking_successf
         audit_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
         "success"
     );
+
+    let proof_context_close = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "close",
+                "feedback-proof-context-close",
+                "--reason",
+                "Implemented close feedback proof classification regression coverage. Successful close proof text references historical rework evidence and regression fixes; proof commands passed.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        proof_context_close.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&proof_context_close.stdout),
+        String::from_utf8_lossy(&proof_context_close.stderr)
+    );
+    let proof_context_json: serde_json::Value = serde_json::from_slice(&proof_context_close.stdout)
+        .expect("proof context close json should parse");
+    assert_eq!(proof_context_json["status"], "pass");
+    assert_eq!(proof_context_json["task"]["status"], "closed");
+    assert_eq!(
+        proof_context_json["host_agent_telemetry"]["status"],
+        "recorded"
+    );
+    assert_eq!(
+        proof_context_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(proof_context_json["blocker_codes"], serde_json::json!([]));
 
     let blocked_close = run_command_capture(
         &[
