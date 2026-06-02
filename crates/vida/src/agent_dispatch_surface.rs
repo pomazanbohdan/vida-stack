@@ -334,12 +334,12 @@ fn task_flow_lookup_keys(task: &state_store::TaskRecord) -> Vec<String> {
         push_unique_lookup_key(&mut keys, inferred_task_class);
     }
     let work_item_kind = state_store::task_work_item_kind(&task.issue_type);
-    push_unique_lookup_key(&mut keys, work_item_kind.default_flow_binding);
     push_unique_lookup_key(&mut keys, work_item_kind.canonical_issue_type);
     if let Some(provider_issue_type) = work_item_kind.provider_issue_type {
         push_unique_lookup_key(&mut keys, provider_issue_type);
     }
     push_unique_lookup_key(&mut keys, &task.issue_type);
+    push_unique_lookup_key(&mut keys, work_item_kind.default_flow_binding);
     keys
 }
 
@@ -348,11 +348,34 @@ fn selected_dev_team_flow_for_task<'a>(
     task: &state_store::TaskRecord,
 ) -> Option<&'a serde_json::Value> {
     for lookup_key in task_flow_lookup_keys(task) {
-        if let Some(flow) = selected_dev_team_flow_for_work_item(readiness, Some(&lookup_key)) {
+        if let Some(flow) = selected_dev_team_flow_for_lookup_key(readiness, &lookup_key) {
             return Some(flow);
         }
     }
     selected_dev_team_flow_for_work_item(readiness, None)
+}
+
+fn selected_dev_team_flow_for_lookup_key<'a>(
+    readiness: &'a serde_json::Value,
+    work_item_type: &str,
+) -> Option<&'a serde_json::Value> {
+    let flows = readiness["flows"].as_array()?;
+    for lookup_key in work_item_type_lookup_keys(work_item_type) {
+        if let Some(flow_id) = readiness["work_item_flow_bindings"]
+            .get(&lookup_key)
+            .and_then(serde_json::Value::as_str)
+        {
+            if let Some(flow) = flows
+                .iter()
+                .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
+            {
+                return Some(flow);
+            }
+        }
+    }
+    flows
+        .iter()
+        .find(|flow| flow_matches_work_item_type(flow, work_item_type))
 }
 
 fn selected_dev_team_flow_for_work_item<'a>(
@@ -365,23 +388,7 @@ fn selected_dev_team_flow_for_work_item<'a>(
         .filter(|value| !value.is_empty())
         .map(str::to_ascii_lowercase);
     if let Some(work_item_type) = normalized_type.as_deref() {
-        for lookup_key in work_item_type_lookup_keys(work_item_type) {
-            if let Some(flow_id) = readiness["work_item_flow_bindings"]
-                .get(&lookup_key)
-                .and_then(serde_json::Value::as_str)
-            {
-                if let Some(flow) = flows
-                    .iter()
-                    .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
-                {
-                    return Some(flow);
-                }
-            }
-        }
-        if let Some(flow) = flows
-            .iter()
-            .find(|flow| flow_matches_work_item_type(flow, work_item_type))
-        {
+        if let Some(flow) = selected_dev_team_flow_for_lookup_key(readiness, work_item_type) {
             return Some(flow);
         }
     }
