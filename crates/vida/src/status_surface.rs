@@ -1092,7 +1092,25 @@ async fn refresh_cached_status_projection_runtime_fields(
         .to_string();
 
     let object = payload.as_object_mut()?;
+    let active_bounded_unit = continuation_binding
+        .get("active_bounded_unit")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let why_this_unit = continuation_binding
+        .get("why_this_unit")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let sequential_vs_parallel_posture = continuation_binding
+        .get("sequential_vs_parallel_posture")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     object.insert("continuation_binding".to_string(), continuation_binding);
+    object.insert("active_bounded_unit".to_string(), active_bounded_unit);
+    object.insert("why_this_unit".to_string(), why_this_unit);
+    object.insert(
+        "sequential_vs_parallel_posture".to_string(),
+        sequential_vs_parallel_posture,
+    );
     object.insert(
         "root_session_write_guard".to_string(),
         root_session_write_guard.clone(),
@@ -1482,7 +1500,7 @@ mod tests {
                 display_id: None,
                 description: "test task",
                 issue_type: "task",
-                status: "open",
+                status: "in_progress",
                 priority: 1,
                 parent_id: Some("task-live-status-parent"),
                 labels: &[],
@@ -1557,6 +1575,18 @@ mod tests {
         assert_eq!(
             payload["latest_run_graph_status"]["run_id"],
             "run-live-status"
+        );
+        assert_eq!(
+            payload["active_bounded_unit"]["task_id"],
+            "task-live-status"
+        );
+        assert_eq!(
+            payload["why_this_unit"],
+            "Single TaskFlow in_progress task is the authoritative active bounded unit."
+        );
+        assert_eq!(
+            payload["sequential_vs_parallel_posture"],
+            "sequential_only_taskflow_active"
         );
         assert_eq!(
             payload["projection_cache"]["status"],
