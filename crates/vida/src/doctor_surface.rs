@@ -854,13 +854,31 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             .filter(|value| !value.is_empty())
                             .is_none()
                 });
-            let latest_run_graph_terminal_closure =
-                latest_run_graph_status.as_ref().is_some_and(|status| {
-                    status.status == "completed"
+            let latest_run_graph_terminal_closure = match latest_run_graph_status.as_ref() {
+                Some(status)
+                    if status.status == "completed"
                         && status.lifecycle_stage == "closure_complete"
                         && status.resume_target == "none"
-                        && status.next_node.as_deref().map(str::trim).is_none()
-                });
+                        && status.next_node.as_deref().map(str::trim).is_none() =>
+                {
+                    match store
+                        .task_close_reconcile_has_persisted_receipt_truth(
+                            &status.run_id,
+                            &status.task_id,
+                        )
+                        .await
+                    {
+                        Ok(has_truth) => has_truth,
+                        Err(error) => {
+                            eprintln!(
+                                "latest run graph terminal closure evidence: failed ({error})"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    }
+                }
+                _ => false,
+            };
             let unresolved_closed_task_active_run = !latest_run_graph_terminal_closure
                 && latest_run_graph_task_closed
                 || latest_terminal_task_active_run_graph_status.is_some();

@@ -852,13 +852,6 @@ impl StateStore {
                 .build_task_close_reconciled_binding(&status, task_id)
                 .await?
             else {
-                if status.task_id == task_id && status.status != "completed" {
-                    let retired_status = Self::task_close_retired_run_graph_status(
-                        status,
-                        "task_close_closed_task_stale_run_retired",
-                    );
-                    self.record_run_graph_status(&retired_status).await?;
-                }
                 self.clear_run_graph_continuation_binding(&run_id).await?;
                 continue;
             };
@@ -918,6 +911,13 @@ impl StateStore {
                 Err(error) => return Err(error),
             };
             if !Self::task_status_is_closed_like(&task.status) {
+                skipped_count += 1;
+                continue;
+            }
+            if !self
+                .task_close_reconcile_has_persisted_receipt_truth(&row.run_id, &row.task_id)
+                .await?
+            {
                 skipped_count += 1;
                 continue;
             }
