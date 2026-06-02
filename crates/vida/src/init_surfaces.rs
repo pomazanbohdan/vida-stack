@@ -4047,14 +4047,17 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
     if args.json {
+        let projection_name = orchestrator_init_projection_name(args.full);
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
             &state_dir,
-            orchestrator_init_projection_name(args.full),
+            projection_name,
         ) {
             let rendered = if let Some(overlay) =
-                crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+                crate::operator_projection_cache::read_runtime_continuation_binding_overlay_newer_than_projection(
                     &state_dir,
-                ) {
+                    projection_name,
+                )
+            {
                 crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_fresh_payload(
                     &state_dir,
                     &cached,
