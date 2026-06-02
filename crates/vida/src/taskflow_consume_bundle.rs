@@ -1460,6 +1460,7 @@ fn dev_team_flows(
                 "work_item_bindings",
                 "sequential",
                 "allow_parallel_handoffs",
+                "fail_closed_on_missing_step_contract",
                 "lifecycle_hook_templates",
                 "proof_gates",
                 "resume_transitions",
@@ -1978,6 +1979,7 @@ dev_team:
       enabled: true
       sequential: true
       allow_parallel_handoffs: false
+      fail_closed_on_missing_step_contract: true
       steps: [developer, coach]
 "#,
         )
@@ -2013,6 +2015,7 @@ dev_team:
         );
 
         assert_eq!(readiness["status"], "ready");
+        assert_eq!(readiness["blockers"], serde_json::json!([]));
         assert_eq!(readiness["configured"], true);
         assert_eq!(
             readiness["sequence"],
