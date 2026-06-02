@@ -953,6 +953,105 @@ fn parse_label_values(values: &[String]) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+fn parse_proof_target_values(values: &[String]) -> Vec<String> {
+    normalize_proof_target_commands(parse_label_values(values))
+}
+
+fn normalize_proof_target_commands(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .flat_map(|value| normalize_proof_target_command(&value))
+        .collect()
+}
+
+fn normalize_proof_target_command(value: &str) -> Vec<String> {
+    let command = normalize_stale_proof_target_command(value);
+    split_cargo_test_proof_target(&command).unwrap_or_else(|| vec![command])
+}
+
+fn normalize_stale_proof_target_command(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed == "vida diagnostics --json" {
+        return "vida diagnostics post-commit --json".to_string();
+    }
+    if trimmed.starts_with("vida docflow protocol-coverage-check ") {
+        let mut tokens = trimmed.split_whitespace().peekable();
+        let mut normalized = Vec::new();
+        while let Some(token) = tokens.next() {
+            if token == "--format" {
+                let _ = tokens.next();
+                continue;
+            }
+            normalized.push(token);
+        }
+        return normalized.join(" ");
+    }
+    trimmed.to_string()
+}
+
+fn split_cargo_test_proof_target(command: &str) -> Option<Vec<String>> {
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 4 || tokens[0] != "cargo" || tokens[1] != "test" {
+        return None;
+    }
+
+    let separator_index = tokens
+        .iter()
+        .position(|token| *token == "--")
+        .unwrap_or(tokens.len());
+    let mut base = vec![tokens[0], tokens[1]];
+    let mut filters = Vec::new();
+    let mut index = 2;
+    while index < separator_index {
+        let token = tokens[index];
+        if token.starts_with('-') {
+            base.push(token);
+            if cargo_test_option_takes_value(token) && index + 1 < separator_index {
+                index += 1;
+                base.push(tokens[index]);
+            }
+        } else {
+            filters.push(token);
+        }
+        index += 1;
+    }
+
+    if filters.len() <= 1 {
+        return None;
+    }
+
+    let tail = &tokens[separator_index..];
+    Some(
+        filters
+            .into_iter()
+            .map(|filter| {
+                base.iter()
+                    .chain(std::iter::once(&filter))
+                    .chain(tail.iter())
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect(),
+    )
+}
+
+fn cargo_test_option_takes_value(option: &str) -> bool {
+    matches!(
+        option,
+        "-p" | "--package"
+            | "--exclude"
+            | "--features"
+            | "--target"
+            | "--target-dir"
+            | "--manifest-path"
+            | "--message-format"
+            | "--profile"
+            | "--jobs"
+            | "-j"
+    )
+}
+
 fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
     value.map(|value| {
         value
@@ -974,7 +1073,7 @@ fn task_create_planner_metadata_arg(command: &TaskCreateArgs) -> state_store::Ta
     state_store::TaskPlannerMetadata {
         owned_paths: parse_label_values(&command.owned_paths),
         acceptance_targets: parse_label_values(&command.acceptance_targets),
-        proof_targets: parse_label_values(&command.proof_targets),
+        proof_targets: parse_proof_target_values(&command.proof_targets),
         ..state_store::TaskPlannerMetadata::default()
     }
 }
@@ -997,7 +1096,7 @@ fn task_update_planner_metadata_arg(
     }
     let proof_targets = parse_label_values(&command.proof_targets);
     if !proof_targets.is_empty() {
-        metadata.proof_targets = proof_targets;
+        metadata.proof_targets = normalize_proof_target_commands(proof_targets);
     }
     Some(metadata)
 }
@@ -5841,8 +5940,8 @@ mod tests {
         canonical_json_string_array_entries, classify_task_close_git_stage_failure,
         ensure_existing_task_mismatch_reason, load_adaptive_preview_finding_json,
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
-        parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        pass_completed_lane_task_next_lawful_receipt,
+        parse_label_values, parse_optional_label_value, parse_proof_target_values,
+        parse_split_child_specs, pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
@@ -5852,12 +5951,13 @@ mod tests {
         task_close_epic_progress_summary, task_close_feedback_blocker_summary,
         task_close_host_agent_telemetry, task_close_result_payload,
         task_close_uses_isolated_state_dir, task_continuation_candidate,
-        task_create_semantics_mismatch, task_create_semantics_requested, task_create_title,
-        task_critical_path_snapshot_first, task_handoff_accept_receipt,
-        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
-        task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
-        task_parent_id, task_ready_authoritative_first, task_update_planner_metadata_arg,
-        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_create_planner_metadata_arg, task_create_semantics_mismatch,
+        task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
+        task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
+        task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
+        task_owned_status_receipt, task_parent_id, task_ready_authoritative_first,
+        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -5977,7 +6077,9 @@ mod tests {
                 "crates/vida/src/task_surface.rs".to_string(),
                 "crates/vida/src/cli.rs".to_string(),
             ],
-            proof_targets: vec!["cargo test -p vida task_update_planner_metadata".to_string()],
+            proof_targets: vec![
+                "cargo test -p vida task_update_planner_metadata proof_target_values".to_string(),
+            ],
             ..Default::default()
         };
 
@@ -5994,11 +6096,34 @@ mod tests {
         assert_eq!(metadata.acceptance_targets, existing.acceptance_targets);
         assert_eq!(
             metadata.proof_targets,
-            vec!["cargo test -p vida task_update_planner_metadata".to_string()]
+            vec![
+                "cargo test -p vida task_update_planner_metadata".to_string(),
+                "cargo test -p vida proof_target_values".to_string(),
+            ]
         );
         assert_eq!(metadata.risk, existing.risk);
         assert_eq!(metadata.estimate, existing.estimate);
         assert_eq!(metadata.lane_hint, existing.lane_hint);
+    }
+
+    #[test]
+    fn task_create_planner_metadata_normalizes_proof_targets() {
+        let mut command = minimal_task_create_args(Some("Task"), None);
+        command.proof_targets = vec![
+            "vida diagnostics --json".to_string(),
+            "vida docflow protocol-coverage-check --profile active-canon --format jsonl"
+                .to_string(),
+        ];
+
+        let metadata = task_create_planner_metadata_arg(&command);
+
+        assert_eq!(
+            metadata.proof_targets,
+            vec![
+                "vida diagnostics post-commit --json",
+                "vida docflow protocol-coverage-check --profile active-canon",
+            ]
+        );
     }
 
     #[test]
@@ -8173,6 +8298,39 @@ mod tests {
             "delta, ,epsilon".to_string(),
         ]);
         assert_eq!(labels, vec!["alpha", "beta", "gamma", "delta", "epsilon"]);
+    }
+
+    #[test]
+    fn proof_target_values_split_multi_filter_cargo_test_commands() {
+        let proof_targets = parse_proof_target_values(&[
+            "cargo test -p vida work_item_taxonomy operator_contracts development_flow_catalog -- --nocapture --test-threads=1".to_string(),
+        ]);
+
+        assert_eq!(
+            proof_targets,
+            vec![
+                "cargo test -p vida work_item_taxonomy -- --nocapture --test-threads=1",
+                "cargo test -p vida operator_contracts -- --nocapture --test-threads=1",
+                "cargo test -p vida development_flow_catalog -- --nocapture --test-threads=1",
+            ]
+        );
+    }
+
+    #[test]
+    fn proof_target_values_normalize_stale_diagnostics_and_docflow_flags() {
+        let proof_targets = parse_proof_target_values(&[
+            "vida diagnostics --json".to_string(),
+            "vida docflow protocol-coverage-check --profile active-canon --format jsonl"
+                .to_string(),
+        ]);
+
+        assert_eq!(
+            proof_targets,
+            vec![
+                "vida diagnostics post-commit --json",
+                "vida docflow protocol-coverage-check --profile active-canon",
+            ]
+        );
     }
 
     #[test]
