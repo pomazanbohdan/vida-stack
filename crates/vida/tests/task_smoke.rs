@@ -5363,7 +5363,7 @@ fn task_close_preserves_unevidenced_closed_task_active_run_projection() {
 }
 
 #[test]
-fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
+fn task_reconcile_closed_runs_retires_receipt_backed_historical_active_batch() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
@@ -5493,19 +5493,20 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
     );
     assert_eq!(reconcile["status"], "pass");
     assert_eq!(
-        reconcile["summary"]["reconciled_count"], 0,
-        "historical reconciliation must not retire closed-task active runs without receipt-backed execution evidence: {reconcile}"
+        reconcile["summary"]["reconciled_count"], 2,
+        "historical reconciliation should retire receipt-backed closed-task active runs: {reconcile}"
     );
+    assert_eq!(reconcile["summary"]["skipped_count"], 0);
 
     let after = run_command_json(&["doctor", "--json"], &state_dir);
     let after_blockers = require_json_string_array(&after["blocker_codes"], "after blockers");
     assert!(
-        after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
-        "unevidenced closed-task active run batch should remain blocked after reconcile command: {after}"
+        !after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "receipt-backed closed-task active run batch should be retired after reconcile command: {after}"
     );
-    assert_eq!(
-        after["latest_terminal_task_active_run_graph_status"]["task_id"],
-        "task-reconcile-closed-runs-b"
+    assert!(
+        after["latest_terminal_task_active_run_graph_status"].is_null(),
+        "receipt-backed active run graph should be cleared by reconcile: {after}"
     );
 
     let _ = fs::remove_dir_all(&state_dir);

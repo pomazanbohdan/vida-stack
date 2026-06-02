@@ -620,16 +620,19 @@ impl StateStore {
             return Ok(false);
         };
 
-        Ok(matches!(plan.status.as_str(), "completed")
-            && plan.next_node.is_none()
-            && !matches!(
-                route.lifecycle_stage.as_str(),
-                "analysis_blocked"
-                    | "implementation_blocked"
-                    | "verification_blocked"
-                    | "closure_blocked"
-            )
-            && governance.handoff_state == "none"
+        Ok(!matches!(
+            plan.status.as_str(),
+            "analysis_blocked"
+                | "implementation_blocked"
+                | "verification_blocked"
+                | "closure_blocked"
+        ) && !matches!(
+            route.lifecycle_stage.as_str(),
+            "analysis_blocked"
+                | "implementation_blocked"
+                | "verification_blocked"
+                | "closure_blocked"
+        ) && governance.handoff_state == "none"
             && resume.resume_target == "none")
     }
 
