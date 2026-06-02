@@ -269,6 +269,30 @@ Classify request intent before task resolution:
    - starts as `answer_only`,
    - enters tracked execution only after explicit mutation decision, approved task context, or user-confirmed execution scope.
 
+## Source-Neutral Work-Signal Rule
+
+Before any tracked work signal becomes implementation, orchestration must classify its source without hardcoding one source family as the workflow law.
+
+Supported generic source classes include:
+
+1. `pull_request`,
+2. `external_downstream_report`,
+3. `runtime_defect`,
+4. `ci_failure`,
+5. `release_task`,
+6. `optimization`,
+7. `documentation_process`,
+8. `operator_surface_gap`,
+9. `feature_or_capability_request`.
+
+Rules:
+
+1. source-specific protocols add evidence requirements only; they do not replace active-unit binding, TaskFlow truth, route admissibility, writer ownership, or proof law,
+2. every source class must be actualized into the canonical task-state surface before write-producing work starts,
+3. task notes or linked evidence must record source class, priority basis, expected behavior, owned/read-only scope, proof target, and sequential/parallel posture,
+4. if the source-specific owner is missing, contradictory, or weaker than the generic runtime law, orchestration must create or update a specification-clarification or runtime-defect item before implementation,
+5. a source that arrives after a local proof or push, including CI feedback, is a new work signal; it must be ranked through the same source-neutral priority model rather than silently blocking the current local development loop.
+
 ## Orchestration Lenses
 
 1. `discovery`
@@ -648,10 +672,10 @@ Escalate when any are true:
 artifact_path: config/instructions/instruction-contracts/core.orchestration.protocol
 artifact_type: instruction_contract
 artifact_version: '1'
-artifact_revision: '2026-03-09'
+artifact_revision: 2026-06-02
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/core.orchestration-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: 2026-06-02T06:40:00+03:00
 changelog_ref: core.orchestration-protocol.changelog.jsonl

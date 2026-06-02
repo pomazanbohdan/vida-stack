@@ -35,6 +35,22 @@ It does not own:
 2. Do not invent ad hoc build/deploy/audit commands when a project script already exists.
 3. If project operational guidance changes, update project-owned docs and scripts, not framework-owned instruction canon.
 
+## Local Proof And Remote Gate Boundary
+
+Local proof is the default development gate for ordinary bounded work. Remote automation signals, including CI after push, must not block active local development unless the active bounded unit explicitly owns mainline admission, release admission, installer validation, or CI architecture repair.
+
+Generic rules:
+
+1. select the cheapest proof that exercises the changed owner surface,
+2. prefer docs/script checks for docs-only or process-only edits,
+3. prefer focused package tests, focused command probes, or debug builds for active code repair,
+4. reserve release builds, installer checks, and installed-runtime validation for bounded tasks whose acceptance target requires those artifacts,
+5. after a pushed local-proof-green slice, continue to the next lawful bounded item without waiting on remote automation,
+6. when remote automation later reports a failure, classify it as a source-neutral work signal and route it through orchestration and TaskFlow priority law,
+7. do not rerun long remote or local gates merely to discover hidden details; first improve artifact capture, JSON output, focused repro commands, or local fast proof coverage.
+
+Admission tasks may override this boundary only by naming the admission surface and proof owner explicitly.
+
 ## Project Preconditions
 
 1. Framework policy stays generic in framework-owned surfaces.
@@ -89,10 +105,10 @@ Operator examples and concrete command snippets may live in:
 artifact_path: config/runtime-instructions/command-execution-discipline.protocol
 artifact_type: runtime_instruction
 artifact_version: '1'
-artifact_revision: '2026-03-11'
+artifact_revision: 2026-06-02
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.command-execution-discipline-protocol.md
 created_at: '2026-03-11T00:00:00+02:00'
-updated_at: '2026-03-11T13:02:48+02:00'
+updated_at: 2026-06-02T06:40:00+03:00
 changelog_ref: work.command-execution-discipline-protocol.changelog.jsonl
