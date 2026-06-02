@@ -1,15 +1,41 @@
 param(
-    [ValidateSet("script-check", "quick", "focused-nextest", "workspace-nextest", "runtime-smoke", "release-install", "target-dir-policy")]
+    [ValidateSet("script-check", "quick", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy")]
     [string]$Mode = "quick",
     [string]$TestFilter = "",
     [int]$Jobs = 0,
-    [switch]$Json
+    [switch]$Json,
+    [Alias("h")]
+    [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 $Records = New-Object System.Collections.Generic.List[object]
 $OriginalCargoTargetDir = $env:CARGO_TARGET_DIR
+
+function Show-Help {
+    @"
+Usage:
+  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode <mode> [-Json] [-Jobs <n>] [-TestFilter <filter>]
+
+Modes:
+  script-check      No-Cargo proof for diffs and script syntax.
+  quick             Debug source proof: git diff check, cargo fmt, cargo check.
+  focused-nextest   Focused vida package test proof; requires -TestFilter.
+  package-nextest   Full vida package test proof with the default nextest profile.
+  workspace-nextest Workspace nextest proof with the CI profile.
+  doc-test          Workspace Rust doc tests.
+  build-debug       Debug build of supported runtime entrypoints.
+  runtime-smoke     Build debug vida and run status from the effective target dir.
+  release-package   Build release archives with scripts/build-release.sh.
+  release-install   Installed launcher proof through vida release install.
+  target-dir-policy Print the effective Cargo target directory policy.
+
+Notes:
+  Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
+  JSON mode records operation timing and log artifact paths under .vida/data/state/command-timing.
+"@
+}
 
 function Resolve-CargoTargetDirPolicy {
     $normalizedRoot = [System.IO.Path]::GetFullPath($RootDir)
@@ -99,6 +125,44 @@ function Invoke-Timed {
     }
 }
 
+function Add-SkippedRecord {
+    param(
+        [string]$OperationId,
+        [string]$Reason
+    )
+
+    $Records.Add([pscustomobject]@{
+        operation_id = $OperationId
+        command_or_surface = $Reason
+        cwd_or_context = $RootDir
+        started_at = (Get-Date).ToString("o")
+        duration_ms = 0
+        exit_status = "skipped"
+        classification = "fast"
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_refs = @()
+    })
+}
+
+function Test-CommandExists {
+    param([string]$Name)
+    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Get-ChangedBashScripts {
+    $paths = New-Object System.Collections.Generic.SortedSet[string]
+    foreach ($diffMode in @(@(), @("--cached"))) {
+        $changed = & git diff @diffMode --name-only -- "scripts/*.sh" "install/*.sh"
+        foreach ($path in $changed) {
+            if (-not [string]::IsNullOrWhiteSpace($path)) {
+                [void]$paths.Add($path)
+            }
+        }
+    }
+    return [string[]]@($paths)
+}
+
 function New-NextestCommand {
     param(
         [string[]]$Args
@@ -117,6 +181,11 @@ function New-NextestCommand {
         $command.Add([string]$Jobs)
     }
     return $command.ToArray()
+}
+
+if ($Help) {
+    Show-Help
+    exit 0
 }
 
 Push-Location $RootDir
@@ -143,7 +212,20 @@ try {
             "-Command",
             '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/vida-dev-gate.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
         )
+        [string[]]$changedBashScripts = @(Get-ChangedBashScripts)
+        if ($changedBashScripts.Count -eq 0) {
+            Add-SkippedRecord "bash-script-parse" "no changed Bash scripts"
+        } elseif (Test-CommandExists "bash") {
+            if ($changedBashScripts.Count -eq 1) {
+                Invoke-Timed "bash-script-parse" @("bash", "-n", $changedBashScripts[0])
+            } else {
+                Invoke-Timed "bash-script-parse" (@("bash", "-n", "-c", 'for f in "$@"; do source "$f"; done', "_") + $changedBashScripts)
+            }
+        } else {
+            Add-SkippedRecord "bash-script-parse" "bash not found; skipped Bash script syntax checks"
+        }
     } elseif ($Mode -eq "quick") {
+        Invoke-Timed "git-diff-check" @("git", "diff", "--check")
         Invoke-Timed "cargo-fmt-check" @("cargo", "fmt", "-p", "vida", "--", "--check")
         Invoke-Timed "cargo-check-vida" @("cargo", "check", "--locked", "-p", "vida")
     } elseif ($Mode -eq "focused-nextest") {
@@ -154,11 +236,23 @@ try {
         if ($TestFilter.Trim().Length -gt 0) {
             Invoke-Timed "nextest-focused" (New-NextestCommand @("-p", "vida", "--profile", "default", $TestFilter))
         }
+    } elseif ($Mode -eq "package-nextest") {
+        Invoke-Timed "nextest-package-vida" (New-NextestCommand @("-p", "vida", "--profile", "default"))
     } elseif ($Mode -eq "workspace-nextest") {
         Invoke-Timed "nextest-workspace" (New-NextestCommand @("--workspace", "--profile", "ci"))
+    } elseif ($Mode -eq "doc-test") {
+        Invoke-Timed "cargo-doc-tests" @("cargo", "test", "--workspace", "--doc", "--locked")
+    } elseif ($Mode -eq "build-debug") {
+        Invoke-Timed "cargo-build-debug-entrypoints" @("cargo", "build", "--locked", "-p", "vida", "-p", "taskflow-cli", "-p", "docflow-cli", "-p", "vida-pi-agent")
     } elseif ($Mode -eq "runtime-smoke") {
-        Invoke-Timed "cargo-build-debug" @("cargo", "build", "-p", "vida")
+        Invoke-Timed "cargo-build-debug" @("cargo", "build", "--locked", "-p", "vida")
         Invoke-Timed "debug-vida-status" @($DebugVidaPath, "status", "--json")
+    } elseif ($Mode -eq "release-package") {
+        if (-not (Test-CommandExists "bash")) {
+            Write-Error "-Mode release-package requires bash."
+            exit 2
+        }
+        Invoke-Timed "release-package" @("bash", "scripts/build-release.sh")
     } elseif ($Mode -eq "release-install") {
         Invoke-Timed "vida-release-install" @("vida", "release", "install", "--json")
         Invoke-Timed "installed-vida-status" @("vida", "status", "--json")

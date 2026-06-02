@@ -92,6 +92,7 @@ fi
 DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_ROOT="$DIST_DIR/package"
 STAGE_DIR="$PACKAGE_ROOT/$ARCHIVE_BASE"
+CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
 if [[ "$WINDOWS_RELEASE" == "yes" ]]; then
   VIDA_BIN="$STAGE_DIR/bin/vida.exe"
   TASKFLOW_BIN="$STAGE_DIR/bin/taskflow.exe"
@@ -137,9 +138,9 @@ fi
 copy_runtime_binary() {
   local binary_name="$1"
   local destination="$2"
-  local source="$ROOT_DIR/target/release/$binary_name"
+  local source="$CARGO_TARGET_ROOT/release/$binary_name"
   if [[ "$WINDOWS_RELEASE" == "yes" ]]; then
-    source="$ROOT_DIR/target/release/${binary_name}.exe"
+    source="$CARGO_TARGET_ROOT/release/${binary_name}.exe"
   fi
   [[ -f "$source" ]] || fail "Missing built runtime binary for release target ${RELEASE_SUFFIX:-default}: $source"
   cp "$source" "$destination"

@@ -26,11 +26,15 @@ Current proof commands:
 1. `scripts/vida-dev-gate.ps1 -Mode script-check -Json`
 2. `scripts/vida-dev-gate.ps1 -Mode quick -Json`
 3. `scripts/vida-dev-gate.ps1 -Mode focused-nextest -TestFilter <filter> -Json`
-4. `scripts/vida-dev-gate.ps1 -Mode workspace-nextest -Json`
-5. `cargo nextest run --locked -p vida --profile default <filter>`
-6. `cargo nextest run --locked --workspace --profile ci`
-7. `cargo test --workspace --doc --locked`
-8. `vida docflow check --root . <changed-docs> --json`
+4. `scripts/vida-dev-gate.ps1 -Mode package-nextest -Json`
+5. `scripts/vida-dev-gate.ps1 -Mode workspace-nextest -Json`
+6. `scripts/vida-dev-gate.ps1 -Mode doc-test -Json`
+7. `scripts/vida-dev-gate.ps1 -Mode build-debug -Json`
+8. `scripts/vida-dev-gate.ps1 -Mode runtime-smoke -Json`
+9. `scripts/vida-dev-gate.ps1 -Mode release-package -Json`
+10. `scripts/vida-dev-gate.ps1 -Mode release-install -Json`
+11. `scripts/vida-dev-gate.ps1 -Mode target-dir-policy -Json`
+12. `vida docflow check --root . <changed-docs> --json`
 
 Current focused Rust test harness condition:
 
@@ -409,5 +413,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/vida1-development-conditions.md
 created_at: '2026-03-11T09:00:00+02:00'
-updated_at: '2026-06-02T03:30:00+03:00'
+updated_at: '2026-06-02T03:58:00+03:00'
 changelog_ref: vida1-development-conditions.changelog.jsonl

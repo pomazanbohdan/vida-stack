@@ -104,7 +104,7 @@ The current VIDA direction is grounded in orchestrator-led multi-agent product e
 
 ### One-line install
 
-Linux/macOS:
+Repository make targets (PowerShell-backed, same local gate contract as Windows):
 
 ```bash
 mkdir myproject
@@ -171,6 +171,12 @@ For local framework development, keep the active repair loop on the debug profil
 Linux/macOS:
 
 ```bash
+make vida-dev-script-check
+make vida-dev-quick
+make vida-test
+make vida-test-workspace
+
+# Unix fallback when PowerShell is not available:
 cargo nextest run --locked -p vida --profile default
 cargo nextest run --locked --workspace --profile ci
 
@@ -212,8 +218,17 @@ powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -
 # Focused regression proof through nextest.
 powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode focused-nextest -TestFilter close_feedback_inference -Json
 
+# Full vida package proof through nextest.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode package-nextest -Json
+
 # Local workspace test gate mirroring CI's nextest profile.
 powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode workspace-nextest -Json
+
+# Rust doc tests.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode doc-test -Json
+
+# Debug build of runtime entrypoints.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode build-debug -Json
 
 # Cheap policy probe for a checkout or linked worktree before running Cargo.
 powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode target-dir-policy -Json
@@ -221,13 +236,16 @@ powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode target-
 # Debug runtime smoke: build debug vida and run status from the effective Cargo target dir.
 powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode runtime-smoke -Json
 
+# Release archive packaging without installing the operator-facing launcher.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -Json
+
 # Installed runtime proof only when the bounded target requires the operator-facing launcher.
 powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-install -Json
 ```
 
 `scripts/vida-dev-gate.ps1` keeps Cargo output visible and deterministic by setting `CARGO_TARGET_DIR` when the caller has not already set it. Normal checkouts use `.vida\cargo-target`; linked worktrees under `.vida\worktrees\...` share the owner checkout's `.vida\cargo-target` so each worktree does not cold-build its own `target` tree. If the caller provides `CARGO_TARGET_DIR`, the script respects it and reports that policy in JSON timing records.
 
-Local test gates use `cargo nextest`; install it before using the script on a fresh host.
+Local test gates use `cargo nextest`; install it before using the script on a fresh host. Use `powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Help` to inspect the current local build/test modes instead of copying older direct Cargo commands.
 
 This keeps ordinary proof runs fast and inspectable. The operator-facing `vida` in `~/.local/share/vida-stack/current/bin` on Unix-like systems or `%LOCALAPPDATA%\vida-stack\current\bin` on Windows should be refreshed from the release profile only when the installed launcher itself is part of the proof.
 

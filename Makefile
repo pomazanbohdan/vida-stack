@@ -1,16 +1,22 @@
-.PHONY: vida-build vida-check vida-test vida-test-workspace vida-dev-script-check vida-dev-quick vida-dev-smoke vida-run-help
+.PHONY: vida-build vida-check vida-test vida-test-workspace vida-doc-test vida-release-package vida-dev-script-check vida-dev-quick vida-dev-smoke vida-run-help
 
 vida-build:
-	cargo build --locked -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
+	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode build-debug -Json
 
 vida-check:
-	cargo check --locked -p vida
+	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
 
 vida-test:
-	cargo nextest run --locked -p vida --profile default
+	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode package-nextest -Json
 
 vida-test-workspace:
-	cargo nextest run --locked --workspace --profile ci
+	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode workspace-nextest -Json
+
+vida-doc-test:
+	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode doc-test -Json
+
+vida-release-package:
+	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -Json
 
 vida-dev-script-check:
 	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json
