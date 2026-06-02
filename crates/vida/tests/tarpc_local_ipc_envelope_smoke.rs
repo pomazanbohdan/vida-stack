@@ -35,10 +35,22 @@ fn envelope(operation: &str) -> VidaCommandEnvelope {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tarpc_local_ipc_envelope_smoke_carries_service_read_operations() {
+async fn tarpc_local_channel_envelope_smoke_carries_service_read_operations() {
     let tarpc_client = TarpcLocalIpcVidaClient::connect_ready_local_channel()
         .await
-        .expect("tarpc local ipc client");
+        .expect("tarpc local channel client");
+    assert_tarpc_read_operations_match_in_process(tarpc_client).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tarpc_local_socket_ipc_envelope_smoke_carries_service_read_operations() {
+    let tarpc_client = TarpcLocalIpcVidaClient::connect_ready_local_socket()
+        .await
+        .expect("tarpc local socket client");
+    assert_tarpc_read_operations_match_in_process(tarpc_client).await;
+}
+
+async fn assert_tarpc_read_operations_match_in_process(tarpc_client: TarpcLocalIpcVidaClient) {
     let in_process = InProcessVidaClient::new_ready();
 
     for operation in [

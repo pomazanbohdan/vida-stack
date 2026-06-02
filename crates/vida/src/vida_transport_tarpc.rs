@@ -1,7 +1,15 @@
 use std::error::Error;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::prelude::*;
+use interprocess::local_socket::{
+    tokio::{prelude::*, Stream as LocalSocketStream},
+    GenericNamespaced, ListenerOptions, ToNsName,
+};
+use tarpc::serde_transport;
 use tarpc::server::{BaseChannel, Channel};
+use tarpc::tokio_serde::formats::Json;
+use tarpc::tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tarpc::{client, context};
 use vida_contracts::{VidaCommandEnvelope, VidaCommandResponse};
 
@@ -62,10 +70,52 @@ impl TarpcLocalIpcVidaClient {
         })
     }
 
+    pub(crate) async fn connect_ready_local_socket() -> TransportResult<Self> {
+        let socket_name = unique_socket_name();
+        let listener_name = socket_name.as_str().to_ns_name::<GenericNamespaced>()?;
+        let listener = ListenerOptions::new()
+            .name(listener_name)
+            .try_overwrite(true)
+            .create_tokio()?;
+
+        let server_task = tokio::spawn(async move {
+            if let Ok(connection) = listener.accept().await {
+                let framed = LengthDelimitedCodec::builder().new_framed(connection);
+                let transport = serde_transport::new(framed, Json::default());
+                BaseChannel::with_defaults(transport)
+                    .execute(VidaEnvelopeServer::new_ready().serve())
+                    .for_each(|request| async move {
+                        request.await;
+                    })
+                    .await;
+            }
+        });
+        tokio::task::yield_now().await;
+
+        let client_name = socket_name.as_str().to_ns_name::<GenericNamespaced>()?;
+        let connection = LocalSocketStream::connect(client_name).await?;
+        let framed = LengthDelimitedCodec::builder().new_framed(connection);
+        let transport = serde_transport::new(framed, Json::default());
+        let client = VidaEnvelopeRpcClient::new(client::Config::default(), transport).spawn();
+
+        Ok(Self {
+            client,
+            _server_task: server_task,
+        })
+    }
+
     pub(crate) async fn execute(
         &self,
         envelope: VidaCommandEnvelope,
     ) -> TransportResult<VidaCommandResponse> {
         Ok(self.client.execute(context::current(), envelope).await?)
     }
+}
+
+fn unique_socket_name() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("vida-tarpc-smoke-{}-{nanos}.sock", std::process::id())
 }
