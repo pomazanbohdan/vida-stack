@@ -36,7 +36,6 @@ host_environment:
       - claude_code_subagents
       - pi_sub_agent_plugin
       - vibe_kanban_agents
-      - opencode_subagents
       - custom_host_agent_adapter
   codex:
     agents: &codex_agent_catalog
@@ -51,7 +50,7 @@ host_environment:
         default_model_profile: codex_gpt55_low_write
         model_profiles:
           codex_gpt55_low_write:
-            provider: openai
+            provider: openai-codex
             model_ref: gpt-5.5
             reasoning_effort: low
             plan_mode_reasoning_effort: medium
@@ -98,7 +97,7 @@ host_environment:
         default_model_profile: codex_gpt55_medium_write
         model_profiles:
           codex_gpt55_medium_write:
-            provider: openai
+            provider: openai-codex
             model_ref: gpt-5.5
             reasoning_effort: medium
             plan_mode_reasoning_effort: high
@@ -148,7 +147,7 @@ host_environment:
         default_model_profile: codex_gpt55_high_readonly
         model_profiles:
           codex_gpt55_high_readonly:
-            provider: openai
+            provider: openai-codex
             model_ref: gpt-5.5
             reasoning_effort: high
             plan_mode_reasoning_effort: high
@@ -188,7 +187,7 @@ host_environment:
         default_model_profile: codex_gpt55_xhigh_arch
         model_profiles:
           codex_gpt55_high_arch:
-            provider: openai
+            provider: openai-codex
             model_ref: gpt-5.5
             reasoning_effort: high
             plan_mode_reasoning_effort: high
@@ -208,7 +207,7 @@ host_environment:
               mode: codex_profile
               required: true
           codex_gpt55_xhigh_arch:
-            provider: openai
+            provider: openai-codex
             model_ref: gpt-5.5
             reasoning_effort: xhigh
             plan_mode_reasoning_effort: xhigh
@@ -302,23 +301,6 @@ host_environment:
           task_classes:
             - specification
             - planning
-    opencode:
-      enabled: false
-      execution_class: external
-      materialization_mode: copy_tree_only
-      template_root: .opencode
-      runtime_root: .opencode
-      carriers:
-        opencode-primary:
-          tier: opencode
-          description: Placeholder carrier for the OpenCode CLI.
-          rate: 4
-          reasoning_band: medium
-          default_runtime_role: worker
-          runtime_roles:
-            - worker
-          task_classes:
-            - implementation
     pi:
       enabled: false
       execution_class: external
@@ -1318,17 +1300,16 @@ agent_system:
       diagnostic_only: true
       enforced: false
     vendor_basis:
-      openai: structured role configs and reasoning-effort tuning in Codex project config; prefer explicit task/runtime settings over implicit chat heuristics
+      openai-codex: structured role configs and reasoning-effort tuning in Codex project config; prefer explicit task/runtime settings over implicit chat heuristics
       anthropic: structured prompt templates, explicit sections, and evaluation-backed refinement loops
       microsoft: record one bounded decision/design artifact per change and route on explicit cost-quality tradeoffs instead of ad hoc escalation
       internal: project-maintained normalized reference units for internal executor profiles
       hermes: provider-configured external CLI posture with project-normalized review units
-      opencode: provider-configured external CLI posture with project-normalized review units
       kilo: provider-configured external CLI posture with project-normalized review units
       vibe: provider-configured external CLI posture with project-normalized review units
       pi: Pi provider/model catalog selected through VIDA profiles and executed through the vida-pi-agent adapter; normalized units are diagnostic until vendor/provider pricing is wired
     providers:
-      openai:
+      openai-codex:
         price_basis: vendor_schedule_snapshot
         source_paths:
           - docs/process/codex-agent-configuration-guide.md
@@ -1372,17 +1353,6 @@ agent_system:
           diagnostic_only: true
           enforced: false
       hermes:
-        price_basis: provider_configured_external_cli
-        source_paths:
-          - docs/process/codex-agent-configuration-guide.md
-        freshness:
-          required: false
-          max_age_days: 30
-          stale_price_policy: diagnostic_only_use_normalized_cost_units
-          missing_price_policy: diagnostic_only_use_normalized_cost_units
-          diagnostic_only: true
-          enforced: false
-      opencode:
         price_basis: provider_configured_external_cli
         source_paths:
           - docs/process/codex-agent-configuration-guide.md
@@ -1522,7 +1492,7 @@ agent_system:
         - regression_test
       model_profiles:
         codex_gpt55_low_write:
-          provider: openai
+          provider: openai-codex
           model_ref: gpt-5.5
           reasoning_effort: low
           normalized_cost_units: 1
@@ -1548,7 +1518,7 @@ agent_system:
             mode: codex_profile
             required: true
         codex_gpt55_medium_write:
-          provider: openai
+          provider: openai-codex
           model_ref: gpt-5.5
           reasoning_effort: medium
           normalized_cost_units: 4
@@ -1580,7 +1550,7 @@ agent_system:
             mode: codex_profile
             required: true
         codex_gpt55_high_readonly:
-          provider: openai
+          provider: openai-codex
           model_ref: gpt-5.5
           reasoning_effort: high
           normalized_cost_units: 16
@@ -1600,7 +1570,7 @@ agent_system:
             mode: codex_profile
             required: true
         codex_gpt55_xhigh_arch:
-          provider: openai
+          provider: openai-codex
           model_ref: gpt-5.5
           reasoning_effort: xhigh
           normalized_cost_units: 48
@@ -1760,120 +1730,6 @@ agent_system:
         no_output_timeout_seconds: 180
         progress_idle_timeout_seconds: 105
         max_runtime_extension_seconds: 75
-    opencode_cli:
-      enabled: false
-      subagent_backend_class: external_cli
-      detect_command: opencode
-      role: free_primary
-      orchestration_tier: external_free
-      cost_priority: highest
-      budget_cost_units: 0
-      models_hint: opencode/minimax-m2.5-free,opencode/gpt-5.1-codex-mini
-      default_model: opencode/minimax-m2.5-free
-      default_model_profile: opencode_minimax_free_review
-      capability_band: read_only,review_safe
-      default_runtime_role: coach
-      write_scope: none
-      max_runtime_seconds: 180
-      min_output_bytes: 260
-      billing_tier: free
-      speed_tier: fast
-      quality_tier: medium
-      runtime_roles:
-        - business_analyst
-        - coach
-        - verifier
-      task_classes:
-        - analysis
-        - specification
-        - planning
-        - review
-        - coach
-        - verification
-      model_profiles:
-        opencode_minimax_free_review:
-          provider: opencode
-          model_ref: opencode/minimax-m2.5-free
-          reasoning_effort: provider_default
-          normalized_cost_units: 0
-          speed_tier: fast
-          quality_tier: medium
-          write_scope: none
-          runtime_roles:
-            - business_analyst
-            - coach
-            - verifier
-          task_classes:
-            - analysis
-            - specification
-            - planning
-            - review
-            - coach
-          reasoning_control:
-            mode: provider_default
-          readiness:
-            mode: external_cli_profile
-            required: true
-        opencode_codex_mini_review:
-          provider: opencode
-          model_ref: opencode/gpt-5.1-codex-mini
-          reasoning_effort: low
-          normalized_cost_units: 1
-          pricing:
-            price_source_kind: provider_catalog
-            source_paths:
-              - docs/process/codex-agent-configuration-guide.md
-            freshness:
-              required: false
-              max_age_days: 30
-              stale_price_policy: diagnostic_only_use_normalized_cost_units
-              missing_price_policy: diagnostic_only_use_normalized_cost_units
-              diagnostic_only: true
-              enforced: false
-          speed_tier: fast
-          quality_tier: high
-          write_scope: none
-          runtime_roles:
-            - coach
-            - verifier
-          task_classes:
-            - review
-            - verification
-            - coach
-          reasoning_control:
-            mode: provider_default
-          readiness:
-            mode: external_cli_profile
-            required: true
-      specialties: planning,spec,review
-      dispatch:
-        command: opencode
-        static_args:
-          - run
-        model_flag: --model
-        env:
-          OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
-        workdir_flag: --dir
-        output_mode: stdout
-        prompt_mode: positional
-        startup_timeout_seconds: 60
-        no_output_timeout_seconds: 180
-        progress_idle_timeout_seconds: 105
-        max_runtime_extension_seconds: 75
-      readiness:
-        auth:
-          mode: file_present
-          path: ~/.local/share/opencode/auth.json
-        model:
-          mode: json_recent_ref
-          path: ~/.local/state/opencode/model.json
-          expected_ref: opencode/minimax-m2.5-free
-          allow_dispatch_override: true
-        provider_failure:
-          mode: recent_dir_contains
-          path: ~/.local/share/opencode/log
-          substring: Authentication Failed
-          max_age_seconds: 900
     kilo_cli:
       enabled: false
       subagent_backend_class: external_cli
@@ -2037,7 +1893,7 @@ agent_system:
       orchestration_tier: external_write_guarded
       cost_priority: preferred_when_admissible
       budget_cost_units: 4
-      models_hint: openai-codex/gpt-5.5,openai-codex/gpt-5.4-mini
+      models_hint: openai-codex/gpt-5.5
       default_model: openai-codex/gpt-5.5
       default_model_profile: pi_gpt55_medium_guarded
       default_runtime_role: worker
@@ -2066,9 +1922,9 @@ agent_system:
         - coach
         - verification
       model_profiles:
-        pi_gpt54_mini_low_guarded:
+        pi_gpt55_low_guarded:
           provider: pi
-          model_ref: openai-codex/gpt-5.4-mini
+          model_ref: openai-codex/gpt-5.5
           reasoning_effort: low
           thinking_level: low
           normalized_cost_units: 1
