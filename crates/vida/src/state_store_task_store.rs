@@ -595,6 +595,31 @@ impl StateStore {
             .await
     }
 
+    async fn task_close_reconcile_has_persisted_closure_receipt_truth(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let task = match self.show_task(task_id).await {
+            Ok(task) => task,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if !Self::task_status_is_closed_like(&task.status) {
+            return Ok(false);
+        }
+
+        if !self
+            .raw_run_graph_state_allows_task_close_closure_binding(run_id)
+            .await?
+        {
+            return Ok(false);
+        }
+
+        self.run_graph_dispatch_has_receipt_backed_closure_truth(run_id)
+            .await
+    }
+
     async fn raw_run_graph_state_allows_task_close_closure_binding(
         &self,
         run_id: &str,
@@ -621,7 +646,7 @@ impl StateStore {
         };
 
         let terminal_completion_evidence = matches!(plan.status.as_str(), "completed")
-            || route.lifecycle_stage == "closure_complete";
+            || (route.lifecycle_stage == "closure_complete" && plan.active_node == "closure");
 
         Ok(terminal_completion_evidence
             && plan.next_node.is_none()
@@ -636,9 +661,30 @@ impl StateStore {
             && resume.resume_target == "none")
     }
 
+    async fn run_graph_dispatch_has_receipt_backed_closure_truth(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        self.run_graph_dispatch_has_receipt_backed_execution_truth_with(run_id, |receipt| {
+            crate::runtime_dispatch_state::dispatch_receipt_has_closure_execution_evidence(receipt)
+        })
+        .await
+    }
+
     async fn run_graph_dispatch_has_receipt_backed_execution_truth(
         &self,
         run_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        self.run_graph_dispatch_has_receipt_backed_execution_truth_with(run_id, |receipt| {
+            crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(receipt)
+        })
+        .await
+    }
+
+    async fn run_graph_dispatch_has_receipt_backed_execution_truth_with(
+        &self,
+        run_id: &str,
+        has_execution_evidence: impl FnOnce(&RunGraphDispatchReceipt) -> bool,
     ) -> Result<bool, StateStoreError> {
         let receipt: Option<RunGraphDispatchReceiptStored> = self
             .db
@@ -658,7 +704,7 @@ impl StateStore {
                 .as_deref()
                 .map(str::trim)
                 .is_some_and(|value| !value.is_empty())
-            && crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(&receipt))
+            && has_execution_evidence(&receipt))
     }
 
     fn task_close_retired_run_graph_status(
@@ -963,7 +1009,7 @@ impl StateStore {
                 continue;
             }
             if !self
-                .task_close_reconcile_has_persisted_receipt_truth(&row.run_id, &row.task_id)
+                .task_close_reconcile_has_persisted_closure_receipt_truth(&row.run_id, &row.task_id)
                 .await?
             {
                 skipped_count += 1;
