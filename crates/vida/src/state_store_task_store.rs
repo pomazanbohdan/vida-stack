@@ -620,7 +620,10 @@ impl StateStore {
             return Ok(false);
         };
 
-        Ok(matches!(plan.status.as_str(), "completed")
+        let terminal_completion_evidence = matches!(plan.status.as_str(), "completed")
+            || route.lifecycle_stage == "closure_complete";
+
+        Ok(terminal_completion_evidence
             && plan.next_node.is_none()
             && !matches!(
                 route.lifecycle_stage.as_str(),
