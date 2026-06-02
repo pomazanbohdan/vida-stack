@@ -26,13 +26,15 @@ pub mod operations {
     pub const MATERIALIZATION_DRIFT_CLASSIFY: &str = "vida.materialization.drift.classify";
     pub const MATERIALIZATION_UPDATE_PLAN: &str = "vida.materialization.update.plan";
     pub const MATERIALIZATION_RECEIPTS_LIST: &str = "vida.materialization.receipts.list";
+    pub const ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET: &str =
+        "vida.orchestration.control_plane.summary.get";
     pub const JOBS_GET: &str = "vida.jobs.get";
 }
 
 pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
     use VidaCapabilityScope::{
-        MaterializationPlan, MaterializationRead, ProjectRegistryRead, ReadEvents, ReadReceipts,
-        ReadStatus, WizardPlan, WizardRead,
+        MaterializationPlan, MaterializationRead, OrchestrationControlPlaneRead,
+        ProjectRegistryRead, ReadEvents, ReadReceipts, ReadStatus, WizardPlan, WizardRead,
     };
     use operations::*;
     vec![
@@ -145,6 +147,11 @@ pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
             MATERIALIZATION_RECEIPTS_LIST,
             VidaOperationScope::Project,
             vec![ReadReceipts, MaterializationRead],
+        ),
+        VidaOperationSpec::read_with_capabilities(
+            ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET,
+            VidaOperationScope::Project,
+            vec![OrchestrationControlPlaneRead],
         ),
         VidaOperationSpec::read_with_capabilities(
             JOBS_GET,
@@ -312,6 +319,7 @@ pub enum VidaCapabilityScope {
     ConfigApply,
     MaterializationPlan,
     MaterializationApply,
+    OrchestrationControlPlaneRead,
     ServiceInstallPlan,
     ServiceInstallApply,
     ServiceAdmin,

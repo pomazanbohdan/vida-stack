@@ -83,7 +83,8 @@ impl FixtureVidaClient {
                     "wizard_read",
                     "wizard_plan",
                     "materialization_read",
-                    "materialization_plan"
+                    "materialization_plan",
+                    "orchestration_control_plane_read"
                 ]
             }),
         )
@@ -387,6 +388,74 @@ impl FixtureVidaClient {
         )
     }
 
+    fn orchestration_control_plane_summary(
+        &self,
+        envelope: &VidaCommandEnvelope,
+    ) -> VidaCommandResponse {
+        match self.resolve_project(envelope) {
+            Ok(project) => pass_response(
+                envelope,
+                json!({
+                    "service": "vida",
+                    "project": {
+                        "project_id": project.project_id,
+                        "registry_entry_id": project.registry_entry_id,
+                        "root_path": project.root_path
+                    },
+                    "source_pattern": {
+                        "kind": "external_reference_inspiration",
+                        "authority": "vida_runtime_law",
+                        "source_refs": [
+                            "https://openai.com/ru-RU/index/open-source-codex-orchestration-symphony/",
+                            "https://github.com/openai/symphony/blob/main/SPEC.md"
+                        ]
+                    },
+                    "tracker_control_plane": {
+                        "active_unit_source": "taskflow_tasks",
+                        "state_machine_source": "task_status",
+                        "agent_assignment_unit": "bounded_task",
+                        "agent_may_create_follow_up_tasks": true
+                    },
+                    "workspace_model": {
+                        "isolated_workspace_per_task": true,
+                        "workspace_owner": "task_worktree_assignment",
+                        "preserve_workspace_across_runs": true
+                    },
+                    "scheduling": {
+                        "bounded_concurrency": true,
+                        "parallelism_source": "taskflow_execution_semantics",
+                        "blocked_tasks_are_not_dispatched": true
+                    },
+                    "retry_reconciliation": {
+                        "restart_recovery": true,
+                        "transient_failure_strategy": "exponential_backoff",
+                        "state_change_stops_ineligible_runs": true
+                    },
+                    "workflow_contract": {
+                        "repo_owned_policy_file": "WORKFLOW.md",
+                        "vida_equivalent_sources": [
+                            "flows.yaml",
+                            "vida.config.yaml",
+                            "AGENTS.sidecar.md"
+                        ],
+                        "prompt_template_source": "configured_development_flow"
+                    },
+                    "observability": {
+                        "structured_runtime_logs": true,
+                        "tui_projection": true,
+                        "service_projection": true
+                    },
+                    "safety": {
+                        "apply_supported": false,
+                        "admin_supported": false,
+                        "approval_policy_source": "vida_runtime_policy"
+                    }
+                }),
+            ),
+            Err(problem) => problem_response(envelope, problem),
+        }
+    }
+
     fn resolve_project(
         &self,
         envelope: &VidaCommandEnvelope,
@@ -442,6 +511,9 @@ impl VidaClient for FixtureVidaClient {
             operations::MATERIALIZATION_DRIFT_CLASSIFY => self.materialization_drift(&envelope),
             operations::MATERIALIZATION_UPDATE_PLAN => self.materialization_update_plan(&envelope),
             operations::MATERIALIZATION_RECEIPTS_LIST => self.materialization_receipts(&envelope),
+            operations::ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET => {
+                self.orchestration_control_plane_summary(&envelope)
+            }
             _ => unsupported_operation_response(&envelope),
         }
     }

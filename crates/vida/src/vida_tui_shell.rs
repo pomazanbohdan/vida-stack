@@ -22,6 +22,9 @@ pub(crate) struct VidaTuiShellSnapshot {
     pub(crate) wizard_apply_supported: bool,
     pub(crate) materialization_safe_updates: usize,
     pub(crate) materialization_manual_conflicts: usize,
+    pub(crate) orchestration_workspace_owner: String,
+    pub(crate) orchestration_parallelism_source: String,
+    pub(crate) orchestration_tui_projection: bool,
 }
 
 impl VidaTuiShellSnapshot {
@@ -50,7 +53,7 @@ impl VidaTuiShellSnapshot {
 
         let materialization = client.execute(envelope_with_project_ref(
             operations::MATERIALIZATION_UPDATE_PLAN,
-            project_ref,
+            project_ref.clone(),
         ));
         assert_eq!(materialization.status, VidaResponseStatus::Pass);
         let materialization = materialization
@@ -59,6 +62,15 @@ impl VidaTuiShellSnapshot {
         let actions = materialization["planned_actions"]
             .as_array()
             .expect("materialization actions");
+
+        let orchestration = client.execute(envelope_with_project_ref(
+            operations::ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET,
+            project_ref,
+        ));
+        assert_eq!(orchestration.status, VidaResponseStatus::Pass);
+        let orchestration = orchestration
+            .result
+            .expect("orchestration control-plane summary");
 
         Self {
             service_status: status["status"].as_str().unwrap_or("unknown").to_string(),
@@ -87,6 +99,17 @@ impl VidaTuiShellSnapshot {
                 .iter()
                 .filter(|action| action["mode"] == "manual_conflict")
                 .count(),
+            orchestration_workspace_owner: orchestration["workspace_model"]["workspace_owner"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
+            orchestration_parallelism_source: orchestration["scheduling"]["parallelism_source"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
+            orchestration_tui_projection: orchestration["observability"]["tui_projection"]
+                .as_bool()
+                .unwrap_or(false),
         }
     }
 }
@@ -109,6 +132,12 @@ pub(crate) fn render_app_shell(frame: &mut Frame<'_>, snapshot: &VidaTuiShellSna
         Line::from(vec![Span::raw(format!(
             "Materialization: safe_updates={} | manual_conflicts={}",
             snapshot.materialization_safe_updates, snapshot.materialization_manual_conflicts
+        ))]),
+        Line::from(vec![Span::raw(format!(
+            "Orchestration: workspace_owner={} | parallelism_source={} | tui_projection={}",
+            snapshot.orchestration_workspace_owner,
+            snapshot.orchestration_parallelism_source,
+            snapshot.orchestration_tui_projection
         ))]),
     ];
     frame.render_widget(Paragraph::new(lines), frame.area());

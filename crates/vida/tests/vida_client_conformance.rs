@@ -129,6 +129,11 @@ fn service_capabilities_and_endpoints_are_read_only() {
         .expect("capabilities should be array")
         .iter()
         .any(|capability| capability == "materialization_plan"));
+    assert!(capabilities["capabilities"]
+        .as_array()
+        .expect("capabilities should be array")
+        .iter()
+        .any(|capability| capability == "orchestration_control_plane_read"));
 
     let endpoints = assert_same_response(operations::SERVICE_ENDPOINT_STATUS)
         .result
@@ -223,6 +228,18 @@ fn service_capabilities_and_endpoints_are_read_only() {
         .expect("required capabilities array")
         .iter()
         .any(|capability| capability == "materialization_plan"));
+    let control_plane = endpoint_rows
+        .iter()
+        .find(|row| row["operation"] == operations::ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET)
+        .expect("orchestration control-plane endpoint row");
+    assert_eq!(control_plane["scope"], "project");
+    assert_eq!(control_plane["posture"], "read_only");
+    assert_eq!(control_plane["requires_project_ref"], true);
+    assert!(control_plane["required_capabilities"]
+        .as_array()
+        .expect("required capabilities array")
+        .iter()
+        .any(|capability| capability == "orchestration_control_plane_read"));
     assert!(endpoint_rows
         .iter()
         .all(|row| row["posture"] != "apply" && row["posture"] != "admin"));
@@ -729,6 +746,51 @@ fn materialization_receipts_back_update_plan_artifact_actions() {
             receipt["receipt_id"] == safe_update["receipt_ref"]
                 && receipt["evidence_kind"] == "artifact_update_plan"
         }));
+}
+
+#[test]
+fn symphony_control_plane_summary_projects_tracker_workspace_and_recovery_contracts() {
+    let fixture = FixtureVidaClient::new_ready();
+    let in_process = InProcessVidaClient::new_ready();
+    let request = envelope_with_project_ref(
+        operations::ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET,
+        VidaProjectRef::ProjectId {
+            project_id: VidaProjectId("vida-stack".to_string()),
+        },
+    );
+
+    let fixture_response = fixture.execute(request.clone());
+    let in_process_response = in_process.execute(request);
+    assert_eq!(fixture_response, in_process_response);
+    assert_eq!(fixture_response.status, VidaResponseStatus::Pass);
+
+    let summary = fixture_response
+        .result
+        .expect("orchestration control-plane summary");
+    assert_eq!(summary["source_pattern"]["authority"], "vida_runtime_law");
+    assert_eq!(
+        summary["tracker_control_plane"]["active_unit_source"],
+        "taskflow_tasks"
+    );
+    assert_eq!(
+        summary["workspace_model"]["workspace_owner"],
+        "task_worktree_assignment"
+    );
+    assert_eq!(
+        summary["scheduling"]["parallelism_source"],
+        "taskflow_execution_semantics"
+    );
+    assert_eq!(
+        summary["retry_reconciliation"]["transient_failure_strategy"],
+        "exponential_backoff"
+    );
+    assert_eq!(
+        summary["workflow_contract"]["repo_owned_policy_file"],
+        "WORKFLOW.md"
+    );
+    assert_eq!(summary["observability"]["tui_projection"], true);
+    assert_eq!(summary["safety"]["apply_supported"], false);
+    assert_eq!(summary["safety"]["admin_supported"], false);
 }
 
 #[test]

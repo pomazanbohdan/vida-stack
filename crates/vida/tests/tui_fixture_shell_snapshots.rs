@@ -17,8 +17,17 @@ fn tui_fixture_shell_snapshots_render_from_fixture_client_without_live_daemon() 
     assert_eq!(snapshot.project_id, "vida-stack");
     assert_eq!(snapshot.wizard_step, "inspect");
     assert!(!snapshot.wizard_apply_supported);
+    assert_eq!(
+        snapshot.orchestration_workspace_owner,
+        "task_worktree_assignment"
+    );
+    assert_eq!(
+        snapshot.orchestration_parallelism_source,
+        "taskflow_execution_semantics"
+    );
+    assert!(snapshot.orchestration_tui_projection);
 
-    let backend = TestBackend::new(96, 8);
+    let backend = TestBackend::new(128, 9);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     terminal
         .draw(|frame| render_app_shell(frame, &snapshot))
@@ -30,6 +39,9 @@ fn tui_fixture_shell_snapshots_render_from_fixture_client_without_live_daemon() 
     assert!(rendered.contains("Project: vida-stack | Worktree: worktree-vida-stack-main"));
     assert!(rendered.contains("Wizard: step=inspect | apply_supported=false"));
     assert!(rendered.contains("Materialization: safe_updates=1 | manual_conflicts=1"));
+    assert!(rendered.contains(
+        "Orchestration: workspace_owner=task_worktree_assignment | parallelism_source=taskflow_execution_semantics | tui_projection=true"
+    ));
 }
 
 fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
