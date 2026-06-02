@@ -112,6 +112,7 @@ mod test_cli_support;
 mod vida_client;
 mod vida_client_fixture;
 mod vida_client_inprocess;
+mod vida_transport_tarpc;
 mod vida_tui_shell;
 
 use std::env;

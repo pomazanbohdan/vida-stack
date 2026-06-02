@@ -13,6 +13,7 @@ blake3 = "1.8.2"
 clap = { version = "4.5.38", features = ["derive", "env"] }
 docflow-cli = { path = "../docflow-cli" }
 fs2 = "0.4.3"
+futures = "0.3.31"
 libc = "0.2"
 ratatui = "0.30.0"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -25,6 +26,7 @@ taskflow-core = { path = "../taskflow-core" }
 taskflow-state = { path = "../taskflow-state" }
 taskflow-state-fs = { path = "../taskflow-state-fs" }
 taskflow-state-surreal = { path = "../taskflow-state-surreal" }
+tarpc = { version = "0.37.0", features = ["serde1", "tokio1"] }
 time = { workspace = true }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 vida-contracts = { path = "../vida-contracts" }
