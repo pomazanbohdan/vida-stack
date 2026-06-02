@@ -1,4 +1,5 @@
 use super::*;
+use crate::launcher_task_commands::shell_quote;
 
 const TASK_TREE_MAX_DEPTH: usize = 128;
 const TASK_TREE_MAX_NODE_VISITS: usize = 10_000;
@@ -408,20 +409,21 @@ impl StateStore {
             recommended_next_action,
             canonical_commands,
         ) = if closure_candidate {
+            let quoted_root_task_id = shell_quote(&root_task.id);
             (
-                    "ready_to_close".to_string(),
-                    Some(
-                        "root container is open while all descendants are closed-like".to_string(),
-                    ),
-                    format!(
-                        "Close container with `vida task close {} --reason \"all descendants closed\" --json`.",
-                        root_task.id
-                    ),
-                    vec![format!(
-                        "vida task close {} --reason \"all descendants closed\" --json",
-                        root_task.id
-                    )],
-                )
+                "ready_to_close".to_string(),
+                Some(
+                    "root container is open while all descendants are closed-like".to_string(),
+                ),
+                format!(
+                    "Close container with `vida task close {} --reason \"all descendants closed\" --json`.",
+                    quoted_root_task_id
+                ),
+                vec![format!(
+                    "vida task close {} --reason \"all descendants closed\" --json",
+                    quoted_root_task_id
+                )],
+            )
         } else if root_closed {
             (
                 "already_closed".to_string(),
@@ -992,6 +994,7 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::launcher_task_commands::shell_quote;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
