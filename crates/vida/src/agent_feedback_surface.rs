@@ -373,8 +373,6 @@ const CONCRETE_CANONICAL_CLOSE_PHRASES: &[&str] = &[
     "blocked by",
     "blocked on",
     "blocker:",
-    "blocker_code",
-    "blocker code",
     "approval required",
     "pending approval",
     "pending operator approval",
@@ -1482,6 +1480,28 @@ mod tests {
             .any(|phrase| phrase.as_str().is_some_and(|value| value.contains(
                 "installed vida task next --json returns blocked with recovery action"
             ))));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_no_blocker_codes_diagnostic_proof_wording() {
+        let reason = "Post-merge diagnostics passed with no blocker codes and git status clean.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(inference["success_markers"], serde_json::json!([]));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("no blocker codes"))));
     }
 
     #[test]
