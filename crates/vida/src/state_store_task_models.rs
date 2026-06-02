@@ -259,6 +259,12 @@ pub fn canonical_work_item_issue_type(issue_type: &str) -> String {
         .unwrap_or_else(|| normalize_work_item_issue_type(issue_type))
 }
 
+pub fn work_item_is_program_container(issue_type: &str) -> bool {
+    work_item_taxonomy_entry(issue_type)
+        .map(|entry| entry.category == WorkItemCategory::ProgramContainer)
+        .unwrap_or(false)
+}
+
 pub fn task_work_item_kind(issue_type: &str) -> TaskWorkItemKind {
     let original = issue_type.trim().to_string();
     let normalized = normalize_work_item_issue_type(issue_type);
@@ -1085,9 +1091,10 @@ impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
 mod tests {
     use super::{
         apply_provider_mapping_to_task_jsonl_record, canonical_work_item_issue_type,
-        normalize_work_item_issue_type, task_work_item_kind, work_item_requires_parent,
-        work_item_taxonomy_entry, TaskDependencyJsonlRecord, TaskJsonlRecord, TaskPlannerMetadata,
-        TaskProviderMapping, TaskStorageRow, WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
+        normalize_work_item_issue_type, task_work_item_kind, work_item_is_program_container,
+        work_item_requires_parent, work_item_taxonomy_entry, TaskDependencyJsonlRecord,
+        TaskJsonlRecord, TaskPlannerMetadata, TaskProviderMapping, TaskStorageRow,
+        WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
     };
 
     #[test]
@@ -1153,6 +1160,15 @@ mod tests {
         assert!(!work_item_requires_parent("epic"));
         assert!(work_item_requires_parent("task"));
         assert!(work_item_requires_parent("unknown_future_type"));
+    }
+
+    #[test]
+    fn work_item_program_container_detection_is_normalized() {
+        assert!(work_item_is_program_container("epic"));
+        assert!(work_item_is_program_container("Epic"));
+        assert!(work_item_is_program_container(" EPIC "));
+        assert!(!work_item_is_program_container("task"));
+        assert!(!work_item_is_program_container("unknown_future_type"));
     }
 
     #[test]
