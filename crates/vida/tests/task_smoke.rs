@@ -5081,6 +5081,59 @@ fn latest_run_projection_consistency_aligns_graph_summary_current_task() {
 }
 
 #[test]
+fn doctor_latest_run_matches_recovery_latest() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "doctor-recovery-parity-parent";
+    create_epic_parent(&state_dir, parent_id, "Doctor recovery parity parent", "open");
+    let active_task_id = "doctor-recovery-parity-active";
+    let active = run_command_json(
+        &[
+            "task",
+            "create",
+            active_task_id,
+            "Doctor recovery parity active",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(active["status"], "pass");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", active_task_id, "implementation"],
+        &state_dir,
+    );
+
+    let recovery = run_command_json(&["taskflow", "recovery", "latest", "--json"], &state_dir);
+    assert_eq!(recovery["surface"], "vida taskflow recovery latest");
+    assert_eq!(recovery["status"], "pass");
+    assert_eq!(recovery["run_id"], active_task_id);
+    assert_eq!(recovery["recovery"]["task_id"], active_task_id);
+
+    let doctor = run_command_json(&["doctor", "--json"], &state_dir);
+    assert_eq!(doctor["latest_run_graph_status"]["task_id"], active_task_id);
+    assert_eq!(
+        doctor["latest_run_graph_recovery"]["run_id"],
+        recovery["run_id"]
+    );
+    assert_eq!(
+        doctor["latest_run_graph_recovery"]["task_id"],
+        recovery["recovery"]["task_id"]
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
