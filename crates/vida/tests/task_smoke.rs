@@ -4993,6 +4993,94 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
 }
 
 #[test]
+fn latest_run_projection_consistency_aligns_graph_summary_current_task() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "latest-run-projection-parent";
+    create_epic_parent(&state_dir, parent_id, "Latest run projection parent", "open");
+    let active_task_id = "latest-run-projection-active";
+    let active = run_command_json(
+        &[
+            "task",
+            "create",
+            active_task_id,
+            "Latest run projection active",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(active["status"], "pass");
+    let ready_task_id = "latest-run-projection-ready";
+    let ready = run_command_json(
+        &[
+            "task",
+            "create",
+            ready_task_id,
+            "Latest run projection ready",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "0",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(ready["status"], "pass");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", active_task_id, "implementation"],
+        &state_dir,
+    );
+
+    let graph_summary = run_command_json(&["taskflow", "graph-summary", "--json"], &state_dir);
+    assert_eq!(graph_summary["surface"], "vida taskflow graph-summary");
+    assert_eq!(graph_summary["latest_run_graph"]["task_id"], active_task_id);
+    assert_eq!(graph_summary["recovery"]["task_id"], active_task_id);
+    assert_eq!(graph_summary["primary_ready_task"]["task"]["id"], active_task_id);
+    assert_eq!(
+        graph_summary["current_task_id"], active_task_id,
+        "graph-summary top-level current_task_id must not drift to ready head: {graph_summary}"
+    );
+    assert_eq!(
+        graph_summary["scheduling"]["current_task_id"], active_task_id,
+        "graph-summary scheduling.current_task_id must mirror the selected active task: {graph_summary}"
+    );
+    assert!(
+        graph_summary["ready_count"].as_u64().unwrap_or_default() >= 2,
+        "fixture should preserve active task and ready task candidates: {graph_summary}"
+    );
+
+    let next_lawful = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(next_lawful["status"], "pass");
+    assert_eq!(
+        next_lawful["active_bounded_unit"]["task_id"],
+        active_task_id
+    );
+    assert_ne!(
+        next_lawful["active_bounded_unit"]["task_id"], ready_task_id,
+        "next-lawful must not select the open ready head while an in-progress run is active"
+    );
+
+    let doctor = run_command_json(&["doctor", "--json"], &state_dir);
+    assert_eq!(doctor["latest_run_graph_status"]["task_id"], active_task_id);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

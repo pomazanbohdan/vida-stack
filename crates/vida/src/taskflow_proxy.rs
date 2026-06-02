@@ -264,9 +264,10 @@ fn graph_summary_scheduling_candidate_json(
 
 fn graph_summary_scheduling_projection_json(
     scheduling: &crate::state_store::TaskSchedulingProjection,
+    current_task_id_override: Option<&str>,
 ) -> serde_json::Value {
     serde_json::json!({
-        "current_task_id": scheduling.current_task_id,
+        "current_task_id": current_task_id_override.or(scheduling.current_task_id.as_deref()),
         "ready": scheduling.ready.iter().map(graph_summary_scheduling_candidate_json).collect::<Vec<_>>(),
         "blocked": scheduling.blocked.iter().map(graph_summary_scheduling_candidate_json).collect::<Vec<_>>(),
         "parallel_candidates_after_current": scheduling
@@ -4888,6 +4889,10 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     });
     let (ready_parallel_safe, parallel_blockers, parallel_candidates_after_current) =
         graph_summary_parallel_contract_fields(&scheduling);
+    let canonical_current_task_id = primary_ready_task
+        .as_ref()
+        .and_then(|task| task["task"]["id"].as_str())
+        .or(scheduling.current_task_id.as_deref());
 
     let mut blocker_codes = continuation_decision.blocker_codes.clone();
     blocker_codes.extend(graph_summary_runtime_gate_blocker_codes(
@@ -4960,7 +4965,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "ready_count": ready_tasks.len(),
         "blocked_count": blocked_tasks.len(),
         "critical_path_length": critical_path.length,
-        "current_task_id": scheduling.current_task_id,
+        "current_task_id": canonical_current_task_id,
         "ready_parallel_safe": ready_parallel_safe,
         "parallel_blockers": parallel_blockers,
         "parallel_candidates_after_current": parallel_candidates_after_current,
@@ -4979,7 +4984,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "global_blockers": operator_session_projection["global_blockers"].clone(),
         "claim_conflicts": operator_session_projection["claim_conflicts"].clone(),
         "runtime_consumption": runtime_consumption,
-        "scheduling": graph_summary_scheduling_projection_json(&scheduling),
+        "scheduling": graph_summary_scheduling_projection_json(&scheduling, canonical_current_task_id),
         "waves": waves,
         "critical_path": critical_path,
     });
@@ -7361,7 +7366,7 @@ mod tests {
             parallel_candidates_after_current: vec![ready],
         };
 
-        let payload = graph_summary_scheduling_projection_json(&scheduling);
+        let payload = graph_summary_scheduling_projection_json(&scheduling, None);
 
         assert_eq!(payload["ready"][0]["task"]["id"], "ready-with-notes");
         assert!(payload["ready"][0]["task"]["notes"].is_null());
@@ -7390,7 +7395,7 @@ mod tests {
             parallel_candidates_after_current: vec![parallel],
         };
 
-        let payload = graph_summary_scheduling_projection_json(&scheduling);
+        let payload = graph_summary_scheduling_projection_json(&scheduling, None);
         let preview = &payload["strategy_preview"];
 
         assert_eq!(preview["enabled"], true);
