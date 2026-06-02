@@ -88,11 +88,16 @@ pub(crate) fn print_surface_header(render: RenderMode, title: &str) {
 }
 
 pub(crate) fn print_surface_line(render: RenderMode, label: &str, value: &str) {
+    println!("{}", format_surface_line(render, label, value));
+}
+
+fn format_surface_line(render: RenderMode, label: &str, value: &str) -> String {
+    let safe_label = sanitize_terminal_value(label);
     let safe_value = sanitize_terminal_value(value);
     match render {
-        RenderMode::Plain => println!("{label}: {safe_value}"),
-        RenderMode::Color => println!("\x1b[1;34m{label}\x1b[0m: {safe_value}"),
-        RenderMode::ColorEmoji => println!("🔹 \x1b[1;34m{label}\x1b[0m: {safe_value}"),
+        RenderMode::Plain => format!("{safe_label}: {safe_value}"),
+        RenderMode::Color => format!("\x1b[1;34m{safe_label}\x1b[0m: {safe_value}"),
+        RenderMode::ColorEmoji => format!("🔹 \x1b[1;34m{safe_label}\x1b[0m: {safe_value}"),
     }
 }
 
@@ -256,7 +261,8 @@ pub(crate) fn print_compact_command_families(render: RenderMode, surface: &str) 
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_terminal_value;
+    use super::{format_surface_line, sanitize_terminal_value};
+    use crate::RenderMode;
 
     #[test]
     fn sanitize_terminal_value_escapes_control_characters() {
@@ -264,6 +270,22 @@ mod tests {
             sanitize_terminal_value("safe\nline\r\x1b[31mred\tcol"),
             r"safe\nline\r\u{1b}[31mred\tcol"
         );
+    }
+
+    #[test]
+    fn format_surface_line_escapes_control_characters_in_labels() {
+        let rendered = format_surface_line(
+            RenderMode::Plain,
+            "epic epic-OSC-\x1b]52;c;dmFsaWRhdG9y\x07-END",
+            "1/1 closed (100.00%)",
+        );
+
+        assert_eq!(
+            rendered,
+            r"epic epic-OSC-\u{1b}]52;c;dmFsaWRhdG9y\u{7}-END: 1/1 closed (100.00%)"
+        );
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
     }
 }
 
