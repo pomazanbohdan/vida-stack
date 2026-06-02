@@ -4933,11 +4933,53 @@ fn readable_verification_evidence_result_path(
     if is_verification_evidence
         && !is_blocked_activation_view
         && !matches!(status, "blocked" | "failed")
+        && !verification_result_blocks_closure_admission(&result)
         && receipt_backed
     {
         return Some(candidate);
     }
     None
+}
+
+fn verification_result_blocks_closure_admission(result: &serde_json::Value) -> bool {
+    if result
+        .get("closure_ready")
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        return true;
+    }
+    if result
+        .get("blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return true;
+    }
+    if result
+        .get("blockers")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|values| !values.is_empty())
+    {
+        return true;
+    }
+    [
+        "summary",
+        "verdict",
+        "completion_verdict",
+        "coach_verdict",
+        "verification_verdict",
+    ]
+    .iter()
+    .any(|key| {
+        result
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| {
+                runtime_lane_completion_summary_blocker_code("verification", Some(value)).is_some()
+            })
+    })
 }
 
 fn synthetic_execution_completion_receipt_id(
@@ -15730,6 +15772,94 @@ host_environment:
             receipt.dispatch_result_path.as_deref(),
             Some("/tmp/activation-view-only.json")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn maybe_bridge_receipt_backed_verification_rework_does_not_open_closure() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let store = crate::StateStore::open(state_root.clone())
+            .await
+            .expect("state store should open");
+        let verification_result_path = harness.path().join("verification-rework-proof.json");
+        fs::write(
+            &verification_result_path,
+            json!({
+                "artifact_kind": "verification_evidence",
+                "status": "pass",
+                "execution_state": "executed",
+                "receipt_backed": true,
+                "closure_ready": false,
+                "verdict": "blocker",
+                "summary": "verifier found rework required because product implementation evidence is missing"
+            })
+            .to_string(),
+        )
+        .expect("verification rework evidence should persist");
+
+        let role_selection = bridge_test_role_selection("feature-x-dev");
+        let run_graph_bootstrap = json!({ "run_id": "run-bridge-verification-rework" });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-bridge-verification-rework".to_string(),
+            dispatch_target: "verification".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-timeout".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/verification-dispatch.json".to_string()),
+            dispatch_result_path: Some("/tmp/activation-view-only.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: Some(verification_result_path.display().to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: Some("senior".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-19T00:00:00Z".to_string(),
+        };
+
+        let bridged =
+            maybe_reconcile_blocked_verification_timeout_with_receipt_evidence_with_admission(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+                Some(true),
+            )
+            .await
+            .expect("reconcile should return");
+
+        assert!(!bridged);
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some("internal_activation_view_only")
+        );
+        assert_eq!(
+            receipt.exception_path_receipt_id.as_deref(),
+            Some("exc-timeout")
+        );
+        assert_eq!(
+            receipt.dispatch_result_path.as_deref(),
+            Some("/tmp/activation-view-only.json")
+        );
+        assert!(receipt.downstream_dispatch_target.is_none());
+        assert!(!receipt.downstream_dispatch_ready);
     }
 
     #[test]
