@@ -1008,6 +1008,47 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn task_progress_summary_shell_quotes_closure_candidate_task_id() {
+        let root = unique_temp_root("vida-task-progress-closure-candidate-quoted-id");
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let unsafe_task_id = "vida-root; touch /tmp/pwned #";
+        let rows = sample_tasks_jsonl()
+            .replace("vida-root", unsafe_task_id)
+            .replace(
+                "\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"open\"",
+                "\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"closed\"",
+            )
+            .replace(
+                "\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"open\"",
+                "\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"closed\"",
+            )
+            .replace(
+                "\"id\":\"vida-c\",\"title\":\"Task C\",\"description\":\"active\",\"status\":\"in_progress\"",
+                "\"id\":\"vida-c\",\"title\":\"Task C\",\"description\":\"active\",\"status\":\"closed\"",
+            );
+        fs::write(&source, rows).expect("write sample jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import tasks");
+
+        let summary = store
+            .task_progress_summary(unsafe_task_id)
+            .await
+            .expect("progress summary");
+        let expected_command =
+            "vida task close 'vida-root; touch /tmp/pwned #' --reason \"all descendants closed\" --json";
+        assert!(summary.closure_candidate);
+        assert!(summary.recommended_next_action.contains(expected_command));
+        assert_eq!(summary.canonical_commands, vec![expected_command]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn critical_path_includes_release1_contract_steps_surface() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
