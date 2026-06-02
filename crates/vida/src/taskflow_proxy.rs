@@ -274,6 +274,117 @@ fn graph_summary_scheduling_projection_json(
             .iter()
             .map(graph_summary_task_ref)
             .collect::<Vec<_>>(),
+        "strategy_preview": graph_summary_workflow_strategy_preview_json(scheduling),
+    })
+}
+
+fn graph_summary_workflow_strategy_preview_json(
+    scheduling: &crate::state_store::TaskSchedulingProjection,
+) -> serde_json::Value {
+    const MCTS_PREVIEW_ITERATIONS: u64 = 50;
+    const MCTS_PREVIEW_MAX_DEPTH: u64 = 5;
+    const MCTS_EXPLORATION_CONSTANT: f64 = 1.414;
+
+    let primary = scheduling
+        .ready
+        .iter()
+        .find(|candidate| candidate.active_critical_path)
+        .or_else(|| scheduling.ready.first());
+    let parallel_candidates = scheduling
+        .parallel_candidates_after_current
+        .iter()
+        .map(graph_summary_task_ref)
+        .collect::<Vec<_>>();
+    let parallel_safe_ready = scheduling
+        .ready
+        .iter()
+        .filter(|candidate| candidate.ready_parallel_safe)
+        .count();
+    let hard_blockers = if primary.is_none() {
+        vec!["no_ready_primary_task".to_string()]
+    } else {
+        Vec::new()
+    };
+    let mut steps = Vec::new();
+    if let Some(candidate) = primary {
+        steps.push(serde_json::json!({
+            "task": graph_summary_task_ref(&candidate.task),
+            "action": "dispatch_primary_preview",
+            "admissibility_source": "taskflow_scheduler_projection",
+            "ready_now": candidate.ready_now,
+            "parallel_safe": candidate.ready_parallel_safe,
+            "active_critical_path": candidate.active_critical_path,
+            "diagnostic_only": true,
+        }));
+    }
+    for task in parallel_candidates
+        .iter()
+        .take(MCTS_PREVIEW_MAX_DEPTH as usize)
+    {
+        steps.push(serde_json::json!({
+            "task": task,
+            "action": "dispatch_parallel_preview",
+            "admissibility_source": "taskflow_parallel_candidates_after_current",
+            "ready_now": true,
+            "parallel_safe": true,
+            "active_critical_path": false,
+            "diagnostic_only": true,
+        }));
+    }
+
+    let selected_step_count = steps.len() as f64;
+    let blocked_count = scheduling.blocked.len() as f64;
+    let ready_count = scheduling.ready.len() as f64;
+    let closure_probability = if selected_step_count == 0.0 {
+        0.0
+    } else {
+        (0.50 + (selected_step_count * 0.08) - (blocked_count * 0.03)).clamp(0.0, 0.95)
+    };
+    let verification_confidence = if selected_step_count == 0.0 {
+        0.0
+    } else {
+        (0.60 + (parallel_safe_ready as f64 * 0.05) - (blocked_count * 0.02)).clamp(0.0, 0.95)
+    };
+    let estimated_parallel_speedup = if selected_step_count <= 1.0 {
+        1.0
+    } else {
+        (1.0 + ((selected_step_count - 1.0) * 0.35)).min(2.5)
+    };
+    let risk_penalty = if ready_count == 0.0 {
+        1.0
+    } else {
+        (blocked_count / (ready_count + blocked_count + 1.0)).min(1.0)
+    };
+
+    serde_json::json!({
+        "enabled": true,
+        "strategy_source": "mcts_preview",
+        "phase": "phase_1",
+        "mode": "diagnostic_only",
+        "iterations": MCTS_PREVIEW_ITERATIONS,
+        "max_depth": MCTS_PREVIEW_MAX_DEPTH,
+        "exploration_constant": MCTS_EXPLORATION_CONSTANT,
+        "preconditions": {
+            "scheduler_projection_available": true,
+            "ready_candidate_count": scheduling.ready.len(),
+            "blocked_candidate_count": scheduling.blocked.len(),
+            "parallel_safe_ready_count": parallel_safe_ready,
+            "parallel_candidates_after_current_count": parallel_candidates.len(),
+            "hard_blockers": hard_blockers,
+        },
+        "selected_strategy": {
+            "steps": steps,
+        },
+        "reward_breakdown": {
+            "closure_probability": closure_probability,
+            "verification_confidence": verification_confidence,
+            "estimated_cost_units": selected_step_count as u64,
+            "estimated_parallel_speedup": estimated_parallel_speedup,
+            "risk_penalty": risk_penalty,
+        },
+        "diagnostic_only_until_dispatched": true,
+        "mutates_task_graph": false,
+        "not_runtime_authority": true,
     })
 }
 
@@ -354,6 +465,7 @@ fn compact_taskflow_graph_summary_payload(mut payload: serde_json::Value) -> ser
                     "ready_count": scheduling["ready"].as_array().map(Vec::len).unwrap_or(0),
                     "blocked_count": scheduling["blocked"].as_array().map(Vec::len).unwrap_or(0),
                     "parallel_candidates_after_current_count": scheduling["parallel_candidates_after_current"].as_array().map(Vec::len).unwrap_or(0),
+                    "strategy_preview": scheduling["strategy_preview"].clone(),
                 }),
             );
         }
@@ -7209,6 +7321,81 @@ mod tests {
         assert!(payload["ready"][0]["task"]["description"].is_null());
         assert!(payload["parallel_candidates_after_current"][0]["notes"].is_null());
         assert!(payload["parallel_candidates_after_current"][0]["description"].is_null());
+    }
+
+    #[test]
+    fn graph_summary_scheduling_projection_includes_diagnostic_mcts_preview() {
+        let mut primary = task("primary", "task", "open", 1, &[], Vec::new());
+        primary.execution_semantics.conflict_domain = Some("runtime".to_string());
+        let mut parallel = task("parallel", "task", "open", 2, &[], Vec::new());
+        parallel.execution_semantics.conflict_domain = Some("docs".to_string());
+        let scheduling = TaskSchedulingProjection {
+            current_task_id: Some("primary".to_string()),
+            ready: vec![scheduling_candidate(
+                primary,
+                true,
+                true,
+                true,
+                Vec::new(),
+                Vec::new(),
+            )],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: vec![parallel],
+        };
+
+        let payload = graph_summary_scheduling_projection_json(&scheduling);
+        let preview = &payload["strategy_preview"];
+
+        assert_eq!(preview["enabled"], true);
+        assert_eq!(preview["strategy_source"], "mcts_preview");
+        assert_eq!(preview["mode"], "diagnostic_only");
+        assert_eq!(preview["diagnostic_only_until_dispatched"], true);
+        assert_eq!(preview["mutates_task_graph"], false);
+        assert_eq!(preview["not_runtime_authority"], true);
+        assert_eq!(
+            preview["preconditions"]["ready_candidate_count"]
+                .as_u64()
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            preview["selected_strategy"]["steps"][0]["task"]["id"],
+            "primary"
+        );
+        assert_eq!(
+            preview["selected_strategy"]["steps"][1]["task"]["id"],
+            "parallel"
+        );
+    }
+
+    #[test]
+    fn graph_summary_compaction_preserves_strategy_preview() {
+        let payload = serde_json::json!({
+            "operator_session_projection": {},
+            "scheduling": {
+                "current_task_id": "primary",
+                "ready": [{"task": {"id": "primary"}}],
+                "blocked": [],
+                "parallel_candidates_after_current": [],
+                "strategy_preview": {
+                    "enabled": true,
+                    "strategy_source": "mcts_preview",
+                    "diagnostic_only_until_dispatched": true,
+                    "not_runtime_authority": true
+                }
+            }
+        });
+
+        let compacted = compact_taskflow_graph_summary_payload(payload);
+
+        assert_eq!(
+            compacted["scheduling"]["strategy_preview"]["strategy_source"],
+            "mcts_preview"
+        );
+        assert_eq!(
+            compacted["scheduling"]["strategy_preview"]["not_runtime_authority"],
+            true
+        );
     }
 
     fn task(
