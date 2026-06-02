@@ -16828,6 +16828,33 @@ host_environment:
     }
 
     #[test]
+    fn runtime_closure_lane_completion_summary_blocker_writes_blocked_artifact() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("verification-packet.json");
+        fs::write(&packet_path, "{}").expect("packet should write");
+
+        let result_path = write_runtime_lane_completion_result_with_summary(
+            harness.path(),
+            "run-verifier-blocker",
+            "verification",
+            "receipt-verifier-blocker",
+            &packet_path.display().to_string(),
+            Some("verdict: blocker; rework required; product implementation evidence missing; not closure-ready"),
+        )
+        .expect("blocked verifier completion result should write");
+
+        let result: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&result_path).expect("result should be readable"),
+        )
+        .expect("result should decode");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "verification_rework_required");
+        assert_eq!(result["closure_ready"], false);
+        assert_eq!(result["completion_verdict"], "rework_required");
+    }
+
+    #[test]
     fn existing_executed_dispatch_result_rejects_completion_without_receipt_id() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let packet_path = harness.path().join("implementer-packet.json");
@@ -22260,6 +22287,96 @@ pub(crate) fn write_runtime_lane_completion_result(
     receipt_id: &str,
     source_dispatch_packet_path: &str,
 ) -> Result<String, String> {
+    write_runtime_lane_completion_result_with_summary(
+        state_root,
+        run_id,
+        completed_target,
+        receipt_id,
+        source_dispatch_packet_path,
+        None,
+    )
+}
+
+pub(crate) fn runtime_lane_completion_summary_blocker_code(
+    completed_target: &str,
+    summary: Option<&str>,
+) -> Option<String> {
+    let normalized = summary?.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let has_explicit_blocker = [
+        "not closure-ready",
+        "not closure ready",
+        "not approve",
+        "not approved",
+        "not closure_ready",
+        "rework",
+        "blocker",
+        "blocked",
+        "review_findings",
+        "changed_scope",
+        "implementation evidence absent",
+        "implementation evidence missing",
+        "product implementation evidence absent",
+        "product implementation evidence missing",
+        "not ready for closure",
+        "closure not ready",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+
+    if !has_explicit_blocker {
+        return None;
+    }
+
+    let only_positive_blocker_context = [
+        "no blocker",
+        "no blockers",
+        "without blockers",
+        "blockers: []",
+        "blocker_codes: []",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+        && ![
+            "not closure-ready",
+            "not closure ready",
+            "not approve",
+            "not approved",
+            "rework",
+            "review_findings",
+            "changed_scope",
+            "implementation evidence absent",
+            "implementation evidence missing",
+        ]
+        .iter()
+        .any(|needle| normalized.contains(needle));
+
+    if only_positive_blocker_context {
+        return None;
+    }
+
+    Some(
+        match completed_target.trim() {
+            "verification" => "verification_rework_required",
+            "coach" => "coach_rework_required",
+            "closure" => "closure_evidence_blocked",
+            _ => "lane_completion_blocked_by_summary",
+        }
+        .to_string(),
+    )
+}
+
+pub(crate) fn write_runtime_lane_completion_result_with_summary(
+    state_root: &Path,
+    run_id: &str,
+    completed_target: &str,
+    receipt_id: &str,
+    source_dispatch_packet_path: &str,
+    summary: Option<&str>,
+) -> Result<String, String> {
     let result_dir = state_root
         .join("runtime-consumption")
         .join("dispatch-results");
@@ -22271,10 +22388,21 @@ pub(crate) fn write_runtime_lane_completion_result(
         .expect("rfc3339 timestamp should render")
         .replace(':', "-");
     let result_path = result_dir.join(format!("{safe_run_id}-{ts}.json"));
-    let body = serde_json::json!({
+    let blocker_code = runtime_lane_completion_summary_blocker_code(completed_target, summary);
+    let execution_state = if blocker_code.is_some() {
+        "blocked"
+    } else {
+        "executed"
+    };
+    let status = if blocker_code.is_some() {
+        "blocked"
+    } else {
+        "pass"
+    };
+    let mut body = serde_json::json!({
         "artifact_kind": "runtime_lane_completion_result",
-        "status": "pass",
-        "execution_state": "executed",
+        "status": status,
+        "execution_state": execution_state,
         "run_id": run_id,
         "completed_target": completed_target,
         "completion_receipt_id": receipt_id,
@@ -22283,6 +22411,15 @@ pub(crate) fn write_runtime_lane_completion_result(
             .format(&Rfc3339)
             .expect("rfc3339 timestamp should render"),
     });
+    if let Some(summary) = summary.map(str::trim).filter(|value| !value.is_empty()) {
+        body["summary"] = serde_json::json!(summary);
+    }
+    if let Some(blocker_code) = blocker_code {
+        body["blocker_code"] = serde_json::json!(blocker_code);
+        body["blockers"] = serde_json::json!([body["blocker_code"].clone()]);
+        body["closure_ready"] = serde_json::json!(false);
+        body["completion_verdict"] = serde_json::json!("rework_required");
+    }
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode lane completion result: {error}"))?;
     std::fs::write(&result_path, encoded)

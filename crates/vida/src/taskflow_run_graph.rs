@@ -4054,6 +4054,19 @@ fn implementation_verification_outcome(status: &str) -> ImplementationVerificati
             ImplementationVerificationOutcome::FindingsBlocked,
         ),
         (
+            "blocker",
+            ImplementationVerificationOutcome::FindingsBlocked,
+        ),
+        (
+            "blocked",
+            ImplementationVerificationOutcome::FindingsBlocked,
+        ),
+        (
+            "rework_required",
+            ImplementationVerificationOutcome::FindingsBlocked,
+        ),
+        ("rework", ImplementationVerificationOutcome::FindingsBlocked),
+        (
             "changed_scope",
             ImplementationVerificationOutcome::FindingsBlocked,
         ),
@@ -10749,6 +10762,14 @@ mod tests {
         );
         assert_eq!(
             implementation_verification_outcome("review_findings"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+        assert_eq!(
+            implementation_verification_outcome("blocker"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+        assert_eq!(
+            implementation_verification_outcome("rework_required"),
             ImplementationVerificationOutcome::FindingsBlocked
         );
         assert_eq!(

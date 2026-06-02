@@ -569,6 +569,14 @@ impl StateStore {
             return Ok(false);
         }
 
+        self.run_graph_dispatch_has_receipt_backed_execution_truth(run_id)
+            .await
+    }
+
+    async fn run_graph_dispatch_has_receipt_backed_execution_truth(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, StateStoreError> {
         let receipt: Option<RunGraphDispatchReceiptStored> = self
             .db
             .select(("run_graph_dispatch_receipt", run_id))
@@ -588,6 +596,43 @@ impl StateStore {
                 .map(str::trim)
                 .is_some_and(|value| !value.is_empty())
             && crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(&receipt))
+    }
+
+    async fn filter_auto_closed_parents_ready_for_close(
+        &self,
+        parents: Vec<TaskRecord>,
+    ) -> Result<Vec<TaskRecord>, StateStoreError> {
+        let mut ready = Vec::new();
+        for parent in parents {
+            if self
+                .auto_closed_parent_has_unresolved_run_graph(&parent.id)
+                .await?
+            {
+                continue;
+            }
+            ready.push(parent);
+        }
+        Ok(ready)
+    }
+
+    async fn auto_closed_parent_has_unresolved_run_graph(
+        &self,
+        task_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let Some(run_id) = self.latest_run_graph_run_id_for_task(task_id).await? else {
+            return Ok(false);
+        };
+        let status = match self.run_graph_status(&run_id).await {
+            Ok(status) => status,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if Self::run_graph_status_allows_task_close_closure_binding(&status) {
+            return Ok(false);
+        }
+        Ok(!self
+            .run_graph_dispatch_has_receipt_backed_execution_truth(&run_id)
+            .await?)
     }
 
     fn normalize_execution_semantics_value(value: Option<&str>) -> Option<String> {
@@ -1854,6 +1899,9 @@ impl StateStore {
         for parent in reopened_parents {
             self.persist_task_record(parent).await?;
         }
+        let closed_parents = self
+            .filter_auto_closed_parents_ready_for_close(closed_parents)
+            .await?;
         self.persist_task_record(task.clone()).await?;
         for parent in &closed_parents {
             self.persist_task_record(parent.clone()).await?;
@@ -2274,6 +2322,9 @@ impl StateStore {
                 ),
             });
         }
+        let closed_parents = self
+            .filter_auto_closed_parents_ready_for_close(closed_parents)
+            .await?;
         self.persist_task_record(task.clone()).await?;
         for parent in &closed_parents {
             self.persist_task_record(parent.clone()).await?;
@@ -3066,6 +3117,159 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn update_task_status_closed_keeps_parent_open_with_blocked_run_graph() {
+        let root = unique_task_store_temp_root("vida-update-child-blocked-run-graph");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, parent_id) in [
+            ("run-graph-parent", "Run graph parent", "epic", None),
+            (
+                "run-graph-child",
+                "Run graph child",
+                "todo",
+                Some("run-graph-parent"),
+            ),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status: "open",
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create task tree");
+        }
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-graph-parent",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "run-graph-parent".to_string();
+        status.active_node = "test_author".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+        status.handoff_state = "delegated_lane_blocked".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "none".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked run graph status");
+
+        store
+            .update_task(UpdateTaskRequest {
+                task_id: "run-graph-child",
+                title: None,
+                status: Some("closed"),
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("close child through update");
+
+        let parent = store
+            .show_task("run-graph-parent")
+            .await
+            .expect("load parent");
+        assert_eq!(parent.status, "open");
+        assert!(parent.closed_at.is_none());
+        assert!(parent.close_reason.is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn close_task_keeps_parent_open_with_blocked_run_graph() {
+        let root = unique_task_store_temp_root("vida-close-child-blocked-run-graph");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, parent_id) in [
+            (
+                "close-run-graph-parent",
+                "Close run graph parent",
+                "epic",
+                None,
+            ),
+            (
+                "close-run-graph-child",
+                "Close run graph child",
+                "todo",
+                Some("close-run-graph-parent"),
+            ),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status: "open",
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create task tree");
+        }
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "close-run-graph-parent",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "close-run-graph-parent".to_string();
+        status.active_node = "test_author".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+        status.handoff_state = "delegated_lane_blocked".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "none".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked run graph status");
+
+        store
+            .close_task("close-run-graph-child", "child completed")
+            .await
+            .expect("close child through task close");
+
+        let parent = store
+            .show_task("close-run-graph-parent")
+            .await
+            .expect("load parent");
+        assert_eq!(parent.status, "open");
+        assert!(parent.closed_at.is_none());
+        assert!(parent.close_reason.is_none());
         let _ = fs::remove_dir_all(&root);
     }
 

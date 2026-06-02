@@ -109,6 +109,9 @@ mod taskflow_task_bridge;
 mod temp_state;
 #[cfg(test)]
 mod test_cli_support;
+mod vida_client;
+mod vida_client_fixture;
+mod vida_client_inprocess;
 
 use std::env;
 use std::ffi::OsString;

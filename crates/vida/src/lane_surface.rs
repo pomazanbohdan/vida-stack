@@ -1701,6 +1701,8 @@ fn write_lane_packet(path: &str, packet: &serde_json::Value) -> Result<(), Strin
 struct HostBridgeCompletionEvidence {
     result_path: String,
     receipt_path: String,
+    execution_state: String,
+    blocker_code: Option<String>,
 }
 
 struct HostBridgeReceiptPaths {
@@ -2019,15 +2021,30 @@ fn materialize_host_bridge_completion_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("parent host bridge reported internal agent completion");
+    let blocker_code = crate::runtime_dispatch_state::runtime_lane_completion_summary_blocker_code(
+        dispatch_target,
+        Some(summary),
+    );
+    let execution_state = if blocker_code.is_some() {
+        "blocked"
+    } else {
+        "executed"
+    };
+    let status = if blocker_code.is_some() {
+        "blocked"
+    } else {
+        "pass"
+    };
     let result = serde_json::json!({
         "artifact_kind": "host_tool_bridge_result",
         "schema_version": 1,
-        "status": "pass",
-        "execution_state": "executed",
+        "status": status,
+        "execution_state": execution_state,
         "request_id": request_id,
         "run_id": run_id,
         "dispatch_target": dispatch_target,
         "completion_receipt_id": receipt_id,
+        "blocker_code": blocker_code.clone(),
         "host_agent_id": host_agent_id,
         "summary": summary,
         "source_dispatch_packet_path": packet_path,
@@ -2044,6 +2061,7 @@ fn materialize_host_bridge_completion_evidence(
             "evidence_kind": "host_tool_bridge_result",
             "backend_id": backend_id,
             "receipt_backed": true,
+            "completion_verdict": if blocker_code.is_some() { "rework_required" } else { "pass" },
             "records_dispatch_result": true
         },
         "recorded_at": recorded_at,
@@ -2051,12 +2069,13 @@ fn materialize_host_bridge_completion_evidence(
     let receipt = serde_json::json!({
         "artifact_kind": "host_tool_bridge_receipt",
         "schema_version": 1,
-        "status": "pass",
+        "status": status,
         "receipt_backed": true,
         "request_id": request_id,
         "run_id": run_id,
         "dispatch_target": dispatch_target,
         "completion_receipt_id": receipt_id,
+        "blocker_code": blocker_code.clone(),
         "host_agent_id": host_agent_id,
         "request_path": canonical_request_path.display().to_string(),
         "result_path": result_path.display().to_string(),
@@ -2083,6 +2102,8 @@ fn materialize_host_bridge_completion_evidence(
     Ok(HostBridgeCompletionEvidence {
         result_path: result_path.display().to_string(),
         receipt_path: receipt_path.display().to_string(),
+        execution_state: execution_state.to_string(),
+        blocker_code: blocker_code.clone(),
     })
 }
 
@@ -2494,6 +2515,31 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 );
                 return ExitCode::from(2);
             }
+            if takeover_active {
+                if let Some(metadata) = exception_path_metadata.as_ref() {
+                    let packet_template_kind = packet
+                        .get("packet_template_kind")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    if let Some(packet_template_kind) = packet_template_kind {
+                        if let Some(active_packet) = packet.get_mut(&packet_template_kind) {
+                            if crate::runtime_dispatch_state::apply_owned_paths_if_missing(
+                                active_packet,
+                                &metadata.owned_write_scope,
+                            ) {
+                                if let Some(object) = packet.as_object_mut() {
+                                    object.insert(
+                                        "owned_paths".to_string(),
+                                        serde_json::json!(metadata.owned_write_scope),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if let Err(error) =
                 crate::validate_runtime_dispatch_packet_contract(&packet, "Lane completion packet")
             {
@@ -2539,13 +2585,19 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string);
+            let completion_blocker_code =
+                crate::runtime_dispatch_state::runtime_lane_completion_summary_blocker_code(
+                    &completed_target,
+                    host_bridge_summary,
+                );
             let completion_result_path =
-                match crate::runtime_dispatch_state::write_runtime_lane_completion_result(
+                match crate::runtime_dispatch_state::write_runtime_lane_completion_result_with_summary(
                     store.root(),
                     run_id,
                     &completed_target,
                     receipt_id,
                     &validated_packet_path,
+                    host_bridge_summary,
                 ) {
                     Ok(path) => path,
                     Err(error) => {
@@ -2557,15 +2609,37 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .downstream_dispatch_blockers
                 .iter()
                 .any(|blocker| blocker == "missing_owned_write_scope");
-            receipt.downstream_dispatch_ready = true;
-            receipt.downstream_dispatch_blockers.clear();
-            receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+            let completion_blocked = completion_blocker_code.is_some()
+                || host_bridge_evidence
+                    .as_ref()
+                    .is_some_and(|evidence| evidence.execution_state == "blocked");
+            if completion_blocked {
+                let blocker_code = completion_blocker_code
+                    .clone()
+                    .or_else(|| {
+                        host_bridge_evidence
+                            .as_ref()
+                            .and_then(|evidence| evidence.blocker_code.clone())
+                    })
+                    .unwrap_or_else(|| "lane_completion_blocked_by_summary".to_string());
+                receipt.downstream_dispatch_ready = false;
+                receipt.downstream_dispatch_blockers = vec![blocker_code.clone()];
+                receipt.downstream_dispatch_status = Some("blocked".to_string());
+                receipt.dispatch_status = "blocked".to_string();
+                receipt.blocker_code = Some(blocker_code);
+                receipt.lane_status = crate::LaneStatus::LaneBlocked.as_str().to_string();
+            } else {
+                receipt.downstream_dispatch_ready = true;
+                receipt.downstream_dispatch_blockers.clear();
+                receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+                receipt.dispatch_status = "executed".to_string();
+                receipt.blocker_code = None;
+                receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+            }
             receipt.downstream_dispatch_result_path = Some(completion_result_path.clone());
             receipt.downstream_dispatch_active_target = Some(completed_target.clone());
             receipt.downstream_dispatch_last_target =
                 completion_previous_target.or_else(|| Some(completed_target.clone()));
-            receipt.dispatch_status = "executed".to_string();
-            receipt.blocker_code = None;
             receipt.exception_path_receipt_id = None;
             receipt.supersedes_receipt_id = None;
             receipt.dispatch_result_path = Some(
@@ -2585,15 +2659,15 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 ));
                 receipt.downstream_dispatch_trace_path = Some(evidence.receipt_path.clone());
             }
-            receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
-            match decode_lane_completion_packet_context(&packet) {
-                Ok(Some((role_selection, run_graph_bootstrap))) => {
-                    let owned_paths_override = exception_path_metadata
-                        .as_ref()
-                        .filter(|_| takeover_active || missing_owned_scope_handoff)
-                        .map(|metadata| metadata.owned_write_scope.as_slice())
-                        .unwrap_or(&[]);
-                    if let Err(error) = crate::runtime_dispatch_state::refresh_downstream_dispatch_preview_with_owned_paths(
+            if !completion_blocked {
+                match decode_lane_completion_packet_context(&packet) {
+                    Ok(Some((role_selection, run_graph_bootstrap))) => {
+                        let owned_paths_override = exception_path_metadata
+                            .as_ref()
+                            .filter(|_| takeover_active || missing_owned_scope_handoff)
+                            .map(|metadata| metadata.owned_write_scope.as_slice())
+                            .unwrap_or(&[]);
+                        if let Err(error) = crate::runtime_dispatch_state::refresh_downstream_dispatch_preview_with_owned_paths(
                         &store,
                         &role_selection,
                         &run_graph_bootstrap,
@@ -2607,11 +2681,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         );
                         return ExitCode::from(1);
                     }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::from(1);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
                 }
             }
             let downstream_dispatch_status = receipt
@@ -5433,6 +5508,231 @@ mod tests {
         .expect("host bridge receipt should be json");
         assert_eq!(bridge_receipt["artifact_kind"], "host_tool_bridge_receipt");
         assert_eq!(bridge_receipt["receipt_backed"], true);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_complete_host_bridge_blocker_does_not_complete_verification_or_open_closure() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-blocker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-host-bridge-verifier-blocker";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "verification".to_string();
+        status.next_node = Some("closure".to_string());
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "verification_blocked".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "dispatch.verification".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let packet_path = root.join(
+            "runtime-consumption/downstream-dispatch-packets/run-host-bridge-verification.json",
+        );
+        std::fs::create_dir_all(
+            packet_path
+                .parent()
+                .expect("downstream packet path should have parent"),
+        )
+        .expect("create downstream packet dir");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": "verification",
+                "activation_runtime_role": "verifier",
+                "packet_template_kind": "delivery_task_packet",
+                "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                "read_only_paths": ["crates/vida/src"],
+                "delivery_task_packet": {
+                    "goal": "Verify implementation evidence.",
+                    "scope_in": ["dispatch_target:verification"],
+                    "handoff_task_class": "implementation",
+                    "handoff_runtime_role": "verifier",
+                    "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                    "read_only_paths": ["crates/vida/src"],
+                    "definition_of_done": ["verification either approves closure or blocks rework"],
+                    "verification_command": "cargo test -p vida lane_complete",
+                    "proof_target": "verification receipt",
+                    "stop_rules": ["stop if implementation evidence is missing"],
+                    "blocking_question": "none"
+                },
+                "downstream_dispatch_target": "closure",
+                "downstream_dispatch_active_target": "verification",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_verification_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked"
+            })
+            .to_string(),
+        )
+        .expect("write downstream packet");
+
+        let request_path = root.join("host-tool-bridge/requests/run-host-bridge-verification.json");
+        let result_path = root.join("host-tool-bridge/results/run-host-bridge-verification.json");
+        let bridge_receipt_path =
+            root.join("host-tool-bridge/receipts/run-host-bridge-verification.json");
+        std::fs::create_dir_all(
+            request_path
+                .parent()
+                .expect("request path should have parent"),
+        )
+        .expect("create request dir");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "run-host-bridge-verification",
+                "run_id": run_id,
+                "dispatch_target": "verification",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "carrier_id": "verifier",
+                "execution_boundary": "parent_host_session",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": bridge_receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write host bridge request");
+
+        let activation_result_path = root.join(
+            "runtime-consumption/dispatch-results/run-host-bridge-verification-activation.json",
+        );
+        std::fs::create_dir_all(
+            activation_result_path
+                .parent()
+                .expect("activation result path should have parent"),
+        )
+        .expect("create activation result dir");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": bridge_receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "verification".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+        receipt.downstream_dispatch_target = Some("closure".to_string());
+        receipt.downstream_dispatch_command = Some("vida taskflow dispatch closure".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_verification_evidence".to_string()];
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_active_target = Some("verification".to_string());
+        receipt.selected_backend = Some("internal_subagents".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "complete".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "host-bridge-verification-blocker".to_string(),
+                "--host-bridge-request".to_string(),
+                request_path.display().to_string(),
+                "--host-agent-id".to_string(),
+                "verifier-1".to_string(),
+                "--host-bridge-summary".to_string(),
+                "verdict: blocker; rework required; product implementation evidence missing; not closure-ready".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after lane command");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert_eq!(after.dispatch_status, "blocked");
+        assert_eq!(after.lane_status, crate::LaneStatus::LaneBlocked.as_str());
+        assert!(!after.downstream_dispatch_ready);
+        assert_eq!(
+            after.blocker_code.as_deref(),
+            Some("verification_rework_required")
+        );
+        assert_eq!(
+            after.downstream_dispatch_blockers,
+            vec!["verification_rework_required".to_string()]
+        );
+
+        let current_status = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read run graph status");
+        assert_eq!(current_status.active_node, "verification");
+        assert_eq!(current_status.lifecycle_stage, "verification_blocked");
+
+        let bridge_result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("read host bridge result"),
+        )
+        .expect("host bridge result should be json");
+        assert_eq!(bridge_result["status"], "blocked");
+        assert_eq!(bridge_result["execution_state"], "blocked");
+        assert_eq!(
+            bridge_result["blocker_code"],
+            "verification_rework_required"
+        );
+        assert_eq!(bridge_result["execution_evidence"]["receipt_backed"], true);
+
+        let completion_result_path = after
+            .downstream_dispatch_result_path
+            .clone()
+            .expect("completion result path should be recorded");
+        let completion_result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(completion_result_path).expect("read lane completion result"),
+        )
+        .expect("lane completion result should be json");
+        assert_eq!(completion_result["status"], "blocked");
+        assert_eq!(
+            completion_result["blocker_code"],
+            "verification_rework_required"
+        );
+        assert_eq!(completion_result["closure_ready"], false);
 
         let _ = std::fs::remove_dir_all(&root);
     }
