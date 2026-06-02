@@ -1879,6 +1879,7 @@ mod tests {
             &operator_session_projection,
             true,
             false,
+            false,
             vec![],
         );
 
