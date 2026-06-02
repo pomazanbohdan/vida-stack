@@ -301,6 +301,14 @@ fn split_work_item_binding_value(value: &str) -> impl Iterator<Item = String> + 
         .map(str::to_string)
 }
 
+fn single_in_progress_task_id_from_rows(rows: &[state_store::TaskRecord]) -> Option<&str> {
+    let mut candidates = rows
+        .iter()
+        .filter(|task| task.status == "in_progress" && task.issue_type != "epic");
+    let candidate = candidates.next()?;
+    candidates.next().is_none().then_some(candidate.id.as_str())
+}
+
 fn work_item_type_lookup_keys(work_item_type: &str) -> Vec<String> {
     let mut keys = Vec::new();
     let normalized = state_store::canonical_work_item_issue_type(work_item_type);
@@ -1652,7 +1660,8 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
         .unwrap_or_else(state_store::default_state_dir);
     let explicit_state_dir = command.state_dir.as_deref();
     let projection_name = agent_dispatch_next_projection_name(&command);
-    if command.json {
+    let cache_read_allowed = command.current_task_id.is_some();
+    if command.json && cache_read_allowed {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
             &state_dir,
             &projection_name,
@@ -1724,10 +1733,21 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             let explicit_bound_current_task_id =
                 explicit_task_graph_continuation_task_id(explicit_binding.as_ref())
                     .map(str::to_string);
+            let taskflow_single_in_progress_task_id =
+                if command.current_task_id.is_none() && explicit_bound_current_task_id.is_none() {
+                    StateStore::read_fresh_tasks_from_jsonl_snapshot(store.root())
+                        .ok()
+                        .and_then(|rows| {
+                            single_in_progress_task_id_from_rows(&rows).map(str::to_string)
+                        })
+                } else {
+                    None
+                };
             let effective_current_task_id = command
                 .current_task_id
                 .as_deref()
-                .or(explicit_bound_current_task_id.as_deref());
+                .or(explicit_bound_current_task_id.as_deref())
+                .or(taskflow_single_in_progress_task_id.as_deref());
             let preview = if command.dev_team {
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
@@ -1931,7 +1951,8 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 mod tests {
     use super::{
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
-        dev_team_sequence, dev_team_sequence_for_work_item, state_store,
+        dev_team_sequence, dev_team_sequence_for_work_item, single_in_progress_task_id_from_rows,
+        state_store,
     };
     use crate::state_store::{
         CreateTaskRequest, TaskExecutionSemantics, TaskRecord, TaskSchedulingCandidate,
@@ -2118,6 +2139,42 @@ mod tests {
             active_critical_path: false,
             parallel_blockers: Vec::new(),
         }
+    }
+
+    #[test]
+    fn single_in_progress_task_id_from_rows_selects_only_non_epic_active_task() {
+        let mut active = task_with_labels_and_type("task-active", "Active task", &[], "task");
+        active.status = "in_progress".to_string();
+        let mut epic = task_with_labels_and_type("epic-active", "Active epic", &[], "epic");
+        epic.status = "in_progress".to_string();
+
+        assert_eq!(
+            single_in_progress_task_id_from_rows(&[epic, active]),
+            Some("task-active")
+        );
+    }
+
+    #[test]
+    fn single_in_progress_task_id_from_rows_fails_closed_for_multiple_active_tasks() {
+        let mut first = task_with_labels_and_type("task-first", "First task", &[], "task");
+        first.status = "in_progress".to_string();
+        let mut second = task_with_labels_and_type("task-second", "Second task", &[], "task");
+        second.status = "in_progress".to_string();
+
+        assert_eq!(single_in_progress_task_id_from_rows(&[first, second]), None);
+    }
+
+    #[test]
+    fn single_in_progress_task_id_from_rows_fails_closed_without_active_task() {
+        assert_eq!(
+            single_in_progress_task_id_from_rows(&[task_with_labels_and_type(
+                "task-open",
+                "Open task",
+                &[],
+                "task",
+            )]),
+            None
+        );
     }
 
     fn activation_bundle_with_worker_selection_truth() -> serde_json::Value {
