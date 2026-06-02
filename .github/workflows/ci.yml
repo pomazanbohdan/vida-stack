@@ -1,9 +1,10 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
+  # Disabled by operator request: do not auto-run CI on normal pushes to main.
+  # push:
+  #   branches:
+  #     - main
   pull_request:
 
 permissions:
