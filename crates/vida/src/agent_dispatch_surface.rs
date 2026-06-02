@@ -69,6 +69,7 @@ struct AgentDispatchNextPreview {
     execution_attempted: bool,
     parallelization_planner: serde_json::Value,
     carrier_selection_api: serde_json::Value,
+    flow_projection: serde_json::Value,
     source_surfaces: Vec<String>,
 }
 
@@ -252,6 +253,179 @@ fn build_carrier_selection_api_descriptor(
         "manual_host_tool_choice_required": false,
         "embedded_assignment_diagnostics": false,
         "diagnostics_note": "Run the listed `vida agent select` command for full carrier/model/cost assignment diagnostics.",
+    })
+}
+
+fn non_dev_team_flow_projection() -> serde_json::Value {
+    serde_json::json!({
+        "status": "not_applicable",
+        "reason": "dev_team_preview_not_enabled",
+        "diagnostic_only": true,
+    })
+}
+
+fn lifecycle_hook_event_stream(
+    selected_flow: Option<&serde_json::Value>,
+    sequence: &[DevTeamSequenceStep],
+) -> Vec<serde_json::Value> {
+    let mut events = Vec::new();
+    if let Some(flow) = selected_flow {
+        for hook in flow["lifecycle_hook_templates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+        {
+            events.push(serde_json::json!({
+                "scope": "flow",
+                "template_id": hook,
+                "authority": "diagnostic_event_stream",
+                "configured_from": "dev_team.flows.lifecycle_hook_templates",
+            }));
+        }
+    }
+    for (index, step) in sequence.iter().enumerate() {
+        for hook in step
+            .lifecycle_hook_templates
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+        {
+            events.push(serde_json::json!({
+                "scope": "step",
+                "step_index": index,
+                "role_label": step.role_label,
+                "template_id": hook,
+                "authority": "diagnostic_event_stream",
+                "configured_from": "dev_team.flows.steps.lifecycle_hook_templates",
+            }));
+        }
+    }
+    events
+}
+
+fn build_dev_team_flow_projection(
+    activation_bundle: &serde_json::Value,
+    selected_flow_id: Option<&str>,
+    sequence: &[DevTeamSequenceStep],
+    selected_lanes: &[AgentDispatchLanePreview],
+    blocker_codes: &[String],
+) -> serde_json::Value {
+    let readiness = &activation_bundle["dev_team_readiness"];
+    let selected_flow = selected_flow_id.and_then(|flow_id| {
+        readiness["flows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
+    });
+    let current_lane = selected_lanes.first();
+    let current_step = current_lane
+        .map(|lane| {
+            serde_json::json!({
+                "role_label": lane.role_label,
+                "runtime_role": lane.runtime_role,
+                "task_class": lane.task_class,
+                "task_id": lane.task_id,
+                "dispatch_command": lane.dispatch_command,
+                "dispatch_command_kind": lane.dispatch_command_kind,
+                "receipt_status": {
+                    "receipt_backed": false,
+                    "receipt_path": null,
+                    "status": "preview_only"
+                },
+                "proof_state": {
+                    "status": "pending_dispatch",
+                    "diagnostic_only": true
+                },
+                "approval_gate": lane.approval_gate,
+            })
+        })
+        .or_else(|| {
+            sequence.first().map(|step| {
+                serde_json::json!({
+                    "role_label": step.role_label,
+                    "runtime_role": step.runtime_role,
+                    "task_class": step.task_class,
+                    "task_id": null,
+                    "dispatch_command": null,
+                    "dispatch_command_kind": null,
+                    "receipt_status": {
+                        "receipt_backed": false,
+                        "receipt_path": null,
+                        "status": "not_selected"
+                    },
+                    "proof_state": {
+                        "status": "not_started",
+                        "diagnostic_only": true
+                    },
+                    "approval_gate": {
+                        "required": step.requires_user_approval,
+                        "status": if step.requires_user_approval {
+                            "approval_required_after_step_completion"
+                        } else {
+                            "not_required"
+                        },
+                        "policy": step.approval_policy,
+                    },
+                })
+            })
+        })
+        .unwrap_or(serde_json::Value::Null);
+    let approval_waits = selected_lanes
+        .iter()
+        .filter(|lane| lane.requires_user_approval)
+        .map(|lane| {
+            serde_json::json!({
+                "task_id": lane.task_id,
+                "role_label": lane.role_label,
+                "status": "approval_required_after_step_completion",
+                "policy": lane.approval_gate["policy"],
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "status": if blocker_codes.is_empty() { "ready" } else { "blocked" },
+        "flow_id": selected_flow.and_then(|flow| flow["flow_id"].as_str()),
+        "flow_class": selected_flow.and_then(|flow| flow["flow_class"].as_str()),
+        "work_item_bindings": selected_flow
+            .map(|flow| flow["work_item_bindings"].clone())
+            .unwrap_or(serde_json::Value::Null),
+        "adapter_projection": selected_flow
+            .map(|flow| flow["adapter_projection"].clone())
+            .unwrap_or(serde_json::Value::Null),
+        "adapter_projection_source": "dev_team.flows.adapter_projection",
+        "adapter_projection_is_data_only": true,
+        "proof_gates": selected_flow
+            .map(|flow| flow["proof_gates"].clone())
+            .unwrap_or(serde_json::Value::Null),
+        "current_step": current_step,
+        "steps": sequence.iter().enumerate().map(|(index, step)| {
+            serde_json::json!({
+                "index": index,
+                "role_label": step.role_label,
+                "runtime_role": step.runtime_role,
+                "task_class": step.task_class,
+                "requires_user_approval": step.requires_user_approval,
+                "approval_policy": step.approval_policy,
+                "lifecycle_hook_templates": step.lifecycle_hook_templates,
+                "resume_transitions": step.resume_transitions,
+                "rework_transitions": step.rework_transitions,
+            })
+        }).collect::<Vec<_>>(),
+        "approval_waits": approval_waits,
+        "lifecycle_hook_event_stream": lifecycle_hook_event_stream(selected_flow, sequence),
+        "receipt_status": {
+            "receipt_backed": false,
+            "receipt_path": null,
+            "status": "preview_only"
+        },
+        "proof_state": {
+            "status": "pending_dispatch",
+            "diagnostic_only": true
+        },
+        "diagnostic_only": true,
     })
 }
 
@@ -864,6 +1038,7 @@ fn build_agent_dispatch_next_preview_standard(
                 vec!["graph_blocked".to_string()],
             ));
         }
+        let flow_projection = non_dev_team_flow_projection();
         return AgentDispatchNextPreview {
             status: "blocked".to_string(),
             mode: "preview".to_string(),
@@ -883,6 +1058,7 @@ fn build_agent_dispatch_next_preview_standard(
                 configured_max_parallel_agents,
             ),
             carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+            flow_projection,
             source_surfaces: agent_dispatch_source_surfaces(),
         };
     };
@@ -1037,6 +1213,7 @@ fn build_agent_dispatch_next_preview_standard(
             configured_max_parallel_agents,
         ),
         carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+        flow_projection: non_dev_team_flow_projection(),
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -1108,6 +1285,11 @@ fn build_agent_dispatch_next_preview_dev_team(
     } else {
         dev_team_sequence(activation_bundle)
     };
+    let selected_flow_id = if ready_flow_ids.len() == 1 {
+        ready_flow_ids.iter().next().map(String::as_str)
+    } else {
+        activation_bundle["dev_team_readiness"]["default_flow_id"].as_str()
+    };
 
     if lanes_requested == 0 {
         blocker_codes.push("invalid_lanes_requested".to_string());
@@ -1131,7 +1313,8 @@ fn build_agent_dispatch_next_preview_dev_team(
     let configured_max_parallel_agents = configured_max_parallel_agents.max(1);
     let effective_max_parallel_agents = lanes_requested.min(configured_max_parallel_agents);
     let steps_to_preview = sequence
-        .into_iter()
+        .iter()
+        .cloned()
         .take(effective_max_parallel_agents)
         .collect::<Vec<_>>();
     if projection.ready.is_empty() {
@@ -1146,6 +1329,13 @@ fn build_agent_dispatch_next_preview_dev_team(
                 vec!["graph_blocked".to_string()],
             ));
         }
+        let flow_projection = build_dev_team_flow_projection(
+            activation_bundle,
+            selected_flow_id,
+            &sequence,
+            &selected_lanes,
+            &blocker_codes,
+        );
         return AgentDispatchNextPreview {
             status: "blocked".to_string(),
             mode: "preview-dev-team".to_string(),
@@ -1165,6 +1355,7 @@ fn build_agent_dispatch_next_preview_dev_team(
                 configured_max_parallel_agents,
             ),
             carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+            flow_projection,
             source_surfaces: agent_dispatch_source_surfaces(),
         };
     }
@@ -1323,6 +1514,13 @@ fn build_agent_dispatch_next_preview_dev_team(
     } else {
         "blocked"
     };
+    let flow_projection = build_dev_team_flow_projection(
+        activation_bundle,
+        selected_flow_id,
+        &sequence,
+        &selected_lanes,
+        &blocker_codes,
+    );
 
     AgentDispatchNextPreview {
         status: status.to_string(),
@@ -1343,6 +1541,7 @@ fn build_agent_dispatch_next_preview_dev_team(
             configured_max_parallel_agents,
         ),
         carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+        flow_projection,
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -1507,6 +1706,7 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
         execution_attempted: false,
         parallelization_planner,
         carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+        flow_projection: non_dev_team_flow_projection(),
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -3304,7 +3504,7 @@ mod tests {
     }
 
     #[test]
-    fn user_approval_flow_projects_step_gate_and_rework_policy() {
+    fn flow_projection_projects_user_approval_step_gate_and_rework_policy() {
         let preview = build_agent_dispatch_next_preview(
             &serde_json::json!({
                 "agent_system": {"max_parallel_agents": 1},
@@ -3389,6 +3589,31 @@ mod tests {
             .next_actions
             .iter()
             .any(|action| action.contains("will pause after receipt-backed completion")));
+        assert_eq!(preview.flow_projection["flow_id"], "approval_flow");
+        assert_eq!(
+            preview.flow_projection["current_step"]["role_label"],
+            "analyst"
+        );
+        assert_eq!(
+            preview.flow_projection["current_step"]["receipt_status"]["status"],
+            "preview_only"
+        );
+        assert_eq!(
+            preview.flow_projection["approval_waits"][0]["policy"]["prompt_template"],
+            "review_document_before_next_role"
+        );
+        assert_eq!(
+            preview.flow_projection["lifecycle_hook_event_stream"][0]["template_id"],
+            "approval_wait"
+        );
+        assert_eq!(
+            preview.flow_projection["adapter_projection_source"],
+            "dev_team.flows.adapter_projection"
+        );
+        assert_eq!(
+            preview.flow_projection["adapter_projection_is_data_only"],
+            true
+        );
     }
 
     #[test]
