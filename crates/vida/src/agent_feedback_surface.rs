@@ -416,6 +416,8 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
     let blocker_keywords = ["blocked", "blocker", "approval_wait", "awaiting_approval"];
     let meta_keywords = [
         "fixed",
+        "implemented",
+        "implemented after",
         "closed after implementing",
         "closed after validating",
         "proofs:",
@@ -1427,6 +1429,17 @@ mod tests {
         assert_eq!(outcome, "success");
         assert_eq!(score, 88);
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_implemented_blocker_gate_proof_wording() {
+        let reason = "Implemented verifier blocker summary gate with tests; focused proofs passed.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let ignored = super::ignored_canonical_close_meta_language(reason);
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "implemented verifier blocker summary gate with tests"));
     }
 
     #[test]
