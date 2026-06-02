@@ -16,12 +16,22 @@ use crate::vida_client::VidaClient;
 pub(crate) struct VidaTuiShellSnapshot {
     pub(crate) service_status: String,
     pub(crate) active_session: String,
+    pub(crate) project_count: usize,
     pub(crate) project_id: String,
     pub(crate) worktree_environment_id: String,
     pub(crate) wizard_step: String,
     pub(crate) wizard_apply_supported: bool,
+    pub(crate) wizard_validation_findings: usize,
+    pub(crate) wizard_diff_change_count: usize,
+    pub(crate) wizard_disabled_apply_reason: String,
     pub(crate) materialization_safe_updates: usize,
     pub(crate) materialization_manual_conflicts: usize,
+    pub(crate) drift_report_only: usize,
+    pub(crate) job_status: String,
+    pub(crate) event_count: usize,
+    pub(crate) receipt_count: usize,
+    pub(crate) lifecycle_state: String,
+    pub(crate) lifecycle_binary_fingerprint: String,
     pub(crate) orchestration_workspace_owner: String,
     pub(crate) orchestration_parallelism_source: String,
     pub(crate) orchestration_tui_projection: bool,
@@ -36,6 +46,13 @@ impl VidaTuiShellSnapshot {
         let project_ref = VidaProjectRef::ProjectId {
             project_id: VidaProjectId("vida-stack".to_string()),
         };
+        let project_registry = client.execute(envelope(operations::PROJECT_REGISTRY_LIST));
+        assert_eq!(project_registry.status, VidaResponseStatus::Pass);
+        let project_registry = project_registry.result.expect("project registry list");
+        let project_count = project_registry["projects"]
+            .as_array()
+            .map_or(0, std::vec::Vec::len);
+
         let project_status = client.execute(envelope_with_project_ref(
             operations::PROJECT_STATUS,
             project_ref.clone(),
@@ -50,6 +67,26 @@ impl VidaTuiShellSnapshot {
         ));
         assert_eq!(wizard_schema.status, VidaResponseStatus::Pass);
         let wizard_schema = wizard_schema.result.expect("wizard schema result");
+        let wizard_validate = client.execute(envelope_with_project_ref_and_payload(
+            operations::WIZARD_SESSION_VALIDATE,
+            project_ref.clone(),
+            json!({ "inputs": {} }),
+        ));
+        assert_eq!(wizard_validate.status, VidaResponseStatus::Pass);
+        let wizard_validate = wizard_validate.result.expect("wizard validation result");
+        let wizard_diff = client.execute(envelope_with_project_ref_and_payload(
+            operations::WIZARD_SESSION_DIFF,
+            project_ref.clone(),
+            json!({
+                "current_revision": 2,
+                "inputs": {
+                    "project_root": "C:/project/vida-stack",
+                    "host_system": "codex"
+                }
+            }),
+        ));
+        assert_eq!(wizard_diff.status, VidaResponseStatus::Pass);
+        let wizard_diff = wizard_diff.result.expect("wizard diff result");
 
         let materialization = client.execute(envelope_with_project_ref(
             operations::MATERIALIZATION_UPDATE_PLAN,
@@ -62,6 +99,27 @@ impl VidaTuiShellSnapshot {
         let actions = materialization["planned_actions"]
             .as_array()
             .expect("materialization actions");
+        let drift = client.execute(envelope_with_project_ref(
+            operations::MATERIALIZATION_DRIFT_CLASSIFY,
+            project_ref.clone(),
+        ));
+        assert_eq!(drift.status, VidaResponseStatus::Pass);
+        let drift = drift.result.expect("materialization drift result");
+        let job = client.execute(envelope(operations::JOBS_GET));
+        assert_eq!(job.status, VidaResponseStatus::Pass);
+        let job = job.result.expect("job result");
+        let events = client.execute(envelope(operations::EVENTS_SINCE));
+        assert_eq!(events.status, VidaResponseStatus::Pass);
+        let events = events.result.expect("events result");
+        let receipts = client.execute(envelope_with_project_ref(
+            operations::RECEIPTS_GET,
+            project_ref.clone(),
+        ));
+        assert_eq!(receipts.status, VidaResponseStatus::Pass);
+        let receipts = receipts.result.expect("receipts result");
+        let lifecycle = client.execute(envelope(operations::SERVICE_LIFECYCLE_STATUS));
+        assert_eq!(lifecycle.status, VidaResponseStatus::Pass);
+        let lifecycle = lifecycle.result.expect("lifecycle status result");
 
         let orchestration = client.execute(envelope_with_project_ref(
             operations::ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET,
@@ -78,6 +136,7 @@ impl VidaTuiShellSnapshot {
                 .as_str()
                 .unwrap_or("unknown")
                 .to_string(),
+            project_count,
             project_id: project_status["project_id"]
                 .as_str()
                 .unwrap_or("unknown")
@@ -91,6 +150,27 @@ impl VidaTuiShellSnapshot {
                 .unwrap_or("unknown")
                 .to_string(),
             wizard_apply_supported: wizard_schema["apply_supported"].as_bool().unwrap_or(false),
+            wizard_validation_findings: wizard_validate["validation"]["findings"]
+                .as_array()
+                .map_or(0, std::vec::Vec::len),
+            wizard_diff_change_count: [
+                "config_changes",
+                "registry_changes",
+                "materialization_changes",
+                "service_changes",
+                "runtime_impacts",
+            ]
+            .iter()
+            .map(|key| {
+                wizard_diff["diff_summary"][key]
+                    .as_array()
+                    .map_or(0, std::vec::Vec::len)
+            })
+            .sum(),
+            wizard_disabled_apply_reason: wizard_diff["disabled_apply_reason"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
             materialization_safe_updates: actions
                 .iter()
                 .filter(|action| action["mode"] == "safe_update")
@@ -99,6 +179,20 @@ impl VidaTuiShellSnapshot {
                 .iter()
                 .filter(|action| action["mode"] == "manual_conflict")
                 .count(),
+            drift_report_only: drift["summary"]["report_only"].as_u64().unwrap_or(0) as usize,
+            job_status: job["status"].as_str().unwrap_or("unknown").to_string(),
+            event_count: events["events"].as_array().map_or(0, std::vec::Vec::len),
+            receipt_count: receipts["receipts"]
+                .as_array()
+                .map_or(0, std::vec::Vec::len),
+            lifecycle_state: lifecycle["lifecycle"]["state"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
+            lifecycle_binary_fingerprint: lifecycle["binary"]["fingerprint"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
             orchestration_workspace_owner: orchestration["workspace_model"]["workspace_owner"]
                 .as_str()
                 .unwrap_or("unknown")
@@ -122,16 +216,33 @@ pub(crate) fn render_app_shell(frame: &mut Frame<'_>, snapshot: &VidaTuiShellSna
             snapshot.service_status, snapshot.active_session
         ))]),
         Line::from(vec![Span::raw(format!(
-            "Project: {} | Worktree: {}",
-            snapshot.project_id, snapshot.worktree_environment_id
+            "Projects: count={} | active={} | Worktree: {}",
+            snapshot.project_count, snapshot.project_id, snapshot.worktree_environment_id
         ))]),
         Line::from(vec![Span::raw(format!(
-            "Wizard: step={} | apply_supported={}",
-            snapshot.wizard_step, snapshot.wizard_apply_supported
+            "Wizard: step={} | validation_findings={} | diff_changes={} | apply_supported={}",
+            snapshot.wizard_step,
+            snapshot.wizard_validation_findings,
+            snapshot.wizard_diff_change_count,
+            snapshot.wizard_apply_supported
         ))]),
         Line::from(vec![Span::raw(format!(
-            "Materialization: safe_updates={} | manual_conflicts={}",
-            snapshot.materialization_safe_updates, snapshot.materialization_manual_conflicts
+            "Disabled action: {}",
+            snapshot.wizard_disabled_apply_reason
+        ))]),
+        Line::from(vec![Span::raw(format!(
+            "Materialization: safe_updates={} | manual_conflicts={} | drift_report_only={}",
+            snapshot.materialization_safe_updates,
+            snapshot.materialization_manual_conflicts,
+            snapshot.drift_report_only
+        ))]),
+        Line::from(vec![Span::raw(format!(
+            "Jobs/Events/Receipts: job_status={} | events={} | receipts={}",
+            snapshot.job_status, snapshot.event_count, snapshot.receipt_count
+        ))]),
+        Line::from(vec![Span::raw(format!(
+            "Lifecycle: state={} | binary_fingerprint={}",
+            snapshot.lifecycle_state, snapshot.lifecycle_binary_fingerprint
         ))]),
         Line::from(vec![Span::raw(format!(
             "Orchestration: workspace_owner={} | parallelism_source={} | tui_projection={}",

@@ -10,13 +10,29 @@ use vida_client_fixture::FixtureVidaClient;
 use vida_tui_shell::{render_app_shell, VidaTuiShellSnapshot};
 
 #[test]
-fn tui_fixture_shell_snapshots_render_from_fixture_client_without_live_daemon() {
+fn ratatui_snapshots_render_fixture_operator_console_mvp_without_live_daemon() {
     let client = FixtureVidaClient::new_ready();
     let snapshot = VidaTuiShellSnapshot::from_client(&client);
     assert_eq!(snapshot.service_status, "ready");
+    assert_eq!(snapshot.project_count, 2);
     assert_eq!(snapshot.project_id, "vida-stack");
     assert_eq!(snapshot.wizard_step, "inspect");
     assert!(!snapshot.wizard_apply_supported);
+    assert_eq!(snapshot.wizard_validation_findings, 1);
+    assert_eq!(snapshot.wizard_diff_change_count, 4);
+    assert_eq!(
+        snapshot.wizard_disabled_apply_reason,
+        "apply-token and claim-proof execution are not implemented"
+    );
+    assert_eq!(snapshot.drift_report_only, 1);
+    assert_eq!(snapshot.job_status, "completed");
+    assert_eq!(snapshot.event_count, 1);
+    assert_eq!(snapshot.receipt_count, 3);
+    assert_eq!(snapshot.lifecycle_state, "ready");
+    assert_eq!(
+        snapshot.lifecycle_binary_fingerprint,
+        "fixture-binary-fingerprint"
+    );
     assert_eq!(
         snapshot.orchestration_workspace_owner,
         "task_worktree_assignment"
@@ -27,7 +43,7 @@ fn tui_fixture_shell_snapshots_render_from_fixture_client_without_live_daemon() 
     );
     assert!(snapshot.orchestration_tui_projection);
 
-    let backend = TestBackend::new(128, 9);
+    let backend = TestBackend::new(144, 12);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     terminal
         .draw(|frame| render_app_shell(frame, &snapshot))
@@ -36,9 +52,19 @@ fn tui_fixture_shell_snapshots_render_from_fixture_client_without_live_daemon() 
     let rendered = buffer_text(terminal.backend().buffer());
     assert!(rendered.contains("VIDA Operator Console"));
     assert!(rendered.contains("Service: ready | Session: active"));
-    assert!(rendered.contains("Project: vida-stack | Worktree: worktree-vida-stack-main"));
-    assert!(rendered.contains("Wizard: step=inspect | apply_supported=false"));
-    assert!(rendered.contains("Materialization: safe_updates=1 | manual_conflicts=1"));
+    assert!(rendered
+        .contains("Projects: count=2 | active=vida-stack | Worktree: worktree-vida-stack-main"));
+    assert!(rendered.contains(
+        "Wizard: step=inspect | validation_findings=1 | diff_changes=4 | apply_supported=false"
+    ));
+    assert!(rendered
+        .contains("Disabled action: apply-token and claim-proof execution are not implemented"));
+    assert!(rendered
+        .contains("Materialization: safe_updates=1 | manual_conflicts=1 | drift_report_only=1"));
+    assert!(rendered.contains("Jobs/Events/Receipts: job_status=completed | events=1 | receipts=3"));
+    assert!(
+        rendered.contains("Lifecycle: state=ready | binary_fingerprint=fixture-binary-fingerprint")
+    );
     assert!(rendered.contains(
         "Orchestration: workspace_owner=task_worktree_assignment | parallelism_source=taskflow_execution_semantics | tui_projection=true"
     ));
