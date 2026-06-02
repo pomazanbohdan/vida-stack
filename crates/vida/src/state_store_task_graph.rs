@@ -293,6 +293,56 @@ impl StateStore {
         })
     }
 
+    pub(crate) fn scheduling_projection_for_current_task_id(
+        projection: &TaskSchedulingProjection,
+        current_task_id: Option<&str>,
+    ) -> TaskSchedulingProjection {
+        let chosen_current = current_task_id
+            .and_then(|task_id| {
+                projection
+                    .ready
+                    .iter()
+                    .chain(projection.blocked.iter())
+                    .find(|candidate| candidate.task.id == task_id)
+                    .map(|candidate| candidate.task.id.clone())
+            })
+            .or_else(|| projection.current_task_id.clone());
+        let current_task = chosen_current.as_deref().and_then(|task_id| {
+            projection
+                .ready
+                .iter()
+                .chain(projection.blocked.iter())
+                .find(|candidate| candidate.task.id == task_id)
+                .map(|candidate| &candidate.task)
+        });
+
+        let ready = projection
+            .ready
+            .iter()
+            .cloned()
+            .map(|mut candidate| {
+                candidate.parallel_blockers =
+                    Self::parallel_blockers_against_current(&candidate.task, current_task);
+                candidate.ready_parallel_safe =
+                    candidate.ready_now && candidate.parallel_blockers.is_empty();
+                candidate
+            })
+            .collect::<Vec<_>>();
+        let parallel_candidates_after_current = ready
+            .iter()
+            .filter(|candidate| Some(candidate.task.id.as_str()) != chosen_current.as_deref())
+            .filter(|candidate| candidate.ready_parallel_safe)
+            .map(|candidate| candidate.task.clone())
+            .collect::<Vec<_>>();
+
+        TaskSchedulingProjection {
+            current_task_id: chosen_current,
+            ready,
+            blocked: projection.blocked.clone(),
+            parallel_candidates_after_current,
+        }
+    }
+
     pub async fn task_progress_summary(
         &self,
         task_id: &str,

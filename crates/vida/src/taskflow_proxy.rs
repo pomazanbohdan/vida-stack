@@ -4887,12 +4887,32 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             "blockers": record.blockers,
         })
     });
-    let (ready_parallel_safe, parallel_blockers, parallel_candidates_after_current) =
-        graph_summary_parallel_contract_fields(&scheduling);
     let canonical_current_task_id = primary_ready_task
         .as_ref()
         .and_then(|task| task["task"]["id"].as_str())
-        .or(scheduling.current_task_id.as_deref());
+        .map(str::to_string)
+        .or_else(|| scheduling.current_task_id.clone());
+    let display_scheduling =
+        crate::state_store::StateStore::scheduling_projection_for_current_task_id(
+            &scheduling,
+            canonical_current_task_id.as_deref(),
+        );
+    let primary_ready_task = if continuation_decision.primary_ready_task.is_some() {
+        display_scheduling.ready.first().map(|candidate| {
+            serde_json::json!({
+                "task": graph_summary_task_ref(&candidate.task),
+                "ready_now": candidate.ready_now,
+                "ready_parallel_safe": candidate.ready_parallel_safe,
+                "active_critical_path": candidate.active_critical_path,
+                "parallel_blockers": candidate.parallel_blockers,
+                "execution_semantics": candidate.task.execution_semantics,
+            })
+        })
+    } else {
+        None
+    };
+    let (ready_parallel_safe, parallel_blockers, parallel_candidates_after_current) =
+        graph_summary_parallel_contract_fields(&display_scheduling);
 
     let mut blocker_codes = continuation_decision.blocker_codes.clone();
     blocker_codes.extend(graph_summary_runtime_gate_blocker_codes(
@@ -4984,7 +5004,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "global_blockers": operator_session_projection["global_blockers"].clone(),
         "claim_conflicts": operator_session_projection["claim_conflicts"].clone(),
         "runtime_consumption": runtime_consumption,
-        "scheduling": graph_summary_scheduling_projection_json(&scheduling, canonical_current_task_id),
+        "scheduling": graph_summary_scheduling_projection_json(&display_scheduling, None),
         "waves": waves,
         "critical_path": critical_path,
     });
@@ -7444,6 +7464,57 @@ mod tests {
             preview["selected_strategy"]["steps"][1]["task"]["id"],
             "parallel"
         );
+    }
+
+    #[test]
+    fn graph_summary_scheduling_projection_recomputes_parallel_fields_for_current_override() {
+        let mut active = task("active-current", "task", "in_progress", 1, &[], Vec::new());
+        active.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        active.execution_semantics.order_bucket = Some("wave-a".to_string());
+        active.execution_semantics.parallel_group = Some("docs".to_string());
+        active.execution_semantics.conflict_domain = Some("active".to_string());
+
+        let mut ready = task("ready-sibling", "task", "open", 0, &[], Vec::new());
+        ready.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        ready.execution_semantics.order_bucket = Some("wave-a".to_string());
+        ready.execution_semantics.parallel_group = Some("docs".to_string());
+        ready.execution_semantics.conflict_domain = Some("ready".to_string());
+
+        let stale_projection = TaskSchedulingProjection {
+            current_task_id: Some("ready-sibling".to_string()),
+            ready: vec![
+                scheduling_candidate(active.clone(), true, true, true, Vec::new(), Vec::new()),
+                scheduling_candidate(ready, true, false, false, Vec::new(), Vec::new()),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: vec![active],
+        };
+
+        let display_projection =
+            crate::state_store::StateStore::scheduling_projection_for_current_task_id(
+                &stale_projection,
+                Some("active-current"),
+            );
+        let payload = graph_summary_scheduling_projection_json(&display_projection, None);
+
+        assert_eq!(payload["current_task_id"], "active-current");
+        assert_eq!(
+            payload["ready"][0]["parallel_blockers"],
+            serde_json::json!(["current_task_reference"])
+        );
+        assert_eq!(
+            payload["parallel_candidates_after_current"][0]["id"],
+            "ready-sibling"
+        );
+        assert!(payload["parallel_candidates_after_current"]
+            .as_array()
+            .is_some_and(|tasks| tasks.iter().all(|task| task["id"] != "active-current")));
+        assert!(payload["strategy_preview"]["selected_strategy"]["steps"]
+            .as_array()
+            .is_some_and(|steps| steps.iter().all(|step| {
+                step["action"] != "dispatch_parallel_preview"
+                    || step["task"]["id"] != "active-current"
+            })));
     }
 
     #[test]
