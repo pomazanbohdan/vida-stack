@@ -1755,6 +1755,7 @@ fn apply_continuation_dispatch_gate_to_preview(
             crate::status_surface_signals::continuation_binding_ambiguous_next_action().to_string(),
         );
     }
+    fail_closed_flow_projection_for_continuation_gate(preview);
     if let Some(planner) = preview.parallelization_planner.as_object_mut() {
         planner.insert(
             "status".to_string(),
@@ -1767,6 +1768,41 @@ fn apply_continuation_dispatch_gate_to_preview(
             "blocked_by_continuation_gate".to_string(),
             serde_json::json!(true),
         );
+    }
+}
+
+fn fail_closed_flow_projection_for_continuation_gate(preview: &mut AgentDispatchNextPreview) {
+    let blocked_proof_state = serde_json::json!({
+        "status": "blocked_by_continuation_gate",
+        "diagnostic_only": true
+    });
+    if let Some(flow_projection) = preview.flow_projection.as_object_mut() {
+        flow_projection.insert("status".to_string(), serde_json::json!("blocked"));
+        flow_projection.insert(
+            "blocked_by_continuation_gate".to_string(),
+            serde_json::json!(true),
+        );
+        flow_projection.insert(
+            "blocker_codes".to_string(),
+            serde_json::json!(preview.blocker_codes),
+        );
+        flow_projection.insert(
+            "next_actions".to_string(),
+            serde_json::json!(preview.next_actions),
+        );
+        flow_projection.insert("proof_state".to_string(), blocked_proof_state.clone());
+        if let Some(current_step) = flow_projection
+            .get_mut("current_step")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            current_step.insert("dispatch_command".to_string(), serde_json::Value::Null);
+            current_step.insert("dispatch_command_kind".to_string(), serde_json::Value::Null);
+            current_step.insert("proof_state".to_string(), blocked_proof_state);
+            current_step.insert(
+                "blocked_by_continuation_gate".to_string(),
+                serde_json::json!(true),
+            );
+        }
     }
 }
 
@@ -4266,6 +4302,85 @@ mod tests {
         assert!(preview.parallelization_planner["packet_proposals"]
             .as_array()
             .is_some_and(|proposals| proposals.is_empty()));
+    }
+
+    #[test]
+    fn continuation_gate_blocks_flow_projection_dispatch_state() {
+        let mut activation_bundle = activation_bundle_with_worker_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "implementation_flow",
+            "roles": [{
+                "role_id": "worker",
+                "runtime_role": "worker",
+                "task_classes": ["implementation"]
+            }],
+            "flows": [{
+                "flow_id": "implementation_flow",
+                "enabled": true,
+                "default": true,
+                "ordered_steps": [{
+                    "role_id": "worker",
+                    "runtime_role": "worker",
+                    "task_class": "implementation"
+                }]
+            }]
+        });
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("task-a".to_string()),
+            ready: vec![candidate("task-a", "Task A", true, true, Vec::new())],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let mut preview =
+            build_agent_dispatch_next_preview(&activation_bundle, &projection, 1, 4, None, true);
+        assert_eq!(preview.status, "pass");
+        assert_eq!(preview.flow_projection["status"], "ready");
+        assert_eq!(
+            preview.flow_projection["current_step"]["proof_state"]["status"],
+            "pending_dispatch"
+        );
+        assert!(preview.flow_projection["current_step"]["dispatch_command"].is_string());
+
+        apply_continuation_dispatch_gate_to_preview(
+            &mut preview,
+            &crate::taskflow_proxy::TaskflowContinuationDispatchGate {
+                admissible: false,
+                admissibility_gate: "continuation_binding_ambiguous".to_string(),
+                blocker_codes: vec!["continuation_binding_ambiguous".to_string()],
+                next_actions: vec!["bind an explicit next bounded unit".to_string()],
+            },
+        );
+
+        assert_eq!(preview.status, "blocked");
+        assert_eq!(preview.lanes_selected, 0);
+        assert!(preview.selected_lanes.is_empty());
+        assert_eq!(preview.flow_projection["status"], "blocked");
+        assert_eq!(
+            preview.flow_projection["proof_state"]["status"],
+            "blocked_by_continuation_gate"
+        );
+        assert_eq!(
+            preview.flow_projection["blocked_by_continuation_gate"],
+            true
+        );
+        assert_eq!(
+            preview.flow_projection["blocker_codes"],
+            serde_json::json!(["continuation_binding_ambiguous"])
+        );
+        assert_eq!(
+            preview.flow_projection["next_actions"],
+            serde_json::json!(["bind an explicit next bounded unit"])
+        );
+        assert!(preview.flow_projection["current_step"]["dispatch_command"].is_null());
+        assert!(preview.flow_projection["current_step"]["dispatch_command_kind"].is_null());
+        assert_eq!(
+            preview.flow_projection["current_step"]["proof_state"]["status"],
+            "blocked_by_continuation_gate"
+        );
+        assert_eq!(
+            preview.flow_projection["current_step"]["blocked_by_continuation_gate"],
+            true
+        );
     }
 
     #[test]
