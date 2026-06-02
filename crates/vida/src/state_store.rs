@@ -686,6 +686,132 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn work_item_provider_mapping_import_rejects_self_parent_dependency() {
+        let root = unique_temp_root("vida-provider-mapping-self-parent");
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let task = serde_json::json!({
+            "id": "vida-self",
+            "title": "Provider self parent",
+            "description": "story",
+            "status": "open",
+            "priority": 4,
+            "issue_type": "",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": [],
+            "provider_mapping": {
+                "provider": "jira",
+                "external_id": "PROJ-SELF",
+                "external_parent_id": "PROJ-SELF",
+                "provider_issue_type": "story"
+            },
+            "dependencies": []
+        });
+        fs::write(
+            &source,
+            format!(
+                "{}\n",
+                serde_json::to_string(&task).expect("serialize self parent")
+            ),
+        )
+        .expect("write provider jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let error = store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect_err("self parent import should fail closed");
+        assert!(error.to_string().contains("invalid graph"));
+        assert!(error.to_string().contains("vida-self"));
+        assert!(store
+            .list_tasks(None, false)
+            .await
+            .expect("list tasks")
+            .is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn work_item_provider_mapping_import_rejects_parent_child_cycle() {
+        let root = unique_temp_root("vida-provider-mapping-parent-cycle");
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let first = serde_json::json!({
+            "id": "vida-first",
+            "title": "Provider first",
+            "description": "story",
+            "status": "open",
+            "priority": 4,
+            "issue_type": "",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": [],
+            "provider_mapping": {
+                "provider": "jira",
+                "external_id": "PROJ-1",
+                "external_parent_id": "PROJ-2",
+                "provider_issue_type": "story"
+            },
+            "dependencies": []
+        });
+        let second = serde_json::json!({
+            "id": "vida-second",
+            "title": "Provider second",
+            "description": "story",
+            "status": "open",
+            "priority": 4,
+            "issue_type": "",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": [],
+            "provider_mapping": {
+                "provider": "jira",
+                "external_id": "PROJ-2",
+                "external_parent_id": "PROJ-1",
+                "provider_issue_type": "story"
+            },
+            "dependencies": []
+        });
+        fs::write(
+            &source,
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&first).expect("serialize first"),
+                serde_json::to_string(&second).expect("serialize second")
+            ),
+        )
+        .expect("write provider jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let error = store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect_err("parent cycle import should fail closed");
+        assert!(error.to_string().contains("parent_child_cycle"));
+        assert!(store
+            .list_tasks(None, false)
+            .await
+            .expect("list tasks")
+            .is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn task_dependency_tree_surfaces_recursive_parent_child_and_blocking_edges() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
