@@ -40,6 +40,21 @@ python3 doc-lifecycle.py status
 2. Missing `last_reviewed_at` is invalid.
 3. `current` documents older than the accepted freshness window should be treated as `stale_document` until re-reviewed.
 
+## Relation Metadata
+
+Document lifecycle records may be linked to other runtime artifacts through the generic DocFlow relation kinds:
+
+1. `owns`
+2. `depends_on`
+3. `affects`
+4. `implements`
+5. `verifies`
+6. `documents`
+7. `supersedes`
+8. `migrates_from`
+
+The relation model is artifact-level metadata. Markdown footer keys are an allowed serialization surface, but lifecycle ownership remains defined by the runtime artifact contract rather than by markdown storage alone.
+
 ## Scope Rule
 
 1. This protocol governs framework-owned documents first (`AGENTS.md`, `vida/config/instructions/**`, synced framework templates/overlays when applicable).

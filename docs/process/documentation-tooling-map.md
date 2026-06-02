@@ -45,6 +45,21 @@ This map covers project-facing documentation tooling for the active `vida-stack`
 15. `task-impact --root <dir> --task-id <id> [--format toon|jsonl]`
 16. `links <file-or-dir> [--format toon|jsonl]`
 
+## Relation Keys
+
+DocFlow artifact and task impact commands recognize the project-generic relation footer keys:
+
+1. `owns`
+2. `depends_on`
+3. `affects`
+4. `implements`
+5. `verifies`
+6. `documents`
+7. `supersedes`
+8. `migrates_from`
+
+These relation keys are project-neutral ownership and impact metadata. They apply to markdown and non-markdown-backed artifacts through the DocFlow contract model; markdown footers are one serialization surface, not the authority model itself.
+
 ## Mutation / Finalization Commands
 
 1. `touch <file> <note> [--event ...] [--task-id ...] [--actor ...] [--scope ...] [--tags ...]`
