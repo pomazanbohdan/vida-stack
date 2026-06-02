@@ -1031,6 +1031,9 @@ fn recovery_exception_takeover_next_action(
     projection_truth: &RunGraphProjectionTruth,
     owned_write_scope_hint: &[String],
 ) -> Option<RecoveryNextAction> {
+    if projection_truth.stale_state_suspected {
+        return None;
+    }
     if !summary.delegation_gate.delegated_cycle_open {
         return None;
     }
@@ -13255,6 +13258,76 @@ mod tests {
             recommended_surface.as_deref(),
             Some("vida lane exception-takeover")
         );
+    }
+
+    #[test]
+    fn recovery_surface_contract_open_cycle_with_owned_scope_defers_to_stale_projection_action() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-open-cycle-stale".to_string(),
+            task_id: "task-open-cycle-stale".to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "coach_blocked".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            recovery_ready: false,
+            handoff_state: "blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                lifecycle_stage: "coach_blocked".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "blocking".to_string(),
+                continuation_signal: "record_exception_takeover".to_string(),
+            },
+        };
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-open-cycle-stale");
+        receipt.dispatch_status = "executing".to_string();
+        receipt.lane_status = "lane_active".to_string();
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_blockers = vec!["stale_executing_dispatch".to_string()];
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason: "run-graph status reflects stale persisted dispatch evidence"
+                .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "aligned".to_string(),
+            stale_state_suspected: true,
+            next_lawful_operator_action: Some(
+                "vida taskflow run-graph status run-open-cycle-stale --json".to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let (_codes, _why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract_with_owned_scope(
+                &summary,
+                &projection_truth,
+                &["crates/vida/src/agent_dispatch_surface.rs".to_string()],
+            );
+
+        assert_eq!(
+            next_action.as_ref().map(|action| action.command.as_str()),
+            Some("vida taskflow run-graph status run-open-cycle-stale --json")
+        );
+        assert_eq!(
+            recommended_command.as_deref(),
+            Some("vida taskflow run-graph status run-open-cycle-stale --json")
+        );
+        assert_eq!(
+            recommended_surface.as_deref(),
+            Some("vida taskflow run-graph status")
+        );
+        assert!(recommended_command
+            .as_deref()
+            .is_some_and(|command| !command.contains("exception-takeover")));
     }
 
     #[test]
