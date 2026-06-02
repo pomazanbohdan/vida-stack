@@ -893,8 +893,9 @@ pub(crate) fn build_dev_team_readiness(
     let pricing_catalog = &activation_bundle["agent_system"]["pricing"];
 
     let mut blockers = Vec::new();
+    let configured_hook_templates = configured_lifecycle_hook_templates(&overlay);
     let roles = dev_team_roles(dev_team, &carrier_catalog, pricing_catalog, &mut blockers);
-    let flows = dev_team_flows(dev_team, &roles, &mut blockers);
+    let flows = dev_team_flows(dev_team, &roles, &configured_hook_templates, &mut blockers);
     let default_flow_id = crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow_id"]))
         .or_else(|| crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow"])));
     let work_item_flow_bindings = dev_team_work_item_flow_bindings(dev_team, &flows, &mut blockers);
@@ -1342,9 +1343,93 @@ fn pricing_metadata_for_profile(
         .cloned()
 }
 
+fn configured_lifecycle_hook_templates(overlay: &serde_yaml::Value) -> HashSet<String> {
+    crate::yaml_string_list(crate::yaml_lookup(
+        overlay,
+        &["agent_extensions", "enabled_hook_templates"],
+    ))
+    .into_iter()
+    .collect()
+}
+
+fn yaml_mapping_key_strings(value: &serde_yaml::Value) -> Vec<String> {
+    value
+        .as_mapping()
+        .into_iter()
+        .flat_map(|mapping| mapping.keys())
+        .filter_map(serde_yaml::Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn validate_yaml_allowed_keys(
+    surface: &str,
+    value: &serde_yaml::Value,
+    allowed_keys: &[&str],
+    blockers: &mut Vec<String>,
+) {
+    let allowed = allowed_keys.iter().copied().collect::<HashSet<_>>();
+    for key in yaml_mapping_key_strings(value) {
+        if !allowed.contains(key.as_str()) {
+            blockers.push(format!("unsupported_{surface}_knob:{key}"));
+        }
+    }
+}
+
+fn validate_lifecycle_hook_refs(
+    surface: &str,
+    hook_refs: &[String],
+    configured_hook_templates: &HashSet<String>,
+    blockers: &mut Vec<String>,
+) {
+    for hook_ref in hook_refs {
+        if !configured_hook_templates.contains(hook_ref) {
+            blockers.push(format!(
+                "unknown_lifecycle_hook_template:{surface}:{hook_ref}"
+            ));
+        }
+    }
+}
+
+fn validate_approval_policy(
+    flow_id: &str,
+    index: usize,
+    step: &serde_yaml::Value,
+    requires_user_approval: bool,
+    blockers: &mut Vec<String>,
+) {
+    let Some(policy) = crate::yaml_lookup(step, &["approval_policy"]) else {
+        if requires_user_approval {
+            blockers.push(format!("missing_approval_policy:{flow_id}:{index}"));
+        }
+        return;
+    };
+    let Some(policy_map) = policy.as_mapping() else {
+        blockers.push(format!("invalid_approval_policy:{flow_id}:{index}"));
+        return;
+    };
+    if policy_map.is_empty() && requires_user_approval {
+        blockers.push(format!("missing_approval_policy:{flow_id}:{index}"));
+        return;
+    }
+    let mode = crate::yaml_string(crate::yaml_lookup(step, &["approval_policy", "mode"]));
+    if requires_user_approval && mode.as_deref().unwrap_or_default().is_empty() {
+        blockers.push(format!("missing_approval_policy_mode:{flow_id}:{index}"));
+    }
+    if let Some(mode) = mode.as_deref().filter(|value| !value.is_empty()) {
+        match mode {
+            "user_review_required" | "optional_user_review" | "not_required" => {}
+            _ => blockers.push(format!(
+                "unsupported_approval_policy_mode:{flow_id}:{index}:{mode}"
+            )),
+        }
+    }
+}
+
 fn dev_team_flows(
     dev_team: &serde_yaml::Value,
     roles: &[serde_json::Value],
+    configured_hook_templates: &HashSet<String>,
     blockers: &mut Vec<String>,
 ) -> Vec<serde_json::Value> {
     let mut flows = Vec::new();
@@ -1364,8 +1449,43 @@ fn dev_team_flows(
         .iter()
         .filter_map(|(key, value)| key.as_str().map(|id| (id, value)))
     {
-        let ordered_steps =
-            dev_team_flow_ordered_steps(flow_id, flow_entry, &known_roles, blockers);
+        validate_yaml_allowed_keys(
+            "flow",
+            flow_entry,
+            &[
+                "enabled",
+                "default",
+                "description",
+                "flow_class",
+                "work_item_bindings",
+                "sequential",
+                "allow_parallel_handoffs",
+                "lifecycle_hook_templates",
+                "proof_gates",
+                "resume_transitions",
+                "rework_transitions",
+                "adapter_projection",
+                "steps",
+            ],
+            blockers,
+        );
+        let flow_hook_templates = crate::yaml_string_list(crate::yaml_lookup(
+            flow_entry,
+            &["lifecycle_hook_templates"],
+        ));
+        validate_lifecycle_hook_refs(
+            &format!("flow:{flow_id}"),
+            &flow_hook_templates,
+            configured_hook_templates,
+            blockers,
+        );
+        let ordered_steps = dev_team_flow_ordered_steps(
+            flow_id,
+            flow_entry,
+            &known_roles,
+            configured_hook_templates,
+            blockers,
+        );
         let steps = ordered_steps
             .iter()
             .filter_map(|step| step["role_id"].as_str().map(str::to_string))
@@ -1387,7 +1507,7 @@ fn dev_team_flows(
                 crate::yaml_lookup(flow_entry, &["allow_parallel_handoffs"]),
                 false,
             ),
-            "lifecycle_hook_templates": crate::yaml_string_list(crate::yaml_lookup(flow_entry, &["lifecycle_hook_templates"])),
+            "lifecycle_hook_templates": flow_hook_templates,
             "proof_gates": yaml_field_json(flow_entry, "proof_gates"),
             "resume_transitions": yaml_field_json(flow_entry, "resume_transitions"),
             "rework_transitions": yaml_field_json(flow_entry, "rework_transitions"),
@@ -1467,6 +1587,7 @@ fn dev_team_flow_ordered_steps(
     flow_id: &str,
     flow_entry: &serde_yaml::Value,
     known_roles: &HashSet<&str>,
+    configured_hook_templates: &HashSet<String>,
     blockers: &mut Vec<String>,
 ) -> Vec<serde_json::Value> {
     let Some(steps_value) = crate::yaml_lookup(flow_entry, &["steps"]) else {
@@ -1497,6 +1618,28 @@ fn dev_team_flow_ordered_steps(
                 }))
             }
             serde_yaml::Value::Mapping(_) => {
+                validate_yaml_allowed_keys(
+                    "flow_step",
+                    step,
+                    &[
+                        "step_id",
+                        "role_id",
+                        "role",
+                        "runtime_role",
+                        "task_class",
+                        "command_template",
+                        "lifecycle_hook_templates",
+                        "carrier_constraints",
+                        "model_profile_constraints",
+                        "proof_gates",
+                        "resume_transitions",
+                        "rework_transitions",
+                        "adapter_projection",
+                        "approval_policy",
+                        "requires_user_approval",
+                    ],
+                    blockers,
+                );
                 let role_id = crate::yaml_string(crate::yaml_lookup(step, &["role_id"]))
                     .or_else(|| crate::yaml_string(crate::yaml_lookup(step, &["role"])))
                     .unwrap_or_default();
@@ -1508,6 +1651,19 @@ fn dev_team_flow_ordered_steps(
                 if !known_roles.contains(role_id.as_str()) {
                     blockers.push(format!("unknown_flow_step:{flow_id}:{role_id}"));
                 }
+                let lifecycle_hook_templates = crate::yaml_string_list(crate::yaml_lookup(
+                    step,
+                    &["lifecycle_hook_templates"],
+                ));
+                validate_lifecycle_hook_refs(
+                    &format!("flow_step:{flow_id}:{index}"),
+                    &lifecycle_hook_templates,
+                    configured_hook_templates,
+                    blockers,
+                );
+                let requires_user_approval =
+                    crate::yaml_bool(crate::yaml_lookup(step, &["requires_user_approval"]), false);
+                validate_approval_policy(flow_id, index, step, requires_user_approval, blockers);
                 Some(serde_json::json!({
                     "step_id": crate::yaml_string(crate::yaml_lookup(step, &["step_id"]))
                         .unwrap_or_else(|| format!("{flow_id}-{index}")),
@@ -1516,7 +1672,7 @@ fn dev_team_flow_ordered_steps(
                     "runtime_role": crate::yaml_string(crate::yaml_lookup(step, &["runtime_role"])),
                     "task_class": crate::yaml_string(crate::yaml_lookup(step, &["task_class"])),
                     "command_template": yaml_field_json(step, "command_template"),
-                    "lifecycle_hook_templates": crate::yaml_string_list(crate::yaml_lookup(step, &["lifecycle_hook_templates"])),
+                    "lifecycle_hook_templates": lifecycle_hook_templates,
                     "carrier_constraints": yaml_field_json(step, "carrier_constraints"),
                     "model_profile_constraints": yaml_field_json(step, "model_profile_constraints"),
                     "proof_gates": yaml_field_json(step, "proof_gates"),
@@ -1524,10 +1680,7 @@ fn dev_team_flow_ordered_steps(
                     "rework_transitions": yaml_field_json(step, "rework_transitions"),
                     "adapter_projection": yaml_field_json(step, "adapter_projection"),
                     "approval_policy": yaml_field_json(step, "approval_policy"),
-                    "requires_user_approval": crate::yaml_bool(
-                        crate::yaml_lookup(step, &["requires_user_approval"]),
-                        false,
-                    ),
+                    "requires_user_approval": requires_user_approval,
                 }))
             }
             _ => {
@@ -1891,6 +2044,9 @@ dev_team:
         std::fs::write(
             &config_path,
             r#"
+agent_extensions:
+  enabled_hook_templates:
+    - command_timing_summary
 dev_team:
   enabled: true
   default_flow_id: investigation_flow
@@ -2049,6 +2205,80 @@ dev_team:
             "codex_host_tools"
         );
         assert_eq!(flow["ordered_steps"][1]["role_id"], "developer");
+    }
+
+    #[test]
+    fn flow_validation_blocks_unsupported_knobs_hooks_and_approval_modes() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+agent_extensions:
+  enabled_hook_templates:
+    - approval_wait
+dev_team:
+  enabled: true
+  default_flow_id: invalid_flow
+  roles:
+    developer:
+      runtime_role: worker
+      task_classes: [implementation]
+      default_carrier: junior
+      handoff:
+        next_role: terminal_closure
+        required_outputs: [changed_files]
+  flows:
+    invalid_flow:
+      enabled: true
+      unsupported_flow_knob: true
+      lifecycle_hook_templates: [hardcoded_cli_hook]
+      steps:
+        - role_id: developer
+          unsupported_step_knob: true
+          lifecycle_hook_templates: [hardcoded_step_hook]
+          requires_user_approval: true
+          approval_policy:
+            mode: auto_approve
+"#,
+        )
+        .expect("config should write");
+
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({
+                "carrier_runtime": {
+                    "roles": [
+                        {
+                            "role_id": "junior",
+                            "model": "gpt-5.5",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "low",
+                            "normalized_cost_units": 1,
+                            "rate": 1,
+                            "runtime_roles": ["worker"],
+                            "task_classes": ["implementation"]
+                        }
+                    ]
+                }
+            }),
+        );
+
+        assert_eq!(readiness["status"], "blocked");
+        let blockers = readiness["blockers"]
+            .as_array()
+            .expect("blockers should project")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(blockers.contains(&"unsupported_flow_knob:unsupported_flow_knob"));
+        assert!(blockers.contains(&"unsupported_flow_step_knob:unsupported_step_knob"));
+        assert!(blockers
+            .contains(&"unknown_lifecycle_hook_template:flow:invalid_flow:hardcoded_cli_hook"));
+        assert!(blockers.contains(
+            &"unknown_lifecycle_hook_template:flow_step:invalid_flow:0:hardcoded_step_hook"
+        ));
+        assert!(blockers.contains(&"unsupported_approval_policy_mode:invalid_flow:0:auto_approve"));
     }
 
     #[test]
