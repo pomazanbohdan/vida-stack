@@ -48,6 +48,30 @@
     ]
   },
   {
+    "operation": "vida.service.lifecycle.plan",
+    "scope": "service",
+    "posture": "plan_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "service_install_plan"
+    ]
+  },
+  {
+    "operation": "vida.service.lifecycle.status",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_status"
+    ]
+  },
+  {
     "operation": "vida.events.since",
     "scope": "service",
     "posture": "read_only",
