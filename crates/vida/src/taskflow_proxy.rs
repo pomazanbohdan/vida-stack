@@ -9646,7 +9646,7 @@ mod tests {
                     }
                 },
                 {
-                    "backend_id": "opencode_cli",
+                    "backend_id": "external_review_cli",
                     "backend_class": "external_cli",
                     "lane_admissibility": {
                         "implementation": false
@@ -9655,7 +9655,7 @@ mod tests {
             ],
             "development_flow": {
                 "implementation": {
-                    "executor_backend": "opencode_cli",
+                    "executor_backend": "external_review_cli",
                     "fallback_executor_backend": "internal_subagents",
                     "carrier_runtime_assignment": {
                         "selected_backend_id": "junior",
@@ -9679,6 +9679,68 @@ mod tests {
             !codes.contains(&serde_json::json!(
                 "selected_backend_not_admissible_for_dispatch_target"
             ))
+        }));
+    }
+
+    #[test]
+    fn case_18_route_readiness_parity() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true,
+                        "review": true,
+                        "verification": true
+                    }
+                },
+                {
+                    "backend_id": "external_review_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "implementation": false,
+                        "review": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "implementation": {
+                    "executor_backend": "external_review_cli",
+                    "fallback_executor_backend": "internal_subagents",
+                    "carrier_runtime_assignment": {
+                        "enabled": true,
+                        "selected_backend_id": "internal_subagents",
+                        "selected_carrier_id": "internal_subagents",
+                        "selected_agent_id": "internal_subagents",
+                        "selected_model_profile_id": "codex_gpt55_low_write",
+                        "selected_model_ref": "gpt-5.5",
+                        "selected_model_provider": "openai-codex",
+                        "selected_reasoning_effort": "low",
+                        "model_selection_enabled": true,
+                        "candidate_scope": "unified_carrier_model_profiles",
+                        "budget_policy": "tier_budget_guard",
+                        "budget_verdict": "within_budget",
+                        "max_budget_units": 4
+                    }
+                }
+            }
+        });
+
+        let payload = super::route_payload_for_dispatch_target(&execution_plan, "implementation");
+
+        assert_eq!(
+            payload["selected_backend"].as_str(),
+            Some("internal_subagents")
+        );
+        assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
+        assert_eq!(payload["selected_model_provider"].as_str(), Some("openai-codex"));
+        assert_eq!(payload["selected_model_ref"].as_str(), Some("gpt-5.5"));
+        assert_eq!(payload["status"].as_str(), Some("pass"));
+        assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
+            !codes.contains(&serde_json::json!(
+                "selected_backend_not_admissible_for_dispatch_target"
+            )) && !codes.contains(&serde_json::json!("selected_backend_not_ready"))
         }));
     }
 
@@ -9989,7 +10051,7 @@ agent_system:
                     "execution_lane_sequence": ["implementation"],
                     "lane_catalog": {
                         "implementation": {
-                            "executor_backend": "opencode_cli",
+                            "executor_backend": "external_review_cli",
                             "fallback_executor_backend": "internal_subagents",
                             "fanout_executor_backends": ["middle", "senior"],
                             "carrier_runtime_assignment": {
@@ -10460,7 +10522,7 @@ agent_system:
             dispatch_command: Some("vida agent-init".to_string()),
             dispatch_packet_path: Some("/tmp/packet.json".to_string()),
             dispatch_result_path: Some("/tmp/result.json".to_string()),
-            selected_backend: Some("opencode_cli".to_string()),
+            selected_backend: Some("external_review_cli".to_string()),
             exception_path_receipt_id: None,
             supersedes_receipt_id: None,
             recorded_at: "2026-05-16T00:00:00Z".to_string(),

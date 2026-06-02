@@ -169,7 +169,7 @@ fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
             "selected_carrier_id": "internal_subagents",
             "selected_model_profile_id": "codex_gpt55_low_write",
             "selected_model_ref": "gpt-5.5",
-            "selected_model_provider": "openai",
+            "selected_model_provider": "openai-codex",
             "selected_reasoning_effort": "low",
             "selected_reasoning_control_mode": "fixed",
             "model_selection_enabled": true,
@@ -507,6 +507,10 @@ fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() 
     assert_eq!(
         standalone["selected_profile"]["profile_id"],
         "codex_gpt55_low_write"
+    );
+    assert_eq!(
+        standalone["selected_profile"]["provider"],
+        "openai-codex"
     );
     assert_eq!(
         standalone["source_paths"]["selected_model_profile_id"],
