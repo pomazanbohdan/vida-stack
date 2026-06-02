@@ -74,20 +74,22 @@ Canonical entrypoints:
 30. `docs/process/command-timing-and-gate-optimization-protocol.md`
     - project-owned process for timing significant operations, diagnosing slow gates, and turning repeated command/script/CI latency into optimization work
 31. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-    - project-owned process overlay for applying generic `Error Search / Bug Reasoning` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
-32. `docs/product/spec/feature-design-and-adr-model.md`
-    - product-law owner for the split between structured feature/change design documents and linked ADRs
-33. `docs/framework/templates/feature-design-document.template.md`
-    - framework-owned reusable feature/change design template with stable sections and bounded variable fields
+     - project-owned process overlay for applying generic `Error Search / Bug Reasoning` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
+32. `docs/process/generic-runtime-protocol-promotion-plan.md`
+    - project-owned plan for promoting reusable project workflow law into generic runtime protocols while keeping local residue in project overlays
+33. `docs/product/spec/feature-design-and-adr-model.md`
+     - product-law owner for the split between structured feature/change design documents and linked ADRs
+34. `docs/framework/templates/feature-design-document.template.md`
+     - framework-owned reusable feature/change design template with stable sections and bounded variable fields
 
 -----
 artifact_path: process/readme
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-05-26
+artifact_revision: 2026-06-02
 schema_version: '1'
 status: canonical
 source_path: docs/process/README.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: 2026-05-26T00:00:00+03:00
+updated_at: 2026-06-02T06:25:00+03:00
 changelog_ref: README.changelog.jsonl
