@@ -1125,6 +1125,7 @@ pub(crate) enum BlockerCode {
     ProtocolBindingBlockingIssues,
     ContinuationBindingAmbiguous,
     MissingRunGraphDispatchReceiptOperatorEvidence,
+    ClosedTaskActiveRunProjectionMismatch,
     RunGraphLatestSnapshotInconsistent,
     LatestRunGraphStatusBlocked,
     RunGraphLatestDispatchReceiptSignalAmbiguous,
@@ -1273,6 +1274,9 @@ impl BlockerCode {
             Self::ContinuationBindingAmbiguous => "continuation_binding_ambiguous",
             Self::MissingRunGraphDispatchReceiptOperatorEvidence => {
                 "missing_run_graph_dispatch_receipt_operator_evidence"
+            }
+            Self::ClosedTaskActiveRunProjectionMismatch => {
+                "closed_task_active_run_projection_mismatch"
             }
             Self::RunGraphLatestSnapshotInconsistent => "run_graph_latest_snapshot_inconsistent",
             Self::LatestRunGraphStatusBlocked => "latest_run_graph_status_blocked",
@@ -1460,6 +1464,9 @@ impl BlockerCode {
             "continuation_binding_ambiguous" => Some(Self::ContinuationBindingAmbiguous),
             "missing_run_graph_dispatch_receipt_operator_evidence" => {
                 Some(Self::MissingRunGraphDispatchReceiptOperatorEvidence)
+            }
+            "closed_task_active_run_projection_mismatch" => {
+                Some(Self::ClosedTaskActiveRunProjectionMismatch)
             }
             "run_graph_latest_snapshot_inconsistent" => {
                 Some(Self::RunGraphLatestSnapshotInconsistent)

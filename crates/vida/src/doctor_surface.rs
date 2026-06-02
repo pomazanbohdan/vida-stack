@@ -18,6 +18,9 @@ const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str = "C
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
+const CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_BLOCKER: &str =
+    "closed_task_active_run_projection_mismatch";
+const CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_NEXT_ACTION: &str = "Reconcile latest run-graph state with canonical backlog status before continuing; closed tasks must not remain projected as active runtime work.";
 
 const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.";
 const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";
@@ -265,6 +268,7 @@ fn doctor_operator_blocker_codes(
     operator_session_projection: &serde_json::Value,
     no_active_taskflow_work: bool,
     latest_run_graph_task_missing: bool,
+    latest_run_graph_task_closed: bool,
     trace_evidence_blocker_codes: Vec<String>,
 ) -> Vec<String> {
     let mut operator_blocker_codes: Vec<String> = Vec::new();
@@ -365,6 +369,9 @@ fn doctor_operator_blocker_codes(
     if latest_run_graph_gate.is_some() && latest_run_graph_dispatch_receipt.is_none() {
         operator_blocker_codes
             .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string());
+    }
+    if latest_run_graph_task_closed {
+        operator_blocker_codes.push(CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_BLOCKER.to_string());
     }
     operator_blocker_codes.extend(governance_projection_blocker_codes(
         principal_delegation,
@@ -495,6 +502,13 @@ fn doctor_operator_next_actions(
     {
         operator_next_actions
             .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_BLOCKER)
+    {
+        operator_next_actions
+            .push(CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_NEXT_ACTION.to_string());
     }
     operator_next_actions.extend(governance_projection_next_actions(
         operator_blocker_codes,
@@ -704,6 +718,14 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
+            let latest_terminal_task_active_run_graph_status =
+                match store.latest_terminal_task_active_run_graph_status().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("latest terminal-task run graph status: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                };
             let latest_run_graph_recovery = match store.latest_run_graph_recovery_summary().await {
                 Ok(summary) => summary,
                 Err(error) => {
@@ -734,20 +756,26 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let (latest_run_graph_task_missing, latest_run_graph_task_stale) =
-                match latest_run_graph_status.as_ref() {
-                    Some(status) => match store.show_task(&status.task_id).await {
-                        Ok(task) => (false, task.status == "closed"),
-                        Err(crate::state_store::StateStoreError::MissingTask { .. }) => {
-                            (true, true)
-                        }
-                        Err(error) => {
-                            eprintln!("latest run graph task authority: failed ({error})");
-                            return ExitCode::from(1);
-                        }
-                    },
-                    None => (false, false),
-                };
+            let (
+                latest_run_graph_task_missing,
+                latest_run_graph_task_closed,
+                latest_run_graph_task_stale,
+            ) = match latest_run_graph_status.as_ref() {
+                Some(status) => match store.show_task(&status.task_id).await {
+                    Ok(task) => {
+                        let closed = task.status == "closed";
+                        (false, closed, closed)
+                    }
+                    Err(crate::state_store::StateStoreError::MissingTask { .. }) => {
+                        (true, false, true)
+                    }
+                    Err(error) => {
+                        eprintln!("latest run graph task authority: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                },
+                None => (false, false, false),
+            };
             let latest_run_graph_approval_receipt = match latest_run_graph_status.as_ref() {
                 Some(status) => match store
                     .run_graph_approval_delegation_receipt(&status.run_id)
@@ -876,6 +904,8 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     &operator_session_projection,
                     no_active_taskflow_work,
                     latest_run_graph_task_missing,
+                    latest_run_graph_task_closed
+                        || latest_terminal_task_active_run_graph_status.is_some(),
                     trace_evidence_blocker_codes,
                 );
                 let mut operator_next_actions = doctor_operator_next_actions(
@@ -1070,6 +1100,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     object.insert(
                         "claim_conflicts".to_string(),
                         operator_session_projection["claim_conflicts"].clone(),
+                    );
+                    object.insert(
+                        "latest_terminal_task_active_run_graph_status".to_string(),
+                        serde_json::to_value(&latest_terminal_task_active_run_graph_status)
+                            .expect("terminal task active run graph status should serialize"),
                     );
                 }
                 if let Some(error) = shared_operator_output_contract_parity_error(&summary_json) {

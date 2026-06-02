@@ -4999,7 +4999,12 @@ fn latest_run_projection_consistency_aligns_graph_summary_current_task() {
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
     let parent_id = "latest-run-projection-parent";
-    create_epic_parent(&state_dir, parent_id, "Latest run projection parent", "open");
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Latest run projection parent",
+        "open",
+    );
     let active_task_id = "latest-run-projection-active";
     let active = run_command_json(
         &[
@@ -5041,7 +5046,13 @@ fn latest_run_projection_consistency_aligns_graph_summary_current_task() {
     );
     assert_eq!(ready["status"], "pass");
     let _ = run_and_assert_success(
-        &["taskflow", "run-graph", "init", active_task_id, "implementation"],
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            active_task_id,
+            "implementation",
+        ],
         &state_dir,
     );
 
@@ -5049,7 +5060,10 @@ fn latest_run_projection_consistency_aligns_graph_summary_current_task() {
     assert_eq!(graph_summary["surface"], "vida taskflow graph-summary");
     assert_eq!(graph_summary["latest_run_graph"]["task_id"], active_task_id);
     assert_eq!(graph_summary["recovery"]["task_id"], active_task_id);
-    assert_eq!(graph_summary["primary_ready_task"]["task"]["id"], active_task_id);
+    assert_eq!(
+        graph_summary["primary_ready_task"]["task"]["id"],
+        active_task_id
+    );
     assert_eq!(
         graph_summary["current_task_id"], active_task_id,
         "graph-summary top-level current_task_id must not drift to ready head: {graph_summary}"
@@ -5087,7 +5101,12 @@ fn doctor_latest_run_matches_recovery_latest() {
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
     let parent_id = "doctor-recovery-parity-parent";
-    create_epic_parent(&state_dir, parent_id, "Doctor recovery parity parent", "open");
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Doctor recovery parity parent",
+        "open",
+    );
     let active_task_id = "doctor-recovery-parity-active";
     let active = run_command_json(
         &[
@@ -5109,7 +5128,13 @@ fn doctor_latest_run_matches_recovery_latest() {
     );
     assert_eq!(active["status"], "pass");
     let _ = run_and_assert_success(
-        &["taskflow", "run-graph", "init", active_task_id, "implementation"],
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            active_task_id,
+            "implementation",
+        ],
         &state_dir,
     );
 
@@ -5128,6 +5153,88 @@ fn doctor_latest_run_matches_recovery_latest() {
     assert_eq!(
         doctor["latest_run_graph_recovery"]["task_id"],
         recovery["recovery"]["task_id"]
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn doctor_detects_closed_task_active_run() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "doctor-closed-active-parent";
+    create_epic_parent(&state_dir, parent_id, "Doctor closed active parent", "open");
+    let closed_task_id = "doctor-closed-active-task";
+    let active = run_command_json(
+        &[
+            "task",
+            "create",
+            closed_task_id,
+            "Doctor closed active task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(active["status"], "pass");
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            closed_task_id,
+            "implementation",
+        ],
+        &state_dir,
+    );
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        db.query("UPDATE type::record('task', $task) SET status = 'closed'")
+            .bind(("task", closed_task_id))
+            .await
+            .expect("close canonical task without mutating run graph");
+        db.query("UPDATE type::record('task', $parent) SET status = 'closed'")
+            .bind(("parent", parent_id))
+            .await
+            .expect("close canonical parent without mutating run graph");
+        drop(db);
+    });
+
+    let doctor = run_command_json(&["doctor", "--json"], &state_dir);
+    assert_eq!(
+        doctor["latest_terminal_task_active_run_graph_status"]["task_id"],
+        closed_task_id
+    );
+    assert_eq!(doctor["status"], "blocked");
+    let blockers = require_json_string_array(&doctor["blocker_codes"], "doctor blocker_codes");
+    assert!(
+        blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "doctor must name closed-task active-run projection mismatch: {doctor}"
+    );
+    assert!(
+        doctor["next_actions"]
+            .as_array()
+            .expect("doctor next_actions should render")
+            .iter()
+            .any(|action| action.as_str().is_some_and(|value| value
+                .contains("closed tasks must not remain projected as active runtime work"))),
+        "doctor should provide actionable closed-task active-run remediation: {doctor}"
     );
 
     let _ = fs::remove_dir_all(&state_dir);

@@ -84,8 +84,7 @@ fn operator_command_latency_next_actions_name_slow_stage() {
     let timing = &payload["vida_timing"];
     assert_eq!(timing["over_budget"], true);
     assert!(
-        timing["slowest_phase"]["name"].as_str().is_some()
-            || timing["slowest_phase"].is_null(),
+        timing["slowest_phase"]["name"].as_str().is_some() || timing["slowest_phase"].is_null(),
         "slowest_phase should be named or explicitly null, got: {payload}"
     );
     let next_actions = timing["next_actions"]

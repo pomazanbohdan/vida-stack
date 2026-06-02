@@ -2409,6 +2409,34 @@ impl StateStore {
         Ok(None)
     }
 
+    pub(crate) async fn latest_terminal_task_active_run_graph_status(
+        &self,
+    ) -> Result<Option<RunGraphStatus>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT run_id, task_id, status, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC LIMIT 25;",
+            )
+            .await?;
+        let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
+        for latest in rows {
+            if !self
+                .run_graph_latest_row_points_to_terminal_task_active(&latest)
+                .await?
+            {
+                continue;
+            }
+            if self
+                .run_graph_latest_receipt_row_supersedes_lane(&latest.run_id)
+                .await?
+            {
+                continue;
+            }
+            return Ok(Some(self.run_graph_status(&latest.run_id).await?));
+        }
+        Ok(None)
+    }
+
     async fn run_graph_latest_receipt_row_supersedes_lane(
         &self,
         run_id: &str,
