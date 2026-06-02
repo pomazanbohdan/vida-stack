@@ -78,6 +78,7 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 11. Debug-runtime smoke commands must resolve the debug binary from `effective_cargo_target_dir`, not from a hardcoded `target/debug` path. This keeps worktree output visible under `.vida/cargo-target` while preventing each linked worktree from cold-building an isolated `target` tree.
 12. Local build/test scripts must be current, reusable proof surfaces. Remove stale scripts when they hardcode carrier names, ambient models, legacy provider lists, or heavy pre-commit builds that are no longer part of the current gate ladder. Replace them with config-derived runtime/status checks, Rust contract tests, or `scripts/vida-dev-gate.ps1` modes.
 13. Do not keep a separate CI smoke step that only reruns package tests already covered by the workspace `cargo nextest` matrix. Keep separate smoke jobs only when they validate a different contract, such as doc tests, runtime boot/status behavior, docflow validation, packaging, installer behavior, or an external artifact path that nextest cannot exercise.
+14. Do not make installer smoke depend on debug build jobs as if those jobs produced installer-ready binaries. GitHub Actions job dependencies do not transfer runner files unless an explicit artifact is uploaded and downloaded, and debug `cargo build` output is not a release package input. The CI graph must distinguish debug compile gates from release artifact producer gates: installer smoke consumes only release artifacts emitted by the package/release stage, while debug cross-platform build gates may run in parallel as compile sanity checks.
 
 ## Gate Decision Model
 
@@ -206,6 +207,7 @@ As of this protocol slice, the following observations are known from the active 
 13. The 2026-06-02 local build/test cleanup removed the duplicate `validate-smoke` package-test step for `vida-pi-agent`; those adapter tests are now covered by the workspace nextest shards, while `validate-smoke` remains reserved for doc tests, docflow validation, and runtime smoke.
 14. The 2026-06-02 local surface cleanup made `scripts/vida-dev-gate.ps1` the current local build/test entrypoint for Makefile targets. The script now has an explicit help surface, changed-file Bash script syntax checks in `script-check`, package/workspace nextest modes, doc-test, debug build, debug runtime smoke, release packaging, and release install modes. `scripts/build-release.sh` must respect `CARGO_TARGET_DIR` so release packaging works under the same deterministic target-dir policy as the local gate. Treat direct local Cargo invocations as Unix fallback or focused ad hoc proof, not as the canonical reusable local script contract.
 15. On this Windows host, `bash -n scripts/build-release.sh` took about `15-20s` during local script proof. Do not make full Bash syntax checks unconditional for docs-only proof; run them only when a Bash script changed, and keep the timing artifact so future shell startup regressions are visible.
+16. The 2026-06-02 CI/CD graph audit found that `package-linux` and `package-windows` were gated on `build-runtime`, but `build-runtime` only ran debug `cargo build` and did not upload installer-ready binaries. Release packaging jobs rebuilt release assets from a fresh checkout, and installer smoke correctly consumed the package artifacts. The corrected graph treats `build-runtime` as `Build debug runtime` and lets release package jobs depend on `test-gate` directly; installer smoke continues to download the release artifacts from the package jobs.
 
 These observations do not prove one root cause. They prove that timing diagnostics must cover both local runtime commands and CI/test gates.
 
@@ -218,5 +220,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/command-timing-and-gate-optimization-protocol.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-06-02T03:58:00+03:00
+updated_at: 2026-06-02T04:22:00+03:00
 changelog_ref: command-timing-and-gate-optimization-protocol.changelog.jsonl
