@@ -410,6 +410,21 @@ fn dev_team_sequence_from_readiness(
     readiness: &serde_json::Value,
     work_item_type: Option<&str>,
 ) -> Vec<DevTeamSequenceStep> {
+    dev_team_sequence_from_readiness_with_default(readiness, work_item_type, true)
+}
+
+fn dev_team_sequence_from_readiness_lookup_key(
+    readiness: &serde_json::Value,
+    work_item_type: &str,
+) -> Vec<DevTeamSequenceStep> {
+    dev_team_sequence_from_readiness_with_default(readiness, Some(work_item_type), false)
+}
+
+fn dev_team_sequence_from_readiness_with_default(
+    readiness: &serde_json::Value,
+    work_item_type: Option<&str>,
+    default_on_miss: bool,
+) -> Vec<DevTeamSequenceStep> {
     let roles = readiness["roles"]
         .as_array()
         .into_iter()
@@ -419,7 +434,15 @@ fn dev_team_sequence_from_readiness(
             Some((role_id.to_string(), role))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    let selected_flow = selected_dev_team_flow_for_work_item(readiness, work_item_type);
+    let selected_flow = match (work_item_type, default_on_miss) {
+        (Some(work_item_type), false) => {
+            selected_dev_team_flow_for_lookup_key(readiness, work_item_type)
+        }
+        _ => selected_dev_team_flow_for_work_item(readiness, work_item_type),
+    };
+    if selected_flow.is_none() && !default_on_miss {
+        return Vec::new();
+    }
     if let Some(steps) = selected_flow
         .and_then(|flow| flow["ordered_steps"].as_array())
         .filter(|steps| !steps.is_empty())
@@ -622,9 +645,9 @@ fn dev_team_sequence_for_task(
     task: &state_store::TaskRecord,
 ) -> Vec<DevTeamSequenceStep> {
     for lookup_key in task_flow_lookup_keys(task) {
-        let readiness_sequence = dev_team_sequence_from_readiness(
+        let readiness_sequence = dev_team_sequence_from_readiness_lookup_key(
             &activation_bundle["dev_team_readiness"],
-            Some(&lookup_key),
+            &lookup_key,
         );
         if !readiness_sequence.is_empty() {
             return readiness_sequence;
@@ -3014,6 +3037,51 @@ mod tests {
 
         assert_eq!(sequence.len(), 1);
         assert_eq!(sequence[0].role_label, "tester");
+        assert_eq!(sequence[0].task_class, "verification");
+    }
+
+    #[test]
+    fn task_sequence_skips_default_on_inferred_key_miss_before_canonical_work_item() {
+        let task = task_with_labels_and_type(
+            "defect-review",
+            "Verify defect remediation",
+            &["verification"],
+            "defect",
+        );
+        let sequence = dev_team_sequence_for_task(
+            &serde_json::json!({
+                "dev_team_readiness": {
+                    "default_flow_id": "default_delivery",
+                    "work_item_flow_bindings": {
+                        "defect": "defect_repair"
+                    },
+                    "roles": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+                    ],
+                    "sequence": ["developer"],
+                    "flows": [
+                        {
+                            "flow_id": "default_delivery",
+                            "enabled": true,
+                            "default": true,
+                            "ordered_steps": [{"role_id": "developer"}]
+                        },
+                        {
+                            "flow_id": "defect_repair",
+                            "enabled": true,
+                            "work_item_bindings": ["defect"],
+                            "ordered_steps": [{"role_id": "tester"}]
+                        }
+                    ]
+                }
+            }),
+            &task,
+        );
+
+        assert_eq!(sequence.len(), 1);
+        assert_eq!(sequence[0].role_label, "tester");
+        assert_eq!(sequence[0].runtime_role, "verifier");
         assert_eq!(sequence[0].task_class, "verification");
     }
 
