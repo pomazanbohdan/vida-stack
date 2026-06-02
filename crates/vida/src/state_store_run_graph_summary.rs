@@ -50,6 +50,13 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .downstream_dispatch_blockers
             .iter()
             .any(|blocker| blocker == "missing_owned_write_scope");
+    let pre_execution_routed_handoff = receipt.dispatch_status == "routed"
+        && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
+        && matches!(
+            receipt.lane_status.as_deref(),
+            Some("lane_open") | Some("lane_running") | Some("packet_ready") | None
+        )
+        && receipt.downstream_dispatch_status.is_none();
     let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
             receipt.lane_status.as_deref(),
@@ -62,7 +69,8 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .blocker_code
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
-        || (!stale_downstream_blockers_are_superseded_by_ready_handoff
+        || (!pre_execution_routed_handoff
+            && !stale_downstream_blockers_are_superseded_by_ready_handoff
             && !executed_analysis_missing_owned_scope_handoff
             && !receipt.downstream_dispatch_blockers.is_empty());
     let spec_post_design_gate_blocked = receipt.dispatch_status == "executed"
@@ -3522,6 +3530,70 @@ mod tests {
         assert!(!latest_run_graph_dispatch_receipt_signal_is_ambiguous(
             &summary
         ));
+    }
+
+    #[test]
+    fn routed_specification_receipt_with_pending_downstream_evidence_stays_dispatch_ready() {
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-spec-routed".to_string();
+        status.task_id = "task-spec-routed".to_string();
+        status.active_node = "planning".to_string();
+        status.next_node = Some("pm".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "dispatch_ready".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_pm".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "conversation_cursor".to_string();
+        status.resume_target = "dispatch.pm_lane".to_string();
+        status.recovery_ready = true;
+
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some(
+                "vida agent-init --dispatch-packet packet --execute-dispatch --json".to_string(),
+            ),
+            dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("work-pool-pack".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some("wait for bounded evidence return".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "pending_specification_evidence".to_string(),
+                "pending_spec_task_close".to_string(),
+                "pending_design_finalize".to_string(),
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("pm".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-02T06:52:54Z".to_string(),
+        };
+
+        let stored_receipt = receipt.into();
+        let reconciled =
+            reconcile_run_graph_status_with_dispatch_receipt(status, Some(&stored_receipt))
+                .expect("routed pre-execution receipt should reconcile");
+
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.lifecycle_stage, "dispatch_ready");
+        assert_eq!(reconciled.resume_target, "dispatch.pm_lane");
+        assert!(reconciled.recovery_ready);
     }
 
     #[tokio::test]
