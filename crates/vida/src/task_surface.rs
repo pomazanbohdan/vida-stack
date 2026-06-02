@@ -3992,10 +3992,7 @@ fn task_next_lawful_receipt(
     ready_task_candidates: Vec<TaskContinuationCandidate>,
     runtime_binding: Option<&state_store::RunGraphContinuationBinding>,
 ) -> TaskNextLawfulReceipt {
-    let active_tasks = tasks
-        .iter()
-        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
-        .collect::<Vec<_>>();
+    let active_tasks = crate::continuation_binding_summary::taskflow_leaf_active_tasks(tasks);
 
     if let Some(binding) = runtime_binding {
         if !continuation_binding_is_closed_downstream_marker(tasks, binding) {
@@ -6627,6 +6624,43 @@ mod tests {
         );
         assert_eq!(receipt.active_bounded_unit, serde_json::Value::Null);
         assert_eq!(receipt.ready_task_candidates.len(), 2);
+    }
+
+    #[test]
+    fn task_next_lawful_selects_in_progress_child_leaf_over_active_parent() {
+        let mut parent = owned_task_record("generic-runtime-foundation-release-readiness", vec![]);
+        parent.title = "Release readiness".to_string();
+        let mut child = owned_task_record(
+            "todo-repair-status-cold-after-mutation-timing-20260602",
+            vec![],
+        );
+        child.title = "Repair cold timing".to_string();
+        child.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: child.id.clone(),
+            depends_on_id: parent.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-06-02T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+
+        let receipt = task_next_lawful_receipt(&[parent, child], Vec::new(), None);
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(
+            receipt.active_bounded_unit["task_id"],
+            "todo-repair-status-cold-after-mutation-timing-20260602"
+        );
+        assert_eq!(
+            receipt.binding_source,
+            Some("taskflow_single_in_progress".to_string())
+        );
+        assert_eq!(
+            receipt.sequential_vs_parallel_posture,
+            "sequential_only_taskflow_active"
+        );
+        assert!(receipt.blocker_codes.is_empty());
     }
 
     #[test]

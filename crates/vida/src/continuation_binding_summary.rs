@@ -868,9 +868,8 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
 pub(crate) fn taskflow_active_candidates_from_tasks(
     tasks: &[crate::state_store::TaskRecord],
 ) -> Vec<serde_json::Value> {
-    tasks
-        .iter()
-        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
+    taskflow_leaf_active_tasks(tasks)
+        .into_iter()
         .map(|task| {
             serde_json::json!({
                 "task_id": task.id,
@@ -879,6 +878,38 @@ pub(crate) fn taskflow_active_candidates_from_tasks(
                 "issue_type": task.issue_type,
                 "title": task.title,
             })
+        })
+        .collect()
+}
+
+pub(crate) fn taskflow_leaf_active_tasks(
+    tasks: &[crate::state_store::TaskRecord],
+) -> Vec<&crate::state_store::TaskRecord> {
+    let active_task_ids = tasks
+        .iter()
+        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
+        .map(|task| task.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let active_parent_ids = tasks
+        .iter()
+        .filter(|task| active_task_ids.contains(task.id.as_str()))
+        .flat_map(|task| {
+            task.dependencies
+                .iter()
+                .filter(|dependency| {
+                    dependency.edge_type == "parent-child"
+                        && dependency.issue_id == task.id
+                        && active_task_ids.contains(dependency.depends_on_id.as_str())
+                })
+                .map(|dependency| dependency.depends_on_id.as_str())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    tasks
+        .iter()
+        .filter(|task| {
+            active_task_ids.contains(task.id.as_str())
+                && !active_parent_ids.contains(task.id.as_str())
         })
         .collect()
 }
@@ -1004,6 +1035,51 @@ pub(crate) fn add_taskflow_active_work_truth(
             }
             return summary;
         }
+        if taskflow_active_candidates.len() > 1 {
+            if let serde_json::Value::Object(object) = &mut summary {
+                object.insert(
+                    "status".to_string(),
+                    serde_json::Value::String("ambiguous".to_string()),
+                );
+                object.insert(
+                    "continuation_allowed".to_string(),
+                    serde_json::Value::Bool(false),
+                );
+                object.insert(
+                    "continuation_required_now".to_string(),
+                    serde_json::Value::Bool(false),
+                );
+                object.insert("active_bounded_unit".to_string(), serde_json::Value::Null);
+                object.insert("why_this_unit".to_string(), serde_json::Value::Null);
+                object.insert(
+                    "primary_path".to_string(),
+                    serde_json::Value::String("diagnosis_path".to_string()),
+                );
+                object.insert(
+                    "sequential_vs_parallel_posture".to_string(),
+                    serde_json::Value::String(
+                        "unknown_until_explicit_taskflow_binding".to_string(),
+                    ),
+                );
+                object.insert(
+                    "pause_boundary_gate".to_string(),
+                    serde_json::Value::String("forbidden_while_ambiguous".to_string()),
+                );
+                object.insert(
+                    "ambiguity_reason".to_string(),
+                    serde_json::Value::String(
+                        "multiple_taskflow_active_work_candidates".to_string(),
+                    ),
+                );
+                object.insert(
+                    "next_actions".to_string(),
+                    serde_json::json!([
+                        "Multiple TaskFlow in-progress leaf tasks are active; close, pause, or explicitly bind the intended bounded unit before implementation."
+                    ]),
+                );
+            }
+            return summary;
+        }
     }
 
     if !orthogonal {
@@ -1096,6 +1172,25 @@ mod tests {
             provider_mapping: None,
             dependencies: Vec::new(),
         }
+    }
+
+    fn task_with_parent(
+        task_id: &str,
+        status: &str,
+        parent_id: &str,
+    ) -> crate::state_store::TaskRecord {
+        let mut task = task_record(task_id, status);
+        task.dependencies
+            .push(crate::state_store::TaskDependencyRecord {
+                issue_id: task_id.to_string(),
+                depends_on_id: parent_id.to_string(),
+                edge_type: "parent-child".to_string(),
+                created_at: "2026-04-24T00:00:00Z".to_string(),
+                created_by: "test".to_string(),
+                metadata: String::new(),
+                thread_id: String::new(),
+            });
+        task
     }
 
     fn exception_takeover_dispatch(
@@ -1422,6 +1517,88 @@ mod tests {
             "sequential_only_taskflow_active"
         );
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_collapses_in_progress_parent_child_chain_to_leaf() {
+        let active_parent = task_record(
+            "generic-runtime-foundation-release-readiness",
+            "in_progress",
+        );
+        let active_child = task_with_parent(
+            "todo-repair-status-cold-after-mutation-timing-20260602",
+            "in_progress",
+            "generic-runtime-foundation-release-readiness",
+        );
+        let runtime_summary = serde_json::json!({
+            "status": "ambiguous",
+            "continuation_allowed": false,
+            "continuation_required_now": false,
+            "active_bounded_unit": serde_json::Value::Null,
+            "binding_source": serde_json::Value::Null,
+            "why_this_unit": serde_json::Value::Null,
+            "primary_path": "diagnosis_path",
+            "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_while_ambiguous",
+            "ambiguity_reason": "runtime_evidence_ambiguous",
+            "next_actions": []
+        });
+
+        let taskflow_candidates =
+            taskflow_active_candidates_from_tasks(&[active_parent, active_child]);
+        assert_eq!(taskflow_candidates.len(), 1);
+        assert_eq!(
+            taskflow_candidates[0]["task_id"],
+            "todo-repair-status-cold-after-mutation-timing-20260602"
+        );
+
+        let summary = add_taskflow_active_work_truth(runtime_summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "todo-repair-status-cold-after-mutation-timing-20260602"
+        );
+        assert_eq!(summary["binding_source"], "taskflow_single_in_progress");
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_keeps_unrelated_active_tasks_ambiguous() {
+        let runtime_summary = serde_json::json!({
+            "status": "ambiguous",
+            "continuation_allowed": false,
+            "continuation_required_now": false,
+            "active_bounded_unit": serde_json::Value::Null,
+            "binding_source": serde_json::Value::Null,
+            "why_this_unit": serde_json::Value::Null,
+            "primary_path": "diagnosis_path",
+            "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_while_ambiguous",
+            "ambiguity_reason": "runtime_evidence_ambiguous",
+            "next_actions": []
+        });
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[
+            task_record(
+                "taskflow-test-first-runtime-defect-remediation-epic",
+                "in_progress",
+            ),
+            task_record(
+                "generic-runtime-foundation-release-readiness",
+                "in_progress",
+            ),
+        ]);
+        assert_eq!(taskflow_candidates.len(), 2);
+
+        let summary = add_taskflow_active_work_truth(runtime_summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(
+            summary["ambiguity_reason"],
+            "multiple_taskflow_active_work_candidates"
+        );
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
     }
 
     #[test]

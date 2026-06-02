@@ -5968,7 +5968,21 @@ async fn latest_or_requested_dispatch_context(
 {
     let run_id = match run_id {
         Some(run_id) => Some(run_id.to_string()),
-        None => store.latest_run_graph_run_id().await?,
+        None => {
+            let tasks = store.list_tasks(None, true).await?;
+            let active_leaf_tasks =
+                crate::continuation_binding_summary::taskflow_leaf_active_tasks(&tasks);
+            if let [active_task] = active_leaf_tasks.as_slice() {
+                if let Some(active_run_id) = store
+                    .latest_run_graph_run_id_for_task(&active_task.id)
+                    .await?
+                {
+                    return store.run_graph_dispatch_context(&active_run_id).await;
+                }
+                return Ok(None);
+            }
+            store.latest_run_graph_run_id().await?
+        }
     };
     let Some(run_id) = run_id else {
         return Ok(None);
@@ -6185,6 +6199,14 @@ fn route_backend_refs_for_current_config_validation(
 ) -> Vec<serde_json::Value> {
     let selected_backend = route["selected_backend"].as_str();
     let selected_profile = route["selected_model_profile_id"].as_str();
+    let route_field_is_effective = |backend_id: Option<&str>| {
+        selected_backend
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map_or(true, |selected| {
+                backend_id.map(str::trim).filter(|value| !value.is_empty()) == Some(selected)
+            })
+    };
     let mut refs = Vec::new();
     let mut seen = BTreeSet::new();
     push_backend_ref(
@@ -6209,7 +6231,7 @@ fn route_backend_refs_for_current_config_validation(
         "route_primary_backend",
         route["route_primary_backend"].as_str(),
         None,
-        true,
+        route_field_is_effective(route["route_primary_backend"].as_str()),
     );
     push_backend_ref(
         &mut refs,
@@ -6217,7 +6239,7 @@ fn route_backend_refs_for_current_config_validation(
         "fallback_backend",
         route["fallback_backend"].as_str(),
         None,
-        true,
+        route_field_is_effective(route["fallback_backend"].as_str()),
     );
     for backend in string_array_from_payload(&route["fanout_backends"]) {
         push_backend_ref(
@@ -6226,7 +6248,7 @@ fn route_backend_refs_for_current_config_validation(
             "fanout_backends",
             Some(&backend),
             None,
-            true,
+            route_field_is_effective(Some(&backend)),
         );
     }
     for candidate in route["candidate_pool"].as_array().into_iter().flatten() {
@@ -6963,8 +6985,11 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                     }
                 },
                 "status": "blocked",
-                "blocker_codes": ["run_graph_dispatch_context_missing"],
+                "blocker_codes": ["missing_run_graph_dispatch_receipt_operator_evidence"],
                 "run_id": parsed.run_id,
+                "next_actions": [
+                    "Bind or dispatch a non-terminal TaskFlow bounded unit before inspecting route diagnostics, or pass an explicit --run-id for historical route analysis."
+                ],
             });
             let payload =
                 normalize_taskflow_route_diagnostic_payload(payload).unwrap_or_else(|_| {
@@ -7178,6 +7203,7 @@ mod tests {
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
         TaskSchedulingCandidate, TaskSchedulingProjection,
     };
+    use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::guard_current_dir;
     use std::fs;
     use std::process::ExitCode;
@@ -9646,7 +9672,7 @@ agent_system:
     }
 
     #[test]
-    fn route_diagnostics_block_actuatable_disabled_external_backend_refs() {
+    fn route_diagnostics_keep_unused_disabled_external_backend_refs_diagnostic() {
         let overlay: serde_yaml::Value = serde_yaml::from_str(
             r#"
 agent_system:
@@ -9686,28 +9712,142 @@ agent_system:
 
         super::apply_disabled_external_backend_refs_from_overlay(&mut payload, &overlay);
 
-        assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(
+            payload["route_disabled_external_backend_refs"]["status"],
+            "diagnostic"
+        );
+        assert!(!payload["blocker_codes"].as_array().is_some_and(|codes| {
             codes.contains(&serde_json::json!(
                 "route_references_disabled_external_backend"
             ))
         }));
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| { codes.contains(&serde_json::json!("route_blocked")) }));
         let refs = payload["route_disabled_external_backend_refs"]["refs"]
             .as_array()
             .expect("disabled backend refs should render");
         assert!(refs.iter().any(|row| {
             row["source"] == "fallback_backend"
                 && row["backend_id"] == "external_bridge"
-                && row["blocking"] == true
+                && row["blocking"] == false
         }));
         assert!(refs.iter().any(|row| {
             row["source"] == "candidate_pool"
                 && row["backend_id"] == "external_bridge"
                 && row["blocking"] == false
         }));
+    }
+
+    #[test]
+    fn route_diagnostics_block_selected_disabled_external_backend_ref() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    external_bridge:
+      enabled: false
+      subagent_backend_class: external_cli
+      default_model_profile: external_review
+      dispatch:
+        command: disabled-agent
+"#,
+        )
+        .expect("overlay should parse");
+        let mut payload = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "route_present": true,
+            "selected_backend": "external_bridge",
+            "runtime_assignment_backend": "external_bridge",
+            "route_primary_backend": "external_bridge",
+            "fallback_backend": "internal_support",
+            "fanout_backends": [],
+            "selected_model_profile_id": "external_review",
+            "candidate_pool": [
+                {
+                    "carrier_id": "external_bridge",
+                    "model_profile_id": "external_review",
+                    "status": "selected"
+                },
+                {
+                    "carrier_id": "internal_support",
+                    "model_profile_id": "internal_review",
+                    "status": "admissible_not_selected"
+                }
+            ]
+        });
+
+        super::apply_disabled_external_backend_refs_from_overlay(&mut payload, &overlay);
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
+            codes.contains(&serde_json::json!(
+                "route_references_disabled_external_backend"
+            ))
+        }));
+        let refs = payload["route_disabled_external_backend_refs"]["refs"]
+            .as_array()
+            .expect("disabled backend refs should render");
+        assert!(refs.iter().any(|row| {
+            row["source"] == "selected_backend"
+                && row["backend_id"] == "external_bridge"
+                && row["blocking"] == true
+        }));
+    }
+
+    #[test]
+    fn route_diagnostic_default_context_does_not_fallback_when_active_leaf_has_no_run() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().join("state"))
+                .await
+                .expect("state store should open");
+            store
+                .create_task(crate::state_store::CreateTaskRequest {
+                    task_id: "active-parent",
+                    title: "Active parent",
+                    display_id: None,
+                    description: "",
+                    issue_type: "epic",
+                    status: "in_progress",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &[],
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: ".",
+                })
+                .await
+                .expect("active parent should create");
+            store
+                .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                    task_id: "active-child",
+                    title: "Active child",
+                    display_id: None,
+                    description: "",
+                    issue_type: "todo",
+                    status: "in_progress",
+                    priority: 1,
+                    parent_id: Some("active-parent"),
+                    labels: &[],
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: ".",
+                })
+                .await
+                .expect("active child should create");
+
+            let context = super::latest_or_requested_dispatch_context(&store, None)
+                .await
+                .expect("context lookup should not fail");
+
+            assert!(
+                context.is_none(),
+                "implicit route diagnostics must not fall back to stale latest runs when the active TaskFlow leaf has no run context"
+            );
+        });
     }
 
     #[test]
