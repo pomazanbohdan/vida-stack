@@ -2255,6 +2255,19 @@ fn receipt_result_path_has_execution_evidence(path: Option<&str>) -> bool {
         == Some("execution_evidence")
 }
 
+fn receipt_result_path_has_target_execution_evidence(path: Option<&str>, target: &str) -> bool {
+    let Some(result) = path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| crate::read_json_file_if_present(Path::new(value)))
+    else {
+        return false;
+    };
+
+    dispatch_result_activation_kind(&result) == Some("execution_evidence")
+        && result["completed_target"].as_str() == Some(target)
+}
+
 fn receipt_result_path_activation_kind(path: Option<&str>) -> Option<&'static str> {
     path.map(str::trim)
         .filter(|value| !value.is_empty())
@@ -4839,6 +4852,29 @@ pub(crate) fn runtime_agent_lane_dispatch_for_root(
         preferred_backend,
         preferred_model_profile_id,
     )
+}
+
+pub(crate) fn dispatch_receipt_has_closure_execution_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    match receipt.dispatch_status.as_str() {
+        "executed" => {
+            if receipt.blocker_code.is_some() {
+                return false;
+            }
+            (receipt.dispatch_target == "closure"
+                && receipt_result_path_has_target_execution_evidence(
+                    receipt.dispatch_result_path.as_deref(),
+                    "closure",
+                ))
+                || (receipt.downstream_dispatch_target.as_deref() == Some("closure")
+                    && receipt_result_path_has_target_execution_evidence(
+                        receipt.downstream_dispatch_result_path.as_deref(),
+                        "closure",
+                    ))
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn dispatch_receipt_has_execution_evidence(
