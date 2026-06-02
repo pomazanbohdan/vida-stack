@@ -341,6 +341,11 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "genuinely blocked",
             "readiness blockers",
             "readiness blocker",
+            "verifier blocker closure regression fix",
+            "blocker/rework",
+            "blocker_code/blockers",
+            "blocked verification lane",
+            "git/remote blocker",
             "blocker list empty",
             "blocker list is empty",
             "empty blocker list",
@@ -390,7 +395,11 @@ const CONCRETE_CANONICAL_CLOSE_PHRASES: &[&str] = &[
     "blocked pending",
     "blocked by",
     "blocked on",
+    "blocked due",
+    "blocked because",
+    "blocked until",
     "blocker:",
+    "blocker code",
     "approval required",
     "pending approval",
     "pending operator approval",
@@ -416,13 +425,24 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
     let blocker_keywords = ["blocked", "blocker", "approval_wait", "awaiting_approval"];
     let meta_keywords = [
         "fixed",
+        "fix",
         "implemented",
         "implemented after",
         "closed after implementing",
         "closed after validating",
+        "commit",
+        "committed",
+        "pushed",
+        "regression",
         "proofs:",
         "proof:",
         "proof commands passed",
+        "reported",
+        "reports",
+        "no longer",
+        "does not",
+        "cannot",
+        "prevents",
         "returns",
         "return",
         "preserves",
@@ -1357,6 +1377,32 @@ mod tests {
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "ready/blocked/progress/list/tree"));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_verifier_rework_regression_proof_context() {
+        let reason = "Separated receipt-backed verification execution evidence from closure-ready proof. Verification evidence that is receipt-backed but explicitly reports closure_ready=false, blocker_code/blockers, or blocker/rework/not-approved verdict text no longer bridges a blocked verification lane into executed closure handoff. Added regression maybe_bridge_receipt_backed_verification_rework_does_not_open_closure. Proof: cargo test -p vida maybe_bridge_receipt_backed_verification_rework_does_not_open_closure -- --nocapture --test-threads=1.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let ignored = super::ignored_canonical_close_meta_language(reason);
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocker_code/blockers"));
+        assert!(ignored.iter().any(|phrase| phrase == "blocker/rework"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked verification lane"));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_commit_push_proof_with_historical_blocker_context() {
+        let reason = "Committed and pushed verifier blocker closure regression fix. Commit f770f70aa77bf95883d7ac9af6da2c680409d739 is on main and origin/main; git status clean. Proof: git log -1 --oneline --decorate; git show --stat --oneline --name-only --no-renames HEAD; git rev-parse HEAD equals origin/main.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let ignored = super::ignored_canonical_close_meta_language(reason);
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "verifier blocker closure regression fix"));
     }
 
     #[test]
