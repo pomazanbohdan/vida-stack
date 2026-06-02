@@ -342,10 +342,6 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "readiness blockers",
             "readiness blocker",
             "verifier blocker closure regression fix",
-            "blocker/rework",
-            "blocker_code/blockers",
-            "blocked verification lane",
-            "git/remote blocker",
             "blocker list empty",
             "blocker list is empty",
             "empty blocker list",
@@ -384,10 +380,39 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "ready/blocked/progress/list/tree",
         ],
     );
+    ignored.extend(ignored_historical_blocker_meta_phrases(reason));
     ignored.extend(ignored_canonical_close_meta_segments(reason));
     ignored.sort();
     ignored.dedup();
     ignored
+}
+
+fn ignored_historical_blocker_meta_phrases(reason: &str) -> Vec<String> {
+    let normalized = reason.to_ascii_lowercase();
+    let has_historical_context = [
+        "closure_ready=false",
+        "verdict text",
+        "no longer bridges",
+        "regression fix",
+        "committed and pushed",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+
+    if !has_historical_context {
+        return Vec::new();
+    }
+
+    [
+        "blocker/rework",
+        "blocker_code/blockers",
+        "blocked verification lane",
+        "git/remote blocker",
+    ]
+    .into_iter()
+    .filter(|phrase| normalized.contains(*phrase))
+    .map(ToString::to_string)
+    .collect()
 }
 
 const CONCRETE_CANONICAL_CLOSE_PHRASES: &[&str] = &[
@@ -445,8 +470,6 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "reports",
         "no longer",
         "does not",
-        "cannot",
-        "prevents",
         "returns",
         "return",
         "preserves",
@@ -1757,5 +1780,20 @@ mod tests {
             super::canonical_close_status_from_reason(reason),
             Some(("blocked", "blocked"))
         );
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_rework_blocker_verdicts() {
+        for reason in [
+            "blocker/rework/not-approved",
+            "Cannot proceed because blocker missing credentials",
+            "Prevents closure: blocker missing credentials",
+        ] {
+            assert_eq!(
+                super::canonical_close_status_from_reason(reason),
+                Some(("blocked", "blocked")),
+                "reason should remain a blocked close verdict: {reason}"
+            );
+        }
     }
 }
