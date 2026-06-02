@@ -52,8 +52,8 @@ fn sample_jsonl(path: &str) {
         concat!(
             "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
             "{\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-a\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
-            "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"in_progress\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-a\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
-            "{\"id\":\"vida-c\",\"title\":\"Task C\",\"description\":\"third\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+            "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"in_progress\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"},{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-a\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+            "{\"id\":\"vida-c\",\"title\":\"Task C\",\"description\":\"third\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-c\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
         ),
     )
     .expect("write task jsonl");
@@ -1112,15 +1112,7 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     }
 
     let dep_add_stdout = run_and_assert_success(
-        &[
-            "task",
-            "dep",
-            "add",
-            "vida-c",
-            "vida-root",
-            "parent-child",
-            "--json",
-        ],
+        &["task", "dep", "add", "vida-c", "vida-a", "blocks", "--json"],
         &state_dir,
     );
     assert!(
@@ -1128,26 +1120,20 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
             || dep_add_stdout.contains("\"issue_id\":\"vida-c\"")
     );
     assert!(
-        dep_add_stdout.contains("\"depends_on_id\": \"vida-root\"")
-            || dep_add_stdout.contains("\"depends_on_id\":\"vida-root\"")
+        dep_add_stdout.contains("\"depends_on_id\": \"vida-a\"")
+            || dep_add_stdout.contains("\"depends_on_id\":\"vida-a\"")
     );
 
     let deps_after_add_stdout =
         run_and_assert_success(&["task", "deps", "vida-c", "--json"], &state_dir);
     assert!(
-        deps_after_add_stdout.contains("\"depends_on_id\": \"vida-root\"")
-            || deps_after_add_stdout.contains("\"depends_on_id\":\"vida-root\"")
+        deps_after_add_stdout.contains("\"depends_on_id\": \"vida-a\"")
+            || deps_after_add_stdout.contains("\"depends_on_id\":\"vida-a\"")
     );
 
     let dep_remove_stdout = run_and_assert_success(
         &[
-            "task",
-            "dep",
-            "remove",
-            "vida-c",
-            "vida-root",
-            "parent-child",
-            "--json",
+            "task", "dep", "remove", "vida-c", "vida-a", "blocks", "--json",
         ],
         &state_dir,
     );
@@ -1167,8 +1153,8 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
             || deps_after_remove_stdout.contains("\"task_id\":\"vida-c\"")
     );
     assert!(
-        deps_after_remove_stdout.contains("\"dependency_count\": 0")
-            || deps_after_remove_stdout.contains("\"dependency_count\":0")
+        deps_after_remove_stdout.contains("\"dependency_count\": 1")
+            || deps_after_remove_stdout.contains("\"dependency_count\":1")
     );
 
     let _ = fs::remove_dir_all(&state_dir);

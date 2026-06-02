@@ -401,8 +401,8 @@ mod tests {
         [
             r#"{"id":"vida-root","title":"Root epic","description":"epic","status":"open","priority":1,"issue_type":"epic","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["wave"],"dependencies":[]}"#,
             r#"{"id":"vida-a","title":"Task A","description":"first","status":"open","priority":2,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[{"issue_id":"vida-a","depends_on_id":"vida-root","type":"parent-child","created_at":"2026-03-08T00:00:00Z","created_by":"tester","metadata":"{}","thread_id":""}]}"#,
-            r#"{"id":"vida-b","title":"Task B","description":"second","status":"open","priority":3,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[{"issue_id":"vida-b","depends_on_id":"vida-a","type":"blocks","created_at":"2026-03-08T00:00:00Z","created_by":"tester","metadata":"{}","thread_id":""}]}"#,
-            r#"{"id":"vida-c","title":"Task C","description":"active","status":"in_progress","priority":4,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[]}"#,
+            r#"{"id":"vida-b","title":"Task B","description":"second","status":"open","priority":3,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[{"issue_id":"vida-b","depends_on_id":"vida-root","type":"parent-child","created_at":"2026-03-08T00:00:00Z","created_by":"tester","metadata":"{}","thread_id":""},{"issue_id":"vida-b","depends_on_id":"vida-a","type":"blocks","created_at":"2026-03-08T00:00:00Z","created_by":"tester","metadata":"{}","thread_id":""}]}"#,
+            r#"{"id":"vida-c","title":"Task C","description":"active","status":"in_progress","priority":4,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[{"issue_id":"vida-c","depends_on_id":"vida-root","type":"parent-child","created_at":"2026-03-08T00:00:00Z","created_by":"tester","metadata":"{}","thread_id":""}]}"#,
             r#"{"id":"vida-d","title":"Task D","description":"done","status":"closed","priority":5,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","closed_at":"2026-03-08T00:10:00Z","close_reason":"done","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[]}"#,
         ]
         .join("\n")
@@ -524,8 +524,10 @@ hierarchy: framework,contracts
         );
 
         let shown = store.show_task("vida-b").await.expect("show task");
-        assert_eq!(shown.dependencies.len(), 1);
-        assert_eq!(shown.dependencies[0].depends_on_id, "vida-a");
+        assert_eq!(shown.dependencies.len(), 2);
+        assert!(shown.dependencies.iter().any(|dependency| {
+            dependency.edge_type == "blocks" && dependency.depends_on_id == "vida-a"
+        }));
 
         let ready = store.ready_tasks().await.expect("ready tasks");
         let ready_ids = ready.into_iter().map(|task| task.id).collect::<Vec<_>>();
@@ -560,16 +562,24 @@ hierarchy: framework,contracts
             .await
             .expect("dependency tree");
         assert_eq!(tree.task.id, "vida-b");
-        assert_eq!(tree.dependencies.len(), 1);
+        assert_eq!(tree.dependencies.len(), 2);
         assert!(tree.children.is_empty());
-        let blocks = &tree.dependencies[0];
+        let blocks = tree
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.edge_type == "blocks")
+            .expect("blocks dependency should be present");
         assert_eq!(blocks.edge_type, "blocks");
         assert_eq!(blocks.depends_on_id, "vida-a");
         let a_node = blocks.node.as_ref().expect("task a node");
         assert_eq!(a_node.task.id, "vida-a");
-        assert_eq!(a_node.dependencies.len(), 1);
+        assert!(a_node.dependencies.is_empty());
         assert!(a_node.children.is_empty());
-        let parent = &a_node.dependencies[0];
+        let parent = tree
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.edge_type == "parent-child")
+            .expect("parent-child dependency should be present");
         assert_eq!(parent.edge_type, "parent-child");
         assert_eq!(parent.depends_on_id, "vida-root");
         assert!(parent.node.is_some());
@@ -580,13 +590,13 @@ hierarchy: framework,contracts
             .await
             .expect("root dependency tree");
         assert!(root_tree.dependencies.is_empty());
-        assert_eq!(root_tree.children.len(), 1);
+        assert_eq!(root_tree.children.len(), 3);
         let child_ids = root_tree
             .children
             .iter()
             .map(|child| child.child_id.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(child_ids, vec!["vida-a"]);
+        assert_eq!(child_ids, vec!["vida-a", "vida-b", "vida-c"]);
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -618,13 +628,14 @@ hierarchy: framework,contracts
             .expect("progress summary");
         assert_eq!(summary.root_task.id, "vida-root");
         assert_eq!(summary.progress_basis, "descendants_excluding_root");
-        assert_eq!(summary.direct_child_count, 1);
-        assert_eq!(summary.descendant_count, 1);
-        assert_eq!(summary.open_count, 1);
-        assert_eq!(summary.in_progress_count, 0);
+        assert_eq!(summary.direct_child_count, 3);
+        assert_eq!(summary.descendant_count, 3);
+        assert_eq!(summary.open_count, 2);
+        assert_eq!(summary.in_progress_count, 1);
         assert_eq!(summary.closed_count, 0);
         assert_eq!(summary.epic_count, 0);
-        assert_eq!(summary.status_counts.get("open"), Some(&1));
+        assert_eq!(summary.status_counts.get("open"), Some(&2));
+        assert_eq!(summary.status_counts.get("in_progress"), Some(&1));
         assert_eq!(summary.percent_closed, 0.0);
 
         let b_summary = store
@@ -1018,7 +1029,7 @@ hierarchy: framework,contracts
             .any(|dependency| dependency.edge_type == "blocks"
                 && dependency.depends_on_id == "dep-task"));
 
-        let detached = store
+        let clear_parent_error = store
             .update_task(UpdateTaskRequest {
                 task_id: "child-task",
                 title: None,
@@ -1037,13 +1048,19 @@ hierarchy: framework,contracts
                 planner_metadata: None,
             })
             .await
-            .expect("clear parent");
+            .expect_err("open parent-required task cannot clear parent");
 
-        assert!(detached
-            .dependencies
-            .iter()
-            .all(|dependency| dependency.edge_type != "parent-child"));
-        assert!(detached
+        assert!(clear_parent_error
+            .to_string()
+            .contains("missing_required_parent_edge on child-task"));
+        let unchanged = store
+            .show_task("child-task")
+            .await
+            .expect("child task should remain after rejected parent clear");
+        assert!(unchanged.dependencies.iter().any(|dependency| {
+            dependency.edge_type == "parent-child" && dependency.depends_on_id == "root-b"
+        }));
+        assert!(unchanged
             .dependencies
             .iter()
             .any(|dependency| dependency.edge_type == "blocks"
@@ -5880,8 +5897,8 @@ hierarchy: framework,contracts
         fs::write(
             &source,
             concat!(
-                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
-                "{\"id\":\"vida-keep\",\"title\":\"Keep old\",\"description\":\"keep\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-stale\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+                "{\"id\":\"vida-keep\",\"title\":\"Keep old\",\"description\":\"keep\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
             ),
         )
         .expect("write initial jsonl");
@@ -6211,7 +6228,7 @@ hierarchy: framework,contracts
             &source,
             concat!(
                 "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
-                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-stale\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
             ),
         )
         .expect("write initial jsonl");
@@ -6359,7 +6376,7 @@ hierarchy: framework,contracts
             &source,
             concat!(
                 "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
-                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-stale\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
             ),
         )
         .expect("write initial jsonl");
@@ -6533,8 +6550,8 @@ hierarchy: framework,contracts
         fs::write(
             &source,
             concat!(
-                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
-                "{\"id\":\"vida-keep\",\"title\":\"Keep old\",\"description\":\"keep\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-stale\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+                "{\"id\":\"vida-keep\",\"title\":\"Keep old\",\"description\":\"keep\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
             ),
         )
         .expect("write initial jsonl");
@@ -6673,7 +6690,7 @@ hierarchy: framework,contracts
             concat!(
                 "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
                 "{\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:01Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-a\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
-                "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"bug\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:02Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-a\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+                "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"bug\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:02Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"},{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-a\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
             ),
         )
         .expect("write task jsonl");

@@ -5,5 +5,12 @@
     "depends_on_id": "vida-missing",
     "edge_type": "blocks",
     "detail": "dependency target is missing from the authoritative runtime store"
+  },
+  {
+    "issue_type": "missing_required_parent_edge",
+    "issue_id": "vida-broken",
+    "depends_on_id": null,
+    "edge_type": "parent-child",
+    "detail": "non-closed work item kind `task` requires one parent-child edge"
   }
 ]
