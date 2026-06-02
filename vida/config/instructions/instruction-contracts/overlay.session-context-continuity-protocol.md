@@ -81,6 +81,14 @@ Clarification rule:
 2. it must not silently weaken an explicit current-user constraint unless that constraint conflicts with safety, canonical protocol law, or validated impossibility,
 3. any such override must be recorded explicitly with its resolution basis.
 
+Runtime continuation source-of-truth rule:
+
+1. When runtime surfaces disagree, the authoritative active bounded unit must be resolved from validated live evidence in this order: explicit continuation binding for the current session, latest run graph status, recovery latest for the same run, doctor/runtime diagnostic projection, and only then backlog ready queue.
+2. A backlog ready queue or ready head is a candidate list, not active-run authority, while an explicit continuation binding, latest run graph status, or recovery latest remains unresolved.
+3. If a closed backlog task still appears as active latest run graph status, recovery latest, doctor cache, or any terminal-task active-run diagnostic, the continuity status must fail closed as a projection mismatch rather than selecting a ready queue fallback.
+4. Doctor cache may accelerate diagnostics only when its invalidation tuple proves freshness; stale, missing, or contradictory doctor cache evidence must yield a diagnostic blocker and must not override latest run graph or recovery latest.
+5. `graph-summary`, `task next-lawful`, `recovery latest`, `doctor`, and orchestrator init surfaces must either expose the same active run/task or report an actionable blocker naming the inconsistent source.
+
 Compact-triggered rule:
 
 1. keep the packet compact by default,
