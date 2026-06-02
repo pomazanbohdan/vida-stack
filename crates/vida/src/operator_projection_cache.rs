@@ -291,6 +291,24 @@ pub(crate) fn write_runtime_continuation_binding_overlay(
 pub(crate) fn read_runtime_continuation_binding_overlay(
     state_dir: &Path,
 ) -> Option<serde_json::Value> {
+    read_runtime_continuation_binding_overlay_after(state_dir, None)
+}
+
+pub(crate) fn read_runtime_continuation_binding_overlay_newer_than_projection(
+    state_dir: &Path,
+    projection_name: &str,
+) -> Option<serde_json::Value> {
+    let projection_modified = std::fs::metadata(projection_path(state_dir, projection_name))
+        .ok()?
+        .modified()
+        .ok()?;
+    read_runtime_continuation_binding_overlay_after(state_dir, Some(projection_modified))
+}
+
+fn read_runtime_continuation_binding_overlay_after(
+    state_dir: &Path,
+    minimum_modified: Option<SystemTime>,
+) -> Option<serde_json::Value> {
     let path = projection_path(
         state_dir,
         RUNTIME_CONTINUATION_BINDING_OVERLAY_PROJECTION_NAME,
@@ -299,9 +317,18 @@ pub(crate) fn read_runtime_continuation_binding_overlay(
         return None;
     }
     let overlay_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    if latest_state_mutation_marker(state_dir)
+        .ok()
+        .is_some_and(|modified| overlay_modified <= modified)
+    {
+        return None;
+    }
     if current_operator_dependency_mutation_marker(state_dir)
         .is_some_and(|modified| overlay_modified <= modified)
     {
+        return None;
+    }
+    if minimum_modified.is_some_and(|modified| overlay_modified <= modified) {
         return None;
     }
     let payload = serde_json::from_str::<serde_json::Value>(
@@ -659,10 +686,12 @@ mod tests {
         read_fresh_json_projection_with_dependency_marker,
         read_launcher_stale_state_fresh_recent_json_projection, read_recent_json_projection,
         read_recent_json_projection_with_dependency_marker,
-        read_runtime_continuation_binding_overlay, read_state_fresh_json_projection,
-        read_state_fresh_json_projection_for_read_only_operator, read_state_recent_json_projection,
-        read_state_stale_recent_json_projection, touch_state_mutation_marker,
-        write_json_projection, write_runtime_continuation_binding_overlay,
+        read_runtime_continuation_binding_overlay,
+        read_runtime_continuation_binding_overlay_newer_than_projection,
+        read_state_fresh_json_projection, read_state_fresh_json_projection_for_read_only_operator,
+        read_state_recent_json_projection, read_state_stale_recent_json_projection,
+        touch_state_mutation_marker, write_json_projection,
+        write_runtime_continuation_binding_overlay,
     };
     use std::{fs, time::Duration};
 
@@ -993,6 +1022,123 @@ mod tests {
     }
 
     #[test]
+    fn runtime_continuation_overlay_rejects_state_mutation_newer_than_overlay() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-runtime-continuation-overlay-state-marker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let marker =
+            crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                &root,
+            );
+        fs::write(&marker, "task-marker-1").expect("task marker should write");
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "run-overlay".to_string(),
+            task_id: "task-overlay".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "run_id": "run-overlay",
+                "task_id": "task-overlay",
+                "task_status": "open"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "test overlay".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("task-overlay".to_string()),
+            recorded_at: "2026-05-25T00:00:00Z".to_string(),
+        };
+
+        std::thread::sleep(Duration::from_millis(10));
+        write_runtime_continuation_binding_overlay(&root, &binding);
+        assert!(
+            read_runtime_continuation_binding_overlay(&root).is_some(),
+            "fresh overlay should be admitted before later state mutation"
+        );
+
+        std::thread::sleep(Duration::from_millis(10));
+        touch_state_mutation_marker(&root);
+        assert!(
+            read_runtime_continuation_binding_overlay(&root).is_none(),
+            "state mutation newer than the overlay must fail closed"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_continuation_overlay_for_fresh_projection_requires_newer_overlay() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-runtime-continuation-overlay-projection-marker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let marker =
+            crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                &root,
+            );
+        fs::write(&marker, "task-marker-1").expect("task marker should write");
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "run-overlay".to_string(),
+            task_id: "task-overlay".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "run_id": "run-overlay",
+                "task_id": "task-overlay",
+                "task_status": "open"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "test overlay".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("task-overlay".to_string()),
+            recorded_at: "2026-05-25T00:00:00Z".to_string(),
+        };
+
+        std::thread::sleep(Duration::from_millis(10));
+        write_runtime_continuation_binding_overlay(&root, &binding);
+        std::thread::sleep(Duration::from_millis(10));
+        write_json_projection(
+            &root,
+            "orchestrator-init-summary-latest",
+            &serde_json::json!({
+                "surface": "vida orchestrator-init",
+                "status": "ready_enough_for_normal_work"
+            }),
+        );
+        assert!(
+            read_runtime_continuation_binding_overlay_newer_than_projection(
+                &root,
+                "orchestrator-init-summary-latest"
+            )
+            .is_none(),
+            "fresh projection newer than the overlay must not be overwritten"
+        );
+
+        std::thread::sleep(Duration::from_millis(10));
+        write_runtime_continuation_binding_overlay(&root, &binding);
+        assert!(
+            read_runtime_continuation_binding_overlay_newer_than_projection(
+                &root,
+                "orchestrator-init-summary-latest"
+            )
+            .is_some(),
+            "overlay newer than the fresh projection may be applied"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn runtime_continuation_overlay_validates_task_snapshot_marker() {
         let root = std::env::temp_dir().join(format!(
             "vida-runtime-continuation-overlay-{}-{}",
@@ -1008,6 +1154,7 @@ mod tests {
                 &root,
             );
         fs::write(&marker, "task-marker-1").expect("task marker should write");
+        std::thread::sleep(Duration::from_millis(10));
         let binding = crate::state_store::RunGraphContinuationBinding {
             run_id: "run-overlay".to_string(),
             task_id: "task-overlay".to_string(),
