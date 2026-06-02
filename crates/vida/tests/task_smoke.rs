@@ -5366,6 +5366,63 @@ fn task_reconcile_closed_runs_retires_historical_closed_task_active_batch() {
         for task_id in [
             "task-reconcile-closed-runs-a",
             "task-reconcile-closed-runs-b",
+        ] {
+            let mut run_query = db
+                .query("SELECT VALUE run_id FROM execution_plan_state WHERE task_id = $task LIMIT 1")
+                .bind(("task", task_id))
+                .await
+                .expect("query task run id");
+            let mut run_ids: Vec<String> = run_query.take(0).expect("decode task run id");
+            let run_id = run_ids.pop().expect("task run graph should exist");
+            let result_path = format!(
+                "{state_dir}/runtime-consumption/dispatch-results/{run_id}.json"
+            );
+            fs::create_dir_all(
+                std::path::Path::new(&result_path)
+                    .parent()
+                    .expect("dispatch result parent"),
+            )
+            .expect("create dispatch result dir");
+            fs::write(
+                &result_path,
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "artifact_kind": "runtime_lane_completion_result",
+                    "status": "pass",
+                    "execution_evidence": {
+                        "status": "recorded",
+                        "evidence_kind": "test_receipt_backed_execution"
+                    }
+                }))
+                .expect("encode dispatch result"),
+            )
+            .expect("write dispatch result");
+            let receipt = serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": "implementation",
+                "dispatch_status": "executed",
+                "lane_status": "completed",
+                "dispatch_kind": "agent_lane",
+                "dispatch_surface": "vida agent-init",
+                "dispatch_command": "vida agent-init --execute-dispatch",
+                "dispatch_packet_path": format!("{state_dir}/runtime-consumption/dispatch-packets/{run_id}.json"),
+                "dispatch_result_path": result_path,
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": [],
+                "downstream_dispatch_executed_count": 0,
+                "activation_agent_type": "worker",
+                "activation_runtime_role": "worker",
+                "selected_backend": "test",
+                "recorded_at": "2026-05-19T00:00:00Z"
+            });
+            db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+                .bind(("run", run_id))
+                .bind(("receipt", receipt))
+                .await
+                .expect("seed receipt-backed execution truth");
+        }
+        for task_id in [
+            "task-reconcile-closed-runs-a",
+            "task-reconcile-closed-runs-b",
             parent_id,
         ] {
             db.query("UPDATE type::record('task', $task) SET status = 'closed'")
@@ -5394,6 +5451,88 @@ fn task_reconcile_closed_runs_retires_historical_closed_task_active_batch() {
         "closed-task active run batch should be retired after one reconcile command: {after}"
     );
     assert!(after["latest_terminal_task_active_run_graph_status"].is_null());
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "task-reconcile-unproven-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Task reconcile unproven parent",
+        "open",
+    );
+    let task_id = "task-reconcile-unproven-active";
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Task reconcile unproven active run",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        for task_id in [task_id, parent_id] {
+            db.query("UPDATE type::record('task', $task) SET status = 'closed'")
+                .bind(("task", task_id))
+                .await
+                .expect("close canonical task without mutating run graph");
+        }
+        drop(db);
+    });
+
+    let before = run_command_json(&["doctor", "--json"], &state_dir);
+    let before_blockers = require_json_string_array(&before["blocker_codes"], "before blockers");
+    assert!(before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
+
+    let reconcile = run_command_json(
+        &["task", "reconcile-closed-runs", "--limit", "25", "--json"],
+        &state_dir,
+    );
+    assert_eq!(reconcile["status"], "pass");
+    assert_eq!(reconcile["summary"]["reconciled_count"], 0);
+    assert_eq!(reconcile["summary"]["skipped_count"], 1);
+
+    let after = run_command_json(&["doctor", "--json"], &state_dir);
+    let after_blockers = require_json_string_array(&after["blocker_codes"], "after blockers");
+    assert!(
+        after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "unproven closed-task active run should remain blocked after reconcile: {after}"
+    );
+    assert!(
+        !after["latest_terminal_task_active_run_graph_status"].is_null(),
+        "unproven active run graph should not be cleared by reconcile: {after}"
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }

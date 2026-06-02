@@ -580,7 +580,7 @@ impl StateStore {
             Err(StateStoreError::MissingTask { .. }) => return Ok(false),
             Err(error) => return Err(error),
         };
-        if task.status != "closed" {
+        if !Self::task_status_is_closed_like(&task.status) {
             return Ok(false);
         }
 
@@ -918,6 +918,13 @@ impl StateStore {
                 Err(error) => return Err(error),
             };
             if !Self::task_status_is_closed_like(&task.status) {
+                skipped_count += 1;
+                continue;
+            }
+            if !self
+                .task_close_reconcile_has_persisted_receipt_truth(&row.run_id, &row.task_id)
+                .await?
+            {
                 skipped_count += 1;
                 continue;
             }
