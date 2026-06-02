@@ -393,9 +393,17 @@ async fn render_latest_recovery_json_payload(surface: &'static str) -> ExitCode 
                     },
                     None => None,
                 };
+                let owned_write_scope_hint = match summary.as_ref() {
+                    Some(summary) => recovery_owned_write_scope_for_summary(&store, summary).await,
+                    None => Vec::new(),
+                };
                 let contract = summary.as_ref().zip(projection_truth.as_ref()).map(
                     |(summary, projection_truth)| {
-                        recovery_surface_contract(summary, projection_truth)
+                        recovery_surface_contract_with_owned_scope(
+                            summary,
+                            projection_truth,
+                            &owned_write_scope_hint,
+                        )
                     },
                 );
                 let payload = match (summary.as_ref(), projection_truth.as_ref(), contract) {
@@ -1002,9 +1010,142 @@ fn recovery_next_action_reason(
     }
 }
 
+async fn recovery_owned_write_scope_for_summary(
+    store: &StateStore,
+    summary: &crate::state_store::RunGraphRecoverySummary,
+) -> Vec<String> {
+    match store.show_task(&summary.task_id).await {
+        Ok(task) => task
+            .planner_metadata
+            .owned_paths
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn recovery_exception_takeover_next_action(
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+    owned_write_scope_hint: &[String],
+) -> Option<RecoveryNextAction> {
+    if !summary.delegation_gate.delegated_cycle_open {
+        return None;
+    }
+    if recovery_projection_resolves_persisted_open_cycle(summary, projection_truth)
+        || recovery_ready_handoff_resolves_open_cycle(summary)
+    {
+        return None;
+    }
+    let receipt = projection_truth.dispatch_receipt.as_ref();
+    if receipt.is_some_and(|receipt| {
+        receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    }) {
+        return None;
+    }
+
+    let task_id = summary.task_id.trim();
+    let task_id = if task_id.is_empty() {
+        summary.run_id.trim()
+    } else {
+        task_id
+    };
+    if owned_write_scope_hint
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .all(str::is_empty)
+    {
+        return None;
+    }
+
+    let reason_class = receipt
+        .and_then(|receipt| receipt.blocker_code.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            receipt.and_then(|receipt| {
+                receipt
+                    .downstream_dispatch_blockers
+                    .iter()
+                    .map(String::as_str)
+                    .map(str::trim)
+                    .find(|value| !value.is_empty())
+            })
+        })
+        .or_else(|| summary.delegation_gate.blocker_code.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("blocked_open_delegated_cycle");
+    let active_node = summary.active_node.trim();
+    let active_node = if active_node.is_empty() {
+        "delegated-lane"
+    } else {
+        active_node
+    };
+    let active_bounded_unit = format!("{task_id}:{active_node}:exception-takeover");
+    let owned_write_scope_args = owned_write_scope_hint
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("--owned-write-scope {}", shell_quote(value)))
+        .collect::<Vec<_>>();
+    let receipt_id = format!("{}-exception-takeover", summary.run_id.trim());
+    let why_delegated_not_lawful = format!(
+        "delegated lane is blocked for run {} by {}",
+        summary.run_id.trim(),
+        reason_class
+    );
+    let why_local_safe = format!(
+        "bounded exception recovery is limited to the active {} unit and declared owned write scope",
+        active_node
+    );
+    let verification_step = format!(
+        "run focused proof for {} before local write closure",
+        active_bounded_unit
+    );
+    let command = format!(
+        "vida lane exception-takeover {} --receipt-id {} --reason-class {} --active-bounded-unit {} {} --why-delegated-path-not-lawful {} --why-local-write-safe {} --return-to-normal-when {} --verification-step {} --json",
+        shell_quote(summary.run_id.trim()),
+        shell_quote(&receipt_id),
+        shell_quote(reason_class),
+        shell_quote(&active_bounded_unit),
+        owned_write_scope_args.join(" "),
+        shell_quote(&why_delegated_not_lawful),
+        shell_quote(&why_local_safe),
+        shell_quote("after focused proof, release install, task closure, and lane completion"),
+        shell_quote(&verification_step),
+    );
+    Some(RecoveryNextAction {
+        surface: recommended_surface_for_command(&command),
+        command,
+        reason: "record bounded exception-path evidence for the dispatch blocker before local recovery work".to_string(),
+    })
+}
+
 fn recovery_surface_contract(
     summary: &crate::state_store::RunGraphRecoverySummary,
     projection_truth: &RunGraphProjectionTruth,
+) -> (
+    Vec<String>,
+    Option<RecoveryWhyNotNow>,
+    Option<RecoveryNextAction>,
+    Option<String>,
+    Option<String>,
+) {
+    recovery_surface_contract_with_owned_scope(summary, projection_truth, &[])
+}
+
+fn recovery_surface_contract_with_owned_scope(
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+    owned_write_scope_hint: &[String],
 ) -> (
     Vec<String>,
     Option<RecoveryWhyNotNow>,
@@ -1043,6 +1184,9 @@ fn recovery_surface_contract(
             surface: recommended_surface_for_command(command),
             reason: recovery_next_action_reason(command, summary, projection_truth),
         });
+    let next_action =
+        recovery_exception_takeover_next_action(summary, projection_truth, owned_write_scope_hint)
+            .or(next_action);
     let why_not_now = (!blocker_codes.is_empty()).then(|| {
         let delegated_cycle_open = summary.delegation_gate.delegated_cycle_open;
         let stale_state_suspected = projection_truth.stale_state_suspected;
@@ -2340,7 +2484,11 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                             next_action,
                             recommended_command,
                             recommended_surface,
-                        ) = recovery_surface_contract(&summary, &projection_truth);
+                        ) = recovery_surface_contract_with_owned_scope(
+                            &summary,
+                            &projection_truth,
+                            &recovery_owned_write_scope_for_summary(&store, &summary).await,
+                        );
                         print_surface_header(RenderMode::Plain, "vida taskflow recovery latest");
                         print_surface_line(RenderMode::Plain, "run", &summary.run_id);
                         print_surface_line(RenderMode::Plain, "recovery", &summary.as_display());
@@ -2428,7 +2576,11 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                             next_action,
                             recommended_command,
                             recommended_surface,
-                        ) = recovery_surface_contract(&summary, &projection_truth);
+                        ) = recovery_surface_contract_with_owned_scope(
+                            &summary,
+                            &projection_truth,
+                            &recovery_owned_write_scope_for_summary(&store, &summary).await,
+                        );
                         print_surface_header(RenderMode::Plain, "vida taskflow recovery status");
                         print_surface_line(RenderMode::Plain, "run", &summary.run_id);
                         print_surface_line(RenderMode::Plain, "recovery", &summary.as_display());
@@ -2510,7 +2662,11 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                             next_action,
                             recommended_command,
                             recommended_surface,
-                        ) = recovery_surface_contract(&summary, &projection_truth);
+                        ) = recovery_surface_contract_with_owned_scope(
+                            &summary,
+                            &projection_truth,
+                            &recovery_owned_write_scope_for_summary(&store, &summary).await,
+                        );
                         match build_recovery_json_payload(
                             "vida taskflow recovery status",
                             &summary,
@@ -13027,6 +13183,78 @@ mod tests {
             Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json")
         );
         assert_eq!(recommended_surface.as_deref(), Some("vida agent-init"));
+    }
+
+    #[test]
+    fn recovery_surface_contract_open_cycle_emits_exception_takeover_when_owned_scope_known() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-open-cycle".to_string(),
+            task_id: "task-open-cycle".to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "coach_blocked".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            recovery_ready: false,
+            handoff_state: "blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                lifecycle_stage: "coach_blocked".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "blocking".to_string(),
+                continuation_signal: "record_exception_takeover".to_string(),
+            },
+        };
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-open-cycle");
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("timeout_without_takeover_authority".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_blockers =
+            vec!["timeout_without_takeover_authority".to_string()];
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason: "run-graph status reflects persisted dispatch blocker evidence"
+                .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "aligned".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some("vida lane show run-open-cycle --json".to_string()),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let (_codes, _why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract_with_owned_scope(
+                &summary,
+                &projection_truth,
+                &[
+                    "crates/vida/src/agent_dispatch_surface.rs".to_string(),
+                    "vida.config.yaml".to_string(),
+                ],
+            );
+        let command = recommended_command.expect("recovery should recommend takeover command");
+
+        assert_eq!(
+            next_action.as_ref().map(|action| action.command.as_str()),
+            Some(command.as_str())
+        );
+        assert!(command.starts_with("vida lane exception-takeover run-open-cycle"));
+        assert!(command.contains("--reason-class timeout_without_takeover_authority"));
+        assert!(command.contains("--active-bounded-unit task-open-cycle:coach:exception-takeover"));
+        assert!(command.contains("--owned-write-scope crates/vida/src/agent_dispatch_surface.rs"));
+        assert!(command.contains("--owned-write-scope vida.config.yaml"));
+        assert_eq!(
+            recommended_surface.as_deref(),
+            Some("vida lane exception-takeover")
+        );
     }
 
     #[test]
