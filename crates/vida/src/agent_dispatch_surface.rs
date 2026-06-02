@@ -1891,16 +1891,20 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 preview
             } else {
                 let requested_parallel_limit = u64::try_from(command.lanes).ok();
-                let plan =
-                    match crate::taskflow_proxy::build_taskflow_scheduler_dispatch_plan_from_store(
-                        &store,
-                        &state_dir,
-                        command.scope.as_deref(),
-                        effective_current_task_id,
-                        requested_parallel_limit,
-                        true,
-                        false,
-                    )
+                let explicit_current_task_id = command
+                    .current_task_id
+                    .as_deref()
+                    .or(explicit_bound_current_task_id.as_deref());
+                let plan = match crate::taskflow_proxy::build_taskflow_scheduler_dispatch_plan_from_store_with_inferred_current_task(
+                    &store,
+                    &state_dir,
+                    command.scope.as_deref(),
+                    explicit_current_task_id,
+                    taskflow_single_in_progress_task_id.as_deref(),
+                    requested_parallel_limit,
+                    true,
+                    false,
+                )
                     .await
                     {
                         Ok(plan) => plan,

@@ -2165,6 +2165,32 @@ fn build_taskflow_scheduler_dispatch_plan(
     dry_run: bool,
     execute_requested: bool,
 ) -> TaskflowSchedulerDispatchPlan {
+    build_taskflow_scheduler_dispatch_plan_with_inferred_current_task(
+        scheduling,
+        max_parallel_agents,
+        requested_parallel_limit,
+        scope_task_id,
+        requested_current_task_id,
+        explicit_bound_current_task_id,
+        None,
+        state_dir,
+        dry_run,
+        execute_requested,
+    )
+}
+
+fn build_taskflow_scheduler_dispatch_plan_with_inferred_current_task(
+    scheduling: crate::state_store::TaskSchedulingProjection,
+    max_parallel_agents: u64,
+    requested_parallel_limit: Option<u64>,
+    scope_task_id: Option<&str>,
+    requested_current_task_id: Option<&str>,
+    explicit_bound_current_task_id: Option<&str>,
+    inferred_current_task_id: Option<&str>,
+    state_dir: &std::path::Path,
+    dry_run: bool,
+    execute_requested: bool,
+) -> TaskflowSchedulerDispatchPlan {
     let configured_max_parallel_agents = max_parallel_agents.max(1);
     let effective_parallel_limit = scheduler_effective_parallel_limit(
         configured_max_parallel_agents,
@@ -2176,6 +2202,11 @@ fn build_taskflow_scheduler_dispatch_plan(
             .iter()
             .find(|candidate| candidate.task.id == task_id)
     } else if let Some(task_id) = explicit_bound_current_task_id {
+        scheduling
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == task_id)
+    } else if let Some(task_id) = inferred_current_task_id {
         scheduling
             .ready
             .iter()
@@ -2200,6 +2231,12 @@ fn build_taskflow_scheduler_dispatch_plan(
             "explicit_run_graph_continuation_binding"
         } else {
             "explicit_run_graph_continuation_binding_not_ready"
+        }
+    } else if inferred_current_task_id.is_some() {
+        if selected_current_task_id.is_some() {
+            "single_in_progress_taskflow_snapshot"
+        } else {
+            "single_in_progress_taskflow_snapshot_not_ready"
         }
     } else if selected_current_candidate.is_some_and(|candidate| candidate.active_critical_path) {
         "critical_path_ready_head"
@@ -2311,6 +2348,8 @@ fn build_taskflow_scheduler_dispatch_plan(
             blocker_codes.push("requested_current_task_not_ready".to_string());
         } else if explicit_bound_current_task_id.is_some() {
             blocker_codes.push("explicit_run_graph_continuation_binding_not_ready".to_string());
+        } else if inferred_current_task_id.is_some() {
+            blocker_codes.push("single_in_progress_taskflow_snapshot_not_ready".to_string());
         }
         next_actions.push(
             "Inspect `vida taskflow graph-summary --json` before attempting scheduler dispatch."
@@ -2505,6 +2544,29 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
     dry_run: bool,
     execute_requested: bool,
 ) -> Result<TaskflowSchedulerDispatchPlan, String> {
+    build_taskflow_scheduler_dispatch_plan_from_store_with_inferred_current_task(
+        store,
+        state_dir,
+        scope_task_id,
+        current_task_id,
+        None,
+        requested_parallel_limit,
+        dry_run,
+        execute_requested,
+    )
+    .await
+}
+
+pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store_with_inferred_current_task(
+    store: &crate::state_store::StateStore,
+    state_dir: &Path,
+    scope_task_id: Option<&str>,
+    current_task_id: Option<&str>,
+    inferred_current_task_id: Option<&str>,
+    requested_parallel_limit: Option<u64>,
+    dry_run: bool,
+    execute_requested: bool,
+) -> Result<TaskflowSchedulerDispatchPlan, String> {
     let max_parallel_agents = crate::build_taskflow_consume_bundle_payload(store)
         .await
         .map(|payload| normalize_scheduler_max_parallel_agents(&payload.activation_bundle))
@@ -2528,7 +2590,9 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
     let explicit_bound_current_task_id = explicit_task_graph_continuation_task_id(
         explicit_binding.as_ref().and_then(|value| value.as_ref()),
     );
-    let effective_current_task_id = current_task_id.or(explicit_bound_current_task_id);
+    let effective_current_task_id = current_task_id
+        .or(explicit_bound_current_task_id)
+        .or(inferred_current_task_id);
 
     let initial_projection = store
         .scheduling_projection_scoped(scope_task_id, effective_current_task_id)
@@ -2562,13 +2626,14 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
         initial_projection
     };
 
-    let mut plan = build_taskflow_scheduler_dispatch_plan(
+    let mut plan = build_taskflow_scheduler_dispatch_plan_with_inferred_current_task(
         scheduling,
         max_parallel_agents,
         requested_parallel_limit,
         scope_task_id,
         current_task_id,
         explicit_bound_current_task_id,
+        inferred_current_task_id,
         state_dir,
         dry_run,
         execute_requested,
@@ -7908,6 +7973,48 @@ mod tests {
             .blocker_codes
             .iter()
             .any(|code| code == "open_delegated_cycle"));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_tracks_inferred_current_task_separately_from_explicit_request() {
+        let inferred = task("single-active", "task", "open", 1, &[], Vec::new());
+        let fallback = task("ready-fallback", "task", "open", 2, &[], Vec::new());
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("single-active".to_string()),
+            ready: vec![
+                scheduling_candidate(inferred, true, false, false, Vec::new(), vec![]),
+                scheduling_candidate(fallback, true, false, true, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+        let plan = super::build_taskflow_scheduler_dispatch_plan_with_inferred_current_task(
+            projection,
+            1,
+            None,
+            None,
+            None,
+            None,
+            Some("single-active"),
+            state_dir,
+            true,
+            false,
+        );
+
+        assert_eq!(plan.status, "pass");
+        assert_eq!(plan.requested_current_task_id, None);
+        assert_eq!(
+            plan.selection_source,
+            "single_in_progress_taskflow_snapshot"
+        );
+        assert_eq!(
+            plan.selected_primary_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("single-active")
+        );
     }
 
     #[test]
