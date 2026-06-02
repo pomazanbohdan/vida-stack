@@ -120,6 +120,21 @@ pub(crate) fn read_state_stale_recent_json_projection(
     read_recent_json_projection_allowing_state_marker(state_dir, projection_name, max_age, None)
 }
 
+pub(crate) fn read_task_snapshot_stale_recent_json_projection_for_live_overlay(
+    state_dir: &Path,
+    projection_name: &str,
+    max_age: Duration,
+) -> Option<String> {
+    read_recent_json_projection_allowing_state_and_task_snapshot_markers(
+        state_dir,
+        projection_name,
+        max_age,
+        None,
+        "task_snapshot_stale_recent_projection_for_live_overlay",
+        "cached_structural_projection_requires_live_task_and_runtime_overlay_before_operator_use",
+    )
+}
+
 pub(crate) fn read_recent_json_projection_with_dependency_marker(
     state_dir: &Path,
     projection_name: &str,
@@ -226,6 +241,38 @@ fn read_recent_json_projection_allowing_state_marker(
         } else {
             "recent_bounded_stale_ok_for_read_only_operator_query"
         },
+    )
+    .or(Some(body))
+}
+
+fn read_recent_json_projection_allowing_state_and_task_snapshot_markers(
+    state_dir: &Path,
+    projection_name: &str,
+    max_age: Duration,
+    dependency_modified: Option<SystemTime>,
+    status: &str,
+    freshness_contract: &str,
+) -> Option<String> {
+    let path = projection_path(state_dir, projection_name);
+    if path_is_symlink(&path) {
+        return None;
+    }
+    let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    if dependency_modified.is_some_and(|modified| cache_modified < modified) {
+        return None;
+    }
+    let cache_age = SystemTime::now().duration_since(cache_modified).ok()?;
+    if cache_age > max_age {
+        return None;
+    }
+    let body = read_json_without_following_symlinks(&path).ok()?;
+    annotate_recent_projection_with_status(
+        &body,
+        projection_name,
+        cache_age,
+        max_age,
+        status,
+        freshness_contract,
     )
     .or(Some(body))
 }
@@ -690,6 +737,7 @@ mod tests {
         read_runtime_continuation_binding_overlay_newer_than_projection,
         read_state_fresh_json_projection, read_state_fresh_json_projection_for_read_only_operator,
         read_state_recent_json_projection, read_state_stale_recent_json_projection,
+        read_task_snapshot_stale_recent_json_projection_for_live_overlay,
         touch_state_mutation_marker, write_json_projection,
         write_runtime_continuation_binding_overlay,
     };
@@ -1214,6 +1262,59 @@ mod tests {
         assert!(
             read_fresh_json_projection(&root, "agent-dispatch-next-latest").is_none(),
             "task snapshot marker drift must invalidate structural operator projections"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn task_snapshot_stale_projection_is_available_only_for_live_overlay() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-task-snapshot-overlay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let marker =
+            crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                &root,
+            );
+        fs::write(&marker, "task-marker-1").expect("task marker should write");
+        std::thread::sleep(Duration::from_millis(10));
+        let payload = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "cached": true
+        });
+        write_json_projection(&root, "status-full-latest", &payload);
+        fs::write(&marker, "task-marker-2").expect("task marker should update");
+
+        assert!(
+            read_state_stale_recent_json_projection(
+                &root,
+                "status-full-latest",
+                Duration::from_secs(300)
+            )
+            .is_none(),
+            "ordinary stale readers must still reject task snapshot drift"
+        );
+        let overlay = read_task_snapshot_stale_recent_json_projection_for_live_overlay(
+            &root,
+            "status-full-latest",
+            Duration::from_secs(300),
+        )
+        .expect("status live-overlay reader may inspect stale structural cache");
+        let overlay: serde_json::Value =
+            serde_json::from_str(&overlay).expect("projection should remain json");
+        assert_eq!(
+            overlay["projection_cache"]["status"],
+            "task_snapshot_stale_recent_projection_for_live_overlay"
+        );
+        assert_eq!(
+            overlay["projection_cache"]["freshness_contract"],
+            "cached_structural_projection_requires_live_task_and_runtime_overlay_before_operator_use"
         );
         let _ = fs::remove_dir_all(root);
     }
