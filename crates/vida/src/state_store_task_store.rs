@@ -584,8 +584,53 @@ impl StateStore {
             return Ok(false);
         }
 
+        if !self
+            .raw_run_graph_state_allows_task_close_closure_binding(run_id)
+            .await?
+        {
+            return Ok(false);
+        }
+
         self.run_graph_dispatch_has_receipt_backed_execution_truth(run_id)
             .await
+    }
+
+    async fn raw_run_graph_state_allows_task_close_closure_binding(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let Some(plan): Option<ExecutionPlanStateRow> =
+            self.db.select(("execution_plan_state", run_id)).await?
+        else {
+            return Ok(false);
+        };
+        let Some(route): Option<RoutedRunStateRow> =
+            self.db.select(("routed_run_state", run_id)).await?
+        else {
+            return Ok(false);
+        };
+        let Some(governance): Option<GovernanceStateRow> =
+            self.db.select(("governance_state", run_id)).await?
+        else {
+            return Ok(false);
+        };
+        let Some(resume): Option<ResumabilityCapsuleRow> =
+            self.db.select(("resumability_capsule", run_id)).await?
+        else {
+            return Ok(false);
+        };
+
+        Ok(matches!(plan.status.as_str(), "completed")
+            && plan.next_node.is_none()
+            && !matches!(
+                route.lifecycle_stage.as_str(),
+                "analysis_blocked"
+                    | "implementation_blocked"
+                    | "verification_blocked"
+                    | "closure_blocked"
+            )
+            && governance.handoff_state == "none"
+            && resume.resume_target == "none")
     }
 
     async fn run_graph_dispatch_has_receipt_backed_execution_truth(
