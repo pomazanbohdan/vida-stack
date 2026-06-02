@@ -48,6 +48,12 @@ bash beads-workflow.sh reflect bd-34r5 \
 3. Every reflection must include one concrete `next_step`.
 4. Avoid generic text like "all good" without evidence.
 
+## Runtime Reflex Loop Records
+
+When protocol, document, or spec generation needs resumable reflection across compact or re-entry, record the active bounded loop as runtime reflex state with stages `PLAN`, `PRODUCE`, `EVALUATE`, `CRITIQUE`, and `REFINE`.
+
+Reflex loop records are diagnostic evidence only. They may cite TaskFlow and DocFlow evidence and help reconstruct the decision path after compact, but they must not grant write authority, close a task, replace verifier/prover evidence, or authorize bootstrap mutation.
+
 -----
 artifact_path: config/diagnostic-instructions/self-reflection.protocol
 artifact_type: diagnostic_instruction
@@ -57,5 +63,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/diagnostic-instructions/analysis.self-reflection-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T13:34:29+02:00'
+updated_at: 2026-06-02T08:05:00+03:00
 changelog_ref: analysis.self-reflection-protocol.changelog.jsonl

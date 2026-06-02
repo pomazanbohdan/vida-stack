@@ -209,10 +209,12 @@ pub(crate) use runtime_consumption_state::{
 };
 pub(crate) use runtime_consumption_state::{
     latest_final_runtime_consumption_snapshot_path,
-    latest_recorded_final_runtime_consumption_snapshot_path,
+    latest_recorded_final_runtime_consumption_snapshot_path, latest_runtime_reflex_loop_record,
     latest_terminal_consume_continue_snapshot_run_id,
     runtime_consumption_snapshot_has_release_admission_evidence, runtime_consumption_summary,
-    write_runtime_consumption_snapshot,
+    runtime_reflex_loop_record, runtime_reflex_loop_summary, write_runtime_consumption_snapshot,
+    RuntimeReflexLoopEvidenceRefs, RuntimeReflexLoopRecord, RuntimeReflexLoopStage,
+    RuntimeReflexLoopSummary,
 };
 pub(crate) use runtime_consumption_surface::{
     blocking_lane_selection, build_docflow_runtime_evidence, doctor_launcher_summary_for_root,

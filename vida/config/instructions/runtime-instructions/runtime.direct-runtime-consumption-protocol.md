@@ -63,6 +63,24 @@ The snapshot must carry:
 6. persisted dispatch receipt and root dispatch packet references,
 7. downstream dispatch packet references when continuation has been materialized.
 
+## Reflex Loop State Rule
+
+Protocol, document, and spec generation may record a bounded reflex loop state for the active work item. The canonical stages are:
+
+1. `PLAN`
+2. `PRODUCE`
+3. `EVALUATE`
+4. `CRITIQUE`
+5. `REFINE`
+
+Reflex loop state is persisted as append-only runtime evidence under:
+
+1. `.vida/state/runtime-reflex-loop/<bounded_unit_id>/*.json`
+
+Each record must carry one active bounded unit, optional artifact id, stage, goal, decision, TaskFlow evidence refs, DocFlow evidence refs, source surface, timestamp, and the safety flags `diagnostic_only=true`, `grants_write_authority=false`, and `not_closure_proof=true`.
+
+Reflex loop records may help `taskflow consume continue`, compact re-entry, DocFlow proof review, and operator diagnostics inspect what was planned, produced, evaluated, critiqued, or refined. They must not grant local write authority, mutate bootstrap state automatically, replace TaskFlow/DocFlow closure evidence, or bypass lane, receipt, verifier, prover, or human-approval gates.
+
 ## Boundary Rule
 
 This file owns:
@@ -70,7 +88,8 @@ This file owns:
 1. the final runtime-consumption loop,
 2. the requirement that `taskflow` explicitly activate the bounded `DocFlow` branch before closure trust,
 3. the runtime-owned persistence contract for final consumption snapshots,
-4. the canonical `final -> continue -> advance` runtime-consumption progression surface.
+4. the canonical `final -> continue -> advance` runtime-consumption progression surface,
+5. the append-only reflex loop state boundary for runtime-consumption evidence.
 
 This file does not own:
 
@@ -102,5 +121,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md
 created_at: '2026-03-10T16:00:00+02:00'
-updated_at: '2026-03-11T12:57:07+02:00'
+updated_at: 2026-06-02T08:05:00+03:00
 changelog_ref: runtime.direct-runtime-consumption-protocol.changelog.jsonl

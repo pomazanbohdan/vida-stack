@@ -44,6 +44,262 @@ impl RuntimeConsumptionSummary {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum RuntimeReflexLoopStage {
+    Plan,
+    Produce,
+    Evaluate,
+    Critique,
+    Refine,
+}
+
+impl RuntimeReflexLoopStage {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            RuntimeReflexLoopStage::Plan => "PLAN",
+            RuntimeReflexLoopStage::Produce => "PRODUCE",
+            RuntimeReflexLoopStage::Evaluate => "EVALUATE",
+            RuntimeReflexLoopStage::Critique => "CRITIQUE",
+            RuntimeReflexLoopStage::Refine => "REFINE",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct RuntimeReflexLoopEvidenceRefs {
+    pub(crate) taskflow: Vec<String>,
+    pub(crate) docflow: Vec<String>,
+    pub(crate) other: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct RuntimeReflexLoopRecord {
+    pub(crate) schema_version: u8,
+    pub(crate) loop_id: String,
+    pub(crate) bounded_unit_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) stage: RuntimeReflexLoopStage,
+    pub(crate) goal: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) decision: Option<String>,
+    pub(crate) evidence_refs: RuntimeReflexLoopEvidenceRefs,
+    pub(crate) source_surface: String,
+    pub(crate) created_at: String,
+    pub(crate) diagnostic_only: bool,
+    pub(crate) grants_write_authority: bool,
+    pub(crate) not_closure_proof: bool,
+}
+
+#[derive(Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeReflexLoopSummary {
+    pub(crate) bounded_unit_id: String,
+    pub(crate) total_records: usize,
+    pub(crate) latest_stage: Option<RuntimeReflexLoopStage>,
+    pub(crate) latest_record_path: Option<String>,
+}
+
+pub(crate) fn runtime_reflex_loop_record(
+    bounded_unit_id: &str,
+    artifact_id: Option<&str>,
+    stage: RuntimeReflexLoopStage,
+    goal: &str,
+    decision: Option<&str>,
+    evidence_refs: RuntimeReflexLoopEvidenceRefs,
+    source_surface: &str,
+) -> Result<RuntimeReflexLoopRecord, String> {
+    let bounded_unit_id = non_empty_reflex_loop_field("bounded_unit_id", bounded_unit_id)?;
+    let goal = non_empty_reflex_loop_field("goal", goal)?;
+    let source_surface = non_empty_reflex_loop_field("source_surface", source_surface)?;
+    let artifact_id = artifact_id
+        .map(|value| non_empty_reflex_loop_field("artifact_id", value))
+        .transpose()?;
+    let decision = decision
+        .map(|value| non_empty_reflex_loop_field("decision", value))
+        .transpose()?;
+    let created_at = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 timestamp should render");
+    let loop_id = match artifact_id.as_deref() {
+        Some(artifact_id) => format!("runtime-reflex-loop:{bounded_unit_id}:{artifact_id}"),
+        None => format!("runtime-reflex-loop:{bounded_unit_id}"),
+    };
+
+    Ok(RuntimeReflexLoopRecord {
+        schema_version: 1,
+        loop_id,
+        bounded_unit_id,
+        artifact_id,
+        stage,
+        goal,
+        decision,
+        evidence_refs,
+        source_surface,
+        created_at,
+        diagnostic_only: true,
+        grants_write_authority: false,
+        not_closure_proof: true,
+    })
+}
+
+pub(crate) fn append_runtime_reflex_loop_record(
+    state_root: &Path,
+    record: &RuntimeReflexLoopRecord,
+) -> Result<String, String> {
+    validate_runtime_reflex_loop_record(record)?;
+    let reflex_dir = runtime_reflex_loop_dir(state_root, &record.bounded_unit_id);
+    std::fs::create_dir_all(&reflex_dir)
+        .map_err(|error| format!("Failed to create runtime-reflex-loop directory: {error}"))?;
+    let ts = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let record_path = reflex_dir.join(format!("reflex-{ts}-{}.json", record.stage.as_str()));
+    let body = serde_json::to_string_pretty(record)
+        .map_err(|error| format!("Failed to encode runtime-reflex-loop record: {error}"))?;
+    std::fs::write(&record_path, body)
+        .map_err(|error| format!("Failed to write runtime-reflex-loop record: {error}"))?;
+    Ok(runtime_consumption_snapshot_path_string(&record_path))
+}
+
+pub(crate) fn latest_runtime_reflex_loop_record(
+    state_root: &Path,
+    bounded_unit_id: &str,
+) -> Result<Option<RuntimeReflexLoopRecord>, String> {
+    let bounded_unit_id = non_empty_reflex_loop_field("bounded_unit_id", bounded_unit_id)?;
+    for entry in runtime_reflex_loop_entries_newest_first(state_root, &bounded_unit_id)? {
+        let payload = match std::fs::read_to_string(&entry.path) {
+            Ok(payload) => payload,
+            Err(_) => continue,
+        };
+        let record = match serde_json::from_str::<RuntimeReflexLoopRecord>(&payload) {
+            Ok(record) => record,
+            Err(_) => continue,
+        };
+        if record.bounded_unit_id != bounded_unit_id {
+            continue;
+        }
+        if validate_runtime_reflex_loop_record(&record).is_err() {
+            continue;
+        }
+        return Ok(Some(record));
+    }
+
+    Ok(None)
+}
+
+pub(crate) fn runtime_reflex_loop_summary(
+    state_root: &Path,
+    bounded_unit_id: &str,
+) -> Result<RuntimeReflexLoopSummary, String> {
+    let bounded_unit_id = non_empty_reflex_loop_field("bounded_unit_id", bounded_unit_id)?;
+    let entries = runtime_reflex_loop_entries_newest_first(state_root, &bounded_unit_id)?;
+    let latest_path = entries
+        .first()
+        .map(|entry| runtime_consumption_snapshot_path_string(&entry.path));
+    let latest_stage =
+        latest_runtime_reflex_loop_record(state_root, &bounded_unit_id)?.map(|record| record.stage);
+    Ok(RuntimeReflexLoopSummary {
+        bounded_unit_id,
+        total_records: entries.len(),
+        latest_stage,
+        latest_record_path: latest_path,
+    })
+}
+
+fn validate_runtime_reflex_loop_record(record: &RuntimeReflexLoopRecord) -> Result<(), String> {
+    if record.schema_version != 1 {
+        return Err(format!(
+            "Unsupported runtime-reflex-loop schema_version `{}`",
+            record.schema_version
+        ));
+    }
+    non_empty_reflex_loop_field("loop_id", &record.loop_id)?;
+    non_empty_reflex_loop_field("bounded_unit_id", &record.bounded_unit_id)?;
+    non_empty_reflex_loop_field("goal", &record.goal)?;
+    non_empty_reflex_loop_field("source_surface", &record.source_surface)?;
+    non_empty_reflex_loop_field("created_at", &record.created_at)?;
+    if !record.diagnostic_only || record.grants_write_authority || !record.not_closure_proof {
+        return Err(
+            "runtime-reflex-loop records are diagnostic evidence only and cannot grant write authority or closure proof"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn runtime_reflex_loop_dir(state_root: &Path, bounded_unit_id: &str) -> std::path::PathBuf {
+    state_root
+        .join("runtime-reflex-loop")
+        .join(safe_runtime_reflex_loop_path_component(bounded_unit_id))
+}
+
+fn runtime_reflex_loop_entries_newest_first(
+    state_root: &Path,
+    bounded_unit_id: &str,
+) -> Result<Vec<RuntimeConsumptionSnapshotEntry>, String> {
+    let reflex_dir = runtime_reflex_loop_dir(state_root, bounded_unit_id);
+    if !reflex_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&reflex_dir)
+        .map_err(|error| format!("Failed to read runtime-reflex-loop directory: {error}"))?
+    {
+        let entry = entry
+            .map_err(|error| format!("Failed to inspect runtime-reflex-loop entry: {error}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if !file_name.starts_with("reflex-") || !file_name.ends_with(".json") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        entries.push(RuntimeConsumptionSnapshotEntry {
+            path,
+            file_name,
+            modified,
+        });
+    }
+    entries.sort_by(|left, right| {
+        right
+            .modified
+            .cmp(&left.modified)
+            .then_with(|| right.file_name.cmp(&left.file_name))
+    });
+    Ok(entries)
+}
+
+fn safe_runtime_reflex_loop_path_component(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn non_empty_reflex_loop_field(field: &str, value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("runtime-reflex-loop `{field}` must not be empty"));
+    }
+    Ok(value.to_string())
+}
+
 pub(crate) const RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX: &str =
     "runtime_consumption_snapshot_index";
 pub(crate) const RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL: &str =
@@ -697,16 +953,18 @@ fn runtime_consumption_snapshot_entries_newest_first(
 #[cfg(test)]
 mod tests {
     use super::{
+        append_runtime_reflex_loop_record,
         apply_runtime_consumption_final_dispatch_receipt_blocker,
         latest_admissible_retrieval_trust_signal, latest_final_runtime_consumption_snapshot_path,
-        latest_terminal_consume_continue_snapshot_run_id,
+        latest_runtime_reflex_loop_record, latest_terminal_consume_continue_snapshot_run_id,
         release_admission_operator_evidence_complete_for_run,
         release_admission_operator_evidence_incomplete,
         runtime_consumption_final_dispatch_receipt_blocker_code,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
         runtime_consumption_snapshot_has_release_admission_evidence,
-        runtime_consumption_snapshot_path_string, RuntimeConsumptionSummary,
-        RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
+        runtime_consumption_snapshot_path_string, runtime_reflex_loop_record,
+        runtime_reflex_loop_summary, RuntimeConsumptionSummary, RuntimeReflexLoopEvidenceRefs,
+        RuntimeReflexLoopStage, RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
         RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
         RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
         RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
@@ -778,6 +1036,106 @@ mod tests {
                 }
             ]
         })
+    }
+
+    #[test]
+    fn runtime_reflex_loop_appends_bounded_records_and_exposes_latest_for_resume() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-runtime-reflex-loop-append-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let evidence_refs = RuntimeReflexLoopEvidenceRefs {
+            taskflow: vec!["taskflow:runtime-reflex-loop-state-model".to_string()],
+            docflow: vec!["docflow:runtime.direct-runtime-consumption-protocol".to_string()],
+            other: Vec::new(),
+        };
+        let plan = runtime_reflex_loop_record(
+            "runtime-reflex-loop-state-model",
+            Some("protocol-generation"),
+            RuntimeReflexLoopStage::Plan,
+            "Model a bounded protocol generation loop",
+            Some("Use append-only runtime state"),
+            evidence_refs.clone(),
+            "vida taskflow consume continue",
+        )
+        .expect("plan record should be valid");
+        let plan_path =
+            append_runtime_reflex_loop_record(&root, &plan).expect("plan record should append");
+        thread::sleep(Duration::from_millis(5));
+        let critique = runtime_reflex_loop_record(
+            "runtime-reflex-loop-state-model",
+            Some("protocol-generation"),
+            RuntimeReflexLoopStage::Critique,
+            "Model a bounded protocol generation loop",
+            Some("Critique evidence before refine"),
+            evidence_refs,
+            "vida docflow proofcheck",
+        )
+        .expect("critique record should be valid");
+        let critique_path =
+            append_runtime_reflex_loop_record(&root, &critique).expect("critique should append");
+
+        assert_ne!(plan_path, critique_path);
+        assert!(Path::new(&plan_path).exists());
+        assert!(Path::new(&critique_path).exists());
+
+        let latest = latest_runtime_reflex_loop_record(&root, "runtime-reflex-loop-state-model")
+            .expect("latest lookup should succeed")
+            .expect("latest record should exist");
+        assert_eq!(latest.stage, RuntimeReflexLoopStage::Critique);
+        assert_eq!(latest.diagnostic_only, true);
+        assert_eq!(latest.grants_write_authority, false);
+        assert_eq!(latest.not_closure_proof, true);
+
+        let summary = runtime_reflex_loop_summary(&root, "runtime-reflex-loop-state-model")
+            .expect("summary lookup should succeed");
+        assert_eq!(summary.total_records, 2);
+        assert_eq!(summary.latest_stage, Some(RuntimeReflexLoopStage::Critique));
+        assert_eq!(
+            summary.latest_record_path.as_deref(),
+            Some(critique_path.as_str())
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_reflex_loop_rejects_write_authority_or_closure_proof_records() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-runtime-reflex-loop-authority-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let mut record = runtime_reflex_loop_record(
+            "runtime-reflex-loop-state-model",
+            None,
+            RuntimeReflexLoopStage::Refine,
+            "Refine without bypassing runtime law",
+            None,
+            RuntimeReflexLoopEvidenceRefs::default(),
+            "vida taskflow consume advance",
+        )
+        .expect("record should be constructible");
+
+        record.grants_write_authority = true;
+        let error = append_runtime_reflex_loop_record(&root, &record)
+            .expect_err("authority-bearing records must be rejected");
+        assert!(error.contains("cannot grant write authority"));
+
+        record.grants_write_authority = false;
+        record.not_closure_proof = false;
+        let error = append_runtime_reflex_loop_record(&root, &record)
+            .expect_err("closure-proof records must be rejected");
+        assert!(error.contains("closure proof"));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
