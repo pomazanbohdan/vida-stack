@@ -4785,6 +4785,71 @@ fn doctor_summary_json_does_not_trust_cached_projection_before_store_open() {
 }
 
 #[test]
+fn doctor_summary_json_uses_cached_projection_after_store_open() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    run_and_assert_success(&["boot"], &state_dir);
+    write_operator_projection(
+        &state_dir,
+        "doctor-summary-latest",
+        &serde_json::json!({
+            "surface": "vida doctor",
+            "view": "summary",
+            "status": "pass",
+            "trace_id": null,
+            "workflow_class": null,
+            "risk_tier": null,
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": {
+                "surface": "vida doctor"
+            },
+            "shared_fields": {
+                "status": "pass",
+                "trace_id": null,
+                "workflow_class": null,
+                "risk_tier": null,
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "surface": "vida doctor"
+                }
+            },
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "trace_id": null,
+                "workflow_class": null,
+                "risk_tier": null,
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "surface": "vida doctor"
+                }
+            },
+            "cache_sentinel": "trusted-after-store-open"
+        }),
+    );
+
+    let output = run_command_capture(&["doctor", "--summary", "--json"], &state_dir);
+    assert!(
+        output.status.success(),
+        "doctor should trust fresh cache after authoritative store opens: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("cached doctor summary json should parse");
+    assert_eq!(payload["surface"], "vida doctor");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["cache_sentinel"], "trusted-after-store-open");
+    assert_eq!(payload["cache_probe"], "doctor-summary-fast-path");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_drift() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

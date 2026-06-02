@@ -524,6 +524,32 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     .await
     {
         Ok(store) => {
+            if summary_only && as_json {
+                if let Some(cached) = doctor_cached_json_projection(store.root(), true) {
+                    match serde_json::from_str::<serde_json::Value>(&cached) {
+                        Ok(mut payload) => {
+                            if let Some(object) = payload.as_object_mut() {
+                                object.insert(
+                                    "cache_probe".to_string(),
+                                    serde_json::Value::String(
+                                        "doctor-summary-fast-path".to_string(),
+                                    ),
+                                );
+                            }
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&payload)
+                                    .expect("cached doctor summary should render as json")
+                            );
+                            return ExitCode::SUCCESS;
+                        }
+                        Err(error) => {
+                            eprintln!("doctor summary cache: failed ({error})");
+                            return ExitCode::from(1);
+                        }
+                    }
+                }
+            }
             let storage_metadata = match store.storage_metadata_summary().await {
                 Ok(summary) => summary,
                 Err(error) => {
