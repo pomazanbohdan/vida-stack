@@ -79,6 +79,7 @@ impl FixtureVidaClient {
                 "capabilities": [
                     "read_status",
                     "read_events",
+                    "service_install_plan",
                     "project_registry_read",
                     "wizard_read",
                     "wizard_plan",
