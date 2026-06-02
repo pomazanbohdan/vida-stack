@@ -92,10 +92,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let summary_only = args.summary;
 
     if as_json {
-        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-            &state_dir,
-            status_json_projection_name(summary_only),
-        ) {
+        if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
+        {
             println!(
                 "{}",
                 render_cached_status_projection_for_operator(summary_only, &cached)
@@ -104,10 +102,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         }
         if summary_only {
             if let Some(cached) =
-            crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
-                &state_dir,
-                status_json_projection_name(summary_only),
-            )
+                read_state_fresh_admissible_status_json_projection(&state_dir, summary_only)
             {
                 println!(
                     "{}",
@@ -779,6 +774,28 @@ async fn build_operator_session_projection_for_status(
     }
 }
 
+fn read_fresh_admissible_status_json_projection(
+    state_dir: &std::path::Path,
+    summary_only: bool,
+) -> Option<String> {
+    crate::operator_projection_cache::read_fresh_json_projection(
+        state_dir,
+        status_json_projection_name(summary_only),
+    )
+    .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))
+}
+
+fn read_state_fresh_admissible_status_json_projection(
+    state_dir: &std::path::Path,
+    summary_only: bool,
+) -> Option<String> {
+    crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
+        state_dir,
+        status_json_projection_name(summary_only),
+    )
+    .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))
+}
+
 fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str) -> String {
     if summary_only {
         return cached.to_string();
@@ -1269,6 +1286,43 @@ mod tests {
                 ["count"],
             2
         );
+    }
+
+    #[test]
+    fn fresh_status_projection_cache_requires_admissible_session_identity() {
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-fresh-cache-admissibility-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create temp state root");
+
+        let forged_payload = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "shared_fields": {
+                "status": "pass"
+            }
+        });
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            super::status_json_projection_name(false),
+            &forged_payload,
+        );
+
+        assert!(
+            crate::operator_projection_cache::read_fresh_json_projection(
+                &root,
+                super::status_json_projection_name(false),
+            )
+            .is_some()
+        );
+        assert!(super::read_fresh_admissible_status_json_projection(&root, false).is_none());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
