@@ -854,6 +854,16 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             .filter(|value| !value.is_empty())
                             .is_none()
                 });
+            let latest_run_graph_terminal_closure =
+                latest_run_graph_status.as_ref().is_some_and(|status| {
+                    status.status == "completed"
+                        && status.lifecycle_stage == "closure_complete"
+                        && status.resume_target == "none"
+                        && status.next_node.as_deref().map(str::trim).is_none()
+                });
+            let unresolved_closed_task_active_run = !latest_run_graph_terminal_closure
+                && latest_run_graph_task_closed
+                || latest_terminal_task_active_run_graph_status.is_some();
             let (trace_evidence, trace_evidence_blocker_codes, trace_evidence_next_actions) =
                 build_trace_evidence_summary(
                     latest_task_reconciliation.as_ref(),
@@ -904,8 +914,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     &operator_session_projection,
                     no_active_taskflow_work,
                     latest_run_graph_task_missing,
-                    latest_run_graph_task_closed
-                        || latest_terminal_task_active_run_graph_status.is_some(),
+                    unresolved_closed_task_active_run,
                     trace_evidence_blocker_codes,
                 );
                 let mut operator_next_actions = doctor_operator_next_actions(

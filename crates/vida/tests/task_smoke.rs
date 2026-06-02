@@ -5241,6 +5241,78 @@ fn doctor_detects_closed_task_active_run() {
 }
 
 #[test]
+fn task_close_retires_closed_task_active_run_projection() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "task-close-retire-closed-active-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Task close retire closed active parent",
+        "open",
+    );
+    let task_id = "task-close-retire-closed-active-task";
+    let active = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Task close retire closed active task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(active["status"], "pass");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+
+    let close = run_command_json(
+        &[
+            "task",
+            "close",
+            task_id,
+            "--reason",
+            "implementation proof passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(close["status"], "pass");
+
+    let run_graph = run_command_json(
+        &["taskflow", "run-graph", "status", task_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(run_graph["status"], "pass");
+    assert_eq!(run_graph["run_graph_status"]["status"], "completed");
+
+    let doctor = run_command_json(&["doctor", "--json"], &state_dir);
+    let blockers = require_json_string_array(&doctor["blocker_codes"], "doctor blocker_codes");
+    assert!(
+        !blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "task close must retire the closed-task active run before doctor projection: {doctor}"
+    );
+    assert!(
+        doctor["latest_terminal_task_active_run_graph_status"].is_null(),
+        "doctor should not retain a terminal task active run after task close reconciliation: {doctor}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

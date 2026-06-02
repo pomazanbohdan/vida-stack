@@ -598,6 +598,23 @@ impl StateStore {
             && crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(&receipt))
     }
 
+    fn task_close_retired_run_graph_status(
+        mut status: RunGraphStatus,
+        reason: &str,
+    ) -> RunGraphStatus {
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = reason.to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        status
+    }
+
     async fn filter_auto_closed_parents_ready_for_close(
         &self,
         parents: Vec<TaskRecord>,
@@ -820,6 +837,13 @@ impl StateStore {
                 .build_task_close_reconciled_binding(&status, task_id)
                 .await?
             else {
+                if status.task_id == task_id && status.status != "completed" {
+                    let retired_status = Self::task_close_retired_run_graph_status(
+                        status,
+                        "task_close_closed_task_stale_run_retired",
+                    );
+                    self.record_run_graph_status(&retired_status).await?;
+                }
                 self.clear_run_graph_continuation_binding(&run_id).await?;
                 continue;
             };
