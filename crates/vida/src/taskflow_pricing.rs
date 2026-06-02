@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -6,6 +7,8 @@ use serde_json::json;
 
 const SOURCE_KIND: &str = "external_provider_config_snapshot";
 const TRUST_CLASS: &str = "diagnostic_only_until_validated";
+const MAX_IMPORT_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_PRICE_ROW_SUMMARY_NODES: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ImportMode {
@@ -26,6 +29,12 @@ struct SnapshotSummary {
     provider_count: usize,
     model_count: usize,
     price_like_row_count: usize,
+}
+
+#[derive(Debug)]
+struct PricingImportSourceError {
+    blocker_code: &'static str,
+    next_action: String,
 }
 
 pub(crate) fn run_taskflow_pricing(args: &[String]) -> ExitCode {
@@ -233,14 +242,14 @@ fn run_pricing_import(args: &[String]) -> ExitCode {
         );
     };
 
-    let bytes = match fs::read(source_file) {
+    let bytes = match read_import_source(source_file) {
         Ok(bytes) => bytes,
         Err(error) => {
             return fail_closed(
                 options.json,
                 "vida taskflow pricing import",
-                vec!["pricing_import_source_file_unreadable"],
-                vec![format!("Could not read source file: {error}")],
+                vec![error.blocker_code],
+                vec![error.next_action],
             )
         }
     };
@@ -272,6 +281,54 @@ fn run_pricing_import(args: &[String]) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn read_import_source(source_file: &PathBuf) -> Result<Vec<u8>, PricingImportSourceError> {
+    let metadata = fs::metadata(source_file).map_err(|error| PricingImportSourceError {
+        blocker_code: "pricing_import_source_file_unreadable",
+        next_action: format!("Could not inspect source file: {error}"),
+    })?;
+
+    if !metadata.is_file() {
+        return Err(PricingImportSourceError {
+            blocker_code: "pricing_import_source_file_not_regular",
+            next_action: "Provide a regular JSON snapshot file; special files and directories are not supported."
+                .to_string(),
+        });
+    }
+
+    if metadata.len() > MAX_IMPORT_SOURCE_BYTES {
+        return Err(PricingImportSourceError {
+            blocker_code: "pricing_import_source_file_too_large",
+            next_action: format!(
+                "Provide a JSON snapshot no larger than {MAX_IMPORT_SOURCE_BYTES} bytes."
+            ),
+        });
+    }
+
+    let mut file = File::open(source_file).map_err(|error| PricingImportSourceError {
+        blocker_code: "pricing_import_source_file_unreadable",
+        next_action: format!("Could not open source file: {error}"),
+    })?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.by_ref()
+        .take(MAX_IMPORT_SOURCE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| PricingImportSourceError {
+            blocker_code: "pricing_import_source_file_unreadable",
+            next_action: format!("Could not read source file: {error}"),
+        })?;
+
+    if bytes.len() as u64 > MAX_IMPORT_SOURCE_BYTES {
+        return Err(PricingImportSourceError {
+            blocker_code: "pricing_import_source_file_too_large",
+            next_action: format!(
+                "Provide a JSON snapshot no larger than {MAX_IMPORT_SOURCE_BYTES} bytes."
+            ),
+        });
+    }
+
+    Ok(bytes)
 }
 
 fn parse_import_options(args: &[String]) -> ImportOptions {
@@ -473,8 +530,21 @@ fn summarize_snapshot(value: &serde_json::Value) -> SnapshotSummary {
 }
 
 fn count_price_like_rows(value: &serde_json::Value) -> usize {
+    let mut remaining_nodes = MAX_PRICE_ROW_SUMMARY_NODES;
+    count_price_like_rows_bounded(value, &mut remaining_nodes)
+}
+
+fn count_price_like_rows_bounded(value: &serde_json::Value, remaining_nodes: &mut usize) -> usize {
+    if *remaining_nodes == 0 {
+        return 0;
+    }
+    *remaining_nodes -= 1;
+
     match value {
-        serde_json::Value::Array(rows) => rows.iter().map(count_price_like_rows).sum(),
+        serde_json::Value::Array(rows) => rows
+            .iter()
+            .map(|row| count_price_like_rows_bounded(row, remaining_nodes))
+            .sum(),
         serde_json::Value::Object(map) => {
             let current = [
                 "normalized_cost_units",
@@ -486,7 +556,11 @@ fn count_price_like_rows(value: &serde_json::Value) -> usize {
             ]
             .iter()
             .any(|key| map.contains_key(*key)) as usize;
-            current + map.values().map(count_price_like_rows).sum::<usize>()
+            current
+                + map
+                    .values()
+                    .map(|value| count_price_like_rows_bounded(value, remaining_nodes))
+                    .sum::<usize>()
         }
         _ => 0,
     }
@@ -615,6 +689,41 @@ mod tests {
     }
 
     #[test]
+    fn read_import_source_rejects_oversized_files_before_reading() {
+        let path = unique_temp_path("oversized-pricing-snapshot.json");
+        let file = File::create(&path).expect("create sparse oversized snapshot");
+        file.set_len(MAX_IMPORT_SOURCE_BYTES + 1)
+            .expect("mark file oversized");
+
+        let error = read_import_source(&path).expect_err("oversized source should fail closed");
+        assert_eq!(error.blocker_code, "pricing_import_source_file_too_large");
+
+        fs::remove_file(path).expect("remove oversized snapshot");
+    }
+
+    #[test]
+    fn read_import_source_rejects_non_regular_paths() {
+        let path = unique_temp_path("pricing-snapshot-directory");
+        fs::create_dir(&path).expect("create snapshot directory");
+
+        let error = read_import_source(&path).expect_err("directory source should fail closed");
+        assert_eq!(error.blocker_code, "pricing_import_source_file_not_regular");
+
+        fs::remove_dir(path).expect("remove snapshot directory");
+    }
+
+    #[test]
+    fn read_import_source_accepts_bounded_regular_file() {
+        let path = unique_temp_path("bounded-pricing-snapshot.json");
+        fs::write(&path, br#"{"provider_id":"provider-a"}"#).expect("write bounded snapshot");
+
+        let bytes = read_import_source(&path).expect("bounded source should be readable");
+        assert_eq!(bytes, br#"{"provider_id":"provider-a"}"#);
+
+        fs::remove_file(path).expect("remove bounded snapshot");
+    }
+
+    #[test]
     fn import_parser_rejects_conflicting_modes() {
         let args = vec![
             "import".to_string(),
@@ -627,5 +736,12 @@ mod tests {
         let options = parse_import_options(&args);
         assert!(options.json);
         assert!(options.blockers.contains(&"pricing_import_mode_conflict"));
+    }
+    fn unique_temp_path(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("vida-{nanos}-{name}"))
     }
 }
