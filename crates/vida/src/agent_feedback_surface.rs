@@ -362,7 +362,6 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "blocked projections",
             "blocked projection",
             "structured blocked json",
-            "blocked json",
             "stderr-only failure",
             "stderr-only exit",
             "blocked coverage",
@@ -1759,6 +1758,16 @@ mod tests {
                 .iter()
                 .any(|marker| marker == "blocked"));
         }
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_blocked_json_parser_failures() {
+        let reason = "Blocked JSON parser failure; cannot proceed";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
     }
 
     #[test]
