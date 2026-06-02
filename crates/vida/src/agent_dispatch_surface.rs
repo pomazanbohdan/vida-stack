@@ -1264,31 +1264,13 @@ fn build_agent_dispatch_next_preview_dev_team(
     let mut next_actions = Vec::new();
     let mut selected_lanes = Vec::new();
     let mut blocked_candidates = Vec::new();
-    let all_ready_flow_ids = projection
-        .ready
-        .iter()
-        .filter(|candidate| candidate.ready_now)
-        .filter_map(|candidate| {
-            selected_dev_team_flow_for_task(
-                &activation_bundle["dev_team_readiness"],
-                &candidate.task,
-            )
-            .and_then(|flow| flow["flow_id"].as_str())
-            .map(str::to_string)
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut selected_ready_candidates = if all_ready_flow_ids.len() > 1 {
-        if let Some(current_task_id) = projection.current_task_id.as_deref() {
-            projection
-                .ready
-                .iter()
-                .filter(|candidate| candidate.task.id == current_task_id)
-                .collect::<Vec<_>>()
-        } else {
-            projection.ready.iter().collect::<Vec<_>>()
-        }
-    } else {
-        projection.ready.iter().collect::<Vec<_>>()
+    let mut selected_ready_candidates = match projection.current_task_id.as_deref() {
+        Some(current_task_id) => projection
+            .ready
+            .iter()
+            .filter(|candidate| candidate.task.id == current_task_id)
+            .collect::<Vec<_>>(),
+        None => projection.ready.iter().collect::<Vec<_>>(),
     };
     if let Some(current_task_id) = projection.current_task_id.as_deref() {
         selected_ready_candidates.sort_by_key(|candidate| {
@@ -3671,6 +3653,33 @@ mod tests {
         assert_eq!(preview.lanes_selected, 1);
         assert_eq!(preview.selected_lanes[0].task_id, "task-active");
         assert_eq!(preview.selected_lanes[0].role_label, "developer");
+    }
+
+    #[test]
+    fn agent_dispatch_next_preview_dev_team_honors_current_task_for_same_flow_ready_candidates() {
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle_with_dev_team_selection_truth(),
+            &TaskSchedulingProjection {
+                current_task_id: Some("zzz-bound".to_string()),
+                ready: vec![
+                    candidate_with_type("aaa-other", "Other specification", true, true, "task"),
+                    candidate_with_type("zzz-bound", "Bound specification", true, true, "task"),
+                ],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            1,
+            1,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 1);
+        assert_eq!(preview.selected_lanes[0].task_id, "zzz-bound");
+        assert!(preview.selected_lanes[0]
+            .dispatch_command
+            .contains("vida agent-init --role business_analyst zzz-bound --json"));
     }
 
     #[test]

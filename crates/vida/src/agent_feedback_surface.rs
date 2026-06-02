@@ -230,9 +230,7 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "failed-result defect descriptions",
             "failed-result defect description",
             "failed-result wording",
-            "failed-result",
             "failed result wording",
-            "failed result",
             "records failure",
             "recorded failure",
             "recording failure",
@@ -365,35 +363,37 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
     ignored
 }
 
-fn has_contrastive_blocker_clause(normalized: &str) -> bool {
-    let concrete_blocker_phrases = [
-        "still blocked",
-        "remains blocked",
-        "remained blocked",
-        "is blocked",
-        "stays blocked",
-        "blocked pending",
-        "blocked by",
-        "blocked on",
-        "blocker:",
-        "blocker_code",
-        "blocker code",
-        "approval required",
-        "pending approval",
-        "pending operator approval",
-        "awaiting approval",
-        "approval_wait",
-        "awaiting_approval",
-    ];
+const CONCRETE_CANONICAL_CLOSE_PHRASES: &[&str] = &[
+    "still blocked",
+    "remains blocked",
+    "remained blocked",
+    "is blocked",
+    "stays blocked",
+    "blocked pending",
+    "blocked by",
+    "blocked on",
+    "blocker:",
+    "blocker_code",
+    "blocker code",
+    "approval required",
+    "pending approval",
+    "pending operator approval",
+    "awaiting approval",
+    "approval_wait",
+    "awaiting_approval",
+];
 
+fn has_concrete_canonical_close_phrase(normalized: &str) -> bool {
+    CONCRETE_CANONICAL_CLOSE_PHRASES
+        .iter()
+        .any(|phrase| normalized.contains(phrase))
+}
+
+fn has_contrastive_blocker_clause(normalized: &str) -> bool {
     normalized
         .split_once(", but ")
         .or_else(|| normalized.split_once(" but "))
-        .is_some_and(|(_, blocker_clause)| {
-            concrete_blocker_phrases
-                .iter()
-                .any(|phrase| blocker_clause.contains(phrase))
-        })
+        .is_some_and(|(_, blocker_clause)| has_concrete_canonical_close_phrase(blocker_clause))
 }
 
 fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
@@ -444,6 +444,7 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
                 && has_meta_keyword
                 && !starts_with_blocked_status
                 && !has_contrastive_blocker_clause(&normalized)
+                && !has_concrete_canonical_close_phrase(&normalized)
             {
                 Some(normalized)
             } else {
@@ -1535,6 +1536,20 @@ mod tests {
         assert_eq!(score, 35);
         assert_eq!(inference["outcome"], "failure");
         assert_eq!(inference["failure_markers"], serde_json::json!(["failed"]));
+    }
+
+    #[test]
+    fn close_feedback_inference_preserves_concrete_failed_result_reasons() {
+        let reason = "Task failed result after verification.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "failure");
+        assert_eq!(score, 35);
+        assert_eq!(inference["outcome"], "failure");
+        assert_eq!(inference["failure_markers"], serde_json::json!(["failed"]));
+        assert_eq!(inference["ignored_meta_language"], serde_json::json!([]));
     }
 
     #[test]
