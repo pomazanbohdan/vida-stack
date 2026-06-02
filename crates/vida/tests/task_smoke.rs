@@ -4756,7 +4756,7 @@ fn doctor_summary_json_does_not_trust_cached_projection_before_store_open() {
     let projection_dir = format!("{state_dir}/operator-projections");
     fs::create_dir_all(&projection_dir).expect("create doctor projection dir");
     fs::write(
-        format!("{projection_dir}/doctor-summary-latest.json"),
+        format!("{projection_dir}/doctor-summary-v2-latest.json"),
         serde_json::json!({
             "surface": "vida doctor",
             "view": "summary",
@@ -4791,7 +4791,7 @@ fn doctor_summary_json_ignores_cached_projection_after_store_open() {
     run_and_assert_success(&["boot"], &state_dir);
     write_operator_projection(
         &state_dir,
-        "doctor-summary-latest",
+        "doctor-summary-v2-latest",
         &serde_json::json!({
             "surface": "vida doctor",
             "view": "summary",
