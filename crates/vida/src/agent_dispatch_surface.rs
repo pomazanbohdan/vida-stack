@@ -278,6 +278,13 @@ fn flow_matches_work_item_type(flow: &serde_json::Value, work_item_type: &str) -
     })
 }
 
+fn flow_has_exact_work_item_binding(flow: &serde_json::Value, work_item_type: &str) -> bool {
+    let exact_key = work_item_type.trim().to_ascii_lowercase();
+    !exact_key.is_empty()
+        && work_item_binding_values(&flow["work_item_bindings"])
+            .any(|value| value.trim().eq_ignore_ascii_case(&exact_key))
+}
+
 fn work_item_binding_values(bindings: &serde_json::Value) -> impl Iterator<Item = String> + '_ {
     match bindings {
         serde_json::Value::String(value) => {
@@ -311,10 +318,10 @@ fn single_in_progress_task_id_from_rows(rows: &[state_store::TaskRecord]) -> Opt
 
 fn work_item_type_lookup_keys(work_item_type: &str) -> Vec<String> {
     let mut keys = Vec::new();
-    let normalized = state_store::canonical_work_item_issue_type(work_item_type);
-    push_unique_lookup_key(&mut keys, normalized);
     let lower = work_item_type.trim().to_ascii_lowercase();
     push_unique_lookup_key(&mut keys, lower);
+    let normalized = state_store::canonical_work_item_issue_type(work_item_type);
+    push_unique_lookup_key(&mut keys, normalized);
     keys
 }
 
@@ -375,7 +382,12 @@ fn selected_dev_team_flow_for_lookup_key<'a>(
     }
     flows
         .iter()
-        .find(|flow| flow_matches_work_item_type(flow, work_item_type))
+        .find(|flow| flow_has_exact_work_item_binding(flow, work_item_type))
+        .or_else(|| {
+            flows
+                .iter()
+                .find(|flow| flow_matches_work_item_type(flow, work_item_type))
+        })
 }
 
 fn selected_dev_team_flow_for_work_item<'a>(
@@ -3015,6 +3027,94 @@ mod tests {
         assert_eq!(sequence.len(), 1);
         assert_eq!(sequence[0].role_label, "tester");
         assert_eq!(sequence[0].task_class, "verification");
+    }
+
+    #[test]
+    fn development_flow_binding_prefers_explicit_alias_binding_over_canonical_binding() {
+        let sequence = dev_team_sequence_for_work_item(
+            &serde_json::json!({
+                "dev_team_readiness": {
+                    "default_flow_id": "default_delivery",
+                    "work_item_flow_bindings": {
+                        "defect": "defect_repair",
+                        "bug": "bug_triage"
+                    },
+                    "roles": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]},
+                        {"role_id": "triager", "runtime_role": "business_analyst", "task_classes": ["triage"]}
+                    ],
+                    "sequence": ["developer"],
+                    "flows": [
+                        {
+                            "flow_id": "default_delivery",
+                            "enabled": true,
+                            "default": true,
+                            "ordered_steps": [{"role_id": "developer"}]
+                        },
+                        {
+                            "flow_id": "defect_repair",
+                            "enabled": true,
+                            "work_item_bindings": ["defect"],
+                            "ordered_steps": [{"role_id": "tester"}]
+                        },
+                        {
+                            "flow_id": "bug_triage",
+                            "enabled": true,
+                            "work_item_bindings": ["bug"],
+                            "ordered_steps": [{"role_id": "triager"}]
+                        }
+                    ]
+                }
+            }),
+            "bug",
+        );
+
+        assert_eq!(sequence.len(), 1);
+        assert_eq!(sequence[0].role_label, "triager");
+        assert_eq!(sequence[0].task_class, "triage");
+    }
+
+    #[test]
+    fn development_flow_fallback_prefers_explicit_alias_binding_over_canonical_binding() {
+        let sequence = dev_team_sequence_for_work_item(
+            &serde_json::json!({
+                "dev_team_readiness": {
+                    "default_flow_id": "default_delivery",
+                    "roles": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]},
+                        {"role_id": "triager", "runtime_role": "business_analyst", "task_classes": ["triage"]}
+                    ],
+                    "sequence": ["developer"],
+                    "flows": [
+                        {
+                            "flow_id": "default_delivery",
+                            "enabled": true,
+                            "default": true,
+                            "ordered_steps": [{"role_id": "developer"}]
+                        },
+                        {
+                            "flow_id": "defect_repair",
+                            "enabled": true,
+                            "work_item_bindings": ["defect"],
+                            "ordered_steps": [{"role_id": "tester"}]
+                        },
+                        {
+                            "flow_id": "bug_triage",
+                            "enabled": true,
+                            "work_item_bindings": ["bug"],
+                            "ordered_steps": [{"role_id": "triager"}]
+                        }
+                    ]
+                }
+            }),
+            "bug",
+        );
+
+        assert_eq!(sequence.len(), 1);
+        assert_eq!(sequence[0].role_label, "triager");
+        assert_eq!(sequence[0].task_class, "triage");
     }
 
     #[test]
