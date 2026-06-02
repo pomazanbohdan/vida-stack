@@ -40,6 +40,8 @@ This map does not cover extracted secondary bundles by default.
     - project-owned timing, slow-gate, script optimization, and operator-friction diagnostic protocol
 13. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
     - project-owned VIDA runtime application of generic `Error Search / Bug Reasoning`
+14. `docs/process/generic-runtime-protocol-promotion-plan.md`
+    - project-owned boundary map for moving reusable project workflow law into generic VIDA runtime owners while retaining local residue
 
 ## Activation Triggers
 
@@ -80,6 +82,8 @@ Do not use this map as the default route for extracted bundles unless the task e
     - continue to `docs/process/command-timing-and-gate-optimization-protocol.md`
 12. Runtime defects / multi-defect pools / TaskFlow, DocFlow, run-graph, lane, dispatch, receipt, ownership, routing, or CI failure clusters:
     - continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`
+13. Generic runtime protocol promotion / project-overlay slimming questions:
+    - continue to `docs/process/generic-runtime-protocol-promotion-plan.md`
 
 ## Boundary Rule
 
@@ -91,10 +95,10 @@ Do not use this map as the default route for extracted bundles unless the task e
 artifact_path: project/root-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-05-26'
+artifact_revision: '2026-06-02'
 schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: 2026-05-26T00:00:00+03:00
+updated_at: 2026-06-02T00:00:00+03:00
 changelog_ref: project-root-map.changelog.jsonl

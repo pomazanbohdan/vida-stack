@@ -11,8 +11,8 @@ This protocol defines:
 1. the minimum top-level operating loop for the project orchestrator,
 2. the default task-shaping depth,
 3. when to delegate, keep work local, or escalate,
-4. the minimum packet-routing data needed for normal Release-1 work,
-5. the anti-stop and exception-path rules needed to keep orchestration in control after interim reports.
+4. the minimum project-local packet-routing data needed after generic runtime protocol promotion,
+5. the project residue for source intake, proof routing, release impact, and escalation.
 
 This protocol does not define:
 
@@ -42,8 +42,8 @@ For active project development orchestration, the minimum project-side read set 
 
 1. `docs/process/project-orchestrator-operating-protocol.md`
 2. `docs/process/project-packet-and-lane-runtime-capsule.md`
-3. `docs/product/spec/release-1-plan.md` when Release-1 work is active
-4. `docs/product/spec/release-1-seam-map.md` when closure or handoff work is active
+3. `docs/process/generic-runtime-protocol-promotion-plan.md` when a rule may belong in generic runtime owners
+4. `docs/product/spec/current-spec-map.md` when product/spec closure context is active
 
 The orchestrator should not widen beyond that set unless a blocker or ambiguity requires it.
 
@@ -71,57 +71,21 @@ The normal top-level loop is:
 8. dispatch the next configured lane,
 9. synthesize the result into TaskFlow and the next bounded step or closure.
 
-Global goal progress gate:
+Generic owner references:
 
-1. during synthesis, before closure or advancement to a more complex happy-path case, the orchestrator must compare current evidence against the project operating goal: root orchestrates, configured agents execute, cheapest eligible roles are used unless promotion is evidence-backed, TaskFlow is current, diagnostics create or update concrete tasks, and continuation is selected only from explicit TaskFlow/runtime evidence,
-2. failed checks must become TaskFlow updates or child tasks under the active epic before the next write-producing lane starts,
-3. newly discovered global-goal gaps are priority analysis tasks for the configured analyst lane and must be checked against the relevant project specs before implementation routing.
+1. active-unit binding, anti-stop, final-report, and continuation law are owned by `instruction-contracts/core.orchestration-runtime-capsule`, `instruction-contracts/core.orchestration-protocol`, and `runtime-instructions/work.taskflow-protocol`,
+2. session ownership, exception takeover, lane identity, packet/handoff evidence, and receipt authority are owned by the runtime, lane handoff, and TaskFlow owner protocols,
+3. command timing, fast proof, long-gate classification, and script optimization are owned by `runtime-instructions/work.command-execution-discipline-protocol` plus the project command-timing protocol,
+4. source-neutral intake and status actualization are owned by TaskFlow source-class metadata and the project source-specific process maps.
 
-Release-impact version gate:
+Project residue:
 
-1. when synthesis closes a pool of tasks that materially changes runtime behavior, agent-mode behavior, diagnostic behavior, release behavior, operator contracts, or self-hosting readiness, the orchestrator must classify the pool as release-impact before treating it as done,
-2. patch release is allowed for compatible bounded fixes that only repair a defect, test, packaging check, documentation mismatch, or local performance issue without changing public command, JSON, TaskFlow, agent-mode, config, installer, or diagnostic semantics,
-3. minor release is required when the pool adds or changes an operating model, diagnostic gate, command or option contract, JSON/status field semantics, TaskFlow or agent-mode flow, config/carrier resolution, release process, CI process, or closes a P0 batch that materially advances self-hosting,
-4. significant or minor release closure must include a README revision pass so public product positioning, installation/use guidance, capability summary, and current release direction match the new release,
-5. release-impact closure must create or update a TaskFlow release task, record the patch/minor decision, bind the selected version and tag, and verify GitHub Actions/release evidence for that exact version before advancing.
-
-Session ownership rule:
-
-1. each root-lane invocation runs as one `orchestrator_session_id`, not as the project-global orchestrator,
-2. packet shaping must name the current bounded unit, intended claim kind, conflict domain, owned path scope, and whether the work is exclusive or parallel-safe,
-3. a blocked lane from another session in the same project root is foreign visibility evidence unless it conflicts with the current task/run, owned paths, exclusive conflict domain, or a global state-integrity blocker,
-4. if runtime status cannot distinguish current-session state from foreign-session state, the orchestrator must fail closed to diagnosis rather than inheriting another session's active task,
-5. releasing, superseding, or reclaiming a claim is part of closure for the bounded step and must be receipt-backed.
-
-Intent-binding clarification:
-
-1. `continue development` authorizes orchestrator-led continuation only after the active bounded unit is explicitly bound,
-2. `continue the next task` or equivalent ordinal wording does not by itself authorize choosing the first ready TaskFlow/backlog candidate,
-3. if the user did not name the bounded unit and the runtime does not show one uniquely evidenced active continuation unit, fail closed to clarification or explicit ambiguity report before shaping/dispatch,
-4. `продовжи агентами`, `continue by agents`, and equivalent delegated-continuation wording sets sticky orchestration intent for the active session until the user explicitly requests stop/final closure.
-5. sticky continuation intent does not weaken rules 1-3 and never authorizes binding by plausibility, backlog ordering, or local intuition alone.
-
-Loop binding rule:
-
-1. once steps 3-7 become lawful for the active bounded unit, the orchestrator must continue through them in the same active cycle unless a real blocker appears,
-2. commentary/progress visibility, status output, or intermediate reporting between those steps does not authorize stopping the cycle,
-3. context gathering that already answers packet ownership and next route is not a closure point,
-4. interim status summaries must remain commentary-style while continuation intent is active,
-5. final closure wording/reporting is forbidden while continuation intent is active unless the user explicitly asks to end/finalize the session.
-6. commentary, status surfaces, and intermediate reports are visibility only; they never count as lawful pause boundaries by themselves.
-6. before emitting any final report, the orchestrator must pass a pre-response gate:
-   - `active delegated agents == 0`,
-   - delegated handoff state is resolved,
-   - no ready continuation item exists in TaskFlow unless the user explicitly requests stop/closure.
-7. “immediately bind the next lawful continuation item” applies only inside the same already-bound bounded unit; crossing into a new sibling slice requires a fresh explicit binding or uniquely evidenced continuation receipt.
-7. if any pre-response gate check fails, continue orchestration and reporting through commentary updates only.
-8. after any green proof/build/test result, runtime handoff, finished delegated lane, or intermediate report, the orchestrator must immediately bind the next lawful continuation item in the same cycle when one is already evidenced.
-9. “report now, continue later” is forbidden when the next lawful item is already known from TaskFlow, recovery state, delegated evidence, or the just-finished proof result.
-10. an intermediate report may describe the state transition, but it does not complete the cycle and must not delay the already-evidenced next lawful continuation item.
-11. when the user gives an explicit ordered sequence, that sequence is the controlling execution contract; the orchestrator must not reorder it because some adjacent cleanup or broader technical program looks more complete.
-12. scope expansion is forbidden unless the current bounded step cannot be completed without it or the user explicitly authorizes the broader track.
-13. if closure-style wording is emitted by mistake during active continuation intent, the immediate recovery step is to return to commentary mode and bind the already-evidenced next lawful continuation item in the same cycle.
-14. when shell commands record backlog notes or similar free text, prefer file-backed arguments such as `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+1. keep the current vida-stack active task, parent epic, priority reason, owned/read-only paths, proof target, role chain, and sequential/parallel posture visible before write-producing work,
+2. use TaskFlow updates rather than chat-only notes for PRs, downstream reports, runtime defects, CI failures, release tasks, optimizations, documentation/process work, and operator-surface gaps,
+3. use `META` for multi-defect or multi-source batch planning before selecting the shared invariant and proof window,
+4. prefer local focused proof and documented script modes before expensive workspace, release, installer, or CI gates,
+5. treat CI after push as diagnostic unless the active bounded unit is release/mainline/installer/CI architecture admission,
+6. keep historical release labels and concrete blocker names as evidence only, not permanent routing law.
 
 The orchestrator must not:
 
@@ -177,64 +141,17 @@ Before any bounded work source moves into implementation, the orchestrator must:
 5. record a separate runtime defect and use bounded Defective Runtime Emulation Mode when VIDA cannot execute that chain,
 6. apply the source's own closure evidence without weakening the generic proof gate.
 
-## Delegation Rule
+## Delegation And Local Handling Overlay
 
-For normal write-producing work, delegation is the default.
+Generic delegation, packet, lane, exception, and host-agent bridge law is owned by the runtime/agent-system protocols. This project process doc keeps only the vida-stack routing overlay:
 
-Default route:
-
-1. orchestrator shapes,
-2. analyst prepares the bounded handoff when analysis/spec context is required,
-3. test_author/autotester writes or specifies the failing regression proof for test-first defects,
-4. coach_test_gate reviews test quality before implementation when a new regression test gates the packet,
-5. developer/implementer writes through the cheapest eligible configured write carrier,
-6. coach_implementation_gate reviews implementation conformance, then duplication_reviewer and tester review closure evidence,
-7. prover and release_closure prove closure readiness,
-8. orchestrator synthesizes and updates TaskFlow.
-
-Full-orchestration rule:
-
-1. when normal write-producing work is in scope, the full delegated cycle remains the default even after bounded read-only findings or explorer-discovered gaps,
-2. discovering the exact patch location does not by itself authorize local orchestrator patching,
-3. local departure from this full cycle requires an explicit recorded exception path.
-4. a worker wait timeout, empty poll result, or slow delegated response does not compress the full cycle into one generic development lane or root-session coding; the next lawful step is renewed waiting, bounded inspection, reuse, reroute, or explicit escalation.
-5. in this project, the canonical delegated execution surface for that cycle is the runtime lane flow through `vida agent-init`; host-tool-specific subagent APIs are backend details and must not be treated as the primary legality gate for project delegation.
-6. role, model, cost, and carrier selection must be resolved from `vida.config.yaml` and active agent-extension registries, not hardcoded in prompts, code, or task notes.
-7. after every lane return, diagnostic, blocker, or new defect, update TaskFlow and re-check ordering, priority, dependency edges, and parallel admissibility before launching the next lane.
-
-Keep work local only when:
-
-1. the work is shaping only,
-2. the work is bounded read-only analysis,
-3. the work is proof-only and cheaper to verify directly,
-4. a recorded saturation or exception path is active.
-
-Clarification:
-
-1. a "very small one-file fix" is not an independent bypass around worker-first or open-delegation law,
-2. if the work is still write-producing, local handling must still satisfy the exception-path and delegated-cycle gates.
-3. local shell access, `apply_patch`, or any other host-tool write affordance is not by itself a legality signal for root-session implementation.
-4. `vida agent-init` is an activation/view surface; reading or rendering that surface is not by itself evidence that the selected lane already executed the packet.
-5. if `vida agent-init --dispatch-packet ...` activates only a `tracked_flow_packet` or other shaping-only handoff, the orchestrator must continue shaping/rerouting until a concrete bounded write-producing packet exists or an explicit blocker is recorded.
-6. if an internal host backend returns only an activation view and no execution evidence, treat that state as a bridge blocker rather than a live delegated execution lane.
-7. under an internal host posture, runtime may satisfy that bridge only through a configured host-agent adapter that can produce VIDA result and receipt artifacts; non-interactive `codex exec` is a separate explicit process carrier and must not be treated as the implementation of `internal_subagents`.
-8. if that bridge blocker still leaves a bounded read-only diagnostic path, continue to a code-level blocker or next bounded fix before pausing for user clarification.
-9. that bounded fix remains diagnosis/shaping output only until runtime evidence changes; do not convert it into local root-session mutation unless a new explicit exception-path receipt or receipt-backed delegated execution evidence is recorded first.
-
-Lane-identity rule:
-
-1. the root session remains the orchestrator throughout normal development orchestration,
-2. resumed execution intent does not convert the root session into a local implementer,
-3. local root-session writing requires an explicit recorded exception path,
-4. absent that receipt, the next lawful action is shaping, delegation, verification routing, or escalation.
-5. if the delegated lane still exists, a same-turn timeout summary is not a supersession receipt.
-
-Escalate only when:
-
-1. packet boundaries cannot be made coherent,
-2. write scopes collide,
-3. architecture conflict blocks lawful closure,
-4. repeated rework still leaves one unresolved design decision.
+1. normal write-producing work is shaped as one bounded TaskFlow packet and routed through the configured role chain when the runtime can execute it,
+2. the project-preferred chain is analyst -> test_author when needed -> coach_test_gate when needed -> developer/implementer -> coach_implementation_gate -> duplication_reviewer -> tester/prover -> release_closure -> orchestrator synthesis,
+3. role, carrier, model, cost, reasoning effort, host CLI, and worktree decisions come from `vida.config.yaml`, agent-extension registries, and runtime assignment evidence,
+4. keep work local only for shaping, read-only analysis, proof-only checks, or a recorded bounded recovery/exception path,
+5. if runtime delegation is blocked, record the runtime defect and use the defective-runtime overlay only until canonical dispatch/continuation is restored,
+6. do not treat a visible host subagent, explicit process-carrier execution, activation view, known patch location, dirty tree, or advisory draft as receipt-backed execution evidence,
+7. before escalating, verify packet boundaries, write-scope collisions, architecture conflicts, and repeated rework evidence against the mapped owner protocols.
 
 ## Packet Readiness Rule
 
@@ -257,63 +174,22 @@ Interpretation rule:
 4. runtime surfaces such as `vida taskflow consume final`, dispatch-packet persistence, resume, and `vida agent-init` must fail closed when the active packet template minimum is missing.
 5. for `tracked_flow_packet` handoffs, raw `create_command` is initial materialization evidence only; once the tracked task id already exists, continue through the runtime-provided ensure/reuse command instead of retrying duplicate creation.
 
-## Anti-Stop Rule
+## Continuation, Exception, And Saturation Owner Pointers
 
-Framework anti-stop, reporting-boundary, continuation, and final-report law is owned by:
+Do not duplicate generic continuation, exception, open-delegation, or saturation law here. Resolve the full rules through:
 
-1. `instruction-contracts/core.orchestration-runtime-capsule`
-2. `instruction-contracts/core.orchestration-protocol`
-3. `runtime-instructions/work.taskflow-protocol`
+1. `instruction-contracts/core.orchestration-runtime-capsule`,
+2. `instruction-contracts/core.orchestration-protocol`,
+3. `runtime-instructions/work.taskflow-protocol`,
+4. `instruction-contracts/lane.worker-dispatch-protocol`,
+5. `runtime-instructions/lane.agent-handoff-context-protocol`.
 
-Project narrowing:
+Project residue:
 
-1. interim synthesis may summarize state, but it must not end the active cycle while `in_work=1`,
-2. do not treat one closed `execution_block` or `delivery_task` as development-session closure when lawful continuation still exists,
-3. after one bounded item closes, rebuild the parent bounded unit and either:
-   - shape the next lawful leaf/item,
-   - or emit an explicit blocker/escalation receipt
-4. `continue development` must not collapse into a symptom-only proof step such as "fix the first failing test" unless the active packet already names that symptom as the current leaf,
-5. a green local proof command closes only its bounded proof target,
-6. if the next lawful item is already known from TaskFlow, verifier, subagent, or continuation evidence, that signal is a trigger to continue routing rather than a closure-style reporting boundary.
-7. commentary, status output, and intermediate reports are visibility only and never count as lawful pause boundaries by themselves.
-8. after any bounded result, green build/test/proof, or delegated handoff/result, the orchestrator must continue the already-evidenced same-cycle next lawful item rather than waiting for another user nudge.
-
-## Recorded Exception Path Rule
-
-Framework exception-path and open-delegation law is owned by:
-
-1. `instruction-contracts/core.orchestration-runtime-capsule`
-2. `instruction-contracts/core.orchestration-protocol`
-3. `runtime-instructions/work.taskflow-protocol`
-
-Project narrowing:
-
-1. local orchestrator write work is lawful only under an explicit pre-write exception path,
-2. narrow that path to one bounded `delivery_task` or `execution_block`,
-3. return to normal orchestrator posture immediately after the bounded local fix/proof step,
-4. before local fix/proof work, be able to name the active parent bounded unit and active packet/leaf from TaskFlow or packet receipts,
-5. do not treat `continue development`, implementer delay, known patch location, or self-diagnosis pressure as substitutes for exception-path or supersession law,
-6. if live runtime still reports blocked takeover for an open delegated cycle, remain in diagnosis/orchestration posture and surface the conflict rather than repair locally.
-7. do not treat a dirty worktree, already-present same-scope diff, or a partially applied delegated patch as implicit permission for local completion; those remain reroute/blocker/supersession evidence until a lawful exception path is recorded before mutation.
-
-## Saturation Recovery Rule
-
-When worker-first execution hits agent or thread limits, the orchestrator must run saturation recovery before declaring local fallback or exception path.
-
-Required sequence:
-
-1. inspect currently delegated lanes,
-2. identify lanes that are `completed_unsynthesized`, `superseded`, `still_waiting`, or `still_active`,
-3. synthesize or supersede any completed returns first,
-4. close/reclaim lanes that no longer carry an open handoff or proof obligation,
-5. retry lawful reuse or fresh dispatch,
-6. only then record saturation as still active if no lawful delegated path remains.
-
-Hard rule:
-
-1. "agent limits" without this inspection/reclaim sequence is not a sufficient reason for root-session coding,
-2. completed delegated lanes must be checked for closeability before any local fallback,
-3. a completed lane with unsynthesized handoff is not closeable yet and must be reconciled first.
+1. interim synthesis may describe state but must not end an active cycle while a lawful same-unit continuation is evidenced,
+2. one green proof closes only its bounded proof target, not the whole development session,
+3. local orchestrator writes require the generic owner-law evidence plus a project-visible bounded unit, path scope, proof target, and TaskFlow note,
+4. agent/thread saturation must inspect delegated lane state, synthesize closeable returns, reclaim only closeable lanes, and retry lawful dispatch before any fallback is recorded.
 
 ## Top-Level Routing Table
 
@@ -368,17 +244,17 @@ If those answers are not visible from the minimum read set, do not continue into
 8. for full prompt-stack law, read `docs/process/project-agent-prompt-stack-protocol.md`,
 9. for full delegated-lane law and closure edge cases, read `docs/process/team-development-and-orchestration-protocol.md`,
 10. for Codex role/runtime posture, read `docs/process/codex-agent-configuration-guide.md`,
-11. for Release-1 execution ownership, read `docs/product/spec/release-1-plan.md`,
-12. for Release-1 closure bottlenecks, read `docs/product/spec/release-1-seam-map.md`.
+11. for release formatting and public release body rules, read `docs/process/release-formatting-protocol.md`,
+12. for current product/spec ownership, read `docs/product/spec/current-spec-map.md`.
 
 -----
 artifact_path: process/project-orchestrator-operating-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-06-02'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: 2026-05-15T09:13:17.0722456Z
+updated_at: 2026-06-02T07:05:00+03:00
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl
