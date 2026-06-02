@@ -242,40 +242,17 @@ Current focused Rust test harness condition:
 205. `vida-rf1.3.4` current-tree reproof confirms that `vida docflow readiness` stays on the Rust/in-process side on the current integrated tree through the exact `boot_smoke` readiness surface proof.
 206. `vida-rf1.3.4` current-tree reproof confirms that `vida docflow check-file` stays on the Rust/in-process side on the current integrated tree through the exact `boot_smoke` check-file surface proof.
 207. `vida-rf1.3.4` current-tree reproof confirms that `vida docflow readiness-file` stays on the Rust/in-process side on the current integrated tree through the exact `boot_smoke` readiness-file surface proof.
-### Nim Transitional Runtime
+### Retired Donor Runtime References
 
-The transitional `taskflow-v0` runtime remains buildable and usable as the current donor/runtime substrate.
+Direct donor-runtime commands are not current operator entrypoints. Keep donor names here only where an old receipt or a bounded parity test explicitly names them.
 
-Proven commands:
+Do not copy old donor command shapes into new scripts, docs, CI jobs, or local proof gates.
 
-1. `nim c -r taskflow-v0/tests/test_runtime_bundle.nim`
-2. `VIDA_ROOT=<repo-root> taskflow-v0/src/vida --help`
+### DocFlow Parity Boundary
 
-Current launch conditions for `taskflow-v0`:
+The current operator surface is `vida docflow`. Direct Python donor commands are not current local build/test guidance.
 
-1. run from the project repository root or set `VIDA_ROOT=<repo-root>` explicitly
-2. local binary path during active development is `taskflow-v0/src/vida`
-3. DB-backed task commands additionally require `VIDA_V0_TURSO_PYTHON=<repo-root>/.venv/bin/python3`
-
-Proven task-surface command shape:
-
-1. `VIDA_ROOT=<repo-root> VIDA_V0_TURSO_PYTHON=<repo-root>/.venv/bin/python3 taskflow-v0/src/vida task ready --json`
-
-### DocFlow Donor Runtime
-
-The current documentation/runtime donor remains the Python `codex-v0` surface behind the user-facing `DocFlow` naming.
-
-Current launch conditions for `codex-v0`:
-
-1. run from the project repository root
-2. use `python3 codex-v0/codex.py <command> ...` during local development
-3. for installer-managed runs, `codex-v0` delegates to `<install-root>/current/.venv/bin/python3 <install-root>/current/codex-v0/codex.py`
-
-Proven command shapes:
-
-1. `python3 codex-v0/codex.py check --profile active-canon`
-2. `python3 codex-v0/codex.py fastcheck --profile active-canon`
-3. `python3 codex-v0/codex.py proofcheck --profile active-canon-strict`
+Use `vida docflow <command>` for local operation and proof. Keep direct donor invocation only inside bounded parity fixtures that intentionally compare old and current behavior.
 
 ### Release Build
 
@@ -287,37 +264,36 @@ Proven command:
 2. `vida release install --json` only when installed-runtime validation or release admission is the bounded target
 3. `scripts/vida-dev-gate.ps1 -Mode release-install -Json` on Windows when the same installed-runtime gate needs timing evidence
 
-Proven release outputs:
+Current release output shape:
 
-1. `dist/vida-stack-v0.2.1.tar.gz`
-2. `dist/vida-stack-v0.2.1.zip`
+1. `dist/vida-stack-<version>.tar.gz`
+2. `dist/vida-stack-<version>.zip` on Windows release builds
 3. `dist/vida-install.sh`
-4. `dist/vida-stack-v0.2.1.manifest.json`
-5. `~/.local/share/vida-stack/current/bin/vida` may be refreshed from `target/release/vida` for the active local system launcher
+4. `dist/vida-install.ps1` on Windows release builds
+5. `dist/vida-stack-<version>.manifest.json`
 
 Current release-manifest contract:
 
-1. installed entrypoints are `vida`, `taskflow-v0`, `codex-v0`
+1. installed entrypoints are `vida`, `taskflow`, `docflow`, and `vida-pi-agent`
 2. the local proof loop remains on the debug profile even when the system launcher is refreshed from the release build
-2. bundled binary is `bin/taskflow-v0`
+3. bundled runtime binaries live under `bin/`
 
 ### Installer
 
 The local installer path is proven end-to-end against a locally built archive.
 
-Proven command shape:
+Current command shape:
 
-1. `bash dist/vida-install.sh install --archive dist/vida-stack-v0.2.2.tar.gz --root <tmp-root> --bin-dir <tmp-bin> --force`
+1. `bash dist/vida-install.sh install --archive dist/vida-stack-<version>.tar.gz --root <tmp-root> --bin-dir <tmp-bin> --force`
 
 Current installer guarantees already proven:
 
-1. creates an installer-managed Python runtime under `<install-root>/releases/<version>/.venv`
-2. installs user-facing launchers into the configured `bin` directory
-3. makes `vida`, `taskflow-v0`, and `codex-v0` executable from `PATH`
+1. installs user-facing launchers into the configured `bin` directory
+2. makes `vida`, `taskflow`, `docflow`, and `vida-pi-agent` executable from `PATH`
+3. validates packaged runtime binaries against the release version
 4. packages `.codex/` into the active release root
 5. scaffolds `vida.config.yaml` from `install/assets/vida.config.yaml.template` when the installed release root does not already contain one
-6. materializes `taskflow-v0/generated/protocol_binding.compiled.json` and imports it into `.vida/state/taskflow-state.db`
-7. passes `bash install/install.sh doctor --root <tmp-root> --bin-dir <tmp-bin>`
+6. passes installer smoke through `scripts/local-installer-smoke.sh --archive <archive>`
 
 ### Unified Launcher Surface
 
@@ -334,43 +310,15 @@ Proven commands:
 
 1. `cargo run -p vida -- taskflow help`
 2. `cargo run -p vida -- docflow help`
-3. `cargo test -p vida`
-4. `cargo test -p vida` now includes proxy execution smoke for resolved `taskflow` and `docflow` runtimes
-5. `cargo test -p vida docflow_proxy_can_use_rust_cli_shell -- --nocapture`
-6. `cargo test -p vida docflow_proxy_can_run_rust_validation_surface -- --nocapture`
-7. `cargo test -p vida docflow_proxy_can_run_rust_readiness_surface -- --nocapture`
-8. `cargo test -p vida --test boot_smoke docflow_proxy_can_run_rust_check_file_surface -- --exact --nocapture`
-9. `cargo test -p vida docflow_proxy_can_run_rust_readiness_file_surface -- --nocapture`
-10. `cargo test -p vida docflow_proxy_can_run_rust_registry_scan_surface -- --nocapture`
-11. `cargo test -p vida docflow_proxy_can_run_rust_overview_scan_surface -- --nocapture`
-12. `cargo test -p vida docflow_proxy_can_run_rust_validate_tree_surface -- --nocapture`
-13. `cargo test -p vida docflow_proxy_can_run_rust_readiness_tree_surface -- --nocapture`
-14. `cargo test -p vida docflow_proxy_can_run_rust_relations_scan_surface -- --nocapture`
-15. `cargo test -p vida docflow_proxy_can_run_rust_registry_write_surface -- --nocapture`
-16. `cargo test -p vida docflow_proxy_can_run_rust_readiness_write_surface -- --nocapture`
-17. `cargo test -p vida docflow_proxy_can_run_rust_registry_surface -- --nocapture`
-18. `cargo test -p vida docflow_proxy_can_run_rust_readiness_check_surface -- --nocapture`
-19. `cargo test -p vida docflow_proxy_can_run_rust_layer_status_surface -- --nocapture`
-20. `cargo test -p vida docflow_proxy_can_run_rust_summary_surface -- --nocapture`
-21. `cargo test -p vida docflow_proxy_can_run_rust_scan_surface -- --nocapture`
-22. `cargo test -p vida docflow_proxy_can_run_rust_fastcheck_surface -- --nocapture`
-23. `cargo test -p vida docflow_proxy_can_run_rust_doctor_surface -- --nocapture`
-24. `cargo test -p vida docflow_proxy_can_run_rust_activation_check_surface -- --nocapture`
-25. `cargo test -p vida docflow_proxy_can_run_rust_protocol_coverage_check_surface -- --nocapture`
-26. `cargo test -p vida docflow_proxy_can_run_rust_proofcheck_surface -- --nocapture`
-27. `cargo test -p vida docflow_proxy_can_run_rust_registry_write_canonical_surface -- --nocapture`
-28. `cargo test -p vida docflow_proxy_can_run_rust_readiness_write_canonical_surface -- --nocapture`
-29. `cargo test -p vida docflow_proxy_runs_readiness_check_in_process_when_profile_is_supported -- --nocapture`
-30. `cargo test -p vida docflow_proxy_runs_proofcheck_in_process_when_profile_is_supported -- --nocapture`
-31. `cargo test -p vida docflow_proxy_runs_finalize_edit_in_process_when_supported -- --nocapture`
-32. `cargo test -p vida docflow_proxy_runs_touch_in_process_when_supported -- --nocapture`
-33. `cargo test -p vida docflow_proxy_runs_rename_artifact_in_process_when_supported -- --nocapture`
-34. `cargo test -p vida docflow_proxy_runs_init_in_process_when_supported -- --nocapture`
-35. `cargo test -p vida docflow_proxy_runs_move_in_process_when_supported -- --nocapture`
+3. `cargo nextest run --locked -p vida --profile default docflow_proxy`
+4. `cargo nextest run --locked -p vida --profile default taskflow_proxy`
+5. `cargo nextest run --locked -p vida --profile default task_smoke`
+6. `scripts/vida-dev-gate.ps1 -Mode focused-nextest -TestFilter <filter> -Json`
+7. `scripts/vida-dev-gate.ps1 -Mode workspace-nextest -Json` when the coherent batch is ready for a local workspace gate
 
 Current launcher semantics:
 
-1. `vida taskflow` is now mixed-mode during the bridge: launcher-owned Rust paths already cover help/query, task dependency diagnostics, doctor-aligned flow inspection, `run-graph` mutation/inspection, the full `consume` family, and the currently promoted `task` bridge commands; unsupported top-level `vida taskflow <unknown>` and unsupported `vida taskflow task <unknown>` paths now fail closed on launcher-owned surfaces, while the remaining residual delegated scope is the still-supported non-promoted TaskFlow runtime commands that continue to route to the transitional `taskflow-v0` runtime
+1. `vida taskflow` is launcher-owned for the implemented Rust paths: help/query, task dependency diagnostics, doctor-aligned flow inspection, `run-graph` mutation/inspection, the `consume` family, and promoted `task` commands; unsupported top-level `vida taskflow <unknown>` and unsupported `vida taskflow task <unknown>` paths fail closed on launcher-owned surfaces
 2. `vida docflow` now routes the active Rust-native `DocFlow` command map in-process and fails closed for unsupported commands
 3. canonical user-facing naming is `DocFlow`; the Python donor remains a parity oracle and bounded validation tool, not a launcher fallback
 4. for the Rust `vida` binary, canonical runtime-family help path is currently `vida taskflow help` and `vida docflow help`
@@ -378,8 +326,7 @@ Current launcher semantics:
 6. root `vida --help` is currently Clap-owned command help, while runtime-family-specific guidance is carried by `vida taskflow help` and `vida docflow help`
 7. `vida docflow` now owns the currently implemented Rust-native `DocFlow` surfaces in-process inside the `vida` binary
 8. the current in-process Rust-owned `vida docflow` surface is proven for `overview`, `summary`, `layer-status`, `scan`, `fastcheck`, `doctor`, `activation-check`, `protocol-coverage-check`, `readiness-check --profile active-canon`, `proofcheck --profile active-canon-strict`, `finalize-edit`, `touch`, `rename-artifact`, `init`, `move`, `changelog`, `changelog-task`, `task-summary`, `migrate-links`, `proofcheck`, `validate-footer`, `readiness`, `check-file`, `readiness-file`, `registry`, `registry-scan`, `registry-write`, `overview-scan`, `validate-tree`, `readiness-tree`, `readiness-check`, `readiness-write`, `relations-scan`, `links`, `deps-map`, and `artifact-impact`; both `registry-write` and `readiness-write` are also proven on their canonical shared artifact paths via `--canonical`
-9. the transitional installed `docflow-v0` wrapper now forwards into the installed `vida docflow` Rust surface instead of invoking the Python donor runtime directly
-10. `bash scripts/build-release.sh` currently produces release artifacts that include `bin/taskflow-v0`, `.codex/`, `AGENTS.sidecar.md`, the packaged runtime-config template under `install/assets/vida.config.yaml.template`, the launcher-owned task-bridge helpers under `taskflow-v0/helpers/turso_task_store.py` and `taskflow-v0/helpers/toon_render.py`, and the protocol-binding seed/compiled JSON pair under `taskflow-v0/config/` plus `taskflow-v0/generated/`; this is proven by inspecting the built `dist/vida-stack-v0.2.2.tar.gz` contents and `dist/vida-stack-v0.2.2.manifest.json`
+9. `bash scripts/build-release.sh` currently produces release artifacts that include current runtime binaries under `bin/`, `.codex/`, `AGENTS.md`, `AGENTS.sidecar.md`, `vida/`, host templates when present, and the packaged runtime-config template under `install/assets/vida.config.yaml.template`
 
 Receipt 207.
 
@@ -434,8 +381,7 @@ The current project-side environment rules are:
 3. installer-managed Python dependencies are declared in `install/requirements-python.txt`
 4. the current YAML stack is `ruamel.yaml`, not `PyYAML`
 5. run project-side Python and runtime entrypoints from the repository root so the active working tree stays aligned with the current project surface
-6. donor `taskflow-v0` DB-backed commands additionally require `VIDA_V0_TURSO_PYTHON=<repo-root>/.venv/bin/python3`
-7. operator-local credentials, sessions, or cache remain local runtime state and are not part of project canon
+6. operator-local credentials, sessions, or cache remain local runtime state and are not part of project canon
 
 ## Documentation Update Rule
 
@@ -451,9 +397,8 @@ Only record proven working conditions.
 
 ## Current Known Transitional Limits
 
-1. `codex-v0/codex.py` still remains the donor/parity oracle and canonical external proof surface during the bridge wave
-2. some project/operator documentation still describes older donor-backed launcher semantics and must be realigned as follow-up documentation cleanup
-3. `taskflow-v0` remains the donor/runtime substrate until `taskflow-rs` becomes the primary execution runtime
+1. some historical receipts still name older donor-backed launcher semantics; they are retained as evidence only, not current operator guidance
+2. any remaining donor-runtime direct invocation must be justified by an explicit parity test or removed during the next documentation cleanup slice
 
 -----
 artifact_path: process/vida1-development-conditions
@@ -464,5 +409,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/vida1-development-conditions.md
 created_at: '2026-03-11T09:00:00+02:00'
-updated_at: '2026-06-02T03:05:00+03:00'
+updated_at: '2026-06-02T03:30:00+03:00'
 changelog_ref: vida1-development-conditions.changelog.jsonl
