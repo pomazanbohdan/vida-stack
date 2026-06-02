@@ -394,6 +394,64 @@ impl StateStore {
         } else {
             (closed_count as f64 / descendant_count as f64) * 100.0
         };
+        let all_descendants_closed_like = rows
+            .iter()
+            .filter(|task| descendant_ids.contains(&task.id))
+            .all(|task| Self::task_status_is_closed_like(&task.status));
+        let is_container = work_item_is_program_container(&root_task.issue_type);
+        let root_closed = Self::task_status_is_closed_like(&root_task.status);
+        let closure_candidate =
+            is_container && !root_closed && descendant_count > 0 && all_descendants_closed_like;
+        let (
+            closure_candidate_state,
+            closure_candidate_reason,
+            recommended_next_action,
+            canonical_commands,
+        ) = if closure_candidate {
+            (
+                    "ready_to_close".to_string(),
+                    Some(
+                        "root container is open while all descendants are closed-like".to_string(),
+                    ),
+                    format!(
+                        "Close container with `vida task close {} --reason \"all descendants closed\" --json`.",
+                        root_task.id
+                    ),
+                    vec![format!(
+                        "vida task close {} --reason \"all descendants closed\" --json",
+                        root_task.id
+                    )],
+                )
+        } else if root_closed {
+            (
+                "already_closed".to_string(),
+                Some("root task is already closed-like".to_string()),
+                "No action; task is already closed.".to_string(),
+                Vec::new(),
+            )
+        } else if !is_container {
+            (
+                "not_container".to_string(),
+                Some("root task is not a program container".to_string()),
+                "Continue normal task execution or inspect dependencies.".to_string(),
+                Vec::new(),
+            )
+        } else if descendant_count == 0 {
+            (
+                "container_without_descendants".to_string(),
+                Some("container has no descendants to prove closure readiness".to_string()),
+                "Add child work items or close with an explicit operator reason.".to_string(),
+                Vec::new(),
+            )
+        } else {
+            (
+                "active_descendants_remaining".to_string(),
+                Some("one or more descendants are not closed-like".to_string()),
+                "Continue or close remaining descendant work before closing the container."
+                    .to_string(),
+                Vec::new(),
+            )
+        };
 
         Ok(TaskProgressSummary {
             root_task,
@@ -406,6 +464,11 @@ impl StateStore {
             epic_count,
             status_counts,
             percent_closed,
+            closure_candidate,
+            closure_candidate_state,
+            closure_candidate_reason,
+            recommended_next_action,
+            canonical_commands,
         })
     }
 

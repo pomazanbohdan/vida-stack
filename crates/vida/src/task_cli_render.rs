@@ -366,19 +366,23 @@ pub(crate) fn print_task_show(
     print_task_read_metadata(render, read_metadata);
 }
 
-pub(crate) fn print_task_progress(
-    render: RenderMode,
-    summary: &TaskProgressSummary,
-    as_json: bool,
-) {
-    let payload = build_pass_operator_surface_payload(
+pub(crate) fn task_progress_payload(summary: &TaskProgressSummary) -> serde_json::Value {
+    build_pass_operator_surface_payload(
         "vida task progress",
         serde_json::json!({
             "task_id": summary.root_task.id,
             "root_work_item_kind": task_work_item_kind_value(&summary.root_task.issue_type),
             "progress": summary,
         }),
-    );
+    )
+}
+
+pub(crate) fn print_task_progress(
+    render: RenderMode,
+    summary: &TaskProgressSummary,
+    as_json: bool,
+) {
+    let payload = task_progress_payload(summary);
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -410,6 +414,13 @@ pub(crate) fn print_task_progress(
         "percent closed",
         &format!("{:.2}", summary.percent_closed),
     );
+    print_surface_line(
+        render,
+        "closure candidate",
+        &summary.closure_candidate.to_string(),
+    );
+    print_surface_line(render, "closure state", &summary.closure_candidate_state);
+    print_surface_line(render, "next action", &summary.recommended_next_action);
     if summary.status_counts.is_empty() {
         print_surface_line(render, "status counts", "none");
         return;
@@ -1126,11 +1137,15 @@ pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPa
 
 #[cfg(test)]
 mod tests {
-    use super::{build_pass_operator_surface_payload, build_task_graph_issues_payload};
+    use super::{
+        build_pass_operator_surface_payload, build_task_graph_issues_payload, task_progress_payload,
+    };
     use crate::operator_contracts::shared_operator_output_contract_parity_error;
     use crate::state_store::{
-        TaskCriticalPathNode, TaskExecutionSemantics, TaskGraphIssue, TaskRecord,
+        TaskCriticalPathNode, TaskExecutionSemantics, TaskGraphIssue, TaskProgressSummary,
+        TaskRecord,
     };
+    use std::collections::BTreeMap;
 
     fn sample_task(id: &str) -> TaskRecord {
         TaskRecord {
@@ -1238,6 +1253,53 @@ mod tests {
         assert_eq!(row.len(), 6);
         assert!(row.contains_key("id"));
         assert!(!row.contains_key("description"));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_progress_payload_exposes_closure_candidate_action() {
+        let mut root = sample_task("epic-ready");
+        root.issue_type = "epic".to_string();
+        let mut status_counts = BTreeMap::new();
+        status_counts.insert("closed".to_string(), 2);
+        let summary = TaskProgressSummary {
+            root_task: root,
+            progress_basis: "descendants_excluding_root".to_string(),
+            direct_child_count: 2,
+            descendant_count: 2,
+            open_count: 0,
+            in_progress_count: 0,
+            closed_count: 2,
+            epic_count: 0,
+            status_counts,
+            percent_closed: 100.0,
+            closure_candidate: true,
+            closure_candidate_state: "ready_to_close".to_string(),
+            closure_candidate_reason: Some(
+                "root container is open while all descendants are closed-like".to_string(),
+            ),
+            recommended_next_action:
+                "Close container with `vida task close epic-ready --reason \"all descendants closed\" --json`."
+                    .to_string(),
+            canonical_commands: vec![
+                "vida task close epic-ready --reason \"all descendants closed\" --json"
+                    .to_string(),
+            ],
+        };
+
+        let payload = task_progress_payload(&summary);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task progress");
+        assert_eq!(payload["progress"]["closure_candidate"], true);
+        assert_eq!(
+            payload["progress"]["closure_candidate_state"],
+            "ready_to_close"
+        );
+        assert_eq!(
+            payload["progress"]["canonical_commands"][0],
+            "vida task close epic-ready --reason \"all descendants closed\" --json"
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 

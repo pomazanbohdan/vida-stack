@@ -851,6 +851,11 @@ pub struct TaskProgressSummary {
     pub epic_count: usize,
     pub status_counts: BTreeMap<String, usize>,
     pub percent_closed: f64,
+    pub closure_candidate: bool,
+    pub closure_candidate_state: String,
+    pub closure_candidate_reason: Option<String>,
+    pub recommended_next_action: String,
+    pub canonical_commands: Vec<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]

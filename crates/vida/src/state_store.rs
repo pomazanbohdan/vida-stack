@@ -955,6 +955,59 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn task_progress_summary_marks_open_epic_with_closed_descendants_as_closure_candidate() {
+        let root = unique_temp_root("vida-task-progress-closure-candidate");
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let rows = sample_tasks_jsonl()
+            .replace(
+                "\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"open\"",
+                "\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"closed\"",
+            )
+            .replace(
+                "\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"open\"",
+                "\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"closed\"",
+            )
+            .replace(
+                "\"id\":\"vida-c\",\"title\":\"Task C\",\"description\":\"active\",\"status\":\"in_progress\"",
+                "\"id\":\"vida-c\",\"title\":\"Task C\",\"description\":\"active\",\"status\":\"closed\"",
+            );
+        fs::write(&source, rows).expect("write sample jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import tasks");
+
+        let summary = store
+            .task_progress_summary("vida-root")
+            .await
+            .expect("progress summary");
+        assert!(summary.closure_candidate);
+        assert_eq!(summary.closure_candidate_state, "ready_to_close");
+        assert_eq!(summary.descendant_count, 3);
+        assert_eq!(summary.closed_count, 3);
+        assert_eq!(summary.percent_closed, 100.0);
+        assert!(summary
+            .recommended_next_action
+            .contains("vida task close vida-root"));
+        assert_eq!(
+            summary.canonical_commands,
+            vec!["vida task close vida-root --reason \"all descendants closed\" --json"]
+        );
+
+        let leaf_summary = store
+            .task_progress_summary("vida-a")
+            .await
+            .expect("leaf progress summary");
+        assert!(!leaf_summary.closure_candidate);
+        assert_eq!(leaf_summary.closure_candidate_state, "already_closed");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn critical_path_includes_release1_contract_steps_surface() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
