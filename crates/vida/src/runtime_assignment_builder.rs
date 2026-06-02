@@ -129,6 +129,7 @@ fn insert_semantic_routing_diagnostics(
                 "complexity_score": feature_vector.complexity_score,
                 "complexity_band": feature_vector.complexity_band,
                 "detected_domain": feature_vector.detected_domain,
+                "guardrail_risk": serde_json::to_value(&feature_vector.guardrail_risk).unwrap_or(serde_json::Value::Null),
                 "feature_vector": serde_json::to_value(&feature_vector).unwrap_or(serde_json::Value::Null),
                 "score_applied": true,
                 "strategy": "semantic_balanced_cost_quality",
@@ -2247,6 +2248,10 @@ mod tests {
         );
         assert_eq!(assignment["semantic_routing"]["score_applied"], true);
         assert_eq!(assignment["semantic_routing"]["advisory_only"], true);
+        assert_eq!(
+            assignment["semantic_routing"]["guardrail_risk"]["advisory_only"],
+            true
+        );
         assert_eq!(
             assignment["semantic_score_breakdown"]["advisory_only"],
             true
