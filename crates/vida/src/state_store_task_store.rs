@@ -99,9 +99,6 @@ impl StateStore {
                 break;
             };
 
-            // Add this parent to the closure chain before checking children
-            tasks_being_closed.insert(parent_id.clone());
-
             let child_indices = tasks
                 .iter()
                 .enumerate()
@@ -147,11 +144,14 @@ impl StateStore {
 
             let next_parent_id = Self::parent_id_for_task(&tasks[parent_index]);
             if matches!(tasks[parent_index].status.as_str(), "open" | "in_progress") {
+                tasks_being_closed.insert(parent_id.clone());
                 tasks[parent_index].status = "closed".to_string();
                 tasks[parent_index].updated_at = now.to_string();
                 tasks[parent_index].closed_at = Some(now.to_string());
                 tasks[parent_index].close_reason = Some(reason.to_string());
                 closed.push(tasks[parent_index].clone());
+            } else if !Self::task_status_is_closed_like(&tasks[parent_index].status) {
+                break;
             }
             current_parent_id = next_parent_id;
         }
@@ -3601,6 +3601,117 @@ mod tests {
         assert_eq!(parent.status, "open");
         assert!(parent.closed_at.is_none());
         assert!(parent.close_reason.is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn task_close_auto_parent_validation_order_keeps_unready_ancestor_open() {
+        let root = unique_task_store_temp_root("vida-close-leaf-unready-ancestor");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, status, parent_id) in [
+            ("root-epic", "Root epic", "epic", "in_progress", None),
+            (
+                "runtime-epic",
+                "Runtime epic",
+                "epic",
+                "in_progress",
+                Some("root-epic"),
+            ),
+            (
+                "route-parent",
+                "Route parent",
+                "task",
+                "paused",
+                Some("runtime-epic"),
+            ),
+            (
+                "async-parent",
+                "Async parent",
+                "task",
+                "paused",
+                Some("route-parent"),
+            ),
+            (
+                "timeout-leaf",
+                "Timeout leaf",
+                "defect",
+                "paused",
+                Some("async-parent"),
+            ),
+            (
+                "active-sibling",
+                "Active sibling",
+                "defect",
+                "in_progress",
+                Some("runtime-epic"),
+            ),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status,
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create task tree");
+        }
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-epic",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "runtime-epic".to_string();
+        status.active_node = "test_author".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+        status.handoff_state = "delegated_lane_blocked".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "none".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked ancestor run graph status");
+
+        store
+            .close_task("timeout-leaf", "leaf completed")
+            .await
+            .expect("close leaf without speculative ancestor validation failure");
+
+        let leaf = store.show_task("timeout-leaf").await.expect("load leaf");
+        let async_parent = store
+            .show_task("async-parent")
+            .await
+            .expect("load async parent");
+        let route_parent = store
+            .show_task("route-parent")
+            .await
+            .expect("load route parent");
+        let runtime_epic = store
+            .show_task("runtime-epic")
+            .await
+            .expect("load runtime epic");
+
+        assert_eq!(leaf.status, "closed");
+        assert_eq!(async_parent.status, "paused");
+        assert_eq!(route_parent.status, "paused");
+        assert_eq!(runtime_epic.status, "in_progress");
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate")
+            .is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 
