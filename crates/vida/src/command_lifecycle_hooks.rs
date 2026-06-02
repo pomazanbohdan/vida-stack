@@ -59,6 +59,7 @@ impl OutputMode {
 pub(crate) struct TimingHookConfig {
     pub(crate) enabled: bool,
     pub(crate) min_duration_threshold: Duration,
+    pub(crate) latency_budget: Option<Duration>,
     pub(crate) include_phase_timing: bool,
     pub(crate) output_mode: OutputMode,
     pub(crate) print_summary: bool,
@@ -77,6 +78,7 @@ impl TimingHookConfig {
             min_duration_threshold: env_u64("VIDA_COMMAND_TIMING_MIN_MS")
                 .map(Duration::from_millis)
                 .unwrap_or(Duration::ZERO),
+            latency_budget: env_u64("VIDA_COMMAND_TIMING_BUDGET_MS").map(Duration::from_millis),
             include_phase_timing: !env_false("VIDA_COMMAND_TIMING_PHASES"),
             output_mode,
             print_summary: enabled
@@ -121,6 +123,13 @@ impl CommandTimingRecord {
             .iter()
             .map(|(phase, duration)| (phase.as_str(), duration.as_millis()))
             .collect()
+    }
+
+    fn slowest_phase(&self) -> Option<(&'static str, u128)> {
+        self.phases
+            .iter()
+            .max_by_key(|(_, duration)| duration.as_nanos())
+            .map(|(phase, duration)| (phase.as_str(), duration.as_millis()))
     }
 }
 
@@ -177,6 +186,10 @@ impl CommandTimingContext {
 
 fn emit_timing_summary(record: &CommandTimingRecord, config: &TimingHookConfig) {
     let total_ms = record.total_duration.unwrap_or_default().as_millis();
+    let budget_ms = config.latency_budget.map(|budget| budget.as_millis());
+    let over_budget = budget_ms.is_some_and(|budget| total_ms >= budget);
+    let slowest_phase = record.slowest_phase();
+    let next_actions = timing_next_actions(over_budget, slowest_phase);
     match config.output_mode {
         OutputMode::Json => {
             let payload = serde_json::json!({
@@ -184,6 +197,13 @@ fn emit_timing_summary(record: &CommandTimingRecord, config: &TimingHookConfig) 
                     "command": record.command,
                     "output_mode": config.output_mode.as_str(),
                     "total_ms": total_ms,
+                    "budget_ms": budget_ms,
+                    "over_budget": over_budget,
+                    "slowest_phase": slowest_phase.map(|(phase, ms)| serde_json::json!({
+                        "name": phase,
+                        "ms": ms,
+                    })),
+                    "next_actions": next_actions,
                     "exit_code": record.exit_code,
                     "phases_ms": record.phase_millis(),
                 }
@@ -193,14 +213,41 @@ fn emit_timing_summary(record: &CommandTimingRecord, config: &TimingHookConfig) 
         OutputMode::Quiet => {}
         OutputMode::Verbose | OutputMode::Standard => {
             eprintln!(
-                "vida_timing command={} total_ms={} exit_code={} phases_ms={:?}",
+                "vida_timing command={} total_ms={} budget_ms={:?} over_budget={} exit_code={} phases_ms={:?} next_actions={:?}",
                 record.command,
                 total_ms,
+                budget_ms,
+                over_budget,
                 record.exit_code.unwrap_or_default(),
-                record.phase_millis()
+                record.phase_millis(),
+                next_actions
             );
         }
     }
+}
+
+fn timing_next_actions(
+    over_budget: bool,
+    slowest_phase: Option<(&'static str, u128)>,
+) -> Vec<String> {
+    if !over_budget {
+        return Vec::new();
+    }
+    let mut actions = Vec::new();
+    match slowest_phase {
+        Some((phase, ms)) => actions.push(format!(
+            "Inspect `{phase}` timing ({ms}ms) and move repeated reads to a cached projection or read-model."
+        )),
+        None => actions.push(
+            "Inspect command timing and move repeated reads to a cached projection or read-model."
+                .to_string(),
+        ),
+    }
+    actions.push(
+        "Re-run with `VIDA_COMMAND_TIMING_ENABLED=true` and a command-specific budget to verify the fix."
+            .to_string(),
+    );
+    actions
 }
 
 fn env_bool(name: &str) -> bool {
