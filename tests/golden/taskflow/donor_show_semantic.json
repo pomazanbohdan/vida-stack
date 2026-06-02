@@ -5,9 +5,11 @@
   "priority": 1,
   "issue_type": "task",
   "dependency_targets": [
+    "vida-root",
     "vida-a"
   ],
   "dependency_edge_types": [
+    "parent-child",
     "blocks"
   ]
 }
