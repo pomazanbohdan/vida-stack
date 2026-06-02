@@ -91,7 +91,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    if as_json && summary_only {
+    if as_json {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
             &state_dir,
             status_json_projection_name(summary_only),
@@ -1226,6 +1226,48 @@ mod tests {
         assert_eq!(
             super::status_json_projection_name(false),
             "status-full-latest"
+        );
+    }
+
+    #[test]
+    fn status_full_cached_projection_renders_operator_compact_view() {
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "host_agents": {
+                "agents": {
+                    "worker": {
+                        "status": "ready"
+                    }
+                },
+                "subagent_backends": {
+                    "internal_subagents": {
+                        "status": "ready"
+                    }
+                }
+            },
+            "operator_session_projection": {
+                "runtime_owner_evidence": {
+                    "stale_sessions": [
+                        {"session_id": "stale-a"},
+                        {"session_id": "stale-b"}
+                    ]
+                }
+            }
+        })
+        .to_string();
+
+        let rendered = super::render_cached_status_projection_for_operator(false, &cached);
+        let payload: serde_json::Value =
+            serde_json::from_str(&rendered).expect("cached status should render as json");
+
+        assert_eq!(payload["view"], "operator_compact");
+        assert_eq!(payload["host_agents"]["agents"]["count"], 1);
+        assert_eq!(payload["host_agents"]["subagent_backends"]["count"], 1);
+        assert_eq!(
+            payload["operator_session_projection"]["runtime_owner_evidence"]["stale_sessions"]
+                ["count"],
+            2
         );
     }
 
