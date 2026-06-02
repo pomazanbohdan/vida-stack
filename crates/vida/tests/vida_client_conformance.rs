@@ -119,6 +119,16 @@ fn service_capabilities_and_endpoints_are_read_only() {
         .expect("capabilities should be array")
         .iter()
         .any(|capability| capability == "wizard_plan"));
+    assert!(capabilities["capabilities"]
+        .as_array()
+        .expect("capabilities should be array")
+        .iter()
+        .any(|capability| capability == "materialization_read"));
+    assert!(capabilities["capabilities"]
+        .as_array()
+        .expect("capabilities should be array")
+        .iter()
+        .any(|capability| capability == "materialization_plan"));
 
     let endpoints = assert_same_response(operations::SERVICE_ENDPOINT_STATUS)
         .result
@@ -183,6 +193,36 @@ fn service_capabilities_and_endpoints_are_read_only() {
             .iter()
             .any(|capability| capability == "wizard_plan"));
     }
+    for materialization_read_operation in [
+        operations::MATERIALIZATION_MANIFEST_GET,
+        operations::MATERIALIZATION_DRIFT_CLASSIFY,
+        operations::MATERIALIZATION_RECEIPTS_LIST,
+    ] {
+        let row = endpoint_rows
+            .iter()
+            .find(|row| row["operation"] == materialization_read_operation)
+            .expect("materialization read endpoint row");
+        assert_eq!(row["scope"], "project");
+        assert_eq!(row["posture"], "read_only");
+        assert_eq!(row["requires_project_ref"], true);
+        assert!(row["required_capabilities"]
+            .as_array()
+            .expect("required capabilities array")
+            .iter()
+            .any(|capability| capability == "materialization_read"));
+    }
+    let update_plan = endpoint_rows
+        .iter()
+        .find(|row| row["operation"] == operations::MATERIALIZATION_UPDATE_PLAN)
+        .expect("materialization update-plan endpoint row");
+    assert_eq!(update_plan["scope"], "project");
+    assert_eq!(update_plan["posture"], "plan_only");
+    assert_eq!(update_plan["requires_project_ref"], true);
+    assert!(update_plan["required_capabilities"]
+        .as_array()
+        .expect("required capabilities array")
+        .iter()
+        .any(|capability| capability == "materialization_plan"));
     assert!(endpoint_rows
         .iter()
         .all(|row| row["posture"] != "apply" && row["posture"] != "admin"));
@@ -579,6 +619,116 @@ fn wizard_apply_remains_unsupported_and_unregistered() {
         response.error.expect("unsupported wizard apply").code,
         "unsupported_operation"
     );
+}
+
+#[test]
+fn materialization_manifest_tracks_artifact_owner_revisions_and_receipts() {
+    let fixture = FixtureVidaClient::new_ready();
+    let in_process = InProcessVidaClient::new_ready();
+    let request = envelope_with_project_ref(
+        operations::MATERIALIZATION_MANIFEST_GET,
+        VidaProjectRef::ProjectId {
+            project_id: VidaProjectId("vida-stack".to_string()),
+        },
+    );
+
+    let fixture_response = fixture.execute(request.clone());
+    let in_process_response = in_process.execute(request);
+    assert_eq!(fixture_response, in_process_response);
+    assert_eq!(fixture_response.status, VidaResponseStatus::Pass);
+    let manifest = fixture_response.result.expect("materialization manifest");
+    assert_eq!(manifest["config_schema_version"], "vida-config-v1");
+    assert_eq!(manifest["config_generator_version"], "fixture-generator-v1");
+    let artifacts = manifest["artifacts"]
+        .as_array()
+        .expect("manifest artifacts");
+    let config = artifacts
+        .iter()
+        .find(|artifact| artifact["artifact_id"] == "vida-config")
+        .expect("vida config artifact");
+    assert_eq!(config["owner"], "vida_generated");
+    assert_eq!(config["drift_status"], "generated_changed_by_version");
+    assert_eq!(config["update_mode"], "safe_update");
+    assert_eq!(config["schema_revision"], "vida-config-v1");
+    assert_eq!(config["generator_revision"], "fixture-generator-v1");
+    assert_eq!(config["receipt_refs"][0], "receipt-config-safe-update");
+}
+
+#[test]
+fn drift_classification_reports_report_only_safe_update_and_manual_conflict() {
+    let fixture = FixtureVidaClient::new_ready();
+    let in_process = InProcessVidaClient::new_ready();
+    let request = envelope_with_project_ref(
+        operations::MATERIALIZATION_DRIFT_CLASSIFY,
+        VidaProjectRef::ProjectId {
+            project_id: VidaProjectId("vida-stack".to_string()),
+        },
+    );
+
+    let fixture_response = fixture.execute(request.clone());
+    let in_process_response = in_process.execute(request);
+    assert_eq!(fixture_response, in_process_response);
+    assert_eq!(fixture_response.status, VidaResponseStatus::Pass);
+    let drift = fixture_response.result.expect("drift classifications");
+    let classifications = drift["classifications"]
+        .as_array()
+        .expect("drift classification rows");
+    for expected_mode in ["report_only", "safe_update", "manual_conflict"] {
+        assert!(classifications
+            .iter()
+            .any(|row| row["update_mode"] == expected_mode));
+    }
+    assert_eq!(drift["summary"]["manual_conflict"], 1);
+}
+
+#[test]
+fn materialization_receipts_back_update_plan_artifact_actions() {
+    let fixture = FixtureVidaClient::new_ready();
+    let in_process = InProcessVidaClient::new_ready();
+    let project_ref = VidaProjectRef::ProjectId {
+        project_id: VidaProjectId("vida-stack".to_string()),
+    };
+    let request = envelope_with_project_ref_and_payload(
+        operations::MATERIALIZATION_UPDATE_PLAN,
+        project_ref.clone(),
+        json!({ "mode": "safe_update" }),
+    );
+
+    let fixture_response = fixture.execute(request.clone());
+    let in_process_response = in_process.execute(request);
+    assert_eq!(fixture_response, in_process_response);
+    assert_eq!(fixture_response.status, VidaResponseStatus::Pass);
+    let plan = fixture_response
+        .result
+        .expect("materialization update plan");
+    assert_eq!(plan["apply_supported"], false);
+    assert_eq!(plan["manual_conflict_count"], 1);
+    let actions = plan["planned_actions"]
+        .as_array()
+        .expect("planned materialization actions");
+    let safe_update = actions
+        .iter()
+        .find(|action| action["mode"] == "safe_update")
+        .expect("safe update action");
+    assert_eq!(safe_update["safe_to_apply"], true);
+    assert_eq!(safe_update["receipt_ref"], "receipt-config-safe-update");
+
+    let receipt_request =
+        envelope_with_project_ref(operations::MATERIALIZATION_RECEIPTS_LIST, project_ref);
+    let fixture_receipts = fixture.execute(receipt_request.clone());
+    let in_process_receipts = in_process.execute(receipt_request);
+    assert_eq!(fixture_receipts, in_process_receipts);
+    let receipt_result = fixture_receipts
+        .result
+        .expect("materialization receipts result");
+    assert!(receipt_result["receipts"]
+        .as_array()
+        .expect("receipt rows")
+        .iter()
+        .any(|receipt| {
+            receipt["receipt_id"] == safe_update["receipt_ref"]
+                && receipt["evidence_kind"] == "artifact_update_plan"
+        }));
 }
 
 #[test]

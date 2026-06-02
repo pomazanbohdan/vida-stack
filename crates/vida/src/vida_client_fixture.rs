@@ -81,7 +81,9 @@ impl FixtureVidaClient {
                     "read_events",
                     "project_registry_read",
                     "wizard_read",
-                    "wizard_plan"
+                    "wizard_plan",
+                    "materialization_read",
+                    "materialization_plan"
                 ]
             }),
         )
@@ -326,6 +328,65 @@ impl FixtureVidaClient {
         )
     }
 
+    fn materialization_manifest(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "manifest_id": "materialization-manifest-fixture-1",
+                "config_schema_version": "vida-config-v1",
+                "config_generator_version": "fixture-generator-v1",
+                "config_file_hash": "fixture-file-hash",
+                "config_semantic_hash": "fixture-semantic-hash",
+                "artifacts": fixture_materialization_artifacts(),
+                "receipt_refs": fixture_materialization_receipts()
+            }),
+        )
+    }
+
+    fn materialization_drift(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "manifest_id": "materialization-manifest-fixture-1",
+                "classifications": fixture_materialization_drift_classifications(),
+                "summary": {
+                    "clean": 1,
+                    "safe_update": 1,
+                    "manual_conflict": 1,
+                    "report_only": 1
+                }
+            }),
+        )
+    }
+
+    fn materialization_update_plan(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "plan_id": "materialization-update-plan-fixture-1",
+                "mode": envelope
+                    .payload
+                    .get("mode")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("report_only"),
+                "apply_supported": false,
+                "planned_actions": fixture_materialization_update_actions(),
+                "receipt_evidence": fixture_materialization_receipts(),
+                "manual_conflict_count": 1
+            }),
+        )
+    }
+
+    fn materialization_receipts(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "receipt_scope": "materialization",
+                "receipts": fixture_materialization_receipts()
+            }),
+        )
+    }
+
     fn resolve_project(
         &self,
         envelope: &VidaCommandEnvelope,
@@ -377,6 +438,10 @@ impl VidaClient for FixtureVidaClient {
             operations::WIZARD_SESSION_UPDATE_INPUT => self.wizard_update_input(&envelope),
             operations::WIZARD_SESSION_VALIDATE => self.wizard_validate(&envelope),
             operations::WIZARD_SESSION_DIFF => self.wizard_diff(&envelope),
+            operations::MATERIALIZATION_MANIFEST_GET => self.materialization_manifest(&envelope),
+            operations::MATERIALIZATION_DRIFT_CLASSIFY => self.materialization_drift(&envelope),
+            operations::MATERIALIZATION_UPDATE_PLAN => self.materialization_update_plan(&envelope),
+            operations::MATERIALIZATION_RECEIPTS_LIST => self.materialization_receipts(&envelope),
             _ => unsupported_operation_response(&envelope),
         }
     }
@@ -581,6 +646,128 @@ fn wizard_stale_revision_problem(
         instance: None,
         related_receipt: None,
     })
+}
+
+fn fixture_materialization_artifacts() -> serde_json::Value {
+    json!([
+        {
+            "artifact_id": "vida-config",
+            "path": "vida.config.yaml",
+            "artifact_kind": "config",
+            "owner": "vida_generated",
+            "template_version": "fixture-template-v1",
+            "schema_revision": "vida-config-v1",
+            "source_config_revision": "fixture-semantic-hash",
+            "generator_revision": "fixture-generator-v1",
+            "last_generated_hash": "hash-config-old",
+            "current_hash": "hash-config-new",
+            "drift_status": "generated_changed_by_version",
+            "update_mode": "safe_update",
+            "receipt_refs": ["receipt-config-safe-update"]
+        },
+        {
+            "artifact_id": "flows",
+            "path": "flows.yaml",
+            "artifact_kind": "flow_config",
+            "owner": "vida_generated",
+            "template_version": "fixture-template-v1",
+            "schema_revision": "vida-flow-v1",
+            "source_config_revision": "fixture-semantic-hash",
+            "generator_revision": "fixture-generator-v1",
+            "last_generated_hash": "hash-flows",
+            "current_hash": "hash-flows",
+            "drift_status": "clean",
+            "update_mode": "report_only",
+            "receipt_refs": ["receipt-flows-report-only"]
+        },
+        {
+            "artifact_id": "agents-sidecar",
+            "path": "AGENTS.sidecar.md",
+            "artifact_kind": "agent_instructions",
+            "owner": "user_owned",
+            "template_version": "fixture-template-v1",
+            "schema_revision": "agent-sidecar-v1",
+            "source_config_revision": "fixture-semantic-hash",
+            "generator_revision": "fixture-generator-v1",
+            "last_generated_hash": "hash-sidecar-old",
+            "current_hash": "hash-sidecar-user",
+            "drift_status": "user_modified",
+            "update_mode": "manual_conflict",
+            "receipt_refs": ["receipt-sidecar-manual-conflict"]
+        }
+    ])
+}
+
+fn fixture_materialization_drift_classifications() -> serde_json::Value {
+    json!([
+        {
+            "artifact_id": "vida-config",
+            "drift_status": "generated_changed_by_version",
+            "update_mode": "safe_update",
+            "reason": "VIDA-generated artifact changed only by generator/template revision."
+        },
+        {
+            "artifact_id": "flows",
+            "drift_status": "clean",
+            "update_mode": "report_only",
+            "reason": "Artifact hash matches the latest generated hash."
+        },
+        {
+            "artifact_id": "agents-sidecar",
+            "drift_status": "user_modified",
+            "update_mode": "manual_conflict",
+            "reason": "User-owned artifact changed outside generated ownership."
+        }
+    ])
+}
+
+fn fixture_materialization_update_actions() -> serde_json::Value {
+    json!([
+        {
+            "artifact_id": "flows",
+            "mode": "report_only",
+            "receipt_ref": "receipt-flows-report-only",
+            "safe_to_apply": false
+        },
+        {
+            "artifact_id": "vida-config",
+            "mode": "safe_update",
+            "receipt_ref": "receipt-config-safe-update",
+            "safe_to_apply": true
+        },
+        {
+            "artifact_id": "agents-sidecar",
+            "mode": "manual_conflict",
+            "receipt_ref": "receipt-sidecar-manual-conflict",
+            "safe_to_apply": false
+        }
+    ])
+}
+
+fn fixture_materialization_receipts() -> serde_json::Value {
+    json!([
+        {
+            "receipt_id": "receipt-flows-report-only",
+            "artifact_id": "flows",
+            "mode": "report_only",
+            "status": "recorded",
+            "evidence_kind": "artifact_manifest_entry"
+        },
+        {
+            "receipt_id": "receipt-config-safe-update",
+            "artifact_id": "vida-config",
+            "mode": "safe_update",
+            "status": "recorded",
+            "evidence_kind": "artifact_update_plan"
+        },
+        {
+            "receipt_id": "receipt-sidecar-manual-conflict",
+            "artifact_id": "agents-sidecar",
+            "mode": "manual_conflict",
+            "status": "recorded",
+            "evidence_kind": "manual_conflict_record"
+        }
+    ])
 }
 
 fn fixture_projects() -> Vec<vida_contracts::ServiceProjectRegistryEntry> {

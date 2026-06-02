@@ -22,12 +22,17 @@ pub mod operations {
     pub const WIZARD_SESSION_UPDATE_INPUT: &str = "vida.wizard.session.update_input";
     pub const WIZARD_SESSION_VALIDATE: &str = "vida.wizard.session.validate";
     pub const WIZARD_SESSION_DIFF: &str = "vida.wizard.session.diff";
+    pub const MATERIALIZATION_MANIFEST_GET: &str = "vida.materialization.manifest.get";
+    pub const MATERIALIZATION_DRIFT_CLASSIFY: &str = "vida.materialization.drift.classify";
+    pub const MATERIALIZATION_UPDATE_PLAN: &str = "vida.materialization.update.plan";
+    pub const MATERIALIZATION_RECEIPTS_LIST: &str = "vida.materialization.receipts.list";
     pub const JOBS_GET: &str = "vida.jobs.get";
 }
 
 pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
     use VidaCapabilityScope::{
-        ProjectRegistryRead, ReadEvents, ReadReceipts, ReadStatus, WizardPlan, WizardRead,
+        MaterializationPlan, MaterializationRead, ProjectRegistryRead, ReadEvents, ReadReceipts,
+        ReadStatus, WizardPlan, WizardRead,
     };
     use operations::*;
     vec![
@@ -120,6 +125,26 @@ pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
             WIZARD_SESSION_DIFF,
             VidaOperationScope::Project,
             vec![WizardPlan],
+        ),
+        VidaOperationSpec::read_with_capabilities(
+            MATERIALIZATION_MANIFEST_GET,
+            VidaOperationScope::Project,
+            vec![MaterializationRead],
+        ),
+        VidaOperationSpec::read_with_capabilities(
+            MATERIALIZATION_DRIFT_CLASSIFY,
+            VidaOperationScope::Project,
+            vec![MaterializationRead],
+        ),
+        VidaOperationSpec::plan_with_capabilities(
+            MATERIALIZATION_UPDATE_PLAN,
+            VidaOperationScope::Project,
+            vec![MaterializationPlan],
+        ),
+        VidaOperationSpec::read_with_capabilities(
+            MATERIALIZATION_RECEIPTS_LIST,
+            VidaOperationScope::Project,
+            vec![ReadReceipts, MaterializationRead],
         ),
         VidaOperationSpec::read_with_capabilities(
             JOBS_GET,
@@ -282,6 +307,7 @@ pub enum VidaCapabilityScope {
     WizardRead,
     WizardPlan,
     WizardApply,
+    MaterializationRead,
     ConfigPlan,
     ConfigApply,
     MaterializationPlan,
