@@ -388,6 +388,37 @@ impl FixtureVidaClient {
         )
     }
 
+    fn receipts_get(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "receipt_scope": "project",
+                "receipt_id": envelope
+                    .payload
+                    .get("receipt_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("latest"),
+                "receipts": fixture_materialization_receipts()
+            }),
+        )
+    }
+
+    fn jobs_get(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "job_id": envelope
+                    .payload
+                    .get("job_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("latest"),
+                "status": "completed",
+                "operation": envelope.operation,
+                "receipt_available": true
+            }),
+        )
+    }
+
     fn orchestration_control_plane_summary(
         &self,
         envelope: &VidaCommandEnvelope,
@@ -511,6 +542,8 @@ impl VidaClient for FixtureVidaClient {
             operations::MATERIALIZATION_DRIFT_CLASSIFY => self.materialization_drift(&envelope),
             operations::MATERIALIZATION_UPDATE_PLAN => self.materialization_update_plan(&envelope),
             operations::MATERIALIZATION_RECEIPTS_LIST => self.materialization_receipts(&envelope),
+            operations::RECEIPTS_GET => self.receipts_get(&envelope),
+            operations::JOBS_GET => self.jobs_get(&envelope),
             operations::ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET => {
                 self.orchestration_control_plane_summary(&envelope)
             }

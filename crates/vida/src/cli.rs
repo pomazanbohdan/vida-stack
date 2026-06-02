@@ -105,6 +105,16 @@ pub(crate) enum Command {
     Doctor(DoctorArgs),
     #[command(about = "run canonical runtime diagnostics for completed slices")]
     Diagnostics(DiagnosticsArgs),
+    #[command(about = "service-first CLI surface backed by VidaClient service operations")]
+    Service(ProxyArgs),
+    #[command(about = "service-first CLI surface backed by VidaClient project operations")]
+    Project(ProxyArgs),
+    #[command(about = "service-first CLI surface backed by VidaClient wizard operations")]
+    Wizard(ProxyArgs),
+    #[command(about = "service-first CLI surface backed by VidaClient job operations")]
+    Job(ProxyArgs),
+    #[command(about = "service-first CLI surface backed by VidaClient receipt operations")]
+    Receipt(ProxyArgs),
     #[command(about = "update scoped VIDA project documentation carriers")]
     Docs(DocsArgs),
     #[command(about = "inspect or reclaim VIDA orchestrator session ownership evidence")]

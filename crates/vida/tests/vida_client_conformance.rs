@@ -73,12 +73,35 @@ fn vida_client_fixture_and_inprocess_match_service_read_operations() {
         operations::SERVICE_ENDPOINT_STATUS,
         operations::EVENTS_SINCE,
         operations::SESSION_RESOLVE,
+        operations::JOBS_GET,
+        operations::RECEIPTS_GET,
     ] {
         let response = assert_same_response(operation);
         assert_eq!(response.status, VidaResponseStatus::Pass);
         assert!(response.error.is_none());
         assert!(response.result.is_some());
     }
+}
+
+#[test]
+fn job_and_receipt_catalog_operations_are_executable_fixture_routes() {
+    let job = assert_same_response(operations::JOBS_GET)
+        .result
+        .expect("job result");
+    assert_eq!(job["status"], "completed");
+    assert_eq!(job["receipt_available"], true);
+
+    let receipt = assert_same_response(operations::RECEIPTS_GET)
+        .result
+        .expect("receipt result");
+    assert_eq!(receipt["receipt_scope"], "project");
+    assert!(receipt["receipts"]
+        .as_array()
+        .expect("receipts should be array")
+        .iter()
+        .any(
+            |item| item["evidence_kind"] == "artifact_update_plan" && item["status"] == "recorded"
+        ));
 }
 
 #[test]

@@ -74,6 +74,7 @@ mod runtime_dispatch_status;
 mod runtime_lane_summary;
 mod semantic_route_cache;
 mod semantic_routing_features;
+mod service_client_cli;
 mod shell_runtime_helpers;
 mod state_store;
 mod status_surface;

@@ -4,8 +4,9 @@ use super::{
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
     orchestrator_session_surface, print_root_help, project_activator_surface, protocol_surface,
-    release_surface, resolve_runtime_project_root, run_taskflow_proxy, state_store, status_surface,
-    task_surface, AgentArgs, AgentCommand, Cli, Command, ReleaseCommand, TaskArgs, TaskCommand,
+    release_surface, resolve_runtime_project_root, run_taskflow_proxy, service_client_cli,
+    state_store, status_surface, task_surface, AgentArgs, AgentCommand, Cli, Command,
+    ReleaseCommand, TaskArgs, TaskCommand,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -47,6 +48,11 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::Status(args)) => status_surface::run_status(args).await,
         Some(Command::Doctor(args)) => doctor_surface::run_doctor(args).await,
         Some(Command::Diagnostics(args)) => diagnostics_surface::run_diagnostics(args).await,
+        Some(Command::Service(args)) => service_client_cli::run_service(args),
+        Some(Command::Project(args)) => service_client_cli::run_project(args),
+        Some(Command::Wizard(args)) => service_client_cli::run_wizard(args),
+        Some(Command::Job(args)) => service_client_cli::run_job(args),
+        Some(Command::Receipt(args)) => service_client_cli::run_receipt(args),
         Some(Command::Docs(args)) => docs_surface::run_docs(args).await,
         Some(Command::OrchestratorSession(args)) => {
             orchestrator_session_surface::run_orchestrator_session(args).await
@@ -99,6 +105,11 @@ fn command_label(command: &Option<Command>) -> String {
         Some(Command::Status(_)) => "vida status".to_string(),
         Some(Command::Doctor(_)) => "vida doctor".to_string(),
         Some(Command::Diagnostics(_)) => "vida diagnostics".to_string(),
+        Some(Command::Service(_)) => "vida service".to_string(),
+        Some(Command::Project(_)) => "vida project".to_string(),
+        Some(Command::Wizard(_)) => "vida wizard".to_string(),
+        Some(Command::Job(_)) => "vida job".to_string(),
+        Some(Command::Receipt(_)) => "vida receipt".to_string(),
         Some(Command::Docs(_)) => "vida docs".to_string(),
         Some(Command::OrchestratorSession(_)) => "vida orchestrator-session".to_string(),
         Some(Command::Consume(_)) => "vida consume".to_string(),
@@ -196,6 +207,11 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
             | Command::Status(_)
             | Command::Doctor(_)
             | Command::Diagnostics(_)
+            | Command::Service(_)
+            | Command::Project(_)
+            | Command::Wizard(_)
+            | Command::Job(_)
+            | Command::Receipt(_)
             | Command::OrchestratorSession(_),
         ) => true,
         _ => false,
