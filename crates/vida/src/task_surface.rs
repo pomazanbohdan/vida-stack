@@ -3976,27 +3976,14 @@ fn task_next_lawful_receipt(
     }
 
     match active_tasks.as_slice() {
-        [active] => {
-            let ready_conflict = ready_task_candidates
-                .iter()
-                .any(|candidate| candidate.task_id != active.id);
-            if ready_conflict {
-                return blocked_task_next_lawful_receipt(
-                    task_continuation_active_unit(active),
-                    ready_task_candidates,
-                    "taskflow_active_ready_conflict",
-                    "TaskFlow has one active task and different ready candidates; close/reconcile active work or bind the intended continuation explicitly.",
-                );
-            }
-            pass_task_next_lawful_receipt(
-                task_continuation_active_unit(active),
-                None,
-                "single TaskFlow in_progress task is the lawful continuation",
-                "sequential_only_active_task",
-                ready_task_candidates,
-                format!("Continue active task `{}`.", active.id),
-            )
-        }
+        [active] => pass_task_next_lawful_receipt(
+            task_continuation_active_unit(active),
+            Some("taskflow_single_in_progress".to_string()),
+            "Single TaskFlow in_progress task is the authoritative active bounded unit.",
+            "sequential_only_taskflow_active",
+            ready_task_candidates,
+            format!("Continue active task `{}`.", active.id),
+        ),
         [] => match ready_task_candidates.as_slice() {
             [candidate] => pass_task_next_lawful_receipt(
                 serde_json::json!({
@@ -5664,13 +5651,13 @@ mod tests {
         task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
         task_close_epic_progress_summary, task_close_feedback_blocker_summary,
         task_close_host_agent_telemetry, task_close_result_payload,
-        task_close_uses_isolated_state_dir, task_create_semantics_mismatch,
-        task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
-        task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
-        task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
-        task_owned_status_receipt, task_parent_id, task_ready_authoritative_first,
-        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_close_uses_isolated_state_dir, task_continuation_candidate,
+        task_create_semantics_mismatch, task_create_semantics_requested, task_create_title,
+        task_critical_path_snapshot_first, task_handoff_accept_receipt,
+        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
+        task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
+        task_parent_id, task_ready_authoritative_first, task_update_planner_metadata_arg,
+        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -6908,10 +6895,36 @@ mod tests {
         assert_eq!(receipt.active_bounded_unit["task_id"], "live-active-task");
         assert_eq!(
             receipt.why_this_unit,
-            "single TaskFlow in_progress task is the lawful continuation"
+            "Single TaskFlow in_progress task is the authoritative active bounded unit."
         );
-        assert_eq!(receipt.binding_source, None);
+        assert_eq!(
+            receipt.binding_source,
+            Some("taskflow_single_in_progress".to_string())
+        );
         assert!(receipt.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn task_next_lawful_prefers_single_active_task_over_other_ready_candidates() {
+        let active_task = owned_task_record("live-active-task", vec![]);
+        let mut ready_task = owned_task_record("other-ready-task", vec![]);
+        ready_task.status = "open".to_string();
+        let ready = vec![task_continuation_candidate(&ready_task, false)];
+
+        let receipt = task_next_lawful_receipt(&[active_task, ready_task], ready, None);
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.active_bounded_unit["task_id"], "live-active-task");
+        assert_eq!(
+            receipt.binding_source,
+            Some("taskflow_single_in_progress".to_string())
+        );
+        assert_eq!(
+            receipt.sequential_vs_parallel_posture,
+            "sequential_only_taskflow_active"
+        );
+        assert!(receipt.blocker_codes.is_empty());
+        assert_eq!(receipt.ready_task_candidates.len(), 1);
     }
 
     #[test]
