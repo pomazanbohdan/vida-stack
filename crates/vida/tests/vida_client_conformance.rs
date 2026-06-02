@@ -71,6 +71,8 @@ fn vida_client_fixture_and_inprocess_match_service_read_operations() {
         operations::SERVICE_STATUS,
         operations::SERVICE_CAPABILITIES,
         operations::SERVICE_ENDPOINT_STATUS,
+        operations::SERVICE_LIFECYCLE_PLAN,
+        operations::SERVICE_LIFECYCLE_STATUS,
         operations::EVENTS_SINCE,
         operations::SESSION_RESOLVE,
         operations::JOBS_GET,
@@ -81,6 +83,44 @@ fn vida_client_fixture_and_inprocess_match_service_read_operations() {
         assert!(response.error.is_none());
         assert!(response.result.is_some());
     }
+}
+
+#[test]
+fn service_lifecycle_plan_reports_cross_platform_dry_run_boundaries() {
+    let result = assert_same_response(operations::SERVICE_LIFECYCLE_PLAN)
+        .result
+        .expect("lifecycle plan result");
+    assert_eq!(result["native_service_apply_supported"], false);
+    let platforms = result["platform_plans"]
+        .as_array()
+        .expect("platform plans should be array");
+    assert!(platforms.iter().any(
+        |plan| plan["platform"] == "windows" && plan["adapter"] == "foreground_session_daemon"
+    ));
+    assert!(platforms
+        .iter()
+        .any(|plan| plan["platform"] == "linux" && plan["adapter"] == "systemd_user"));
+    assert!(platforms
+        .iter()
+        .any(|plan| plan["platform"] == "macos" && plan["adapter"] == "launchd_user_agent"));
+    assert!(platforms.iter().all(|plan| plan["dry_run"] == true));
+}
+
+#[test]
+fn service_lifecycle_status_reports_binary_fingerprint_and_endpoint_diagnostics() {
+    let result = assert_same_response(operations::SERVICE_LIFECYCLE_STATUS)
+        .result
+        .expect("lifecycle status result");
+    assert_eq!(result["lifecycle"]["state"], "ready");
+    assert_eq!(
+        result["binary"]["fingerprint"],
+        "fixture-binary-fingerprint"
+    );
+    assert_eq!(
+        result["endpoint_diagnostics"]["fallback"]["token_value_exposed"],
+        false
+    );
+    assert_eq!(result["endpoint_diagnostics"]["status"], "ready");
 }
 
 #[test]

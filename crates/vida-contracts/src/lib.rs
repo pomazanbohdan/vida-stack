@@ -8,6 +8,8 @@ pub mod operations {
     pub const SERVICE_STATUS: &str = "vida.service.status";
     pub const SERVICE_CAPABILITIES: &str = "vida.service.capabilities";
     pub const SERVICE_ENDPOINT_STATUS: &str = "vida.service.endpoint.status";
+    pub const SERVICE_LIFECYCLE_PLAN: &str = "vida.service.lifecycle.plan";
+    pub const SERVICE_LIFECYCLE_STATUS: &str = "vida.service.lifecycle.status";
     pub const EVENTS_SINCE: &str = "vida.events.since";
     pub const SESSION_RESOLVE: &str = "vida.session.resolve";
     pub const PROJECT_RESOLVE: &str = "vida.project.resolve";
@@ -34,7 +36,8 @@ pub mod operations {
 pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
     use VidaCapabilityScope::{
         MaterializationPlan, MaterializationRead, OrchestrationControlPlaneRead,
-        ProjectRegistryRead, ReadEvents, ReadReceipts, ReadStatus, WizardPlan, WizardRead,
+        ProjectRegistryRead, ReadEvents, ReadReceipts, ReadStatus, ServiceInstallPlan, WizardPlan,
+        WizardRead,
     };
     use operations::*;
     vec![
@@ -55,6 +58,16 @@ pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
         ),
         VidaOperationSpec::read_with_capabilities(
             SERVICE_ENDPOINT_STATUS,
+            VidaOperationScope::Service,
+            vec![ReadStatus],
+        ),
+        VidaOperationSpec::plan_with_capabilities(
+            SERVICE_LIFECYCLE_PLAN,
+            VidaOperationScope::Service,
+            vec![ServiceInstallPlan],
+        ),
+        VidaOperationSpec::read_with_capabilities(
+            SERVICE_LIFECYCLE_STATUS,
             VidaOperationScope::Service,
             vec![ReadStatus],
         ),

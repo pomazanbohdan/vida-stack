@@ -43,6 +43,16 @@ fn cli_service_first_families_emit_vida_client_operations() {
             "vida.service.capabilities",
         ),
         (
+            &["service", "lifecycle-plan", "--json"][..],
+            "service",
+            "vida.service.lifecycle.plan",
+        ),
+        (
+            &["service", "lifecycle-status", "--json"][..],
+            "service",
+            "vida.service.lifecycle.status",
+        ),
+        (
             &["service", "events", "--json"][..],
             "service",
             "vida.events.since",

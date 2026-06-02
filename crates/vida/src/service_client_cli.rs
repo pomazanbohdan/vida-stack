@@ -110,6 +110,8 @@ pub(crate) fn service_cli_request(
         (ServiceCliFamily::Service, "capabilities") => operations::SERVICE_CAPABILITIES,
         (ServiceCliFamily::Service, "endpoints")
         | (ServiceCliFamily::Service, "endpoint-status") => operations::SERVICE_ENDPOINT_STATUS,
+        (ServiceCliFamily::Service, "lifecycle-plan") => operations::SERVICE_LIFECYCLE_PLAN,
+        (ServiceCliFamily::Service, "lifecycle-status") => operations::SERVICE_LIFECYCLE_STATUS,
         (ServiceCliFamily::Service, "events") => operations::EVENTS_SINCE,
         (ServiceCliFamily::Project, "list") => operations::PROJECT_REGISTRY_LIST,
         (ServiceCliFamily::Project, "resolve") => operations::PROJECT_RESOLVE,
@@ -170,6 +172,9 @@ fn payload_for(operation: &str, args: &[String]) -> serde_json::Value {
     match operation {
         operations::EVENTS_SINCE => {
             json!({ "cursor": value_after(args, "--cursor").unwrap_or("latest") })
+        }
+        operations::SERVICE_LIFECYCLE_PLAN => {
+            json!({ "mode": value_after(args, "--mode").unwrap_or("dry_run") })
         }
         operations::PROJECT_REGISTRY_GET
         | operations::PROJECT_RESOLVE
@@ -288,6 +293,16 @@ mod tests {
             ),
             (
                 ServiceCliFamily::Service,
+                vec!["lifecycle-plan"],
+                operations::SERVICE_LIFECYCLE_PLAN,
+            ),
+            (
+                ServiceCliFamily::Service,
+                vec!["lifecycle-status"],
+                operations::SERVICE_LIFECYCLE_STATUS,
+            ),
+            (
+                ServiceCliFamily::Service,
                 vec!["events"],
                 operations::EVENTS_SINCE,
             ),
@@ -344,8 +359,10 @@ mod tests {
         }
 
         let operations = client.operations.borrow().clone();
-        assert_eq!(operations.len(), 13);
+        assert_eq!(operations.len(), 15);
         assert!(operations.contains(&operations::SERVICE_STATUS.to_string()));
+        assert!(operations.contains(&operations::SERVICE_LIFECYCLE_PLAN.to_string()));
+        assert!(operations.contains(&operations::SERVICE_LIFECYCLE_STATUS.to_string()));
         assert!(operations.contains(&operations::PROJECT_STATUS.to_string()));
         assert!(operations.contains(&operations::WIZARD_SESSION_DIFF.to_string()));
         assert!(operations.contains(&operations::JOBS_GET.to_string()));

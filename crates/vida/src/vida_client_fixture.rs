@@ -114,6 +114,76 @@ impl FixtureVidaClient {
         )
     }
 
+    fn lifecycle_plan(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "mode": envelope
+                    .payload
+                    .get("mode")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("dry_run"),
+                "native_service_apply_supported": false,
+                "platform_plans": [
+                    {
+                        "platform": "windows",
+                        "adapter": "foreground_session_daemon",
+                        "install_target": "current_user_session",
+                        "start_mode": "foreground",
+                        "dry_run": true
+                    },
+                    {
+                        "platform": "linux",
+                        "adapter": "systemd_user",
+                        "install_target": "systemd_user_unit",
+                        "start_mode": "user_service",
+                        "dry_run": true
+                    },
+                    {
+                        "platform": "macos",
+                        "adapter": "launchd_user_agent",
+                        "install_target": "launch_agent_plist",
+                        "start_mode": "user_agent",
+                        "dry_run": true
+                    }
+                ],
+                "apply_gate": {
+                    "required": true,
+                    "default": "blocked"
+                }
+            }),
+        )
+    }
+
+    fn lifecycle_status(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "service": "vida",
+                "lifecycle": {
+                    "state": "ready",
+                    "running_mode": "foreground_session_daemon",
+                    "native_service_installed": false
+                },
+                "binary": {
+                    "name": "vida",
+                    "profile": "debug",
+                    "fingerprint": "fixture-binary-fingerprint",
+                    "fingerprint_algorithm": "fixture-stable-hash"
+                },
+                "endpoint_diagnostics": {
+                    "preferred_local_ipc": ["windows_named_pipe", "unix_domain_socket"],
+                    "fallback": {
+                        "kind": "loopback_tcp",
+                        "requires_token": true,
+                        "token_value_exposed": false
+                    },
+                    "status": "ready"
+                }
+            }),
+        )
+    }
+
     fn events_since(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
         pass_response(
             envelope,
@@ -525,6 +595,8 @@ impl VidaClient for FixtureVidaClient {
             operations::SERVICE_STATUS => self.status(&envelope),
             operations::SERVICE_CAPABILITIES => self.capabilities(&envelope),
             operations::SERVICE_ENDPOINT_STATUS => self.endpoint_status(&envelope),
+            operations::SERVICE_LIFECYCLE_PLAN => self.lifecycle_plan(&envelope),
+            operations::SERVICE_LIFECYCLE_STATUS => self.lifecycle_status(&envelope),
             operations::EVENTS_SINCE => self.events_since(&envelope),
             operations::SESSION_RESOLVE => self.session_resolve(&envelope),
             operations::PROJECT_REGISTRY_LIST => self.registry_list(&envelope),
