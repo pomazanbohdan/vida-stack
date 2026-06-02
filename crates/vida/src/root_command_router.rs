@@ -156,6 +156,7 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         | TaskCommand::CriticalPath(command) => command.state_dir.is_some(),
         TaskCommand::Dep(command) => match &command.command {
             super::TaskDependencyCommand::Add(command) => command.state_dir.is_some(),
+            super::TaskDependencyCommand::AddBulk(command) => command.state_dir.is_some(),
             super::TaskDependencyCommand::Remove(command) => command.state_dir.is_some(),
         },
         TaskCommand::Handoff(command) => match &command.command {

@@ -232,6 +232,35 @@ pub struct TaskDependencyRecord {
     pub thread_id: String,
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyBulkAddInput {
+    pub issue_id: String,
+    pub depends_on_id: String,
+    pub edge_type: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyBulkAddEdgeReport {
+    pub issue_id: String,
+    pub depends_on_id: String,
+    pub edge_type: String,
+    pub reason: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyBulkAddResult {
+    pub dry_run: bool,
+    pub requested_count: usize,
+    pub created_count: usize,
+    pub existing_count: usize,
+    pub failed_count: usize,
+    pub unapplied_count: usize,
+    pub created: Vec<TaskDependencyRecord>,
+    pub existing: Vec<TaskDependencyRecord>,
+    pub failed: Vec<TaskDependencyBulkAddEdgeReport>,
+    pub unapplied: Vec<TaskDependencyBulkAddEdgeReport>,
+}
+
 #[derive(Debug)]
 pub enum StateStoreError {
     Io(io::Error),

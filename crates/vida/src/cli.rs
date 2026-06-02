@@ -371,6 +371,7 @@ pub(crate) struct TaskDepArgs {
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum TaskDependencyCommand {
     Add(TaskDependencyMutationCommandArgs),
+    AddBulk(TaskDependencyBulkAddCommandArgs),
     Remove(TaskDependencyTargetCommandArgs),
 }
 
@@ -403,6 +404,36 @@ pub(crate) struct TaskDependencyTargetCommandArgs {
     pub(crate) task_id: String,
     pub(crate) depends_on_id: String,
     pub(crate) edge_type: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskDependencyBulkAddCommandArgs {
+    #[arg(
+        long = "edge",
+        help = "Dependency edge in issue_id:depends_on_id:edge_type format; repeat for each edge"
+    )]
+    pub(crate) edges: Vec<String>,
+
+    #[arg(
+        long = "edge-file",
+        help = "Read dependency edges from a newline-delimited issue_id:depends_on_id:edge_type file"
+    )]
+    pub(crate) edge_file: Option<PathBuf>,
+
+    #[arg(long = "dry-run")]
+    pub(crate) dry_run: bool,
+
+    #[arg(long = "created-by", default_value = "vida")]
+    pub(crate) created_by: String,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,

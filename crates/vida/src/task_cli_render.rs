@@ -3,8 +3,9 @@ use crate::operator_contracts::{
 };
 use crate::state_store::{
     BlockedTaskRecord, TaskBulkReparentResult, TaskCriticalPath, TaskDefectBatchRehomeResult,
-    TaskDependencyRecord, TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge,
-    TaskDependencyTreeNode, TaskGraphIssue, TaskProgressSummary, TaskRecord,
+    TaskDependencyBulkAddResult, TaskDependencyRecord, TaskDependencyStatus,
+    TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskGraphIssue,
+    TaskProgressSummary, TaskRecord,
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
 
@@ -950,6 +951,63 @@ pub(crate) fn print_task_dependency_mutation(
     print_surface_line(render, "task", &dependency.issue_id);
     print_surface_line(render, "depends_on", &dependency.depends_on_id);
     print_surface_line(render, "edge_type", &dependency.edge_type);
+}
+
+pub(crate) fn print_task_dependency_bulk_add_result(
+    render: RenderMode,
+    result: &TaskDependencyBulkAddResult,
+    as_json: bool,
+) {
+    let blocker_codes = if result.failed_count == 0 {
+        Vec::new()
+    } else {
+        crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+        )
+        .into_iter()
+        .collect()
+    };
+    let next_actions = if result.failed_count == 0 {
+        Vec::new()
+    } else {
+        vec![
+            "Inspect failed and unapplied edges, repair missing tasks or invalid graph edges, then rerun `vida task dep add-bulk --json` with only the missing edges."
+                .to_string(),
+        ]
+    };
+    let payload = build_operator_surface_payload(
+        "vida task dep add-bulk",
+        blocker_codes,
+        next_actions,
+        serde_json::json!({
+            "result": result,
+            "dry_run": result.dry_run,
+            "requested_count": result.requested_count,
+            "created_count": result.created_count,
+            "existing_count": result.existing_count,
+            "failed_count": result.failed_count,
+            "unapplied_count": result.unapplied_count,
+        }),
+    );
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task dependency bulk add result should render as json",
+    ) {
+        return;
+    }
+
+    print_surface_header(render, "vida task dep add-bulk");
+    print_surface_line(
+        render,
+        "dry_run",
+        if result.dry_run { "true" } else { "false" },
+    );
+    print_surface_line(render, "requested", &result.requested_count.to_string());
+    print_surface_line(render, "created", &result.created_count.to_string());
+    print_surface_line(render, "existing", &result.existing_count.to_string());
+    print_surface_line(render, "failed", &result.failed_count.to_string());
+    print_surface_line(render, "unapplied", &result.unapplied_count.to_string());
 }
 
 pub(crate) fn print_task_bulk_reparent_result(

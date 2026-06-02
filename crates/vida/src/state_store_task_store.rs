@@ -1505,6 +1505,185 @@ impl StateStore {
         Ok(dependency)
     }
 
+    pub async fn add_task_dependencies_bulk(
+        &self,
+        edges: &[TaskDependencyBulkAddInput],
+        created_by: &str,
+        dry_run: bool,
+    ) -> Result<TaskDependencyBulkAddResult, StateStoreError> {
+        let mut tasks = self.all_tasks().await?;
+        let original_tasks = tasks.clone();
+        let mut created = Vec::new();
+        let mut existing = Vec::new();
+        let mut failed = Vec::new();
+        let mut unapplied = Vec::new();
+        let mut touched_task_ids = BTreeSet::new();
+        let now = unix_timestamp_nanos().to_string();
+
+        for edge in edges {
+            let issue_id = edge.issue_id.trim();
+            let depends_on_id = edge.depends_on_id.trim();
+            let edge_type = edge.edge_type.trim();
+            let report = |reason: String| TaskDependencyBulkAddEdgeReport {
+                issue_id: issue_id.to_string(),
+                depends_on_id: depends_on_id.to_string(),
+                edge_type: edge_type.to_string(),
+                reason,
+            };
+
+            if issue_id.is_empty() || depends_on_id.is_empty() || edge_type.is_empty() {
+                failed.push(report(
+                    "issue_id, depends_on_id, and edge_type are required".to_string(),
+                ));
+                continue;
+            }
+
+            let target_exists = tasks.iter().any(|task| task.id == depends_on_id);
+            if !target_exists {
+                failed.push(report(format!(
+                    "missing dependency target `{depends_on_id}`"
+                )));
+                continue;
+            }
+
+            let Some(task_index) = tasks.iter().position(|task| task.id == issue_id) else {
+                failed.push(report(format!("missing source task `{issue_id}`")));
+                continue;
+            };
+
+            if let Some(dependency) = tasks[task_index]
+                .dependencies
+                .iter()
+                .find(|dependency| {
+                    dependency.depends_on_id == depends_on_id && dependency.edge_type == edge_type
+                })
+                .cloned()
+            {
+                existing.push(dependency);
+                continue;
+            }
+
+            let dependency = TaskDependencyRecord {
+                issue_id: issue_id.to_string(),
+                depends_on_id: depends_on_id.to_string(),
+                edge_type: edge_type.to_string(),
+                created_at: now.clone(),
+                created_by: created_by.to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            };
+            tasks[task_index].dependencies.push(dependency.clone());
+            tasks[task_index].updated_at = now.clone();
+            tasks[task_index].dependencies.sort_by(|left, right| {
+                left.edge_type
+                    .cmp(&right.edge_type)
+                    .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+            });
+            touched_task_ids.insert(issue_id.to_string());
+            touched_task_ids.insert(depends_on_id.to_string());
+            created.push(dependency);
+        }
+
+        if !failed.is_empty() {
+            unapplied.extend(
+                created
+                    .iter()
+                    .map(|dependency| TaskDependencyBulkAddEdgeReport {
+                        issue_id: dependency.issue_id.clone(),
+                        depends_on_id: dependency.depends_on_id.clone(),
+                        edge_type: dependency.edge_type.clone(),
+                        reason: "bulk mutation aborted before persistence".to_string(),
+                    }),
+            );
+            created.clear();
+            return Ok(TaskDependencyBulkAddResult {
+                dry_run,
+                requested_count: edges.len(),
+                created_count: 0,
+                existing_count: existing.len(),
+                failed_count: failed.len(),
+                unapplied_count: unapplied.len(),
+                created,
+                existing,
+                failed,
+                unapplied,
+            });
+        }
+
+        let issues =
+            Self::validate_task_graph_rows_for_mutation(&original_tasks, &tasks, &touched_task_ids);
+        if let Some(first) = issues.first() {
+            unapplied.extend(
+                created
+                    .iter()
+                    .map(|dependency| TaskDependencyBulkAddEdgeReport {
+                        issue_id: dependency.issue_id.clone(),
+                        depends_on_id: dependency.depends_on_id.clone(),
+                        edge_type: dependency.edge_type.clone(),
+                        reason: "bulk mutation aborted before persistence".to_string(),
+                    }),
+            );
+            failed.push(TaskDependencyBulkAddEdgeReport {
+                issue_id: first.issue_id.clone(),
+                depends_on_id: String::new(),
+                edge_type: String::new(),
+                reason: format!(
+                    "dependency mutation would create invalid graph: {} on {}",
+                    first.issue_type, first.issue_id
+                ),
+            });
+            created.clear();
+            return Ok(TaskDependencyBulkAddResult {
+                dry_run,
+                requested_count: edges.len(),
+                created_count: 0,
+                existing_count: existing.len(),
+                failed_count: failed.len(),
+                unapplied_count: unapplied.len(),
+                created,
+                existing,
+                failed,
+                unapplied,
+            });
+        }
+
+        if !dry_run {
+            let changed_task_ids = touched_task_ids
+                .iter()
+                .filter(|task_id| {
+                    original_tasks
+                        .iter()
+                        .find(|task| task.id == **task_id)
+                        .zip(tasks.iter().find(|task| task.id == **task_id))
+                        .map(|(before, after)| before != after)
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            for task_id in changed_task_ids {
+                let task = tasks
+                    .iter()
+                    .find(|task| task.id == task_id)
+                    .cloned()
+                    .expect("changed task should exist in staged task set");
+                self.persist_task_record(task).await?;
+            }
+        }
+
+        Ok(TaskDependencyBulkAddResult {
+            dry_run,
+            requested_count: edges.len(),
+            created_count: created.len(),
+            existing_count: existing.len(),
+            failed_count: failed.len(),
+            unapplied_count: unapplied.len(),
+            created,
+            existing,
+            failed,
+            unapplied,
+        })
+    }
+
     pub async fn remove_task_dependency(
         &self,
         issue_id: &str,

@@ -3877,6 +3877,148 @@ fn dep_add_fails_closed_when_second_parent_child_edge_is_added() {
 }
 
 #[test]
+fn task_dependency_bulk_add_creates_50_edges_and_reports_existing_without_partial_failure() {
+    let state_dir = unique_state_dir();
+    let jsonl_path = format!("{state_dir}/bulk-issues.jsonl");
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let mut jsonl = String::new();
+    jsonl.push_str("{\"id\":\"bulk-root\",\"title\":\"Bulk root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n");
+    jsonl.push_str("{\"id\":\"bulk-source\",\"title\":\"Bulk source\",\"description\":\"source\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"bulk-source\",\"depends_on_id\":\"bulk-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n");
+    jsonl.push_str("{\"id\":\"bulk-fail-source\",\"title\":\"Bulk fail source\",\"description\":\"source\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"bulk-fail-source\",\"depends_on_id\":\"bulk-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n");
+    for index in 0..50 {
+        jsonl.push_str(&format!(
+            "{{\"id\":\"bulk-blocker-{index}\",\"title\":\"Bulk blocker {index}\",\"description\":\"blocker\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{{\"issue_id\":\"bulk-blocker-{index}\",\"depends_on_id\":\"bulk-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{{}}\",\"thread_id\":\"\"}}]}}\n"
+        ));
+    }
+    fs::write(&jsonl_path, jsonl).expect("write bulk task jsonl");
+    run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+
+    let edge_file_path = format!("{state_dir}/bulk-edges.txt");
+    let edge_file = (0..50)
+        .map(|index| format!("bulk-source:bulk-blocker-{index}:blocks"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&edge_file_path, edge_file).expect("write bulk edge file");
+    let dry_run_output = vida()
+        .args([
+            "task",
+            "dep",
+            "add-bulk",
+            "--edge-file",
+            &edge_file_path,
+            "--dry-run",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("dry-run bulk dependency add should run");
+    assert!(
+        dry_run_output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&dry_run_output.stdout),
+        String::from_utf8_lossy(&dry_run_output.stderr)
+    );
+    let dry_run_json: serde_json::Value =
+        serde_json::from_slice(&dry_run_output.stdout).expect("dry-run bulk add json should parse");
+    assert_release1_shared_envelope_fields(&dry_run_json, "bulk add dry-run");
+    assert_eq!(dry_run_json["status"], "pass");
+    assert_eq!(dry_run_json["dry_run"], true);
+    assert_eq!(dry_run_json["requested_count"], 50);
+    assert_eq!(dry_run_json["created_count"], 50);
+    let dry_run_deps =
+        run_and_assert_success(&["task", "deps", "bulk-source", "--json"], &state_dir);
+    assert!(!dry_run_deps.contains("\"depends_on_id\": \"bulk-blocker-0\""));
+    assert!(!dry_run_deps.contains("\"depends_on_id\":\"bulk-blocker-0\""));
+
+    let mut bulk_args = vec![
+        "task".to_string(),
+        "dep".to_string(),
+        "add-bulk".to_string(),
+    ];
+    for index in 0..50 {
+        bulk_args.push("--edge".to_string());
+        bulk_args.push(format!("bulk-source:bulk-blocker-{index}:blocks"));
+    }
+    bulk_args.push("--json".to_string());
+    let bulk_output = vida()
+        .args(&bulk_args)
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("bulk dependency add should run");
+    assert!(
+        bulk_output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&bulk_output.stdout),
+        String::from_utf8_lossy(&bulk_output.stderr)
+    );
+    let bulk_json: serde_json::Value =
+        serde_json::from_slice(&bulk_output.stdout).expect("bulk add json should parse");
+    assert_release1_shared_envelope_fields(&bulk_json, "bulk add pass");
+    assert_eq!(bulk_json["surface"], "vida task dep add-bulk");
+    assert_eq!(bulk_json["status"], "pass");
+    assert_eq!(bulk_json["requested_count"], 50);
+    assert_eq!(bulk_json["created_count"], 50);
+    assert_eq!(bulk_json["existing_count"], 0);
+    assert_eq!(bulk_json["failed_count"], 0);
+    assert_eq!(bulk_json["unapplied_count"], 0);
+
+    let duplicate_output = vida()
+        .args(&bulk_args)
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("duplicate bulk dependency add should run");
+    assert!(
+        duplicate_output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&duplicate_output.stdout),
+        String::from_utf8_lossy(&duplicate_output.stderr)
+    );
+    let duplicate_json: serde_json::Value = serde_json::from_slice(&duplicate_output.stdout)
+        .expect("duplicate bulk add json should parse");
+    assert_eq!(duplicate_json["requested_count"], 50);
+    assert_eq!(duplicate_json["created_count"], 0);
+    assert_eq!(duplicate_json["existing_count"], 50);
+    assert_eq!(duplicate_json["failed_count"], 0);
+    assert_eq!(duplicate_json["unapplied_count"], 0);
+
+    let failed_output = vida()
+        .args([
+            "task",
+            "dep",
+            "add-bulk",
+            "--edge",
+            "bulk-fail-source:bulk-blocker-0:blocks",
+            "--edge",
+            "bulk-fail-source:bulk-missing-target:blocks",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("failing bulk dependency add should run");
+    assert!(!failed_output.status.success());
+    let failed_json: serde_json::Value =
+        serde_json::from_slice(&failed_output.stdout).expect("failed bulk add json should parse");
+    assert_release1_shared_envelope_fields(&failed_json, "bulk add blocked");
+    assert_eq!(failed_json["status"], "blocked");
+    assert_eq!(failed_json["created_count"], 0);
+    assert_eq!(failed_json["existing_count"], 0);
+    assert_eq!(failed_json["failed_count"], 1);
+    assert_eq!(failed_json["unapplied_count"], 1);
+    assert_eq!(
+        failed_json["blocker_codes"],
+        serde_json::json!(["dependency_graph_issues"])
+    );
+
+    let fail_deps =
+        run_and_assert_success(&["task", "deps", "bulk-fail-source", "--json"], &state_dir);
+    assert!(!fail_deps.contains("\"depends_on_id\": \"bulk-blocker-0\""));
+    assert!(!fail_deps.contains("\"depends_on_id\":\"bulk-blocker-0\""));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn run_graph_update_fails_closed_when_memory_correction_lacks_sealed_context() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

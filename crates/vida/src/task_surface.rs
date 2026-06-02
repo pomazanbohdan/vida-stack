@@ -1,8 +1,8 @@
 use super::*;
 use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_defect_batch_rehome_result,
-    print_task_direct_children, print_task_update_graph_blocked, task_ready_payload,
-    task_show_payload,
+    print_task_dependency_bulk_add_result, print_task_direct_children,
+    print_task_update_graph_blocked, task_ready_payload, task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
 
@@ -406,6 +406,51 @@ pub(crate) async fn task_dependency_tree_read_only(
         }
         Err(error) => Err(error),
     }
+}
+
+fn parse_task_dependency_bulk_edge(
+    raw: &str,
+) -> Result<state_store::TaskDependencyBulkAddInput, String> {
+    let parts = raw.split(':').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
+        return Err(format!(
+            "invalid bulk dependency edge `{raw}`; expected issue_id:depends_on_id:edge_type"
+        ));
+    }
+    Ok(state_store::TaskDependencyBulkAddInput {
+        issue_id: parts[0].to_string(),
+        depends_on_id: parts[1].to_string(),
+        edge_type: parts[2].to_string(),
+    })
+}
+
+fn task_dependency_bulk_edge_inputs(
+    inline_edges: &[String],
+    edge_file: Option<&std::path::Path>,
+) -> Result<Vec<state_store::TaskDependencyBulkAddInput>, String> {
+    let mut raw_edges = inline_edges.to_vec();
+    if let Some(path) = edge_file {
+        let content = std::fs::read_to_string(path).map_err(|error| {
+            format!(
+                "failed to read dependency edge file `{}`: {error}",
+                path.display()
+            )
+        })?;
+        raw_edges.extend(
+            content
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(ToOwned::to_owned),
+        );
+    }
+    if raw_edges.is_empty() {
+        return Err("at least one --edge or --edge-file entry is required".to_string());
+    }
+    raw_edges
+        .iter()
+        .map(|edge| parse_task_dependency_bulk_edge(edge))
+        .collect()
 }
 
 async fn task_list_authoritative_first(
@@ -5636,6 +5681,54 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                         Err(error) => {
                             eprintln!("Failed to add task dependency: {error}");
+                            ExitCode::from(1)
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!("Failed to open authoritative state store: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
+            TaskDependencyCommand::AddBulk(add) => {
+                let state_dir = add
+                    .state_dir
+                    .clone()
+                    .unwrap_or_else(state_store::default_state_dir);
+                let edges =
+                    match task_dependency_bulk_edge_inputs(&add.edges, add.edge_file.as_deref()) {
+                        Ok(edges) => edges,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                match StateStore::open_existing(state_dir).await {
+                    Ok(store) => match store
+                        .add_task_dependencies_bulk(&edges, &add.created_by, add.dry_run)
+                        .await
+                    {
+                        Ok(result) => {
+                            if result.failed_count == 0 && !result.dry_run {
+                                if let Err(code) = refresh_task_snapshot_after_mutation(
+                                    &store,
+                                    "vida task dep add-bulk",
+                                )
+                                .await
+                                {
+                                    return code;
+                                }
+                            }
+                            let exit_code = if result.failed_count == 0 {
+                                ExitCode::SUCCESS
+                            } else {
+                                ExitCode::from(1)
+                            };
+                            print_task_dependency_bulk_add_result(add.render, &result, add.json);
+                            exit_code
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to add task dependencies in bulk: {error}");
                             ExitCode::from(1)
                         }
                     },
