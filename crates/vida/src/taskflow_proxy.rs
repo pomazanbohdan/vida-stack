@@ -3667,6 +3667,9 @@ fn taskflow_graph_summary_operator_contracts(
     };
     let shared_fields = serde_json::json!({
         "status": status,
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
         "blocker_codes": blocker_codes,
         "next_actions": next_actions,
         "artifact_refs": artifact_refs,
@@ -3712,9 +3715,12 @@ fn taskflow_graph_summary_blocked_payload(error_stage: &str, error: &str) -> ser
     serde_json::json!({
         "status": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
         "surface": "vida taskflow graph-summary",
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
         "valid": false,
-        "blocker_codes": blocker_codes,
-        "next_actions": next_actions,
+        "blocker_codes": shared_fields["blocker_codes"],
+        "next_actions": shared_fields["next_actions"],
         "error_stage": error_stage,
         "error": error,
         "shared_fields": shared_fields,
@@ -4939,6 +4945,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     let payload = serde_json::json!({
         "surface": "vida taskflow graph-summary",
         "status": status,
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
         "artifact_refs": artifact_refs,
         "shared_fields": shared_fields,
         "operator_contracts": operator_contracts,

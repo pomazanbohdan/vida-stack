@@ -3681,6 +3681,147 @@ fn task_import_jsonl_invalid_graph_returns_json_envelope() {
         .expect("next action should render")
         .contains("vida task import-jsonl"));
 
+    let validate_json = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
+    assert_release1_shared_envelope_fields(&validate_json, "validate-graph after blocked import");
+    assert_eq!(validate_json["status"], "pass");
+    assert_eq!(validate_json["surface"], "vida task validate-graph");
+
+    let list_json = run_command_json(&["task", "list", "--json"], &state_dir);
+    assert_eq!(list_json["status"], "pass");
+    assert_eq!(list_json["task_count"], 0);
+    assert!(
+        !serde_json::to_string(&list_json)
+            .expect("task list json should render")
+            .contains("vida-broken"),
+        "blocked import must not persist invalid task rows"
+    );
+
+    let graph_summary_output =
+        run_command_capture(&["taskflow", "graph-summary", "--json"], &state_dir);
+    assert!(
+        !graph_summary_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&graph_summary_output.stderr)
+    );
+    let graph_summary_json: serde_json::Value =
+        serde_json::from_slice(&graph_summary_output.stdout)
+            .expect("graph-summary empty-graph blocked json should parse");
+    assert_release1_shared_envelope_fields(
+        &graph_summary_json,
+        "graph-summary after blocked import",
+    );
+    assert_eq!(graph_summary_json["status"], "blocked");
+    assert_eq!(graph_summary_json["surface"], "vida taskflow graph-summary");
+    assert_eq!(
+        graph_summary_json["blocker_codes"],
+        serde_json::json!(["no_ready_tasks", "task_graph_empty"])
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn graph_summary_invalid_persisted_graph_returns_json_envelope() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    create_epic_parent(
+        &state_dir,
+        "persisted-invalid-root",
+        "Persisted invalid root",
+        "open",
+    );
+    let child = run_command_json(
+        &[
+            "task",
+            "create",
+            "persisted-invalid-child",
+            "Persisted invalid child",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            "persisted-invalid-root",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(child["status"], "pass");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let dependencies = serde_json::json!([
+            {
+                "issue_id": "persisted-invalid-child",
+                "depends_on_id": "persisted-missing-parent",
+                "edge_type": "parent-child",
+                "created_at": "2026-03-08T00:00:00Z",
+                "created_by": "tester",
+                "metadata": "{}",
+                "thread_id": ""
+            }
+        ]);
+        db.query("UPDATE type::record('task', $task) SET dependencies = $dependencies")
+            .bind(("task", "persisted-invalid-child"))
+            .bind(("dependencies", dependencies))
+            .await
+            .expect("seed invalid dependency graph");
+    });
+
+    let validate_output = vida()
+        .args(["task", "validate-graph", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("validate-graph should run");
+    assert!(
+        !validate_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&validate_output.stderr)
+    );
+    let validate_json: serde_json::Value = serde_json::from_slice(&validate_output.stdout)
+        .expect("validate-graph blocked json should parse");
+    assert_release1_shared_envelope_fields(&validate_json, "blocked validate-graph");
+    assert_eq!(validate_json["status"], "blocked");
+    assert_eq!(validate_json["surface"], "vida task validate-graph");
+    assert_eq!(
+        validate_json["blocker_codes"],
+        serde_json::json!(["dependency_graph_issues"])
+    );
+
+    let graph_summary_output = vida()
+        .args(["taskflow", "graph-summary", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("graph-summary should run");
+    assert!(
+        !graph_summary_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&graph_summary_output.stderr)
+    );
+    let graph_summary_json: serde_json::Value =
+        serde_json::from_slice(&graph_summary_output.stdout)
+            .expect("graph-summary blocked json should parse");
+    assert_release1_shared_envelope_fields(&graph_summary_json, "blocked graph-summary");
+    assert_eq!(graph_summary_json["status"], "blocked");
+    assert_eq!(graph_summary_json["surface"], "vida taskflow graph-summary");
+    assert_eq!(
+        graph_summary_json["blocker_codes"],
+        serde_json::json!(["dependency_graph_issues"])
+    );
+    assert_eq!(graph_summary_json["error_stage"], "critical_path");
+    assert!(graph_summary_json["next_actions"][0]
+        .as_str()
+        .expect("graph-summary next action should render")
+        .contains("vida task validate-graph --json"));
+
     let _ = fs::remove_dir_all(&state_dir);
 }
 
