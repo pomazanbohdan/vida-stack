@@ -270,17 +270,35 @@ struct DevTeamSequenceStep {
 
 fn flow_matches_work_item_type(flow: &serde_json::Value, work_item_type: &str) -> bool {
     let lookup_keys = work_item_type_lookup_keys(work_item_type);
-    flow["work_item_bindings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .any(|value| {
-            let binding_keys = work_item_type_lookup_keys(value);
-            binding_keys
+    work_item_binding_values(&flow["work_item_bindings"]).any(|value| {
+        let binding_keys = work_item_type_lookup_keys(&value);
+        binding_keys
+            .iter()
+            .any(|binding_key| lookup_keys.iter().any(|key| key == binding_key))
+    })
+}
+
+fn work_item_binding_values(bindings: &serde_json::Value) -> impl Iterator<Item = String> + '_ {
+    match bindings {
+        serde_json::Value::String(value) => {
+            Box::new(split_work_item_binding_value(value)) as Box<dyn Iterator<Item = String>>
+        }
+        serde_json::Value::Array(values) => Box::new(
+            values
                 .iter()
-                .any(|binding_key| lookup_keys.iter().any(|key| key == binding_key))
-        })
+                .filter_map(serde_json::Value::as_str)
+                .flat_map(split_work_item_binding_value),
+        ),
+        _ => Box::new(std::iter::empty()),
+    }
+}
+
+fn split_work_item_binding_value(value: &str) -> impl Iterator<Item = String> + '_ {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn work_item_type_lookup_keys(work_item_type: &str) -> Vec<String> {
@@ -1689,31 +1707,30 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            let explicit_binding = if command.current_task_id.is_none() {
+                match store
+                    .latest_explicit_run_graph_continuation_binding_for_current_session()
+                    .await
+                {
+                    Ok(binding) => binding,
+                    Err(error) => {
+                        eprintln!("Failed to read latest explicit continuation binding: {error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            } else {
+                None
+            };
+            let explicit_bound_current_task_id =
+                explicit_task_graph_continuation_task_id(explicit_binding.as_ref())
+                    .map(str::to_string);
+            let effective_current_task_id = command
+                .current_task_id
+                .as_deref()
+                .or(explicit_bound_current_task_id.as_deref());
             let preview = if command.dev_team {
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
-                let explicit_binding = if command.current_task_id.is_none() {
-                    match store
-                        .latest_explicit_run_graph_continuation_binding_for_current_session()
-                        .await
-                    {
-                        Ok(binding) => binding,
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to read latest explicit continuation binding: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    }
-                } else {
-                    None
-                };
-                let explicit_bound_current_task_id =
-                    explicit_task_graph_continuation_task_id(explicit_binding.as_ref());
-                let effective_current_task_id = command
-                    .current_task_id
-                    .as_deref()
-                    .or(explicit_bound_current_task_id);
                 let projection =
                     match StateStore::read_fresh_tasks_from_jsonl_snapshot(store.root()) {
                         Ok(rows) => {
@@ -1805,7 +1822,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                         &store,
                         &state_dir,
                         command.scope.as_deref(),
-                        command.current_task_id.as_deref(),
+                        effective_current_task_id,
                         requested_parallel_limit,
                         true,
                         false,
@@ -2887,6 +2904,42 @@ mod tests {
         assert_eq!(sequence.len(), 1);
         assert_eq!(sequence[0].role_label, "tester");
         assert_eq!(sequence[0].task_class, "verification");
+    }
+
+    #[test]
+    fn development_flow_binding_selects_sequence_from_scalar_comma_bindings() {
+        let sequence = dev_team_sequence_for_work_item(
+            &serde_json::json!({
+                "dev_team_readiness": {
+                    "default_flow_id": "minimal",
+                    "roles": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "coach", "runtime_role": "coach", "task_classes": ["coach"]}
+                    ],
+                    "sequence": ["developer"],
+                    "flows": [
+                        {
+                            "flow_id": "minimal",
+                            "enabled": true,
+                            "default": true,
+                            "work_item_bindings": "task",
+                            "ordered_steps": [{"role_id": "developer"}]
+                        },
+                        {
+                            "flow_id": "reviewed",
+                            "enabled": true,
+                            "work_item_bindings": "epic,task",
+                            "ordered_steps": [{"role_id": "coach"}]
+                        }
+                    ]
+                }
+            }),
+            "epic",
+        );
+
+        assert_eq!(sequence.len(), 1);
+        assert_eq!(sequence[0].role_label, "coach");
+        assert_eq!(sequence[0].task_class, "coach");
     }
 
     #[test]
