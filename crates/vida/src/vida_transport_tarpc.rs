@@ -6,6 +6,7 @@ use interprocess::local_socket::{
     tokio::{prelude::*, Stream as LocalSocketStream},
     GenericNamespaced, ListenerOptions, ToNsName,
 };
+use serde_json::json;
 use tarpc::serde_transport;
 use tarpc::server::{BaseChannel, Channel};
 use tarpc::tokio_serde::formats::Json;
@@ -118,4 +119,21 @@ fn unique_socket_name() -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     format!("vida-tarpc-smoke-{}-{nanos}.sock", std::process::id())
+}
+
+pub(crate) fn local_socket_endpoint_metadata() -> serde_json::Value {
+    json!({
+        "transport": "tarpc",
+        "framing": "length_delimited_json",
+        "preferred_local_ipc": [
+            "windows_named_pipe",
+            "unix_domain_socket"
+        ],
+        "fallback": {
+            "kind": "loopback_tcp",
+            "allowed": true,
+            "requires_token": true,
+            "token_value_exposed": false
+        }
+    })
 }
