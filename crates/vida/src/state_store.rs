@@ -116,10 +116,10 @@ use state_store_source_scan::{
     record_id_for_slice_source,
 };
 pub use state_store_task_models::{
-    canonical_work_item_issue_type, task_work_item_kind, work_item_requires_parent,
-    work_item_taxonomy_entry, BlockedTaskRecord, CreateTaskRequest, TaskBulkReparentResult,
-    TaskCriticalPath, TaskCriticalPathNode, TaskDefectBatchRehomeResult, TaskDependencyStatus,
-    TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
+    canonical_work_item_issue_type, task_work_item_kind, work_item_is_program_container,
+    work_item_requires_parent, work_item_taxonomy_entry, BlockedTaskRecord, CreateTaskRequest,
+    TaskBulkReparentResult, TaskCriticalPath, TaskCriticalPathNode, TaskDefectBatchRehomeResult,
+    TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
     TaskExecutionSemantics, TaskGraphIssue, TaskImportSummary, TaskPlannerMetadata,
     TaskProgressSummary, TaskRecord, TaskRelease1ContractStep, TaskSchedulingCandidate,
     TaskSchedulingProjection, TaskStoreSummary, TaskWorkItemKind, UpdateTaskRequest,

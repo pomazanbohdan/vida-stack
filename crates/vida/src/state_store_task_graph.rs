@@ -21,7 +21,8 @@ impl StateStore {
     }
 
     fn task_is_open_like(task: &TaskRecord) -> bool {
-        (task.status == "open" || task.status == "in_progress") && task.issue_type != "epic"
+        (task.status == "open" || task.status == "in_progress")
+            && !work_item_is_program_container(&task.issue_type)
     }
 
     fn task_blockers(
@@ -332,7 +333,7 @@ impl StateStore {
                 "closed" => closed_count += 1,
                 _ => {}
             }
-            if task.issue_type == "epic" {
+            if work_item_is_program_container(&task.issue_type) {
                 epic_count += 1;
             }
         }
@@ -548,7 +549,8 @@ impl StateStore {
         let active_ids = tasks
             .iter()
             .filter(|task| {
-                (task.status == "open" || task.status == "in_progress") && task.issue_type != "epic"
+                (task.status == "open" || task.status == "in_progress")
+                    && !work_item_is_program_container(&task.issue_type)
             })
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
@@ -824,7 +826,9 @@ impl StateStore {
             let Some(dep_task) = by_id.get(&dependency.depends_on_id) else {
                 continue;
             };
-            if Self::task_status_is_closed_like(&dep_task.status) || dep_task.issue_type == "epic" {
+            if Self::task_status_is_closed_like(&dep_task.status)
+                || work_item_is_program_container(&dep_task.issue_type)
+            {
                 continue;
             }
 
@@ -973,6 +977,34 @@ mod tests {
             metadata: "{}".to_string(),
             thread_id: String::new(),
         }
+    }
+
+    #[test]
+    fn normalized_program_container_is_not_dispatchable_work() {
+        let mut epic = task_record("mixed-case-epic", "open");
+        epic.issue_type = "Epic".to_string();
+
+        let ready = StateStore::ready_tasks_scoped_from_rows(&[epic.clone()], None)
+            .expect("ready tasks should render");
+        assert!(
+            ready.is_empty(),
+            "normalized epics must not be ready leaf work"
+        );
+
+        let projection = StateStore::scheduling_projection_scoped_from_rows(
+            &[epic.clone()],
+            None,
+            None,
+            &BTreeSet::new(),
+        )
+        .expect("scheduling projection should render");
+        assert!(projection.ready.is_empty());
+        assert!(projection.blocked.is_empty());
+        assert_eq!(projection.current_task_id, None);
+
+        let critical_path =
+            StateStore::critical_path_from_rows(&[epic]).expect("critical path should render");
+        assert!(critical_path.nodes.is_empty());
     }
 
     #[test]

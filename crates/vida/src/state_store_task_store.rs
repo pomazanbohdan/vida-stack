@@ -1187,7 +1187,7 @@ impl StateStore {
         let mut blocked = tasks
             .into_iter()
             .filter(|task| task.status == "open" || task.status == "in_progress")
-            .filter(|task| task.issue_type != "epic")
+            .filter(|task| !work_item_is_program_container(&task.issue_type))
             .filter_map(|task| {
                 let blockers = task
                     .dependencies
@@ -1227,7 +1227,7 @@ impl StateStore {
             .iter()
             .cloned()
             .filter(|task| task.status == "open" || task.status == "in_progress")
-            .filter(|task| task.issue_type != "epic")
+            .filter(|task| !work_item_is_program_container(&task.issue_type))
             .filter_map(|task| {
                 let blockers = task
                     .dependencies
