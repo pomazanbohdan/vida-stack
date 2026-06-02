@@ -1314,6 +1314,10 @@ fn build_orchestrator_init_full_payload(
         "init": init_view,
         "dev_team_readiness": dev_team_readiness,
         "orchestrator_runtime_contract": orchestrator_runtime_contract,
+        "continuation_binding": init_view["continuation_binding"],
+        "active_bounded_unit": init_view["continuation_binding"]["active_bounded_unit"],
+        "why_this_unit": init_view["continuation_binding"]["why_this_unit"],
+        "sequential_vs_parallel_posture": init_view["continuation_binding"]["sequential_vs_parallel_posture"],
         "runtime_bundle_summary": orchestrator_runtime_bundle_summary(bundle, state_dir),
     })
 }
@@ -1345,10 +1349,33 @@ fn build_orchestrator_init_summary_payload(
             "project_root": init_view["project_root"],
             "root_artifact_id": init_view["root_artifact_id"],
         },
+        "continuation_binding": init_view["continuation_binding"],
+        "active_bounded_unit": init_view["continuation_binding"]["active_bounded_unit"],
+        "why_this_unit": init_view["continuation_binding"]["why_this_unit"],
+        "sequential_vs_parallel_posture": init_view["continuation_binding"]["sequential_vs_parallel_posture"],
         "next_lawful_dispatch_action": orchestrator_runtime_contract["next_lawful_dispatch_action"],
         "dev_team_readiness_summary": compact_dev_team_readiness_summary(dev_team_readiness),
         "runtime_bundle_summary": orchestrator_runtime_bundle_summary(bundle, state_dir),
     })
+}
+
+fn cached_orchestrator_init_payload_has_top_level_continuation_fields(cached: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(cached)
+        .ok()
+        .is_some_and(|payload| {
+            !payload
+                .get("active_bounded_unit")
+                .unwrap_or(&serde_json::Value::Null)
+                .is_null()
+                && !payload
+                    .get("why_this_unit")
+                    .unwrap_or(&serde_json::Value::Null)
+                    .is_null()
+                && payload
+                    .get("sequential_vs_parallel_posture")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+        })
 }
 
 fn build_orchestrator_runtime_contract(
@@ -1878,6 +1905,49 @@ mod tests {
         assert!(
             agent_init_execute_dispatch_window_requires_operator_handoff(2),
             "2s dispatch windows must return operator-visible in-flight evidence instead of waiting for terminal agent output"
+        );
+    }
+
+    #[test]
+    fn orchestrator_init_summary_payload_projects_top_level_continuation_fields() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let bundle = crate::taskflow_runtime_bundle::blocking_runtime_bundle("test");
+        let init_view = json!({
+            "status": "ready_enough_for_normal_work",
+            "local_runtime_surface": "vida orchestrator-init",
+            "boot_surface": "vida boot",
+            "project_activation": {
+                "activation_pending": false
+            },
+            "project_root": harness.path().display().to_string(),
+            "root_artifact_id": "root",
+            "continuation_binding": {
+                "status": "bound",
+                "active_bounded_unit": {
+                    "kind": "task_graph_task",
+                    "task_id": "active-task"
+                },
+                "why_this_unit": "Active task is authoritative.",
+                "sequential_vs_parallel_posture": "sequential_only_taskflow_active"
+            }
+        });
+        let payload = build_orchestrator_init_summary_payload(
+            &init_view,
+            &json!({ "flows": [], "roles": [] }),
+            &json!({ "next_lawful_dispatch_action": {} }),
+            &bundle,
+            harness.path(),
+        );
+
+        assert_eq!(payload["active_bounded_unit"]["task_id"], "active-task");
+        assert_eq!(payload["why_this_unit"], "Active task is authoritative.");
+        assert_eq!(
+            payload["sequential_vs_parallel_posture"],
+            "sequential_only_taskflow_active"
+        );
+        assert_eq!(
+            payload["init"]["continuation_binding"]["active_bounded_unit"]["task_id"],
+            "active-task"
         );
     }
 
@@ -3960,8 +4030,23 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
             &state_dir,
             orchestrator_init_projection_name(args.full),
         ) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
+            let rendered = if let Some(overlay) =
+                crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+                    &state_dir,
+                ) {
+                crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_fresh_payload(
+                    &state_dir,
+                    &cached,
+                    &overlay,
+                )
+                .unwrap_or_else(|| cached.clone())
+            } else {
+                cached.clone()
+            };
+            if cached_orchestrator_init_payload_has_top_level_continuation_fields(&rendered) {
+                println!("{rendered}");
+                return ExitCode::SUCCESS;
+            }
         }
         if let Some(cached) =
             crate::operator_projection_cache::read_state_stale_recent_json_projection(

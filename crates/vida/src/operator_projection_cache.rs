@@ -331,6 +331,36 @@ pub(crate) fn apply_runtime_continuation_binding_overlay_to_payload(
     cached: &str,
     overlay: &serde_json::Value,
 ) -> Option<String> {
+    apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
+        state_dir,
+        cached,
+        overlay,
+        "state_marker_stale_recent_projection_with_runtime_continuation_overlay",
+        "cached_structural_projection_with_validated_continuation_binding_overlay",
+    )
+}
+
+pub(crate) fn apply_runtime_continuation_binding_overlay_to_fresh_payload(
+    state_dir: &Path,
+    cached: &str,
+    overlay: &serde_json::Value,
+) -> Option<String> {
+    apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
+        state_dir,
+        cached,
+        overlay,
+        "state_marker_fresh_projection_with_runtime_continuation_overlay",
+        "fresh_cached_structural_projection_with_validated_continuation_binding_overlay",
+    )
+}
+
+fn apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
+    state_dir: &Path,
+    cached: &str,
+    overlay: &serde_json::Value,
+    cache_status: &str,
+    freshness_contract: &str,
+) -> Option<String> {
     let mut payload = serde_json::from_str::<serde_json::Value>(cached).ok()?;
     if payload
         .get("projection_cache_dependencies")
@@ -347,12 +377,12 @@ pub(crate) fn apply_runtime_continuation_binding_overlay_to_payload(
     object.insert(
         "projection_cache".to_string(),
         serde_json::json!({
-            "status": "state_marker_stale_recent_projection_with_runtime_continuation_overlay",
+            "status": cache_status,
             "projection_name": object
                 .get("surface")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("operator_projection"),
-            "freshness_contract": "cached_structural_projection_with_validated_continuation_binding_overlay"
+            "freshness_contract": freshness_contract
         }),
     );
 
@@ -1137,6 +1167,94 @@ mod tests {
             super::apply_runtime_continuation_binding_overlay_to_payload(&root, &cached, &overlay)
                 .is_none(),
             "structural projection with stale task marker must fail closed"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_continuation_overlay_updates_fresh_operator_payload() {
+        let overlay = serde_json::json!({
+            "binding": {
+                "run_id": "run-overlay",
+                "task_id": "task-overlay",
+                "status": "bound",
+                "active_bounded_unit": {
+                    "kind": "task_graph_task",
+                    "run_id": "run-overlay",
+                    "task_id": "task-overlay"
+                },
+                "binding_source": "explicit_continuation_bind_task",
+                "why_this_unit": "test overlay",
+                "primary_path": "normal_delivery_path",
+                "sequential_vs_parallel_posture": "sequential_only_explicit_task_bound",
+                "request_text": "task-overlay",
+                "recorded_at": "2026-05-25T00:00:00Z"
+            },
+            "continuation_binding": {
+                "status": "bound",
+                "continuation_allowed": true,
+                "continuation_required_now": false,
+                "active_bounded_unit": {
+                    "kind": "task_graph_task",
+                    "run_id": "run-overlay",
+                    "task_id": "task-overlay"
+                },
+                "binding_source": "explicit_continuation_bind_task",
+                "why_this_unit": "test overlay",
+                "primary_path": "normal_delivery_path",
+                "sequential_vs_parallel_posture": "sequential_only_explicit_task_bound",
+                "pause_boundary_gate": "allowed_if_no_further_bound_work_is_evidenced",
+                "ambiguity_reason": null,
+                "next_actions": []
+            }
+        });
+        let root = std::env::temp_dir().join(format!(
+            "vida-runtime-continuation-fresh-payload-overlay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let marker =
+            crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                &root,
+            );
+        fs::write(&marker, "task-marker-1").expect("task marker should write");
+        std::thread::sleep(Duration::from_millis(10));
+        write_json_projection(
+            &root,
+            "orchestrator-init-summary-latest",
+            &serde_json::json!({
+                "surface": "vida orchestrator-init",
+                "status": "ready_enough_for_normal_work",
+                "init": {
+                    "continuation_binding": {
+                        "status": "ambiguous",
+                        "active_bounded_unit": null
+                    }
+                }
+            }),
+        );
+        let cached = read_fresh_json_projection(&root, "orchestrator-init-summary-latest")
+            .expect("fresh projection should be readable");
+
+        let rendered = super::apply_runtime_continuation_binding_overlay_to_fresh_payload(
+            &root, &cached, &overlay,
+        )
+        .expect("fresh overlay should update payload");
+        let rendered: serde_json::Value =
+            serde_json::from_str(&rendered).expect("rendered overlay should parse");
+
+        assert_eq!(
+            rendered["init"]["continuation_binding"]["active_bounded_unit"]["task_id"],
+            "task-overlay"
+        );
+        assert_eq!(rendered["active_bounded_unit"]["task_id"], "task-overlay");
+        assert_eq!(
+            rendered["projection_cache"]["status"],
+            "state_marker_fresh_projection_with_runtime_continuation_overlay"
         );
         let _ = fs::remove_dir_all(root);
     }

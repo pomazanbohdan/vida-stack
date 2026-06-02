@@ -2814,11 +2814,11 @@ fn taskflow_defect_loop_routes_repair_and_gates_parent_closure() {
         .is_empty());
     assert_eq!(
         next_lawful["why_this_unit"],
-        "single TaskFlow in_progress task is the lawful continuation"
+        "Single TaskFlow in_progress task is the authoritative active bounded unit."
     );
     assert_eq!(
         next_lawful["sequential_vs_parallel_posture"],
-        "sequential_only_active_task"
+        "sequential_only_taskflow_active"
     );
 
     let dispatch_preview = run_command_json(
