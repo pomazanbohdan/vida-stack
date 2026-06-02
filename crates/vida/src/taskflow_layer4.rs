@@ -790,6 +790,10 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Detached JSON export alone is not treated as binding closure.");
             return;
         }
+        Some("pricing") => {
+            crate::taskflow_pricing::print_taskflow_pricing_help();
+            return;
+        }
         Some("bootstrap-spec") => {
             println!("VIDA TaskFlow help: bootstrap-spec");
             println!();
@@ -826,7 +830,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|pricing|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -870,6 +874,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  packet      persisted runtime packet inspection");
     println!("  artifacts   execution-preparation artifact readiness/materialization");
     println!("  run-graph   resumability and node-state inspection");
+    println!("  pricing     price-catalog readiness and provider snapshot import receipts");
     println!("  consume     explicit TaskFlow -> final closure handoff");
     println!("  query       launcher-owned command-discovery helper");
     println!(
@@ -909,6 +914,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow packet task <task-id> --json");
     println!("  vida taskflow packet latest --json");
     println!("  vida taskflow artifacts list --json");
+    println!("  vida taskflow pricing status --json");
+    println!("  vida taskflow pricing import --source-file <path> --dry-run --json");
     println!("  vida taskflow consume final \"proof path\" --json");
     println!("  vida taskflow consume continue --json");
     println!("  vida taskflow consume advance --max-rounds 4 --json");

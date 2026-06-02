@@ -5707,6 +5707,7 @@ struct TaskflowRouteDiagnosticArgs {
     dispatch_target: Option<String>,
     runtime_role: Option<String>,
     as_json: bool,
+    include_pricing: bool,
 }
 
 fn parse_taskflow_route_diagnostic_args(
@@ -5725,7 +5726,7 @@ fn parse_taskflow_route_diagnostic_args(
         }
         _ => {
             return Err(
-                "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+                "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--pricing] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--pricing] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
             );
         }
     };
@@ -5736,11 +5737,16 @@ fn parse_taskflow_route_diagnostic_args(
         dispatch_target: None,
         runtime_role: None,
         as_json: false,
+        include_pricing: false,
     };
     while index < args.len() {
         match args[index].as_str() {
             "--json" => {
                 parsed.as_json = true;
+                index += 1;
+            }
+            "--pricing" => {
+                parsed.include_pricing = true;
                 index += 1;
             }
             "--run-id" => {
@@ -5766,12 +5772,12 @@ fn parse_taskflow_route_diagnostic_args(
             }
             "--help" | "-h" => {
                 return Err(
-                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--pricing] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--pricing] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
                 );
             }
             _ => {
                 return Err(
-                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--pricing] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--pricing] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
                 );
             }
         }
@@ -6251,6 +6257,95 @@ fn route_payload_for_dispatch_target(
     payload
 }
 
+fn attach_pricing_diagnostics(payload: &mut serde_json::Value) {
+    let diagnostics = serde_json::json!({
+        "requested": true,
+        "diagnostic_only": true,
+        "price_catalog_readiness": crate::taskflow_pricing::pricing_readiness_payload(),
+        "source_mode": "profile_local_compatibility",
+        "active_snapshot_id": serde_json::Value::Null,
+        "refresh_or_import_attempted": false,
+        "next_actions": [
+            "Use `vida taskflow pricing status --json` for catalog readiness.",
+            "Use `vida taskflow pricing import --source-file <path> --dry-run --json` for provider snapshot preview receipts."
+        ]
+    });
+
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("pricing_diagnostics".to_string(), diagnostics.clone());
+    }
+    if let Some(route) = payload.get_mut("route") {
+        attach_pricing_diagnostics_to_route(route, &diagnostics);
+    }
+    if let Some(routes) = payload
+        .get_mut("routes")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for route in routes {
+            attach_pricing_diagnostics_to_route(route, &diagnostics);
+        }
+    }
+}
+
+fn attach_pricing_diagnostics_to_route(
+    route: &mut serde_json::Value,
+    diagnostics: &serde_json::Value,
+) {
+    if let Some(object) = route.as_object_mut() {
+        object.insert("pricing_diagnostics".to_string(), diagnostics.clone());
+    }
+    if let Some(selected) = route
+        .get_mut("selected_candidate")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        selected.insert(
+            "price_catalog_snapshot_id".to_string(),
+            serde_json::Value::Null,
+        );
+        selected.insert(
+            "price_source_kind".to_string(),
+            serde_json::Value::String("profile_local_compatibility".to_string()),
+        );
+        selected.insert(
+            "price_freshness_status".to_string(),
+            serde_json::Value::String("profile_local_fallback".to_string()),
+        );
+        selected.insert(
+            "normalized_cost_units_source".to_string(),
+            serde_json::Value::String("profile_local_runtime_assignment".to_string()),
+        );
+        selected.insert(
+            "pricing_diagnostic_class".to_string(),
+            serde_json::Value::String("diagnostic_only".to_string()),
+        );
+    }
+    if let Some(rejected) = route
+        .get_mut("rejected_candidates")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for candidate in rejected {
+            if let Some(object) = candidate.as_object_mut() {
+                object.insert(
+                    "price_catalog_snapshot_id".to_string(),
+                    serde_json::Value::Null,
+                );
+                object.insert(
+                    "price_freshness_status".to_string(),
+                    serde_json::Value::String("profile_local_fallback".to_string()),
+                );
+                object.insert(
+                    "pricing_reasons".to_string(),
+                    serde_json::json!(["diagnostic_only_price_gap"]),
+                );
+                object.insert(
+                    "pricing_fail_closed".to_string(),
+                    serde_json::Value::Bool(false),
+                );
+            }
+        }
+    }
+}
+
 fn route_validate_targets(execution_plan: &serde_json::Value) -> Vec<String> {
     let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
     let mut targets =
@@ -6664,11 +6759,12 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
     };
     let state_dir = proxy_state_dir();
     let projection_name = format!(
-        "taskflow-route-{}-run-{}-target-{}-role-{}-latest",
+        "taskflow-route-{}-run-{}-target-{}-role-{}-pricing-{}-latest",
         parsed.mode.projection_component(),
         safe_taskflow_projection_component(parsed.run_id.as_deref().unwrap_or("latest")),
         safe_taskflow_projection_component(parsed.dispatch_target.as_deref().unwrap_or("default")),
         safe_taskflow_projection_component(parsed.runtime_role.as_deref().unwrap_or("default")),
+        parsed.include_pricing,
     );
     if parsed.as_json {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
@@ -6752,7 +6848,20 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                     None => "implementation".to_string(),
                 },
             };
-            let explain = route_payload_for_dispatch_target(execution_plan, &dispatch_target);
+            let mut explain = route_payload_for_dispatch_target(execution_plan, &dispatch_target);
+            if parsed.include_pricing {
+                attach_pricing_diagnostics_to_route(
+                    &mut explain,
+                    &serde_json::json!({
+                        "requested": true,
+                        "diagnostic_only": true,
+                        "price_catalog_readiness": crate::taskflow_pricing::pricing_readiness_payload(),
+                        "source_mode": "profile_local_compatibility",
+                        "active_snapshot_id": serde_json::Value::Null,
+                        "refresh_or_import_attempted": false,
+                    }),
+                );
+            }
             let next_actions = if string_array_from_payload(&explain["blocker_codes"])
                 .iter()
                 .any(|code| code == "model_not_pinned")
@@ -6761,7 +6870,7 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             } else {
                 string_array_from_payload(&explain["next_actions"])
             };
-            serde_json::json!({
+            let mut payload = serde_json::json!({
                 "surface": "vida taskflow route explain",
                 "status": explain["status"],
                 "blocker_codes": explain["blocker_codes"],
@@ -6770,7 +6879,11 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 "task_id": context.task_id,
                 "dispatch_target": dispatch_target,
                 "route": explain,
-            })
+            });
+            if parsed.include_pricing {
+                attach_pricing_diagnostics(&mut payload);
+            }
+            payload
         }
         RouteDiagnosticMode::ModelProfileReadinessAudit => {
             let dispatch_target = match parsed.dispatch_target {
@@ -6807,7 +6920,11 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             audit
         }
         RouteDiagnosticMode::ValidateRouting => {
-            build_validate_routing_payload(&context, execution_plan)
+            let mut payload = build_validate_routing_payload(&context, execution_plan);
+            if parsed.include_pricing {
+                attach_pricing_diagnostics(&mut payload);
+            }
+            payload
         }
         RouteDiagnosticMode::ConfigActuationCensus => {
             build_config_actuation_census_payload(&context, execution_plan)
@@ -8962,6 +9079,24 @@ mod tests {
         let parsed = super::parse_taskflow_route_diagnostic_args(&args).unwrap();
         assert_eq!(parsed.mode, super::RouteDiagnosticMode::Explain);
         assert_eq!(parsed.dispatch_target.as_deref(), Some("implementation"));
+        assert!(parsed.as_json);
+        assert!(!parsed.include_pricing);
+    }
+
+    #[test]
+    fn route_diagnostic_parser_accepts_pricing_diagnostics_flag() {
+        let args = vec![
+            "route".to_string(),
+            "explain".to_string(),
+            "--runtime-role".to_string(),
+            "worker".to_string(),
+            "--pricing".to_string(),
+            "--json".to_string(),
+        ];
+        let parsed = super::parse_taskflow_route_diagnostic_args(&args).unwrap();
+        assert_eq!(parsed.mode, super::RouteDiagnosticMode::Explain);
+        assert_eq!(parsed.runtime_role.as_deref(), Some("worker"));
+        assert!(parsed.include_pricing);
         assert!(parsed.as_json);
     }
 
@@ -11435,6 +11570,10 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
 
     if matches!(args.args.first().map(String::as_str), Some("scheduler")) {
         return run_taskflow_scheduler_surface(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("pricing")) {
+        return crate::taskflow_pricing::run_taskflow_pricing(&args.args);
     }
 
     if matches!(
