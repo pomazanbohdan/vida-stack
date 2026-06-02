@@ -269,12 +269,31 @@ struct DevTeamSequenceStep {
 }
 
 fn flow_matches_work_item_type(flow: &serde_json::Value, work_item_type: &str) -> bool {
+    let lookup_keys = work_item_type_lookup_keys(work_item_type);
     flow["work_item_bindings"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(serde_json::Value::as_str)
-        .any(|value| value.eq_ignore_ascii_case(work_item_type))
+        .any(|value| {
+            let binding_keys = work_item_type_lookup_keys(value);
+            binding_keys
+                .iter()
+                .any(|binding_key| lookup_keys.iter().any(|key| key == binding_key))
+        })
+}
+
+fn work_item_type_lookup_keys(work_item_type: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let normalized = state_store::canonical_work_item_issue_type(work_item_type);
+    if !normalized.is_empty() {
+        keys.push(normalized);
+    }
+    let lower = work_item_type.trim().to_ascii_lowercase();
+    if !lower.is_empty() && !keys.iter().any(|key| key == &lower) {
+        keys.push(lower);
+    }
+    keys
 }
 
 fn selected_dev_team_flow_for_work_item<'a>(
@@ -287,15 +306,17 @@ fn selected_dev_team_flow_for_work_item<'a>(
         .filter(|value| !value.is_empty())
         .map(str::to_ascii_lowercase);
     if let Some(work_item_type) = normalized_type.as_deref() {
-        if let Some(flow_id) = readiness["work_item_flow_bindings"]
-            .get(work_item_type)
-            .and_then(serde_json::Value::as_str)
-        {
-            if let Some(flow) = flows
-                .iter()
-                .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
+        for lookup_key in work_item_type_lookup_keys(work_item_type) {
+            if let Some(flow_id) = readiness["work_item_flow_bindings"]
+                .get(&lookup_key)
+                .and_then(serde_json::Value::as_str)
             {
-                return Some(flow);
+                if let Some(flow) = flows
+                    .iter()
+                    .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
+                {
+                    return Some(flow);
+                }
             }
         }
         if let Some(flow) = flows
@@ -962,7 +983,7 @@ fn build_agent_dispatch_next_preview_dev_team(
             .map(str::to_string)
         })
         .collect::<std::collections::BTreeSet<_>>();
-    let selected_ready_candidates = if all_ready_flow_ids.len() > 1 {
+    let mut selected_ready_candidates = if all_ready_flow_ids.len() > 1 {
         if let Some(current_task_id) = projection.current_task_id.as_deref() {
             projection
                 .ready
@@ -975,6 +996,15 @@ fn build_agent_dispatch_next_preview_dev_team(
     } else {
         projection.ready.iter().collect::<Vec<_>>()
     };
+    if let Some(current_task_id) = projection.current_task_id.as_deref() {
+        selected_ready_candidates.sort_by_key(|candidate| {
+            if candidate.task.id == current_task_id {
+                0
+            } else {
+                1
+            }
+        });
+    }
     let ready_flow_ids = selected_ready_candidates
         .iter()
         .filter(|candidate| candidate.ready_now)
@@ -2822,6 +2852,44 @@ mod tests {
     }
 
     #[test]
+    fn development_flow_binding_selects_sequence_by_canonical_work_item_alias() {
+        let sequence = dev_team_sequence_for_work_item(
+            &serde_json::json!({
+                "dev_team_readiness": {
+                    "default_flow_id": "default_delivery",
+                    "work_item_flow_bindings": {
+                        "defect": "defect_repair"
+                    },
+                    "roles": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+                    ],
+                    "sequence": ["developer"],
+                    "flows": [
+                        {
+                            "flow_id": "default_delivery",
+                            "enabled": true,
+                            "default": true,
+                            "ordered_steps": [{"role_id": "developer"}]
+                        },
+                        {
+                            "flow_id": "defect_repair",
+                            "enabled": true,
+                            "work_item_bindings": ["defect"],
+                            "ordered_steps": [{"role_id": "tester"}]
+                        }
+                    ]
+                }
+            }),
+            "bug",
+        );
+
+        assert_eq!(sequence.len(), 1);
+        assert_eq!(sequence[0].role_label, "tester");
+        assert_eq!(sequence[0].task_class, "verification");
+    }
+
+    #[test]
     fn development_flow_binding_blocks_mixed_ready_flow_classes_without_current_task() {
         let preview = build_agent_dispatch_next_preview(
             &serde_json::json!({
@@ -2927,6 +2995,50 @@ mod tests {
         assert!(!preview
             .blocker_codes
             .contains(&"ambiguous_work_item_flow_selection".to_string()));
+    }
+
+    #[test]
+    fn development_flow_binding_orders_current_task_first_with_same_ready_flow_class() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "default_delivery",
+            "work_item_flow_bindings": {
+                "task": "default_delivery"
+            },
+            "roles": [
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]}
+            ],
+            "sequence": ["developer"],
+            "flows": [
+                {
+                    "flow_id": "default_delivery",
+                    "enabled": true,
+                    "default": true,
+                    "ordered_steps": [{"role_id": "developer"}]
+                }
+            ]
+        });
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: Some("task-active".to_string()),
+                ready: vec![
+                    candidate_with_type("task-other", "Other task", true, true, "task"),
+                    candidate_with_type("task-active", "Active task", true, true, "task"),
+                ],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            1,
+            1,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 1);
+        assert_eq!(preview.selected_lanes[0].task_id, "task-active");
+        assert_eq!(preview.selected_lanes[0].role_label, "developer");
     }
 
     #[test]
