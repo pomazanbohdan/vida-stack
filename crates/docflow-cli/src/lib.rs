@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 use docflow_config::{resolve_profile_roots, resolve_scan_ignored_globs};
-use docflow_contracts::{ReadinessRow, ScanRow};
+use docflow_contracts::{ArtifactRelationKind, ReadinessRow, ScanRow};
 use docflow_core::{ArtifactPath, CheckedAt, ReadinessVerdict};
 use docflow_format_jsonl::encode_line;
 use docflow_inventory::{InventoryScope, build_registry};
@@ -2084,7 +2084,12 @@ fn artifact_impact_rows(
             .map(|artifact| artifact.body)
             .unwrap_or(content.clone());
         let mut reasons = Vec::new();
-        if footer.values().any(|entry| entry == &value) {
+        for relation in ArtifactRelationKind::ALL {
+            if footer.get(relation.footer_key()) == Some(&value) {
+                reasons.push(relation.footer_key().to_string());
+            }
+        }
+        if reasons.is_empty() && footer.values().any(|entry| entry == &value) {
             reasons.push("footer_ref".to_string());
         }
         if extract_markdown_links(&rel, &body)
@@ -4823,6 +4828,35 @@ mod tests {
     }
 
     #[test]
+    fn artifact_impact_command_reports_generic_relation_keys() {
+        let root = temp_dir("artifact-impact-generic-relation-root");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("docs/process/a.md"),
+            "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: canonical\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+        )
+        .expect("source markdown");
+        fs::write(
+            root.join("docs/process/b.md"),
+            "# b\n\n-----\nartifact_path: process/b\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/b.md\nstatus: canonical\nchangelog_ref: b.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\ndocuments: process/a\nverifies: process/a\n",
+        )
+        .expect("dependent markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "artifact-impact",
+            "--artifact",
+            "process/a",
+            "--root",
+            root.to_string_lossy().as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("impact: docs/process/b.md [verifies,documents]"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
     fn task_impact_command_defaults_to_operator_surface() {
         let root = temp_dir("task-impact-root");
         fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
@@ -4857,6 +4891,40 @@ mod tests {
         assert!(rendered.contains("indirect_impacts: 1"));
         assert!(rendered.contains("touched_path: docs/process/a.md"));
         assert!(rendered.contains("indirect_impact: docs/process/b.md <= process/a [footer_ref]"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn task_impact_command_reports_generic_relation_keys() {
+        let root = temp_dir("task-impact-generic-relation-root");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("docs/process/a.md"),
+            "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: canonical\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+        )
+        .expect("source markdown");
+        fs::write(
+            root.join("docs/process/a.changelog.jsonl"),
+            "{\"ts\":\"2026-03-11T00:00:00Z\",\"event\":\"artifact_revision_updated\",\"artifact_path\":\"process/a\",\"task_id\":\"artifact-relation-task\"}\n",
+        )
+        .expect("source changelog");
+        fs::write(
+            root.join("docs/process/b.md"),
+            "# b\n\n-----\nartifact_path: process/b\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/b.md\nstatus: canonical\nchangelog_ref: b.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\ndocuments: process/a\n",
+        )
+        .expect("dependent markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "task-impact",
+            "--task-id",
+            "artifact-relation-task",
+            "--root",
+            root.to_string_lossy().as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("indirect_impact: docs/process/b.md <= process/a [documents]"));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }
