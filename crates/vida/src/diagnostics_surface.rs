@@ -1,8 +1,10 @@
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::{
-    state_store::StateStore, DiagnosticsArgs, DiagnosticsCommand, DiagnosticsPostCommitArgs,
+    state_store::StateStore, DiagnosticsArgs, DiagnosticsCommand, DiagnosticsEvidenceCheckArgs,
+    DiagnosticsPostCommitArgs, DiagnosticsRulesCheckArgs,
 };
 
 const DIAGNOSTICS_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
@@ -156,6 +158,206 @@ fn diagnostic_exit_code(payload: &serde_json::Value) -> ExitCode {
     } else {
         ExitCode::from(1)
     }
+}
+
+fn trimmed_non_empty_values(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn normalized_path_strings(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .filter(|value| !value.trim().is_empty())
+        .collect()
+}
+
+fn render_diagnostics_gate_payload(
+    surface: &str,
+    gate_id: &str,
+    gate_status: &str,
+    task_id: Option<&str>,
+    evidence_refs: Vec<String>,
+    affected_paths: Vec<String>,
+    blocker_codes: Vec<String>,
+    failure_codes: Vec<String>,
+    issues: Vec<serde_json::Value>,
+    next_actions: Vec<String>,
+) -> serde_json::Value {
+    let status = status_from_blockers(&blocker_codes);
+    let artifact_refs = serde_json::json!({
+        "surface": surface,
+        "task_id": task_id.unwrap_or_default(),
+        "evidence_refs": evidence_refs,
+        "affected_paths": affected_paths,
+    });
+    let vida_gate_result = crate::operator_contracts::render_vida_gate_result_with_status(
+        gate_id,
+        gate_status,
+        blocker_codes.clone(),
+        Vec::new(),
+        failure_codes,
+        issues,
+        next_actions.clone(),
+        artifact_refs.clone(),
+    );
+    serde_json::json!({
+        "surface": surface,
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": if status == "pass" { Vec::<String>::new() } else { next_actions },
+        "artifact_refs": artifact_refs,
+        "operator_contracts": vida_gate_result["operator_contracts"].clone(),
+        "vida_gate_result": vida_gate_result,
+    })
+}
+
+fn build_evidence_check_diagnostics(args: &DiagnosticsEvidenceCheckArgs) -> serde_json::Value {
+    let evidence_refs = trimmed_non_empty_values(&args.evidence_refs);
+    let mut blocker_codes = Vec::new();
+    let mut issues = Vec::new();
+    let mut next_actions = Vec::new();
+    if evidence_refs.is_empty() {
+        blocker_codes.push("missing_gate_evidence".to_string());
+        issues.push(serde_json::json!({
+            "code": "insufficient_evidence",
+            "message": "No evidence refs were supplied for the bounded gate.",
+        }));
+        next_actions.push(
+            "Provide at least one concrete --evidence-ref value before treating the gate as pass."
+                .to_string(),
+        );
+    }
+    render_diagnostics_gate_payload(
+        "vida diagnostics evidence-check",
+        "diagnostics.evidence_check",
+        if blocker_codes.is_empty() {
+            "pass"
+        } else {
+            "insufficient_evidence"
+        },
+        args.task_id.as_deref(),
+        evidence_refs,
+        Vec::new(),
+        blocker_codes,
+        Vec::new(),
+        issues,
+        next_actions,
+    )
+}
+
+fn check_protocol_id(protocol_id: &str) -> Option<serde_json::Value> {
+    crate::protocol_surface::render_protocol_view_target(protocol_id)
+        .err()
+        .map(|error| {
+            serde_json::json!({
+                "code": "protocol_rule_violation",
+                "protocol_id": protocol_id,
+                "message": error,
+            })
+        })
+}
+
+fn check_changed_path(path: &Path) -> Option<serde_json::Value> {
+    if path.exists() {
+        None
+    } else {
+        Some(serde_json::json!({
+            "code": "rules_check_path_missing",
+            "path": path.display().to_string(),
+            "message": "Changed path does not exist in the current project root.",
+        }))
+    }
+}
+
+fn build_rules_check_diagnostics(args: &DiagnosticsRulesCheckArgs) -> serde_json::Value {
+    let protocol_ids = trimmed_non_empty_values(&args.protocol_ids);
+    let affected_paths = normalized_path_strings(&args.changed_paths);
+    let evidence_refs = protocol_ids
+        .iter()
+        .map(|protocol_id| format!("protocol:{protocol_id}"))
+        .chain(affected_paths.iter().map(|path| format!("path:{path}")))
+        .collect::<Vec<_>>();
+    let mut blocker_codes = Vec::new();
+    let mut issues = Vec::new();
+    let mut next_actions = Vec::new();
+
+    if protocol_ids.is_empty() && affected_paths.is_empty() {
+        blocker_codes.push("missing_gate_evidence".to_string());
+        issues.push(serde_json::json!({
+            "code": "insufficient_evidence",
+            "message": "Rules-check needs at least one --changed-path or --protocol-id input.",
+        }));
+        next_actions.push(
+            "Run rules-check with concrete --changed-path or --protocol-id inputs.".to_string(),
+        );
+    }
+
+    for protocol_id in &protocol_ids {
+        if let Some(issue) = check_protocol_id(protocol_id) {
+            blocker_codes.push("protocol_rule_violation".to_string());
+            issues.push(issue);
+        }
+    }
+    for path in &args.changed_paths {
+        if let Some(issue) = check_changed_path(path) {
+            blocker_codes.push("rules_check_path_missing".to_string());
+            issues.push(issue);
+        }
+    }
+    blocker_codes.sort();
+    blocker_codes.dedup();
+    if !issues.is_empty() && next_actions.is_empty() {
+        next_actions.push(
+            "Resolve rules-check issues before treating the bounded change as pass.".to_string(),
+        );
+    }
+
+    render_diagnostics_gate_payload(
+        "vida diagnostics rules-check",
+        "diagnostics.rules_check",
+        if blocker_codes
+            .iter()
+            .any(|code| code == "missing_gate_evidence")
+        {
+            "insufficient_evidence"
+        } else if blocker_codes.is_empty() {
+            "pass"
+        } else {
+            "blocked"
+        },
+        args.task_id.as_deref(),
+        evidence_refs,
+        affected_paths,
+        blocker_codes,
+        Vec::new(),
+        issues,
+        next_actions,
+    )
+}
+
+fn run_diagnostics_gate(payload: serde_json::Value, json: bool) -> ExitCode {
+    if json {
+        crate::print_json_pretty(&payload);
+    } else {
+        println!(
+            "{}",
+            payload["surface"].as_str().unwrap_or("vida diagnostics")
+        );
+        println!(
+            "status: {}",
+            payload["status"].as_str().unwrap_or("blocked")
+        );
+        if let Some(blockers) = payload["blocker_codes"].as_array() {
+            println!("blocker_codes: {}", blockers.len());
+        }
+    }
+    diagnostic_exit_code(&payload)
 }
 
 fn compact_counted_json_member(value: &serde_json::Value) -> serde_json::Value {
@@ -382,18 +584,28 @@ async fn run_post_commit(args: DiagnosticsPostCommitArgs) -> ExitCode {
 pub(crate) async fn run_diagnostics(args: DiagnosticsArgs) -> ExitCode {
     match args.command {
         DiagnosticsCommand::PostCommit(args) => run_post_commit(args).await,
+        DiagnosticsCommand::EvidenceCheck(args) => {
+            run_diagnostics_gate(build_evidence_check_diagnostics(&args), args.json)
+        }
+        DiagnosticsCommand::RulesCheck(args) => {
+            run_diagnostics_gate(build_rules_check_diagnostics(&args), args.json)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
+        build_evidence_check_diagnostics, build_rules_check_diagnostics,
         compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability,
         run_post_commit, POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
     };
     use crate::test_cli_support::guard_current_dir;
-    use crate::DiagnosticsPostCommitArgs;
+    use crate::{
+        DiagnosticsEvidenceCheckArgs, DiagnosticsPostCommitArgs, DiagnosticsRulesCheckArgs,
+    };
     use std::fs;
+    use std::path::PathBuf;
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -417,6 +629,87 @@ mod tests {
         assert_eq!(compacted["agents"]["count"], 2);
         assert_eq!(compacted["subagent_backends"]["count"], 3);
         assert_eq!(compacted["host_cli_system"], "codex");
+    }
+
+    #[test]
+    fn diagnostics_evidence_check_blocks_missing_evidence_refs() {
+        let payload = build_evidence_check_diagnostics(&DiagnosticsEvidenceCheckArgs {
+            task_id: Some("task-1".to_string()),
+            ..Default::default()
+        });
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["blocker_codes"][0], "missing_gate_evidence");
+        assert_eq!(
+            payload["vida_gate_result"]["status"],
+            "insufficient_evidence"
+        );
+        assert_eq!(
+            payload["vida_gate_result"]["issues"][0]["code"],
+            "insufficient_evidence"
+        );
+    }
+
+    #[test]
+    fn diagnostics_evidence_check_passes_with_concrete_evidence_refs() {
+        let payload = build_evidence_check_diagnostics(&DiagnosticsEvidenceCheckArgs {
+            task_id: Some("task-1".to_string()),
+            evidence_refs: vec![" cargo test -p vida diagnostics_surface ".to_string()],
+            ..Default::default()
+        });
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
+        assert_eq!(payload["vida_gate_result"]["status"], "pass");
+        assert_eq!(
+            payload["vida_gate_result"]["evidence_refs"][0],
+            "cargo test -p vida diagnostics_surface"
+        );
+    }
+
+    #[test]
+    fn diagnostics_rules_check_blocks_without_inputs() {
+        let payload = build_rules_check_diagnostics(&DiagnosticsRulesCheckArgs::default());
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["blocker_codes"][0], "missing_gate_evidence");
+        assert_eq!(
+            payload["vida_gate_result"]["status"],
+            "insufficient_evidence"
+        );
+    }
+
+    #[test]
+    fn diagnostics_rules_check_reports_missing_changed_path_as_gate_issue() {
+        let payload = build_rules_check_diagnostics(&DiagnosticsRulesCheckArgs {
+            changed_paths: vec![PathBuf::from("does/not/exist")],
+            ..Default::default()
+        });
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["blocker_codes"][0], "rules_check_path_missing");
+        assert_eq!(
+            payload["vida_gate_result"]["issues"][0]["code"],
+            "rules_check_path_missing"
+        );
+    }
+
+    #[test]
+    fn diagnostics_rules_check_accepts_existing_protocol_id() {
+        let payload = build_rules_check_diagnostics(&DiagnosticsRulesCheckArgs {
+            protocol_ids: vec!["instruction-contracts/core.orchestration-protocol".to_string()],
+            ..Default::default()
+        });
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["vida_gate_result"]["status"], "pass");
+        assert_eq!(
+            payload["vida_gate_result"]["evidence_refs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

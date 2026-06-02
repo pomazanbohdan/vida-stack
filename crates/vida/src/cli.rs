@@ -1262,12 +1262,49 @@ pub(crate) enum DiagnosticsCommand {
         about = "reconcile git, TaskFlow, DocFlow, run-graph, dispatch, owner, and issue workflow evidence after commit"
     )]
     PostCommit(DiagnosticsPostCommitArgs),
+    #[command(about = "check whether a bounded gate has concrete evidence refs")]
+    EvidenceCheck(DiagnosticsEvidenceCheckArgs),
+    #[command(about = "check changed paths and protocol ids against read-only runtime rules")]
+    RulesCheck(DiagnosticsRulesCheckArgs),
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct DiagnosticsPostCommitArgs {
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct DiagnosticsEvidenceCheckArgs {
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "task-id")]
+    pub(crate) task_id: Option<String>,
+
+    #[arg(long = "evidence-ref")]
+    pub(crate) evidence_refs: Vec<String>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct DiagnosticsRulesCheckArgs {
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "task-id")]
+    pub(crate) task_id: Option<String>,
+
+    #[arg(long = "changed-path")]
+    pub(crate) changed_paths: Vec<PathBuf>,
+
+    #[arg(long = "protocol-id")]
+    pub(crate) protocol_ids: Vec<String>,
 
     #[arg(long = "json")]
     pub(crate) json: bool,

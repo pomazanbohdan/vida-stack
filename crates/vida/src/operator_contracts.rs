@@ -29,8 +29,25 @@ pub(crate) struct FinalizedRelease1OperatorTruth {
 
 pub(crate) const VIDA_GATE_RESULT_SCHEMA_VERSION: &str = "vida-gate-result-v1";
 
-pub(crate) fn render_vida_gate_result(
+fn inferred_gate_status(
+    blocker_codes: &[String],
+    warning_codes: &[String],
+    failure_codes: &[String],
+) -> &'static str {
+    if !blocker_codes.is_empty() {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status
+    } else if !failure_codes.is_empty() {
+        "fail"
+    } else if !warning_codes.is_empty() {
+        "warn"
+    } else {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
+    }
+}
+
+pub(crate) fn render_vida_gate_result_with_status(
     gate_id: &str,
+    explicit_status: &str,
     blocker_codes: Vec<String>,
     warning_codes: Vec<String>,
     failure_codes: Vec<String>,
@@ -43,16 +60,11 @@ pub(crate) fn render_vida_gate_result(
     let failure_codes = canonical_gate_code_entries(failure_codes);
     let next_actions =
         canonical_next_action_entries(&serde_json::json!(next_actions)).unwrap_or_default();
-    let status = if !blocker_codes.is_empty() {
-        RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status
-    } else if !failure_codes.is_empty() {
-        "fail"
-    } else if !warning_codes.is_empty() {
-        "warn"
-    } else {
-        RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
+    let status = match explicit_status.trim() {
+        "pass" | "warn" | "fail" | "blocked" | "insufficient_evidence" => explicit_status.trim(),
+        _ => inferred_gate_status(&blocker_codes, &warning_codes, &failure_codes),
     };
-    let operator_status = if blocker_codes.is_empty() && failure_codes.is_empty() {
+    let operator_status = if matches!(status, "pass" | "warn") {
         RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
     } else {
         RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status
@@ -112,7 +124,7 @@ pub(crate) fn render_vida_gate_result(
         "gate_id": gate_id.trim(),
         "status": status,
         "ready": matches!(status, "pass" | "warn"),
-        "blocking": matches!(status, "fail" | "blocked"),
+        "blocking": matches!(status, "fail" | "blocked" | "insufficient_evidence"),
         "trace_id": trace_id,
         "workflow_class": workflow_class,
         "risk_tier": risk_tier,
@@ -129,6 +141,31 @@ pub(crate) fn render_vida_gate_result(
         "artifact_refs": artifact_refs,
         "operator_contracts": operator_contracts,
     })
+}
+
+pub(crate) fn render_vida_gate_result(
+    gate_id: &str,
+    blocker_codes: Vec<String>,
+    warning_codes: Vec<String>,
+    failure_codes: Vec<String>,
+    issues: Vec<Value>,
+    next_actions: Vec<String>,
+    artifact_refs: Value,
+) -> Value {
+    let blocker_codes = canonical_gate_code_entries(blocker_codes);
+    let warning_codes = canonical_gate_code_entries(warning_codes);
+    let failure_codes = canonical_gate_code_entries(failure_codes);
+    let status = inferred_gate_status(&blocker_codes, &warning_codes, &failure_codes);
+    render_vida_gate_result_with_status(
+        gate_id,
+        status,
+        blocker_codes,
+        warning_codes,
+        failure_codes,
+        issues,
+        next_actions,
+        artifact_refs,
+    )
 }
 
 pub(crate) fn render_vida_gate_result_from_operator_contracts(
@@ -631,7 +668,7 @@ mod tests {
         normalize_blocker_codes, operator_contract_status_for_blockers,
         operator_contracts_consistency_error, release1_operator_contracts_consistency_error,
         render_operator_contract_envelope, render_vida_gate_result,
-        render_vida_gate_result_from_operator_contracts,
+        render_vida_gate_result_from_operator_contracts, render_vida_gate_result_with_status,
         shared_operator_output_contract_parity_error, RELEASE1_OPERATOR_CONTRACT_SPEC,
         VIDA_GATE_RESULT_SCHEMA_VERSION,
     };
@@ -675,6 +712,36 @@ mod tests {
         );
         assert_eq!(envelope["schema_version"], json!("release-1-v1"));
         assert_eq!(envelope["status"], json!("pass"));
+    }
+
+    #[test]
+    fn vida_gate_result_explicit_insufficient_evidence_fails_closed() {
+        let gate_result = render_vida_gate_result_with_status(
+            "evidence",
+            "insufficient_evidence",
+            vec!["missing_gate_evidence".to_string()],
+            vec![],
+            vec![],
+            vec![json!({"code": "insufficient_evidence"})],
+            vec!["Provide evidence refs.".to_string()],
+            json!({
+                "evidence_refs": [],
+                "affected_paths": [],
+                "task_id": "task-1",
+            }),
+        );
+
+        assert_eq!(gate_result["status"], json!("insufficient_evidence"));
+        assert_eq!(gate_result["ready"], json!(false));
+        assert_eq!(gate_result["blocking"], json!(true));
+        assert_eq!(
+            gate_result["blocker_codes"][0],
+            json!("missing_gate_evidence")
+        );
+        assert_eq!(
+            gate_result["operator_contracts"]["status"],
+            json!("blocked")
+        );
     }
 
     #[test]
