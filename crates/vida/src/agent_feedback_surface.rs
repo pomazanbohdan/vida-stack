@@ -222,6 +222,15 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "failed keywords",
             "failure keyword",
             "failed keyword",
+            "blocker list empty",
+            "blocker list is empty",
+            "empty blocker list",
+            "blocker entries empty",
+            "blocker entries are empty",
+            "no blocker entries",
+            "zero blocker entries",
+            "blocker codes empty",
+            "blocker codes are empty",
             "failed/tampered parent adapter results",
             "failed/tampered parent-adapter results",
             "failed or tampered parent adapter results",
@@ -332,6 +341,15 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "genuinely blocked",
             "readiness blockers",
             "readiness blocker",
+            "blocker list empty",
+            "blocker list is empty",
+            "empty blocker list",
+            "blocker entries empty",
+            "blocker entries are empty",
+            "no blocker entries",
+            "zero blocker entries",
+            "blocker codes empty",
+            "blocker codes are empty",
             "blocker coverage",
             "spawn-blocker ordering",
             "blocked task projections",
@@ -1502,6 +1520,27 @@ mod tests {
             .any(|phrase| phrase
                 .as_str()
                 .is_some_and(|value| value.contains("no blocker codes"))));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_empty_blocker_list_proof_wording() {
+        let reason = "Lane reconciliation finished: lane_completed, dispatch_status executed, receipt paths recorded, and blocker list empty; the reconciliation todo can now end before selecting the next lawful task.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("blocker list empty"))));
     }
 
     #[test]
