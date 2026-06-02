@@ -79,7 +79,9 @@ impl FixtureVidaClient {
                 "capabilities": [
                     "read_status",
                     "read_events",
-                    "project_registry_read"
+                    "project_registry_read",
+                    "wizard_read",
+                    "wizard_plan"
                 ]
             }),
         )
@@ -88,7 +90,6 @@ impl FixtureVidaClient {
     fn endpoint_status(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
         let endpoints: Vec<_> = mvp_operation_registry()
             .into_iter()
-            .filter(|spec| matches!(spec.scope, vida_contracts::VidaOperationScope::Service))
             .map(|spec| {
                 json!({
                     "operation": spec.operation.0,
@@ -203,6 +204,128 @@ impl FixtureVidaClient {
         }
     }
 
+    fn wizard_schema(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "schema_id": "vida.project_init.fixture.v1",
+                "wizard_kind": envelope
+                    .payload
+                    .get("wizard_kind")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("project_init"),
+                "current_step": "inspect",
+                "apply_supported": false,
+                "option_graph": fixture_wizard_option_graph(),
+                "transitions": [
+                    {
+                        "from": "inspect",
+                        "to": "draft",
+                        "operation": operations::WIZARD_SESSION_START
+                    },
+                    {
+                        "from": "draft",
+                        "to": "validate",
+                        "operation": operations::WIZARD_SESSION_VALIDATE
+                    },
+                    {
+                        "from": "validate",
+                        "to": "diff",
+                        "operation": operations::WIZARD_SESSION_DIFF
+                    }
+                ],
+                "disabled_apply_reason": "apply-token and claim-proof execution are not implemented"
+            }),
+        )
+    }
+
+    fn wizard_start(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "wizard_session": fixture_wizard_state(envelope, 1, "draft", json!({})),
+                "idempotency_key": envelope.idempotency_key,
+                "state_machine": {
+                    "from": "inspect",
+                    "to": "draft",
+                    "transition": operations::WIZARD_SESSION_START
+                }
+            }),
+        )
+    }
+
+    fn wizard_get(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        pass_response(
+            envelope,
+            json!({
+                "wizard_session": fixture_wizard_state(envelope, 1, "draft", json!({}))
+            }),
+        )
+    }
+
+    fn wizard_update_input(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        if let Some(problem) = wizard_stale_revision_problem(envelope, 1) {
+            return problem_response(envelope, problem);
+        }
+        let inputs = envelope
+            .payload
+            .get("inputs")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        pass_response(
+            envelope,
+            json!({
+                "wizard_session": fixture_wizard_state(envelope, 2, "draft", inputs),
+                "idempotency_key": envelope.idempotency_key,
+                "state_machine": {
+                    "from": "draft",
+                    "to": "draft",
+                    "transition": operations::WIZARD_SESSION_UPDATE_INPUT
+                }
+            }),
+        )
+    }
+
+    fn wizard_validate(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        let inputs = envelope
+            .payload
+            .get("inputs")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        pass_response(
+            envelope,
+            json!({
+                "wizard_session": fixture_wizard_state(envelope, 2, "validate", inputs.clone()),
+                "validation": fixture_wizard_validation(&inputs),
+                "readiness": fixture_wizard_readiness(),
+                "apply_supported": false
+            }),
+        )
+    }
+
+    fn wizard_diff(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        if let Some(problem) = wizard_stale_revision_problem(envelope, 2) {
+            return problem_response(envelope, problem);
+        }
+        let inputs = envelope
+            .payload
+            .get("inputs")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        pass_response(
+            envelope,
+            json!({
+                "wizard_session": fixture_wizard_state(envelope, 2, "diff", inputs.clone()),
+                "plan_ref": {
+                    "plan_id": "wizard-plan-fixture-1"
+                },
+                "diff_summary": fixture_wizard_diff(&inputs),
+                "apply_supported": false,
+                "disabled_apply_reason": "apply-token and claim-proof execution are not implemented"
+            }),
+        )
+    }
+
     fn resolve_project(
         &self,
         envelope: &VidaCommandEnvelope,
@@ -248,9 +371,216 @@ impl VidaClient for FixtureVidaClient {
             operations::PROJECT_REGISTRY_DISCOVER => self.registry_discover(&envelope),
             operations::PROJECT_RESOLVE => self.project_resolve(&envelope),
             operations::PROJECT_STATUS => self.project_status(&envelope),
+            operations::WIZARD_SCHEMA_GET => self.wizard_schema(&envelope),
+            operations::WIZARD_SESSION_START => self.wizard_start(&envelope),
+            operations::WIZARD_SESSION_GET => self.wizard_get(&envelope),
+            operations::WIZARD_SESSION_UPDATE_INPUT => self.wizard_update_input(&envelope),
+            operations::WIZARD_SESSION_VALIDATE => self.wizard_validate(&envelope),
+            operations::WIZARD_SESSION_DIFF => self.wizard_diff(&envelope),
             _ => unsupported_operation_response(&envelope),
         }
     }
+}
+
+fn fixture_wizard_option_graph() -> serde_json::Value {
+    json!([
+        {
+            "option_id": "project_root",
+            "label": "Project root",
+            "value_type": "path",
+            "required": true,
+            "depends_on": [],
+            "conflicts_with": []
+        },
+        {
+            "option_id": "enable_tui",
+            "label": "Enable TUI",
+            "value_type": "boolean",
+            "required": false,
+            "depends_on": ["project_root"],
+            "conflicts_with": []
+        },
+        {
+            "option_id": "service_mode",
+            "label": "Service mode",
+            "value_type": "enum_one",
+            "required": true,
+            "depends_on": ["project_root"],
+            "conflicts_with": []
+        }
+    ])
+}
+
+fn fixture_wizard_state(
+    envelope: &VidaCommandEnvelope,
+    revision: u64,
+    current_step: &str,
+    inputs: serde_json::Value,
+) -> serde_json::Value {
+    json!({
+        "wizard_session_id": "wizard-session-fixture-1",
+        "wizard_kind": envelope
+            .payload
+            .get("wizard_kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("project_init"),
+        "session_id": envelope.session_id,
+        "project_ref": envelope.project_ref,
+        "current_step": current_step,
+        "revision": revision,
+        "semantic_revision": format!("wizard-semantic-revision-{revision}"),
+        "inputs": fixture_wizard_option_states(inputs),
+        "validation_findings": [],
+        "readiness_findings": fixture_wizard_readiness(),
+        "apply_supported": false
+    })
+}
+
+fn fixture_wizard_option_states(inputs: serde_json::Value) -> serde_json::Value {
+    let project_root = inputs
+        .get("project_root")
+        .cloned()
+        .unwrap_or_else(|| json!(""));
+    let enable_tui = inputs
+        .get("enable_tui")
+        .cloned()
+        .unwrap_or_else(|| json!(false));
+    let service_mode = inputs
+        .get("service_mode")
+        .cloned()
+        .unwrap_or_else(|| json!("read_only"));
+    json!([
+        {
+            "option_id": "project_root",
+            "value": project_root,
+            "effective_value": project_root,
+            "source": "operator_input",
+            "visible": true,
+            "enabled": true,
+            "required": true,
+            "dirty": project_root != "",
+            "valid": project_root != "",
+            "dependency_inputs": [],
+            "affected_materialization_targets": ["vida.config.yaml"]
+        },
+        {
+            "option_id": "enable_tui",
+            "value": enable_tui,
+            "effective_value": enable_tui,
+            "source": "operator_input",
+            "visible": true,
+            "enabled": project_root != "",
+            "required": false,
+            "dirty": enable_tui != false,
+            "valid": true,
+            "dependency_inputs": ["project_root"],
+            "affected_materialization_targets": ["flows.yaml"]
+        },
+        {
+            "option_id": "service_mode",
+            "value": service_mode,
+            "effective_value": service_mode,
+            "source": "operator_input",
+            "visible": true,
+            "enabled": project_root != "",
+            "required": true,
+            "dirty": service_mode != "read_only",
+            "valid": service_mode == "read_only" || service_mode == "read_write_plan_only",
+            "dependency_inputs": ["project_root"],
+            "affected_materialization_targets": ["vida.config.yaml"]
+        }
+    ])
+}
+
+fn fixture_wizard_validation(inputs: &serde_json::Value) -> serde_json::Value {
+    let project_root_missing = inputs
+        .get("project_root")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(str::is_empty);
+    if project_root_missing {
+        json!({
+            "status": "blocked",
+            "findings": [
+                {
+                    "option_id": "project_root",
+                    "code": "required_option_missing",
+                    "message": "Project root is required before diff planning.",
+                    "severity": "error"
+                }
+            ]
+        })
+    } else {
+        json!({
+            "status": "pass",
+            "findings": []
+        })
+    }
+}
+
+fn fixture_wizard_readiness() -> serde_json::Value {
+    json!([
+        {
+            "code": "apply_disabled_until_claim_proof",
+            "message": "Apply remains disabled until apply-token and claim-proof execution are implemented.",
+            "blocker": true
+        }
+    ])
+}
+
+fn fixture_wizard_diff(inputs: &serde_json::Value) -> serde_json::Value {
+    let enable_tui = inputs
+        .get("enable_tui")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let service_mode = inputs
+        .get("service_mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("read_only");
+    json!({
+        "diff_hash": format!("fixture-diff-enable-tui-{enable_tui}-mode-{service_mode}"),
+        "config_changes": ["project_root"],
+        "registry_changes": ["project_registry_binding"],
+        "materialization_changes": if enable_tui {
+            json!(["tui_wizard_surface"])
+        } else {
+            json!([])
+        },
+        "service_changes": [service_mode],
+        "runtime_impacts": ["plan_only_no_apply"]
+    })
+}
+
+fn wizard_stale_revision_problem(
+    envelope: &VidaCommandEnvelope,
+    current_revision: u64,
+) -> Option<VidaProblem> {
+    let expected_revision = envelope
+        .payload
+        .get("expected_revision")
+        .and_then(serde_json::Value::as_u64)?;
+    if expected_revision == current_revision {
+        return None;
+    }
+    Some(VidaProblem {
+        problem_type: "https://vida.dev/problems/wizard-stale-revision".to_string(),
+        title: "Wizard draft revision is stale".to_string(),
+        detail: format!(
+            "Expected revision `{expected_revision}` does not match current revision `{current_revision}`."
+        ),
+        code: "wizard_stale_revision".to_string(),
+        severity: VidaProblemSeverity::Error,
+        retryable: true,
+        blockers: vec![vida_contracts::VidaBlocker {
+            code: "wizard_revision_mismatch".to_string(),
+            scope: Some("expected_revision".to_string()),
+            next_actions: vec![
+                "Reload the wizard session and retry with the latest revision.".to_string()
+            ],
+        }],
+        remediation: vec!["Call vida.wizard.session.get before updating or diffing.".to_string()],
+        instance: None,
+        related_receipt: None,
+    })
 }
 
 fn fixture_projects() -> Vec<vida_contracts::ServiceProjectRegistryEntry> {

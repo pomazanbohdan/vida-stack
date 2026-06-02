@@ -45,6 +45,16 @@ fn envelope_with_project_ref(operation: &str, project_ref: VidaProjectRef) -> Vi
     envelope
 }
 
+fn envelope_with_project_ref_and_payload(
+    operation: &str,
+    project_ref: VidaProjectRef,
+    payload: serde_json::Value,
+) -> VidaCommandEnvelope {
+    let mut envelope = envelope_with_project_ref(operation, project_ref);
+    envelope.payload = payload;
+    envelope
+}
+
 fn assert_same_response(operation: &str) -> VidaCommandResponse {
     let fixture = FixtureVidaClient::new_ready();
     let in_process = InProcessVidaClient::new_ready();
@@ -99,6 +109,16 @@ fn service_capabilities_and_endpoints_are_read_only() {
         .expect("capabilities should be array")
         .iter()
         .any(|capability| capability == "project_registry_read"));
+    assert!(capabilities["capabilities"]
+        .as_array()
+        .expect("capabilities should be array")
+        .iter()
+        .any(|capability| capability == "wizard_read"));
+    assert!(capabilities["capabilities"]
+        .as_array()
+        .expect("capabilities should be array")
+        .iter()
+        .any(|capability| capability == "wizard_plan"));
 
     let endpoints = assert_same_response(operations::SERVICE_ENDPOINT_STATUS)
         .result
@@ -126,6 +146,42 @@ fn service_capabilities_and_endpoints_are_read_only() {
             .expect("required capabilities array")
             .iter()
             .any(|capability| capability == "project_registry_read"));
+    }
+    for wizard_read_operation in [
+        operations::WIZARD_SCHEMA_GET,
+        operations::WIZARD_SESSION_GET,
+    ] {
+        let row = endpoint_rows
+            .iter()
+            .find(|row| row["operation"] == wizard_read_operation)
+            .expect("wizard read endpoint row");
+        assert_eq!(row["scope"], "project");
+        assert_eq!(row["posture"], "read_only");
+        assert_eq!(row["requires_project_ref"], true);
+        assert!(row["required_capabilities"]
+            .as_array()
+            .expect("required capabilities array")
+            .iter()
+            .any(|capability| capability == "wizard_read"));
+    }
+    for wizard_plan_operation in [
+        operations::WIZARD_SESSION_START,
+        operations::WIZARD_SESSION_UPDATE_INPUT,
+        operations::WIZARD_SESSION_VALIDATE,
+        operations::WIZARD_SESSION_DIFF,
+    ] {
+        let row = endpoint_rows
+            .iter()
+            .find(|row| row["operation"] == wizard_plan_operation)
+            .expect("wizard plan endpoint row");
+        assert_eq!(row["scope"], "project");
+        assert_eq!(row["posture"], "plan_only");
+        assert_eq!(row["requires_project_ref"], true);
+        assert!(row["required_capabilities"]
+            .as_array()
+            .expect("required capabilities array")
+            .iter()
+            .any(|capability| capability == "wizard_plan"));
     }
     assert!(endpoint_rows
         .iter()
@@ -320,6 +376,209 @@ fn project_status_unknown_project_ref_returns_structured_blocker() {
     let problem = fixture_response.error.expect("missing project problem");
     assert_eq!(problem.code, "project_not_found");
     assert_eq!(fixture_response.blockers[0].code, "project_not_registered");
+}
+
+#[test]
+fn wizard_option_graph_schema_exposes_typed_option_graph_and_disabled_apply() {
+    let fixture = FixtureVidaClient::new_ready();
+    let in_process = InProcessVidaClient::new_ready();
+    let request = envelope_with_project_ref_and_payload(
+        operations::WIZARD_SCHEMA_GET,
+        VidaProjectRef::ProjectId {
+            project_id: VidaProjectId("vida-stack".to_string()),
+        },
+        json!({ "wizard_kind": "project_init" }),
+    );
+
+    let fixture_response = fixture.execute(request.clone());
+    let in_process_response = in_process.execute(request);
+    assert_eq!(fixture_response, in_process_response);
+    assert_eq!(fixture_response.status, VidaResponseStatus::Pass);
+    let schema = fixture_response.result.expect("wizard schema result");
+    assert_eq!(schema["current_step"], "inspect");
+    assert_eq!(schema["apply_supported"], false);
+    let option_graph = schema["option_graph"]
+        .as_array()
+        .expect("option graph array");
+    assert!(option_graph.iter().any(|option| {
+        option["option_id"] == "project_root"
+            && option["value_type"] == "path"
+            && option["required"] == true
+    }));
+    assert!(option_graph.iter().any(|option| {
+        option["option_id"] == "enable_tui"
+            && option["value_type"] == "boolean"
+            && option["depends_on"][0] == "project_root"
+    }));
+}
+
+#[test]
+fn wizard_state_machine_lifecycle_validates_and_diffs_plan_only() {
+    let fixture = FixtureVidaClient::new_ready();
+    let in_process = InProcessVidaClient::new_ready();
+    let project_ref = VidaProjectRef::ProjectId {
+        project_id: VidaProjectId("vida-stack".to_string()),
+    };
+    let inputs = json!({
+        "project_root": "C:/project/vida-stack",
+        "enable_tui": true,
+        "service_mode": "read_write_plan_only"
+    });
+
+    let start = envelope_with_project_ref_and_payload(
+        operations::WIZARD_SESSION_START,
+        project_ref.clone(),
+        json!({ "wizard_kind": "project_init" }),
+    );
+    let fixture_start = fixture.execute(start.clone());
+    let in_process_start = in_process.execute(start.clone());
+    assert_eq!(fixture_start, in_process_start);
+    let started = fixture_start.result.expect("wizard start result");
+    assert_eq!(started["wizard_session"]["current_step"], "draft");
+    assert_eq!(started["wizard_session"]["revision"], 1);
+    assert_eq!(started["state_machine"]["from"], "inspect");
+    assert_eq!(started["state_machine"]["to"], "draft");
+
+    let repeat_start = fixture.execute(start);
+    assert_eq!(repeat_start, in_process_start);
+
+    let get = envelope_with_project_ref(operations::WIZARD_SESSION_GET, project_ref.clone());
+    let fixture_get = fixture.execute(get.clone());
+    let in_process_get = in_process.execute(get);
+    assert_eq!(fixture_get, in_process_get);
+    assert_eq!(
+        fixture_get.result.expect("wizard get result")["wizard_session"]["semantic_revision"],
+        "wizard-semantic-revision-1"
+    );
+
+    let update = envelope_with_project_ref_and_payload(
+        operations::WIZARD_SESSION_UPDATE_INPUT,
+        project_ref.clone(),
+        json!({
+            "expected_revision": 1,
+            "inputs": inputs
+        }),
+    );
+    let fixture_update = fixture.execute(update.clone());
+    let in_process_update = in_process.execute(update);
+    assert_eq!(fixture_update, in_process_update);
+    let updated = fixture_update.result.expect("wizard update result");
+    assert_eq!(updated["wizard_session"]["revision"], 2);
+    assert_eq!(
+        updated["wizard_session"]["inputs"][0]["option_id"],
+        "project_root"
+    );
+    assert_eq!(updated["wizard_session"]["inputs"][1]["value"], true);
+
+    let validate = envelope_with_project_ref_and_payload(
+        operations::WIZARD_SESSION_VALIDATE,
+        project_ref.clone(),
+        json!({ "inputs": {
+            "project_root": "C:/project/vida-stack",
+            "enable_tui": true,
+            "service_mode": "read_write_plan_only"
+        }}),
+    );
+    let fixture_validate = fixture.execute(validate.clone());
+    let in_process_validate = in_process.execute(validate);
+    assert_eq!(fixture_validate, in_process_validate);
+    let validation = fixture_validate.result.expect("wizard validate result");
+    assert_eq!(validation["validation"]["status"], "pass");
+    assert_eq!(validation["apply_supported"], false);
+    assert_eq!(
+        validation["readiness"][0]["code"],
+        "apply_disabled_until_claim_proof"
+    );
+
+    let diff = envelope_with_project_ref_and_payload(
+        operations::WIZARD_SESSION_DIFF,
+        project_ref,
+        json!({
+            "expected_revision": 2,
+            "inputs": {
+                "project_root": "C:/project/vida-stack",
+                "enable_tui": true,
+                "service_mode": "read_write_plan_only"
+            }
+        }),
+    );
+    let fixture_diff = fixture.execute(diff.clone());
+    let in_process_diff = in_process.execute(diff);
+    assert_eq!(fixture_diff, in_process_diff);
+    let diff_result = fixture_diff.result.expect("wizard diff result");
+    assert_eq!(diff_result["wizard_session"]["current_step"], "diff");
+    assert_eq!(diff_result["apply_supported"], false);
+    assert!(diff_result["diff_summary"]["materialization_changes"]
+        .as_array()
+        .expect("materialization changes")
+        .iter()
+        .any(|change| change == "tui_wizard_surface"));
+}
+
+#[test]
+fn wizard_validate_missing_required_input_reports_blocking_finding() {
+    let response = FixtureVidaClient::new_ready().execute(envelope_with_project_ref_and_payload(
+        operations::WIZARD_SESSION_VALIDATE,
+        VidaProjectRef::ProjectId {
+            project_id: VidaProjectId("vida-stack".to_string()),
+        },
+        json!({ "inputs": { "enable_tui": true } }),
+    ));
+
+    assert_eq!(response.status, VidaResponseStatus::Pass);
+    let result = response.result.expect("wizard validate result");
+    assert_eq!(result["validation"]["status"], "blocked");
+    assert_eq!(
+        result["validation"]["findings"][0]["code"],
+        "required_option_missing"
+    );
+}
+
+#[test]
+fn wizard_diff_stale_revision_blocks_update_and_diff() {
+    let fixture = FixtureVidaClient::new_ready();
+    let in_process = InProcessVidaClient::new_ready();
+    let project_ref = VidaProjectRef::ProjectId {
+        project_id: VidaProjectId("vida-stack".to_string()),
+    };
+
+    for operation in [
+        operations::WIZARD_SESSION_UPDATE_INPUT,
+        operations::WIZARD_SESSION_DIFF,
+    ] {
+        let request = envelope_with_project_ref_and_payload(
+            operation,
+            project_ref.clone(),
+            json!({
+                "expected_revision": 0,
+                "inputs": { "project_root": "C:/project/vida-stack" }
+            }),
+        );
+        let fixture_response = fixture.execute(request.clone());
+        let in_process_response = in_process.execute(request);
+        assert_eq!(fixture_response, in_process_response);
+        assert_eq!(fixture_response.status, VidaResponseStatus::Blocked);
+        let problem = fixture_response.error.expect("stale revision problem");
+        assert_eq!(problem.code, "wizard_stale_revision");
+        assert_eq!(
+            fixture_response.blockers[0].code,
+            "wizard_revision_mismatch"
+        );
+    }
+}
+
+#[test]
+fn wizard_apply_remains_unsupported_and_unregistered() {
+    assert!(mvp_operation_registry()
+        .iter()
+        .all(|spec| spec.operation.0 != "vida.wizard.session.apply"));
+
+    let response = assert_same_response("vida.wizard.session.apply");
+    assert_eq!(response.status, VidaResponseStatus::Blocked);
+    assert_eq!(
+        response.error.expect("unsupported wizard apply").code,
+        "unsupported_operation"
+    );
 }
 
 #[test]
