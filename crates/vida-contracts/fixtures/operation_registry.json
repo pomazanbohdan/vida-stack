@@ -216,6 +216,55 @@
     ]
   },
   {
+    "operation": "vida.materialization.manifest.get",
+    "scope": "project",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "materialization_read"
+    ]
+  },
+  {
+    "operation": "vida.materialization.drift.classify",
+    "scope": "project",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "materialization_read"
+    ]
+  },
+  {
+    "operation": "vida.materialization.update.plan",
+    "scope": "project",
+    "posture": "plan_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "materialization_plan"
+    ]
+  },
+  {
+    "operation": "vida.materialization.receipts.list",
+    "scope": "project",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_receipts",
+      "materialization_read"
+    ]
+  },
+  {
     "operation": "vida.jobs.get",
     "scope": "service",
     "posture": "read_only",
