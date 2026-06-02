@@ -509,13 +509,21 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             return ExitCode::from(1);
                         }
                         let dispatch_packet_preview = {
+                            let owned_paths_override =
+                                super::implementation_owned_paths_for_dispatch_context(
+                                    &store,
+                                    &role_selection,
+                                    &dispatch_receipt,
+                                )
+                                .await;
                             let ctx = crate::RuntimeDispatchPacketContext::new(
                                 store.root(),
                                 &role_selection,
                                 &dispatch_receipt,
                                 &taskflow_handoff_plan,
                                 &run_graph_bootstrap,
-                            );
+                            )
+                            .with_owned_paths_override(owned_paths_override);
                             match super::runtime_dispatch_packet_preview(&ctx) {
                                 Ok(preview) => Some(preview),
                                 Err(error) => {
@@ -576,13 +584,21 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             dispatch_receipt.blocker_code = Some(blocker_code);
                         }
                         if !consume_final_mode.is_read_only() {
+                            let owned_paths_override =
+                                super::implementation_owned_paths_for_dispatch_context(
+                                    &store,
+                                    &role_selection,
+                                    &dispatch_receipt,
+                                )
+                                .await;
                             let ctx = crate::RuntimeDispatchPacketContext::new(
                                 store.root(),
                                 &role_selection,
                                 &dispatch_receipt,
                                 &taskflow_handoff_plan,
                                 &run_graph_bootstrap,
-                            );
+                            )
+                            .with_owned_paths_override(owned_paths_override);
                             let dispatch_packet_path =
                                 match super::write_runtime_dispatch_packet(&ctx) {
                                     Ok(path) => path,

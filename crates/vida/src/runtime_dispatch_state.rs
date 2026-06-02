@@ -6540,16 +6540,17 @@ async fn planner_metadata_owned_paths_from_task(store: &StateStore, task_id: &st
         .show_task(task_id)
         .await
         .map(|task| {
-            task.planner_metadata
-                .owned_paths
-                .into_iter()
-                .filter_map(|path| normalize_safe_owned_scope_path_candidate(&path))
-                .collect()
+            let mut owned_paths = Vec::new();
+            append_unique_explicit_owned_scope_paths(
+                &mut owned_paths,
+                &task.planner_metadata.owned_paths,
+            );
+            owned_paths
         })
         .unwrap_or_default()
 }
 
-async fn implementation_owned_paths_for_dispatch_context(
+pub(crate) async fn implementation_owned_paths_for_dispatch_context(
     store: &StateStore,
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -6561,10 +6562,10 @@ async fn implementation_owned_paths_for_dispatch_context(
     }
     if let Some(task_id) = tracked_implementer_dev_task_id(role_selection) {
         let task_paths = planner_metadata_owned_paths_from_task(store, task_id).await;
-        append_unique_owned_paths(&mut owned_paths, &task_paths);
+        append_unique_explicit_owned_scope_paths(&mut owned_paths, &task_paths);
     }
     let task_paths = planner_metadata_owned_paths_from_task(store, &receipt.run_id).await;
-    append_unique_owned_paths(&mut owned_paths, &task_paths);
+    append_unique_explicit_owned_scope_paths(&mut owned_paths, &task_paths);
     owned_paths
 }
 
@@ -6928,6 +6929,7 @@ pub(crate) struct RuntimeDispatchPacketContext<'a> {
     pub(crate) receipt: &'a crate::state_store::RunGraphDispatchReceipt,
     pub(crate) taskflow_handoff_plan: &'a serde_json::Value,
     pub(crate) run_graph_bootstrap: &'a serde_json::Value,
+    pub(crate) owned_paths_override: Vec<String>,
     pub(crate) selected_backend_override: Option<String>,
 }
 
@@ -6945,8 +6947,15 @@ impl<'a> RuntimeDispatchPacketContext<'a> {
             receipt,
             taskflow_handoff_plan,
             run_graph_bootstrap,
+            owned_paths_override: Vec::new(),
             selected_backend_override: None,
         }
+    }
+
+    pub(crate) fn with_owned_paths_override(mut self, owned_paths: Vec<String>) -> Self {
+        self.owned_paths_override.clear();
+        append_unique_explicit_owned_scope_paths(&mut self.owned_paths_override, &owned_paths);
+        self
     }
 
     pub(crate) fn with_selected_backend_override(
@@ -7059,8 +7068,13 @@ fn build_runtime_dispatch_packet_body(
     if crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths(
         handoff_task_class,
     ) {
-        let owned_paths =
-            owned_paths_for_required_delivery_task_class(ctx.role_selection, handoff_task_class);
+        let mut owned_paths = ctx.owned_paths_override.clone();
+        if owned_paths.is_empty() {
+            owned_paths = owned_paths_for_required_delivery_task_class(
+                ctx.role_selection,
+                handoff_task_class,
+            );
+        }
         if !apply_owned_paths_if_missing(&mut delivery_task_packet, &owned_paths) {
             clear_runtime_consumption_fallback_owned_paths(&mut delivery_task_packet);
         }
@@ -21049,6 +21063,98 @@ agent_system:
         assert_eq!(
             packet["delivery_task_packet"]["owned_paths"],
             serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_uses_owned_scope_override_for_required_delivery_packet() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "prove release readiness".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["readiness".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementer": {
+                        "executor_backend": "internal_subagents",
+                        "activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-store-scope-override".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("missing_owned_write_scope".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-20T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        )
+        .with_owned_paths_override(vec!["crates/vida".to_string(), "docs/process".to_string()]);
+
+        let preview = runtime_dispatch_packet_preview(&ctx).expect("preview should render");
+        let missing_fields = preview["packet_contract_missing_fields"]
+            .as_array()
+            .expect("missing fields should be an array");
+        assert!(
+            !missing_fields
+                .iter()
+                .any(|field| field.as_str() == Some("owned_paths")),
+            "owned_paths should be satisfied by the explicit context override"
+        );
+        assert_eq!(
+            preview["packet"]["delivery_task_packet"]["owned_paths"],
+            serde_json::json!(["crates/vida", "docs/process"])
         );
     }
 }
