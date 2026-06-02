@@ -106,7 +106,7 @@ fn build_parallelization_planner(
             "coverage_or_test_expansion",
             projection.ready.iter().any(|candidate| {
                 let title = candidate.task.title.to_ascii_lowercase();
-                let issue_type = candidate.task.issue_type.to_ascii_lowercase();
+                let work_item_keys = task_flow_lookup_keys(&candidate.task).join(" ");
                 let labels = candidate
                     .task
                     .labels
@@ -116,7 +116,7 @@ fn build_parallelization_planner(
                     .join(" ");
                 title.contains("test")
                     || title.contains("coverage")
-                    || issue_type.contains("verification")
+                    || work_item_keys.contains("verification")
                     || labels.contains("verification")
                     || labels.contains("quality")
             }),
@@ -312,14 +312,47 @@ fn single_in_progress_task_id_from_rows(rows: &[state_store::TaskRecord]) -> Opt
 fn work_item_type_lookup_keys(work_item_type: &str) -> Vec<String> {
     let mut keys = Vec::new();
     let normalized = state_store::canonical_work_item_issue_type(work_item_type);
-    if !normalized.is_empty() {
+    push_unique_lookup_key(&mut keys, normalized);
+    let lower = work_item_type.trim().to_ascii_lowercase();
+    push_unique_lookup_key(&mut keys, lower);
+    keys
+}
+
+fn push_unique_lookup_key(keys: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    let normalized = value.trim().to_ascii_lowercase();
+    if !normalized.is_empty() && !keys.iter().any(|key| key == &normalized) {
         keys.push(normalized);
     }
-    let lower = work_item_type.trim().to_ascii_lowercase();
-    if !lower.is_empty() && !keys.iter().any(|key| key == &lower) {
-        keys.push(lower);
+}
+
+fn task_flow_lookup_keys(task: &state_store::TaskRecord) -> Vec<String> {
+    let mut keys = Vec::new();
+    let task_value = serde_json::to_value(task).unwrap_or(serde_json::Value::Null);
+    let inferred_task_class = crate::infer_task_class_from_task_payload(&task_value);
+    if inferred_task_class != "implementation" {
+        push_unique_lookup_key(&mut keys, inferred_task_class);
     }
+    let work_item_kind = state_store::task_work_item_kind(&task.issue_type);
+    push_unique_lookup_key(&mut keys, work_item_kind.default_flow_binding);
+    push_unique_lookup_key(&mut keys, work_item_kind.canonical_issue_type);
+    if let Some(provider_issue_type) = work_item_kind.provider_issue_type {
+        push_unique_lookup_key(&mut keys, provider_issue_type);
+    }
+    push_unique_lookup_key(&mut keys, &task.issue_type);
     keys
+}
+
+fn selected_dev_team_flow_for_task<'a>(
+    readiness: &'a serde_json::Value,
+    task: &state_store::TaskRecord,
+) -> Option<&'a serde_json::Value> {
+    for lookup_key in task_flow_lookup_keys(task) {
+        if let Some(flow) = selected_dev_team_flow_for_work_item(readiness, Some(&lookup_key)) {
+            return Some(flow);
+        }
+    }
+    selected_dev_team_flow_for_work_item(readiness, None)
 }
 
 fn selected_dev_team_flow_for_work_item<'a>(
@@ -575,6 +608,22 @@ fn dev_team_sequence_for_work_item(
     } else {
         readiness_sequence
     }
+}
+
+fn dev_team_sequence_for_task(
+    activation_bundle: &serde_json::Value,
+    task: &state_store::TaskRecord,
+) -> Vec<DevTeamSequenceStep> {
+    for lookup_key in task_flow_lookup_keys(task) {
+        let readiness_sequence = dev_team_sequence_from_readiness(
+            &activation_bundle["dev_team_readiness"],
+            Some(&lookup_key),
+        );
+        if !readiness_sequence.is_empty() {
+            return readiness_sequence;
+        }
+    }
+    dev_team_sequence(activation_bundle)
 }
 
 fn configured_max_parallel_agents_from_activation_bundle(
@@ -1001,9 +1050,9 @@ fn build_agent_dispatch_next_preview_dev_team(
         .iter()
         .filter(|candidate| candidate.ready_now)
         .filter_map(|candidate| {
-            selected_dev_team_flow_for_work_item(
+            selected_dev_team_flow_for_task(
                 &activation_bundle["dev_team_readiness"],
-                Some(&candidate.task.issue_type),
+                &candidate.task,
             )
             .and_then(|flow| flow["flow_id"].as_str())
             .map(str::to_string)
@@ -1035,9 +1084,9 @@ fn build_agent_dispatch_next_preview_dev_team(
         .iter()
         .filter(|candidate| candidate.ready_now)
         .filter_map(|candidate| {
-            selected_dev_team_flow_for_work_item(
+            selected_dev_team_flow_for_task(
                 &activation_bundle["dev_team_readiness"],
-                Some(&candidate.task.issue_type),
+                &candidate.task,
             )
             .and_then(|flow| flow["flow_id"].as_str())
             .map(str::to_string)
@@ -1047,9 +1096,7 @@ fn build_agent_dispatch_next_preview_dev_team(
         selected_ready_candidates
             .iter()
             .find(|candidate| candidate.ready_now)
-            .map(|candidate| {
-                dev_team_sequence_for_work_item(activation_bundle, &candidate.task.issue_type)
-            })
+            .map(|candidate| dev_team_sequence_for_task(activation_bundle, &candidate.task))
             .unwrap_or_else(|| dev_team_sequence(activation_bundle))
     } else {
         dev_team_sequence(activation_bundle)
@@ -1951,8 +1998,8 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 mod tests {
     use super::{
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
-        dev_team_sequence, dev_team_sequence_for_work_item, single_in_progress_task_id_from_rows,
-        state_store,
+        dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
+        single_in_progress_task_id_from_rows, state_store,
     };
     use crate::state_store::{
         CreateTaskRequest, TaskExecutionSemantics, TaskRecord, TaskSchedulingCandidate,
@@ -2961,6 +3008,51 @@ mod tests {
         assert_eq!(sequence.len(), 1);
         assert_eq!(sequence[0].role_label, "tester");
         assert_eq!(sequence[0].task_class, "verification");
+    }
+
+    #[test]
+    fn development_flow_binding_prefers_task_class_for_generic_task_kind() {
+        let task = task_with_labels(
+            "architecture-task",
+            "Architecture migration task",
+            &["architecture"],
+        );
+        let sequence = dev_team_sequence_for_task(
+            &serde_json::json!({
+                "dev_team_readiness": {
+                    "default_flow_id": "default_delivery",
+                    "work_item_flow_bindings": {
+                        "task": "default_delivery",
+                        "architecture": "architecture_design"
+                    },
+                    "roles": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "architect", "runtime_role": "solution_architect", "task_classes": ["architecture"]}
+                    ],
+                    "sequence": ["developer"],
+                    "flows": [
+                        {
+                            "flow_id": "default_delivery",
+                            "enabled": true,
+                            "default": true,
+                            "ordered_steps": [{"role_id": "developer"}]
+                        },
+                        {
+                            "flow_id": "architecture_design",
+                            "enabled": true,
+                            "work_item_bindings": ["architecture"],
+                            "ordered_steps": [{"role_id": "architect", "runtime_role": "solution_architect", "task_class": "architecture"}]
+                        }
+                    ]
+                }
+            }),
+            &task,
+        );
+
+        assert_eq!(sequence.len(), 1);
+        assert_eq!(sequence[0].role_label, "architect");
+        assert_eq!(sequence[0].runtime_role, "solution_architect");
+        assert_eq!(sequence[0].task_class, "architecture");
     }
 
     #[test]
