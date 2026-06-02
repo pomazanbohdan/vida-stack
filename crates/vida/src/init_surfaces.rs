@@ -1550,6 +1550,152 @@ fn validate_agent_init_auto_dispatch_packet_args(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentInitAutoDispatchActiveUnitError {
+    blocker_code: &'static str,
+    detail: String,
+    active_task_id: Option<String>,
+    resolved_run_id: String,
+    lineage_task_ids: Vec<String>,
+}
+
+fn agent_init_auto_dispatch_lineage_task_ids(
+    resume_inputs: &super::taskflow_consume_resume::ResumeInputs,
+) -> Vec<String> {
+    let mut ids = std::collections::BTreeSet::new();
+    let run_id = resume_inputs.dispatch_receipt.run_id.trim();
+    if !run_id.is_empty() {
+        ids.insert(run_id.to_string());
+    }
+    for key in ["run_id", "task_id"] {
+        if let Some(value) = resume_inputs
+            .run_graph_bootstrap
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            ids.insert(value.to_string());
+        }
+    }
+    ids.into_iter().collect()
+}
+
+fn validate_agent_init_auto_dispatch_active_unit_ids(
+    active_task_ids: Vec<String>,
+    lineage_task_ids: Vec<String>,
+    resolved_run_id: &str,
+) -> Result<(), AgentInitAutoDispatchActiveUnitError> {
+    match active_task_ids.as_slice() {
+        [] => Err(AgentInitAutoDispatchActiveUnitError {
+            blocker_code: "auto_dispatch_packet_active_unit_missing",
+            detail: "`--auto-dispatch-packet` requires one active non-container task.".to_string(),
+            active_task_id: None,
+            resolved_run_id: resolved_run_id.to_string(),
+            lineage_task_ids,
+        }),
+        [active_task_id] => {
+            if lineage_task_ids
+                .iter()
+                .any(|task_id| task_id == active_task_id)
+            {
+                Ok(())
+            } else {
+                Err(AgentInitAutoDispatchActiveUnitError {
+                    blocker_code: "auto_dispatch_packet_active_unit_mismatch",
+                    detail: format!(
+                        "`--auto-dispatch-packet` resolved run `{resolved_run_id}` but active bounded unit is `{active_task_id}`."
+                    ),
+                    active_task_id: Some(active_task_id.clone()),
+                    resolved_run_id: resolved_run_id.to_string(),
+                    lineage_task_ids,
+                })
+            }
+        }
+        _ => Err(AgentInitAutoDispatchActiveUnitError {
+            blocker_code: "auto_dispatch_packet_active_unit_ambiguous",
+            detail: "`--auto-dispatch-packet` requires exactly one active non-container task."
+                .to_string(),
+            active_task_id: None,
+            resolved_run_id: resolved_run_id.to_string(),
+            lineage_task_ids,
+        }),
+    }
+}
+
+async fn validate_agent_init_auto_dispatch_active_unit(
+    store: &state_store::StateStore,
+    resume_inputs: &super::taskflow_consume_resume::ResumeInputs,
+) -> Result<(), AgentInitAutoDispatchActiveUnitError> {
+    let active_task_ids = store
+        .list_tasks(Some("in_progress"), false)
+        .await
+        .map_err(|error| AgentInitAutoDispatchActiveUnitError {
+            blocker_code: "auto_dispatch_packet_active_unit_unavailable",
+            detail: format!("Failed to read active task state for auto dispatch: {error}"),
+            active_task_id: None,
+            resolved_run_id: resume_inputs.dispatch_receipt.run_id.clone(),
+            lineage_task_ids: agent_init_auto_dispatch_lineage_task_ids(resume_inputs),
+        })?
+        .into_iter()
+        .filter(|task| !crate::state_store::work_item_is_program_container(&task.issue_type))
+        .map(|task| task.id)
+        .collect::<Vec<_>>();
+    validate_agent_init_auto_dispatch_active_unit_ids(
+        active_task_ids,
+        agent_init_auto_dispatch_lineage_task_ids(resume_inputs),
+        &resume_inputs.dispatch_receipt.run_id,
+    )
+}
+
+fn agent_init_auto_dispatch_active_unit_blocked_payload(
+    dispatch_mode: &serde_json::Value,
+    error: &AgentInitAutoDispatchActiveUnitError,
+    dispatch_packet_path: &str,
+) -> serde_json::Value {
+    let blocker_codes = vec![error.blocker_code];
+    let next_actions = vec![
+        "Bind the intended bounded unit explicitly or pass the exact dispatch packet path for that run.".to_string(),
+        "Do not execute a stale latest dispatch packet through `--auto-dispatch-packet`.".to_string(),
+    ];
+    let artifact_refs = serde_json::json!({
+        "surface": "vida agent-init",
+        "dispatch_packet_path": dispatch_packet_path,
+        "resolved_run_id": error.resolved_run_id,
+        "active_task_id": error.active_task_id,
+        "lineage_task_ids": error.lineage_task_ids,
+        "auto_dispatch_packet": true,
+    });
+    serde_json::json!({
+        "surface": "vida agent-init",
+        "status": "blocked",
+        "execution_state": "blocked",
+        "dispatch_mode": dispatch_mode,
+        "error": error.detail,
+        "blocker_code": error.blocker_code,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null
+        },
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs
+        }
+    })
+}
+
 fn emit_agent_init_execute_dispatch_missing_packet(args: &AgentInitArgs) -> ExitCode {
     if args.json {
         let dispatch_mode = agent_init_dispatch_mode(args, &serde_json::Value::Null);
@@ -5248,6 +5394,24 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 let selection_value = serde_json::to_value(&resume_inputs.role_selection)
                     .unwrap_or(serde_json::Value::Null);
                 let dispatch_mode = agent_init_dispatch_mode(&args, &selection_value);
+                if args.auto_dispatch_packet {
+                    if let Err(error) =
+                        validate_agent_init_auto_dispatch_active_unit(&store, &resume_inputs).await
+                    {
+                        if args.json {
+                            crate::print_json_pretty(
+                                &agent_init_auto_dispatch_active_unit_blocked_payload(
+                                    &dispatch_mode,
+                                    &error,
+                                    &resume_inputs.dispatch_packet_path,
+                                ),
+                            );
+                        } else {
+                            eprintln!("{}", error.detail);
+                        }
+                        return ExitCode::from(1);
+                    }
+                }
                 drop(store);
                 return execute_agent_init_dispatch_from_resume_inputs(
                     args.json,
@@ -5474,7 +5638,31 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         )
                         .await
                         {
-                            Ok(inputs) => inputs,
+                            Ok(inputs) => {
+                                if args.auto_dispatch_packet {
+                                    if let Err(error) =
+                                        validate_agent_init_auto_dispatch_active_unit(
+                                            &store,
+                                            &inputs,
+                                        )
+                                        .await
+                                    {
+                                        if args.json {
+                                            crate::print_json_pretty(
+                                                &agent_init_auto_dispatch_active_unit_blocked_payload(
+                                                    &dispatch_mode,
+                                                    &error,
+                                                    &inputs.dispatch_packet_path,
+                                                ),
+                                            );
+                                        } else {
+                                            eprintln!("{}", error.detail);
+                                        }
+                                        return ExitCode::from(1);
+                                    }
+                                }
+                                inputs
+                            }
                             Err(error) => {
                                 if args.json {
                                     let (receipt_evidence, result_artifact) =
@@ -6739,6 +6927,58 @@ mod agent_init_surface_tests {
         );
         assert_eq!(dispatch_mode["root_session_write_authority_granted"], false);
         assert_eq!(dispatch_mode["continuation_authority_granted"], false);
+    }
+
+    #[test]
+    fn agent_init_auto_dispatch_active_unit_ids_fail_closed_for_stale_lineage() {
+        let error = validate_agent_init_auto_dispatch_active_unit_ids(
+            vec!["active-task".to_string()],
+            vec!["stale-run".to_string()],
+            "stale-run",
+        )
+        .expect_err("stale latest dispatch must not execute");
+
+        assert_eq!(
+            error.blocker_code,
+            "auto_dispatch_packet_active_unit_mismatch"
+        );
+        assert_eq!(error.active_task_id.as_deref(), Some("active-task"));
+        assert_eq!(error.resolved_run_id, "stale-run");
+    }
+
+    #[test]
+    fn agent_init_auto_dispatch_active_unit_ids_accept_matching_lineage() {
+        validate_agent_init_auto_dispatch_active_unit_ids(
+            vec!["active-task".to_string()],
+            vec!["active-task".to_string(), "run-123".to_string()],
+            "run-123",
+        )
+        .expect("matching active task lineage should execute");
+    }
+
+    #[test]
+    fn agent_init_auto_dispatch_active_unit_ids_fail_closed_without_single_active_task() {
+        let missing = validate_agent_init_auto_dispatch_active_unit_ids(
+            Vec::new(),
+            vec!["run-123".to_string()],
+            "run-123",
+        )
+        .expect_err("missing active unit should block auto dispatch");
+        assert_eq!(
+            missing.blocker_code,
+            "auto_dispatch_packet_active_unit_missing"
+        );
+
+        let ambiguous = validate_agent_init_auto_dispatch_active_unit_ids(
+            vec!["task-a".to_string(), "task-b".to_string()],
+            vec!["task-a".to_string()],
+            "task-a",
+        )
+        .expect_err("ambiguous active unit should block auto dispatch");
+        assert_eq!(
+            ambiguous.blocker_code,
+            "auto_dispatch_packet_active_unit_ambiguous"
+        );
     }
 
     #[test]
