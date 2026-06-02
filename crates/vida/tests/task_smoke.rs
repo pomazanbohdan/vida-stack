@@ -5241,7 +5241,7 @@ fn doctor_detects_closed_task_active_run() {
 }
 
 #[test]
-fn task_close_retires_closed_task_active_run_projection() {
+fn task_close_preserves_unevidenced_closed_task_active_run_projection() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
@@ -5296,24 +5296,60 @@ fn task_close_retires_closed_task_active_run_projection() {
         &state_dir,
     );
     assert_eq!(run_graph["status"], "pass");
-    assert_eq!(run_graph["run_graph_status"]["status"], "completed");
+    assert_ne!(
+        run_graph["run_graph_status"]["status"], "completed",
+        "task close must not forge completed run-graph state without receipt-backed execution evidence: {run_graph}"
+    );
 
     let doctor = run_command_json(&["doctor", "--json"], &state_dir);
     let blockers = require_json_string_array(&doctor["blocker_codes"], "doctor blocker_codes");
     assert!(
-        !blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
-        "task close must retire the closed-task active run before doctor projection: {doctor}"
+        blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "unevidenced task close must keep the closed-task active-run blocker visible: {doctor}"
+    );
+    assert_eq!(
+        doctor["latest_terminal_task_active_run_graph_status"]["task_id"], task_id,
+        "doctor should retain the unevidenced terminal-task active run after task close: {doctor}"
+    );
+
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            task_id,
+            "implementation",
+            "closure",
+            "completed",
+            "implementation",
+            r#"{"lifecycle_stage":"closure_complete","resume_target":null,"checkpoint_kind":"execution_cursor","context_state":"sealed","handoff_state":"none","policy_gate":"not_required","recovery_ready":false}"#,
+        ],
+        &state_dir,
+    );
+    let forged_run_graph = run_command_json(
+        &["taskflow", "run-graph", "status", task_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(forged_run_graph["run_graph_status"]["status"], "completed");
+    assert_eq!(
+        forged_run_graph["run_graph_status"]["lifecycle_stage"],
+        "closure_complete"
+    );
+    let forged_doctor = run_command_json(&["doctor", "--json"], &state_dir);
+    let forged_blockers = require_json_string_array(
+        &forged_doctor["blocker_codes"],
+        "forged doctor blocker_codes",
     );
     assert!(
-        doctor["latest_terminal_task_active_run_graph_status"].is_null(),
-        "doctor should not retain a terminal task active run after task close reconciliation: {doctor}"
+        forged_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "doctor must not suppress a terminal closure state that lacks receipt-backed execution evidence: {forged_doctor}"
     );
 
     let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]
-fn task_reconcile_closed_runs_retires_historical_closed_task_active_batch() {
+fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
@@ -5385,15 +5421,21 @@ fn task_reconcile_closed_runs_retires_historical_closed_task_active_batch() {
         &state_dir,
     );
     assert_eq!(reconcile["status"], "pass");
-    assert_eq!(reconcile["summary"]["reconciled_count"], 2);
+    assert_eq!(
+        reconcile["summary"]["reconciled_count"], 0,
+        "historical reconciliation must not retire closed-task active runs without receipt-backed execution evidence: {reconcile}"
+    );
 
     let after = run_command_json(&["doctor", "--json"], &state_dir);
     let after_blockers = require_json_string_array(&after["blocker_codes"], "after blockers");
     assert!(
-        !after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
-        "closed-task active run batch should be retired after one reconcile command: {after}"
+        after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "unevidenced closed-task active run batch should remain blocked after reconcile command: {after}"
     );
-    assert!(after["latest_terminal_task_active_run_graph_status"].is_null());
+    assert_eq!(
+        after["latest_terminal_task_active_run_graph_status"]["task_id"],
+        "task-reconcile-closed-runs-b"
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }
