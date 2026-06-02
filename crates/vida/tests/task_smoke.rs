@@ -4785,7 +4785,7 @@ fn doctor_summary_json_does_not_trust_cached_projection_before_store_open() {
 }
 
 #[test]
-fn doctor_summary_json_uses_cached_projection_after_store_open() {
+fn doctor_summary_json_ignores_cached_projection_after_store_open() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
     run_and_assert_success(&["boot"], &state_dir);
@@ -4835,16 +4835,30 @@ fn doctor_summary_json_uses_cached_projection_after_store_open() {
     let output = run_command_capture(&["doctor", "--summary", "--json"], &state_dir);
     assert!(
         output.status.success(),
-        "doctor should trust fresh cache after authoritative store opens: stdout={} stderr={}",
+        "doctor should compute authoritative summary after store opens: stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let payload: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("cached doctor summary json should parse");
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("authoritative doctor summary json should parse");
     assert_eq!(payload["surface"], "vida doctor");
-    assert_eq!(payload["status"], "pass");
-    assert_eq!(payload["cache_sentinel"], "trusted-after-store-open");
-    assert_eq!(payload["cache_probe"], "doctor-summary-fast-path");
+    assert_eq!(payload["view"], "summary");
+    assert!(
+        payload.get("cache_sentinel").is_none(),
+        "doctor summary must not be sourced from forgeable cached projection: {payload}"
+    );
+    assert!(
+        payload.get("cache_probe").is_none(),
+        "doctor summary must not mark the removed cached fast path: {payload}"
+    );
+    assert!(
+        payload.get("runtime_consumption").is_some(),
+        "authoritative summary should include computed runtime evidence: {payload}"
+    );
+    assert!(
+        payload.get("root_session_write_guard").is_some(),
+        "authoritative summary should include computed write-guard evidence: {payload}"
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }

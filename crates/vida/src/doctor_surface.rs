@@ -27,7 +27,6 @@ const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run 
 const MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
     "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.";
 const DOCTOR_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
-const DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 fn governance_projection_blocker_codes(
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
     memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
@@ -538,32 +537,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     .await
     {
         Ok(store) => {
-            if summary_only && as_json {
-                if let Some(cached) = doctor_cached_json_projection(store.root(), true) {
-                    match serde_json::from_str::<serde_json::Value>(&cached) {
-                        Ok(mut payload) => {
-                            if let Some(object) = payload.as_object_mut() {
-                                object.insert(
-                                    "cache_probe".to_string(),
-                                    serde_json::Value::String(
-                                        "doctor-summary-fast-path".to_string(),
-                                    ),
-                                );
-                            }
-                            println!(
-                                "{}",
-                                serde_json::to_string_pretty(&payload)
-                                    .expect("cached doctor summary should render as json")
-                            );
-                            return ExitCode::SUCCESS;
-                        }
-                        Err(error) => {
-                            eprintln!("doctor summary cache: failed ({error})");
-                            return ExitCode::from(1);
-                        }
-                    }
-                }
-            }
             let storage_metadata = match store.storage_metadata_summary().await {
                 Ok(summary) => summary,
                 Err(error) => {
@@ -1325,37 +1298,6 @@ fn doctor_json_projection_name(summary_only: bool) -> &'static str {
     }
 }
 
-fn doctor_cached_json_projection(state_dir: &Path, summary_only: bool) -> Option<String> {
-    doctor_cached_json_projection_with_dependency_marker(
-        state_dir,
-        summary_only,
-        crate::operator_projection_cache::current_launcher_mutation_marker(),
-    )
-}
-
-fn doctor_cached_json_projection_with_dependency_marker(
-    state_dir: &Path,
-    summary_only: bool,
-    dependency_modified: Option<std::time::SystemTime>,
-) -> Option<String> {
-    let projection_name = doctor_json_projection_name(summary_only);
-    let fresh_projection =
-        crate::operator_projection_cache::read_fresh_json_projection_with_dependency_marker(
-            state_dir,
-            projection_name,
-            dependency_modified,
-        );
-    if fresh_projection.is_some() {
-        return fresh_projection;
-    }
-    crate::operator_projection_cache::read_recent_json_projection_with_dependency_marker(
-        state_dir,
-        projection_name,
-        DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-        dependency_modified,
-    )
-}
-
 async fn doctor_dependency_graph_issues(
     store: &crate::StateStore,
 ) -> Result<Vec<crate::state_store::TaskGraphIssue>, crate::state_store::StateStoreError> {
@@ -1365,15 +1307,14 @@ async fn doctor_dependency_graph_issues(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trace_evidence_summary, doctor_cached_json_projection,
-        doctor_cached_json_projection_with_dependency_marker, doctor_operator_blocker_codes,
+        build_trace_evidence_summary, doctor_operator_blocker_codes,
         final_snapshot_missing_release_admission_evidence, selected_effective_bundle_receipt_id,
     };
     use crate::contract_profile_adapter::{
         operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
     };
     use crate::operator_contracts::canonical_release1_operator_contract_status;
-    use std::{fs, time::Duration};
+    use std::fs;
 
     #[test]
     fn release1_operator_contracts_consistency_accepts_blocked_with_actions() {
@@ -1385,67 +1326,6 @@ mod tests {
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
             None
         );
-    }
-
-    #[test]
-    fn doctor_summary_cache_rejects_state_marker_stale_projection() {
-        let root = std::env::temp_dir().join(format!(
-            "vida-doctor-summary-stale-cache-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("test clock should support unique ids")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).expect("state root should be writable");
-        let payload = serde_json::json!({"surface": "vida doctor", "status": "pass"});
-        crate::operator_projection_cache::write_json_projection(
-            &root,
-            "doctor-summary-latest",
-            &payload,
-        );
-        assert!(doctor_cached_json_projection(&root, true).is_some());
-
-        std::thread::sleep(Duration::from_millis(10));
-        crate::operator_projection_cache::touch_state_mutation_marker(&root);
-
-        assert!(doctor_cached_json_projection(&root, true).is_none());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn doctor_summary_cache_rejects_launcher_marker_stale_projection() {
-        let root = std::env::temp_dir().join(format!(
-            "vida-doctor-summary-launcher-cache-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("test clock should support unique ids")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).expect("state root should be writable");
-        fs::write(root.join("manifest"), "stable").expect("state marker should be writable");
-        std::thread::sleep(Duration::from_millis(10));
-        let payload = serde_json::json!({"surface": "vida doctor", "status": "pass"});
-        crate::operator_projection_cache::write_json_projection(
-            &root,
-            "doctor-summary-latest",
-            &payload,
-        );
-        assert!(doctor_cached_json_projection(&root, true).is_some());
-
-        std::thread::sleep(Duration::from_millis(10));
-        let dependency_modified = std::time::SystemTime::now();
-        let cached = doctor_cached_json_projection_with_dependency_marker(
-            &root,
-            true,
-            Some(dependency_modified),
-        );
-        assert!(
-            cached.is_none(),
-            "doctor projection cache must reject launcher-stale projections"
-        );
-        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
