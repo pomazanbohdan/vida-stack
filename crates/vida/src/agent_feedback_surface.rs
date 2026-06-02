@@ -391,6 +391,7 @@ const CONCRETE_CANONICAL_CLOSE_PHRASES: &[&str] = &[
     "blocked by",
     "blocked on",
     "blocker:",
+    "blocker remains",
     "approval required",
     "pending approval",
     "pending operator approval",
@@ -1440,6 +1441,19 @@ mod tests {
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "implemented verifier blocker summary gate with tests"));
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_implemented_change_with_remaining_blocker() {
+        let reason = "Implemented the change but blocker remains pending verifier evidence";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+        assert!(!super::ignored_canonical_close_meta_language(reason)
+            .iter()
+            .any(|phrase| phrase.contains("blocker remains pending verifier evidence")));
     }
 
     #[test]
