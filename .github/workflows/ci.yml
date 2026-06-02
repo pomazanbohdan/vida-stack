@@ -1,0 +1,604 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  nextest-archive:
+    name: Test archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-${{ runner.os }}
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Archive nextest binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo nextest archive --workspace --locked --profile ci --archive-file nextest-tests.tar.zst
+          test -x target/debug/vida
+          test -x target/debug/taskflow
+          test -x target/debug/docflow
+          test -x target/debug/vida-pi-agent
+          test -x target/debug/vida-pi-agent-fake-pi
+          mkdir -p nextest-support-bin
+          cp target/debug/vida nextest-support-bin/
+          cp target/debug/taskflow nextest-support-bin/
+          cp target/debug/docflow nextest-support-bin/
+          cp target/debug/vida-pi-agent nextest-support-bin/
+          cp target/debug/vida-pi-agent-fake-pi nextest-support-bin/
+
+      - name: Upload nextest archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: nextest-tests
+          path: nextest-tests.tar.zst
+          if-no-files-found: error
+
+      - name: Upload nextest support binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: nextest-support-bin
+          path: nextest-support-bin/*
+          if-no-files-found: error
+
+  nextest-shard:
+    name: Test shard ${{ matrix.partition }}/4
+    needs: nextest-archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        partition:
+          - 1
+          - 2
+          - 3
+          - 4
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Download nextest archive
+        uses: actions/download-artifact@v6
+        with:
+          name: nextest-tests
+
+      - name: Download nextest support binaries
+        uses: actions/download-artifact@v6
+        with:
+          name: nextest-support-bin
+          path: nextest-support-bin
+
+      - name: Restore support binaries expected by CLI smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/debug
+          cp nextest-support-bin/vida target/debug/
+          cp nextest-support-bin/taskflow target/debug/
+          cp nextest-support-bin/docflow target/debug/
+          cp nextest-support-bin/vida-pi-agent target/debug/
+          cp nextest-support-bin/vida-pi-agent-fake-pi target/debug/
+          chmod +x target/debug/vida target/debug/taskflow target/debug/docflow target/debug/vida-pi-agent target/debug/vida-pi-agent-fake-pi
+
+      - name: Run nextest shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo nextest run --archive-file nextest-tests.tar.zst --workspace-remap "$PWD" --profile ci --partition "slice:${{ matrix.partition }}/4"
+
+  validate-smoke:
+    name: Test smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-${{ runner.os }}
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
+
+      - name: Run doc tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace --doc --locked
+
+      - name: Run docflow validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p vida -- docflow check-file --path README.md
+          cargo run -p vida -- docflow check-file --path VERSION-PLAN.md
+          cargo run -p vida -- docflow readiness-check --profile active-canon
+
+      - name: Run runtime smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .vida/config .vida/db .vida/project
+          STATE_DIR=".vida/data/ci-runtime-state"
+          rm -rf "$STATE_DIR"
+          cargo run -p vida -- boot --state-dir "$STATE_DIR"
+          cargo run -p vida -- status --state-dir "$STATE_DIR" --json >/tmp/ci-status.json
+          cargo run -p vida -- doctor --state-dir "$STATE_DIR" --json >/tmp/ci-doctor.json
+          cargo run -p vida -- task list --state-dir "$STATE_DIR" --json >/tmp/ci-task-list.json
+          cargo run -p vida -- task ready --state-dir "$STATE_DIR" --json >/tmp/ci-task-ready.json
+          cargo run -p vida -- task blocked --state-dir "$STATE_DIR" --json >/tmp/ci-task-blocked.json
+          cargo run -p vida -- orchestrator-init --state-dir "$STATE_DIR" --json >/tmp/ci-orchestrator-init.json
+          cargo run -p vida -- agent-init --role worker --state-dir "$STATE_DIR" --json >/tmp/ci-agent-init.json
+          cargo run -p vida -- project-activator --json >/tmp/ci-project-activator.json
+          cargo run -p vida -- protocol view bootstrap/router >/tmp/ci-protocol-router.txt
+
+  test-gate:
+    name: Test gate
+    needs:
+      - nextest-shard
+      - validate-smoke
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check test jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ needs.nextest-shard.result }}" = "success"
+          test "${{ needs.validate-smoke.result }}" = "success"
+
+  build-runtime:
+    name: Build debug runtime (${{ matrix.os }})
+    needs: test-gate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-${{ runner.os }}
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
+
+      - name: Build runtime entrypoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
+
+  build-release-linux:
+    name: Build Linux release binaries
+    needs: test-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-${{ runner.os }}
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
+
+      - name: Build release runtime entrypoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
+          mkdir -p release-bin
+          cp target/release/vida release-bin/
+          cp target/release/taskflow release-bin/
+          cp target/release/docflow release-bin/
+          cp target/release/vida-pi-agent release-bin/
+
+      - name: Upload Linux release binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-release-binaries
+          path: release-bin/*
+          if-no-files-found: error
+
+  build-release-windows:
+    name: Build Windows release binaries
+    needs: test-gate
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-${{ runner.os }}
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
+
+      - name: Build release runtime entrypoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
+          mkdir -p release-bin
+          cp target/release/vida.exe release-bin/
+          cp target/release/taskflow.exe release-bin/
+          cp target/release/docflow.exe release-bin/
+          cp target/release/vida-pi-agent.exe release-bin/
+
+      - name: Upload Windows release binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-release-binaries
+          path: release-bin/*
+          if-no-files-found: error
+
+  package-linux:
+    name: Package Linux release
+    needs: build-release-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Download Linux release binaries
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-release-binaries
+          path: release-bin
+
+      - name: Build release assets and verify runtime-only package
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x release-bin/vida release-bin/taskflow release-bin/docflow release-bin/vida-pi-agent
+          VIDA_RELEASE_SKIP_BUILD=1 VIDA_RELEASE_BIN_DIR="$PWD/release-bin" bash scripts/build-release.sh
+          python3 - <<'PY'
+          import json
+          import tarfile
+          from pathlib import Path
+
+          manifests = sorted(Path("dist").glob("vida-stack-v*.manifest.json"))
+          assert manifests, "release manifest was not generated"
+          data = json.loads(manifests[0].read_text())
+          expected_roots = ["AGENTS.md", "AGENTS.sidecar.md", ".codex/", ".qwen/", ".kilo/", ".opencode/", "bin/vida", "bin/taskflow", "bin/docflow", "bin/vida-pi-agent", "install/assets/", "vida/"]
+          assert data["included_roots"] == expected_roots, data["included_roots"]
+          assert data["installed_entrypoints"] == ["vida", "taskflow", "docflow", "vida-pi-agent", "vida docflow", "vida taskflow"], data["installed_entrypoints"]
+          assert data["installed_compatibility_contracts"]["taskflow"] == "canonical taskflow runtime", data["installed_compatibility_contracts"]
+          assert data["installed_compatibility_contracts"]["docflow"] == "canonical docflow runtime", data["installed_compatibility_contracts"]
+          assert data["bundled_binaries"] == ["bin/vida", "bin/taskflow", "bin/docflow", "bin/vida-pi-agent"], data["bundled_binaries"]
+          assert data["binary_versions"]["vida"]["matches_expected_version"] is True, data["binary_versions"]["vida"]
+          assert data["binary_versions"]["vida"]["build_timestamp"], data["binary_versions"]["vida"]
+          assert data["binary_versions"]["taskflow"]["matches_expected_version"] is True, data["binary_versions"]["taskflow"]
+          assert data["binary_versions"]["docflow"]["matches_expected_version"] is True, data["binary_versions"]["docflow"]
+          assert data["installer_managed_runtimes"] == ["vida", "taskflow", "docflow", "vida-pi-agent"], data["installer_managed_runtimes"]
+
+          archive = sorted(Path("dist").glob("vida-stack-v*.tar.gz"))[0]
+          with tarfile.open(archive, "r:gz") as tf:
+            names = tf.getnames()
+
+          assert any(name.endswith("/AGENTS.md") for name in names), names[:20]
+          assert any(name.endswith("/AGENTS.sidecar.md") for name in names), names[:20]
+          assert any(name.endswith("/bin/vida") for name in names), names[:20]
+          assert any(name.endswith("/bin/taskflow") for name in names), names[:20]
+          assert any(name.endswith("/bin/docflow") for name in names), names[:20]
+          assert any(name.endswith("/bin/vida-pi-agent") for name in names), names[:20]
+          assert any("/.codex/config.toml" in name for name in names), names[:20]
+          assert any("/vida/root-map.md" in name for name in names), names[:20]
+          assert any("/install/assets/vida.config.yaml.template" in name for name in names), names[:20]
+          assert any("/install/assets/feature-design-document.template.md" in name for name in names), names[:20]
+
+          forbidden_roots = ("crates", "scripts", "tests", "target")
+          leaked = []
+          for name in names:
+            parts = name.split("/", 1)
+            if len(parts) < 2:
+              continue
+            rel = parts[1].rstrip("/")
+            if not rel:
+              continue
+            first = rel.split("/", 1)[0]
+            if first in forbidden_roots:
+              leaked.append(name)
+          assert not leaked, leaked
+          PY
+          bash dist/vida-install.sh help >/tmp/vida-install-help.txt
+          test -s /tmp/vida-install-help.txt
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 help > /tmp/vida-install-ps-help.txt
+          test -s /tmp/vida-install-ps-help.txt
+
+      - name: Upload Linux release assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-release-assets
+          path: |
+            dist/vida-stack-v*.tar.gz
+            dist/vida-stack-v*.manifest.json
+            dist/vida-install.sh
+            dist/vida-install.ps1
+          if-no-files-found: error
+
+  package-windows:
+    name: Package Windows release
+    needs: build-release-windows
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Download Windows release binaries
+        uses: actions/download-artifact@v6
+        with:
+          name: windows-release-binaries
+          path: release-bin
+
+      - name: Build Windows release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          export VIDA_RELEASE_SUFFIX=windows-x86_64
+          export VIDA_RELEASE_SKIP_BUILD=1
+          export VIDA_RELEASE_BIN_DIR="$PWD/release-bin"
+          bash scripts/build-release.sh
+
+      - name: Upload Windows release assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-release-assets
+          path: |
+            dist/vida-stack-v*-windows-x86_64.zip
+            dist/vida-stack-v*-windows-x86_64.manifest.json
+            dist/vida-install.ps1
+          if-no-files-found: error
+
+  install-smoke-linux:
+    name: Install smoke Linux
+    needs: package-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Download Linux release assets
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-release-assets
+          path: dist
+
+      - name: Run local installer smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE_PATH="$(find dist -maxdepth 1 -name 'vida-stack-v*.tar.gz' | head -n 1)"
+          test -n "$ARCHIVE_PATH"
+          bash scripts/local-installer-smoke.sh --archive "$ARCHIVE_PATH"
+
+  install-smoke-windows:
+    name: Install smoke Windows
+    needs: package-windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Download Windows release assets
+        uses: actions/download-artifact@v6
+        with:
+          name: windows-release-assets
+          path: dist
+
+      - name: Run Windows installer smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tmpRoot = Join-Path $env:RUNNER_TEMP "vida-installer-smoke"
+          $installRoot = Join-Path $tmpRoot "install-root"
+          $binDir = Join-Path $tmpRoot "bin"
+          $projectDir = Join-Path $tmpRoot "project"
+          New-Item -ItemType Directory -Force -Path $binDir, $projectDir | Out-Null
+          $archive = Get-ChildItem -LiteralPath dist -Filter "vida-stack-v*-windows-x86_64.zip" | Select-Object -First 1
+          if (-not $archive) { throw "Windows release zip was not generated" }
+          $manifestPath = Get-ChildItem -LiteralPath dist -Filter "vida-stack-v*-windows-x86_64.manifest.json" | Select-Object -First 1
+          if (-not $manifestPath) { throw "Windows release manifest was not generated" }
+          $manifest = Get-Content -LiteralPath $manifestPath.FullName -Raw | ConvertFrom-Json
+          $expectedVidaVersion = $manifest.binary_versions.vida.version_line
+          if (-not $expectedVidaVersion) { throw "Windows release manifest did not record vida version_line" }
+          if (-not $manifest.binary_versions.vida.matches_expected_version) { throw "Windows release manifest vida version mismatch" }
+          if (-not $manifest.binary_versions.vida.build_timestamp) { throw "Windows release manifest vida build timestamp missing" }
+
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 install --archive $archive.FullName --root $installRoot --bin-dir $binDir --force
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer install failed" }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 doctor -Root $installRoot -BinDir $binDir
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer doctor failed" }
+
+          $env:VIDA_HOME = $installRoot
+          $env:VIDA_ROOT = Join-Path $installRoot "current"
+          $runtimeBinDir = Join-Path $env:VIDA_ROOT "bin"
+          $env:PATH = "$runtimeBinDir;$env:PATH"
+          $vidaCommand = Get-Command vida -ErrorAction Stop
+          $expectedVida = [System.IO.Path]::GetFullPath((Join-Path $runtimeBinDir "vida.exe"))
+          $actualVida = [System.IO.Path]::GetFullPath($vidaCommand.Source)
+          if ($actualVida -ine $expectedVida) {
+            throw "vida did not resolve to the direct runtime binary: $($vidaCommand.Source)"
+          }
+          vida --version | Out-File -FilePath (Join-Path $tmpRoot "vida-version.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "vida version failed" }
+          $actualVidaVersion = (Get-Content -LiteralPath (Join-Path $tmpRoot "vida-version.txt") -Raw).Trim()
+          if ($actualVidaVersion -ne $expectedVidaVersion) {
+            throw "installed vida version mismatch: expected '$expectedVidaVersion', got '$actualVidaVersion'"
+          }
+          vida --help | Out-File -FilePath (Join-Path $tmpRoot "vida-help.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "vida help failed" }
+          taskflow help | Out-File -FilePath (Join-Path $tmpRoot "taskflow-help.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "taskflow help failed" }
+          docflow --help | Out-File -FilePath (Join-Path $tmpRoot "docflow-help.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "docflow help failed" }
+          vida-pi-agent --help | Out-File -FilePath (Join-Path $tmpRoot "vida-pi-agent-help.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "vida-pi-agent help failed" }
+
+          Push-Location $projectDir
+          try {
+            vida init | Out-File -FilePath (Join-Path $tmpRoot "vida-init.txt") -Encoding utf8
+            if ($LASTEXITCODE -ne 0) { throw "vida init failed" }
+          } finally {
+            Pop-Location
+          }
+
+          Select-String -LiteralPath (Join-Path $tmpRoot "taskflow-help.txt") -Pattern "VIDA TaskFlow runtime family"
+          Select-String -LiteralPath (Join-Path $tmpRoot "docflow-help.txt") -Pattern "Standalone DocFlow CLI"
+          Select-String -LiteralPath (Join-Path $tmpRoot "vida-pi-agent-help.txt") -Pattern "VIDA adapter for one-shot Pi RPC dispatch"
+          Select-String -LiteralPath (Join-Path $tmpRoot "vida-version.txt") -Pattern "vida "
+          if (-not (Test-Path -LiteralPath (Join-Path $projectDir "AGENTS.md"))) { throw "AGENTS.md was not bootstrapped" }
+          if (-not (Test-Path -LiteralPath (Join-Path $projectDir "AGENTS.sidecar.md"))) { throw "AGENTS.sidecar.md was not bootstrapped" }
+          if (-not (Test-Path -LiteralPath (Join-Path $projectDir "vida.config.yaml"))) { throw "vida.config.yaml was not bootstrapped" }
+          if (-not (Test-Path -LiteralPath (Join-Path $projectDir "docs/product/spec/templates/feature-design-document.template.md"))) { throw "feature design template was not bootstrapped" }
+
+  ci-gate:
+    name: CI gate
+    needs:
+      - test-gate
+      - build-runtime
+      - install-smoke-linux
+      - install-smoke-windows
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check CI jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ needs.test-gate.result }}" = "success"
+          test "${{ needs.build-runtime.result }}" = "success"
+          test "${{ needs.install-smoke-linux.result }}" = "success"
+          test "${{ needs.install-smoke-windows.result }}" = "success"
