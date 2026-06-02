@@ -1811,6 +1811,26 @@ fn agent_dispatch_next_projection_name(command: &AgentDispatchNextArgs) -> Strin
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AgentDispatchNextCurrentTaskIds<'a> {
+    preview_current_task_id: Option<&'a str>,
+    scheduler_current_task_id: Option<&'a str>,
+}
+
+fn resolve_agent_dispatch_next_current_task_ids<'a>(
+    requested_current_task_id: Option<&'a str>,
+    explicit_bound_current_task_id: Option<&'a str>,
+    taskflow_single_in_progress_task_id: Option<&'a str>,
+) -> AgentDispatchNextCurrentTaskIds<'a> {
+    AgentDispatchNextCurrentTaskIds {
+        preview_current_task_id: requested_current_task_id
+            .or(explicit_bound_current_task_id)
+            .or(taskflow_single_in_progress_task_id),
+        scheduler_current_task_id: requested_current_task_id
+            .or(taskflow_single_in_progress_task_id),
+    }
+}
+
 fn emit_agent_dispatch_next_preview(
     command: &AgentDispatchNextArgs,
     state_dir: &std::path::Path,
@@ -2020,11 +2040,11 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 } else {
                     None
                 };
-            let effective_current_task_id = command
-                .current_task_id
-                .as_deref()
-                .or(explicit_bound_current_task_id.as_deref())
-                .or(taskflow_single_in_progress_task_id.as_deref());
+            let resolved_current_task_ids = resolve_agent_dispatch_next_current_task_ids(
+                command.current_task_id.as_deref(),
+                explicit_bound_current_task_id.as_deref(),
+                taskflow_single_in_progress_task_id.as_deref(),
+            );
             let preview = if command.dev_team {
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
@@ -2043,7 +2063,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                             match StateStore::scheduling_projection_scoped_from_rows(
                                 &rows,
                                 command.scope.as_deref(),
-                                effective_current_task_id,
+                                resolved_current_task_ids.preview_current_task_id,
                                 &critical_path_ids,
                             ) {
                                 Ok(projection) => projection,
@@ -2056,7 +2076,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                         Err(_) => match store
                             .scheduling_projection_scoped(
                                 command.scope.as_deref(),
-                                effective_current_task_id,
+                                resolved_current_task_ids.preview_current_task_id,
                             )
                             .await
                         {
@@ -2119,7 +2139,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                         &store,
                         &state_dir,
                         command.scope.as_deref(),
-                        effective_current_task_id,
+                        resolved_current_task_ids.scheduler_current_task_id,
                         requested_parallel_limit,
                         true,
                         false,
@@ -2229,7 +2249,8 @@ mod tests {
     use super::{
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
         dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
-        single_in_progress_task_id_from_rows, state_store,
+        resolve_agent_dispatch_next_current_task_ids, single_in_progress_task_id_from_rows,
+        state_store,
     };
     use crate::state_store::{
         CreateTaskRequest, TaskExecutionSemantics, TaskRecord, TaskSchedulingCandidate,
@@ -2239,6 +2260,39 @@ mod tests {
     use crate::test_cli_support::{cli, EnvVarGuard};
     use crate::AgentDispatchNextArgs;
     use std::process::ExitCode;
+
+    #[test]
+    fn agent_dispatch_next_scheduler_keeps_explicit_binding_implicit() {
+        let resolved =
+            resolve_agent_dispatch_next_current_task_ids(None, Some("explicit-bound"), None);
+
+        assert_eq!(resolved.preview_current_task_id, Some("explicit-bound"));
+        assert_eq!(resolved.scheduler_current_task_id, None);
+    }
+
+    #[test]
+    fn agent_dispatch_next_scheduler_preserves_operator_requested_current_task() {
+        let resolved = resolve_agent_dispatch_next_current_task_ids(
+            Some("requested"),
+            Some("explicit-bound"),
+            Some("single-in-progress"),
+        );
+
+        assert_eq!(resolved.preview_current_task_id, Some("requested"));
+        assert_eq!(resolved.scheduler_current_task_id, Some("requested"));
+    }
+
+    #[test]
+    fn agent_dispatch_next_scheduler_preserves_single_in_progress_fallback() {
+        let resolved =
+            resolve_agent_dispatch_next_current_task_ids(None, None, Some("single-in-progress"));
+
+        assert_eq!(resolved.preview_current_task_id, Some("single-in-progress"));
+        assert_eq!(
+            resolved.scheduler_current_task_id,
+            Some("single-in-progress")
+        );
+    }
 
     trait StateStoreFixtureTaskExt {
         fn create_task_with_fixture_parent<'a>(
