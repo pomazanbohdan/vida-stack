@@ -866,6 +866,14 @@ impl StateStore {
             records.push((index + 1, record));
         }
 
+        let mut staged_contents = Vec::new();
+        let mut staged_tasks_by_id = existing_tasks
+            .iter()
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect::<BTreeMap<_, _>>();
+        let mut touched_task_ids = BTreeSet::new();
+
         for (line, mut record) in records {
             let task_id = record.id.trim().to_string();
             if task_id.is_empty() {
@@ -919,6 +927,39 @@ impl StateStore {
                 .await?;
             let mut content = TaskContent::from(record);
             content.display_id = normalized_display_id;
+
+            touched_task_ids.insert(task_id.clone());
+            for dependency in &content.dependencies {
+                touched_task_ids.insert(dependency.depends_on_id.clone());
+            }
+            staged_tasks_by_id.insert(
+                task_id.clone(),
+                TaskRecord::from(TaskStorageRow::from(content.clone())),
+            );
+            staged_contents.push((task_id, content));
+        }
+
+        let staged_tasks = staged_tasks_by_id.into_values().collect::<Vec<_>>();
+        let issues = Self::validate_task_graph_rows_for_mutation(
+            &existing_tasks,
+            &staged_tasks,
+            &touched_task_ids,
+        )
+        .into_iter()
+        // Preserve existing provider-import behavior for closed children under open parents
+        // while still rejecting structural graph corruption before any rows are persisted.
+        .filter(|issue| issue.issue_type != "open_parent_has_no_open_child")
+        .collect::<Vec<_>>();
+        if let Some(first) = issues.first() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task import would create invalid graph: {} on {}",
+                    first.issue_type, first.issue_id
+                ),
+            });
+        }
+
+        for (task_id, content) in staged_contents {
             let existing: Option<TaskStorageRowStored> =
                 self.db.select(("task", task_id.as_str())).await?;
             match existing {
