@@ -1590,6 +1590,76 @@ fn emit_blocked_lane_envelope(as_json: bool) -> ExitCode {
     ExitCode::from(2)
 }
 
+fn emit_missing_lane_receipt_envelope(
+    as_json: bool,
+    run_id: Option<&str>,
+    surface: &'static str,
+) -> ExitCode {
+    let blocker_code = if run_id.is_some() {
+        "missing_lane_receipt"
+    } else {
+        "missing_latest_lane_receipt"
+    };
+    let reason = run_id.map_or_else(
+        || "No latest lane receipt exists for the current session.".to_string(),
+        |run_id| format!("Missing lane receipt for `{run_id}`."),
+    );
+    let next_actions = vec![
+        "Run `vida status --json` and `vida task next-lawful --json` to confirm the active bounded unit."
+            .to_string(),
+        "Create or refresh a dispatch packet before inspecting lane takeover readiness.".to_string(),
+    ];
+    let artifact_refs = serde_json::json!({
+        "surface": surface,
+        "run_id": run_id,
+        "receipt_required": true,
+    });
+    let operator_contracts = render_operator_contract_envelope(
+        "blocked",
+        vec![blocker_code.to_string()],
+        next_actions.clone(),
+        artifact_refs,
+    );
+    let envelope = BlockedLaneEnvelope {
+        surface,
+        status: "blocked",
+        trace_id: operator_contracts["trace_id"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        workflow_class: operator_contracts["workflow_class"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        risk_tier: operator_contracts["risk_tier"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        artifact_refs: operator_contracts["artifact_refs"].clone(),
+        next_actions,
+        blocker_codes: vec![blocker_code.to_string()],
+        reason,
+    };
+
+    if crate::surface_render::print_surface_json(
+        &envelope,
+        as_json,
+        "missing lane receipt surface should serialize",
+    ) {
+        return ExitCode::from(2);
+    }
+
+    crate::print_surface_header(crate::RenderMode::Plain, envelope.surface);
+    crate::print_surface_line(crate::RenderMode::Plain, "status", envelope.status);
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "blocker_codes",
+        &envelope.blocker_codes.join(", "),
+    );
+    crate::print_surface_line(crate::RenderMode::Plain, "reason", &envelope.reason);
+    if let Some(next_action) = envelope.next_actions.first() {
+        crate::print_surface_line(crate::RenderMode::Plain, "next_action", next_action);
+    }
+    ExitCode::from(2)
+}
+
 fn lane_show_projection_name(run_id: &str) -> String {
     let suffix = run_id
         .chars()
@@ -2387,8 +2457,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }) else {
-                eprintln!("No lane receipt found.");
-                return ExitCode::from(2);
+                return emit_missing_lane_receipt_envelope(*as_json, None, "vida lane show");
             };
             let status = match store.run_graph_status(&summary.run_id).await {
                 Ok(status) => Some(status),
@@ -2473,8 +2542,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }) else {
-                eprintln!("Missing lane receipt for `{run_id}`.");
-                return ExitCode::from(2);
+                return emit_missing_lane_receipt_envelope(
+                    *as_json,
+                    Some(run_id),
+                    "vida lane show",
+                );
             };
             let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let needs_status_projection = summary.lane_status
@@ -2562,8 +2634,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }) else {
-                eprintln!("Missing lane receipt for `{run_id}`.");
-                return ExitCode::from(2);
+                return emit_missing_lane_receipt_envelope(
+                    *as_json,
+                    Some(run_id),
+                    "vida lane takeover-ready",
+                );
             };
             let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let status = store.run_graph_status(run_id).await.ok();
@@ -2633,8 +2708,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }) else {
-                eprintln!("No lane receipt found.");
-                return ExitCode::from(2);
+                return emit_missing_lane_receipt_envelope(as_json, None, "vida lane show");
             };
             let status = match store.run_graph_status(&summary.run_id).await {
                 Ok(status) => Some(status),
@@ -2684,8 +2758,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }) else {
-                eprintln!("Missing lane receipt for `{run_id}`.");
-                return ExitCode::from(2);
+                return emit_missing_lane_receipt_envelope(as_json, Some(run_id), "vida lane show");
             };
             let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let recovery = status.as_ref().map(|status| {
@@ -2741,8 +2814,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }) else {
-                eprintln!("Missing lane receipt for `{run_id}`.");
-                return ExitCode::from(2);
+                return emit_missing_lane_receipt_envelope(
+                    as_json,
+                    Some(run_id),
+                    "vida lane complete",
+                );
             };
             let mut recovery = store.run_graph_recovery_summary(run_id).await.ok();
             let mut status = store.run_graph_status(run_id).await.ok();
@@ -3059,8 +3135,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }) else {
-                eprintln!("Missing lane receipt for `{run_id}`.");
-                return ExitCode::from(2);
+                return emit_missing_lane_receipt_envelope(
+                    as_json,
+                    Some(run_id),
+                    "vida lane retire",
+                );
             };
             let Some(status) = (match store.run_graph_status(run_id).await {
                 Ok(status) => Some(status),
@@ -3239,8 +3318,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }) else {
-                eprintln!("Missing lane receipt for `{run_id}`.");
-                return ExitCode::from(2);
+                return emit_missing_lane_receipt_envelope(
+                    as_json,
+                    Some(run_id),
+                    "vida lane exception-takeover",
+                );
             };
             let recovery = store.run_graph_recovery_summary(run_id).await.ok();
             let status = store.run_graph_status(run_id).await.ok();
@@ -3293,8 +3375,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }) else {
-                eprintln!("Missing lane receipt for `{run_id}`.");
-                return ExitCode::from(2);
+                return emit_missing_lane_receipt_envelope(
+                    as_json,
+                    Some(run_id),
+                    "vida lane supersede",
+                );
             };
             let recovery = store.run_graph_recovery_summary(run_id).await.ok();
             let status = store.run_graph_status(run_id).await.ok();
