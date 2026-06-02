@@ -580,7 +580,7 @@ impl StateStore {
             Err(StateStoreError::MissingTask { .. }) => return Ok(false),
             Err(error) => return Err(error),
         };
-        if task.status != "closed" {
+        if !Self::task_status_is_closed_like(&task.status) {
             return Ok(false);
         }
 
