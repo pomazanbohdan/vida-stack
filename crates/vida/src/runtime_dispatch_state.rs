@@ -6279,6 +6279,7 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
     append_unique_explicit_owned_scope_paths(
         &mut implementation_owned_paths,
         implementation_owned_paths_override,
+        Some(store.root()),
     );
     if implementation_owned_paths.is_empty() {
         implementation_owned_paths =
@@ -6466,7 +6467,7 @@ pub(crate) fn planner_metadata_owned_paths_from_role_selection(
     {
         let Some(path) = value
             .as_str()
-            .and_then(normalize_safe_owned_scope_path_candidate)
+            .and_then(|path| normalize_explicit_owned_scope_path_candidate(path, None))
         else {
             continue;
         };
@@ -6511,20 +6512,64 @@ fn append_unique_owned_paths(target: &mut Vec<String>, source: &[String]) {
     }
 }
 
-fn append_unique_explicit_owned_scope_paths(target: &mut Vec<String>, source: &[String]) {
-    for path in source {
-        let normalized = path.trim().trim_end_matches('/').to_string();
-        if normalized.is_empty()
-            || !normalized.contains('/')
-            || normalized.starts_with('/')
-            || normalized.starts_with("./")
-            || normalized.starts_with("../")
-            || normalized
-                .split('/')
-                .any(|part| matches!(part, "" | "." | ".."))
-        {
-            continue;
+fn normalize_explicit_owned_scope_path_candidate(
+    candidate: &str,
+    state_root: Option<&Path>,
+) -> Option<String> {
+    let normalized = candidate
+        .trim()
+        .trim_end_matches(|ch| matches!(ch, '/' | '\\'))
+        .to_string();
+    if normalized.is_empty()
+        || !normalized.contains('/')
+        || normalized.starts_with('/')
+        || normalized.starts_with("./")
+        || normalized.starts_with("../")
+        || normalized.contains('\\')
+        || normalized.contains(':')
+    {
+        return None;
+    }
+    if normalized == ".vida" || normalized.starts_with(".vida/") {
+        return None;
+    }
+    let relative_path = Path::new(&normalized);
+    if relative_path
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    if let Some(state_root) = state_root {
+        let project_root = taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+            .unwrap_or_else(|| state_root.parent().unwrap_or(state_root).to_path_buf());
+        let canonical_project_root = project_root.canonicalize().unwrap_or(project_root.clone());
+        let candidate_path = project_root.join(relative_path);
+        if let Ok(canonical_candidate) = candidate_path.canonicalize() {
+            if !canonical_candidate.starts_with(&canonical_project_root) {
+                return None;
+            }
+        } else if let Some(parent) = candidate_path.parent() {
+            if let Ok(canonical_parent) = parent.canonicalize() {
+                if !canonical_parent.starts_with(&canonical_project_root) {
+                    return None;
+                }
+            }
         }
+    }
+    Some(normalized)
+}
+
+fn append_unique_explicit_owned_scope_paths(
+    target: &mut Vec<String>,
+    source: &[String],
+    state_root: Option<&Path>,
+) {
+    for path in source {
+        let Some(normalized) = normalize_explicit_owned_scope_path_candidate(path, state_root)
+        else {
+            continue;
+        };
         if !target.iter().any(|existing| existing == &normalized) {
             target.push(normalized);
         }
@@ -6544,6 +6589,7 @@ async fn planner_metadata_owned_paths_from_task(store: &StateStore, task_id: &st
             append_unique_explicit_owned_scope_paths(
                 &mut owned_paths,
                 &task.planner_metadata.owned_paths,
+                Some(store.root()),
             );
             owned_paths
         })
@@ -6562,10 +6608,10 @@ pub(crate) async fn implementation_owned_paths_for_dispatch_context(
     }
     if let Some(task_id) = tracked_implementer_dev_task_id(role_selection) {
         let task_paths = planner_metadata_owned_paths_from_task(store, task_id).await;
-        append_unique_explicit_owned_scope_paths(&mut owned_paths, &task_paths);
+        append_unique_explicit_owned_scope_paths(&mut owned_paths, &task_paths, Some(store.root()));
     }
     let task_paths = planner_metadata_owned_paths_from_task(store, &receipt.run_id).await;
-    append_unique_explicit_owned_scope_paths(&mut owned_paths, &task_paths);
+    append_unique_explicit_owned_scope_paths(&mut owned_paths, &task_paths, Some(store.root()));
     owned_paths
 }
 
@@ -6954,7 +7000,11 @@ impl<'a> RuntimeDispatchPacketContext<'a> {
 
     pub(crate) fn with_owned_paths_override(mut self, owned_paths: Vec<String>) -> Self {
         self.owned_paths_override.clear();
-        append_unique_explicit_owned_scope_paths(&mut self.owned_paths_override, &owned_paths);
+        append_unique_explicit_owned_scope_paths(
+            &mut self.owned_paths_override,
+            &owned_paths,
+            Some(self.state_root),
+        );
         self
     }
 
@@ -21140,7 +21190,14 @@ agent_system:
             &handoff_plan,
             &run_graph_bootstrap,
         )
-        .with_owned_paths_override(vec!["crates/vida".to_string(), "docs/process".to_string()]);
+        .with_owned_paths_override(vec![
+            ".vida/data/state".to_string(),
+            "C:/Users/alice/secrets".to_string(),
+            "../outside/project".to_string(),
+            "/tmp/outside-project".to_string(),
+            "crates/vida".to_string(),
+            "docs/process".to_string(),
+        ]);
 
         let preview = runtime_dispatch_packet_preview(&ctx).expect("preview should render");
         let missing_fields = preview["packet_contract_missing_fields"]
@@ -21155,6 +21212,27 @@ agent_system:
         assert_eq!(
             preview["packet"]["delivery_task_packet"]["owned_paths"],
             serde_json::json!(["crates/vida", "docs/process"])
+        );
+
+        let unsafe_only_ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        )
+        .with_owned_paths_override(vec![
+            ".vida/data/state".to_string(),
+            "C:/Users/alice/secrets".to_string(),
+            "../outside/project".to_string(),
+            "/tmp/outside-project".to_string(),
+        ]);
+        let unsafe_only_preview =
+            runtime_dispatch_packet_preview(&unsafe_only_ctx).expect("preview should render");
+        assert_eq!(unsafe_only_preview["status"], "blocked");
+        assert_eq!(
+            unsafe_only_preview["packet_contract_missing_fields"],
+            serde_json::json!(["owned_paths"])
         );
     }
 }
