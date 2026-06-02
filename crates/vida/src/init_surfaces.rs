@@ -1949,6 +1949,27 @@ mod tests {
             payload["init"]["continuation_binding"]["active_bounded_unit"]["task_id"],
             "active-task"
         );
+        assert!(
+            cached_orchestrator_init_payload_has_top_level_continuation_fields(
+                &payload.to_string()
+            )
+        );
+        assert!(
+            !cached_orchestrator_init_payload_has_top_level_continuation_fields(
+                &json!({
+                    "surface": "vida orchestrator-init",
+                    "status": "ready_enough_for_normal_work",
+                    "init": {
+                        "continuation_binding": {
+                            "active_bounded_unit": {
+                                "task_id": "nested-only"
+                            }
+                        }
+                    }
+                })
+                .to_string()
+            )
+        );
     }
 
     #[cfg(windows)]
