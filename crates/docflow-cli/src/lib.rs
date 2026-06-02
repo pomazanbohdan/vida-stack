@@ -116,6 +116,8 @@ pub struct ReadinessArgs {
 pub struct FileArgs {
     #[arg(long)]
     pub path: String,
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1112,25 +1114,34 @@ pub fn run(cli: Cli) -> String {
         Command::ValidateFooter(args) => render_validation_result(&args.path, &args.content),
         Command::Readiness(args) => render_readiness_result(&args.path, &args.content),
         Command::CheckFile(args) => match fs::read_to_string(&args.path) {
-            Ok(content) => render_validation_result(&args.path, &content),
-            Err(error) => format!(
-                "validation\n  issues: 1\n  verdict: blocking\n  - {} [read_error]: {}",
-                args.path, error
-            ),
+            Ok(content) => {
+                if args.json {
+                    render_validation_json_result(&args.path, &content)
+                } else {
+                    render_validation_result(&args.path, &content)
+                }
+            }
+            Err(error) => render_file_read_error("validation", "issues", &args.path, &error.to_string(), args.json),
         },
         Command::ReadinessFile(args) => match fs::read_to_string(&args.path) {
-            Ok(content) => render_readiness_result(&args.path, &content),
-            Err(error) => format!(
-                "readiness\n  rows: 1\n  verdict: blocking\n  - {} [read_error: {}]",
-                args.path, error
-            ),
+            Ok(content) => {
+                if args.json {
+                    render_readiness_json_result(&args.path, &content)
+                } else {
+                    render_readiness_result(&args.path, &content)
+                }
+            }
+            Err(error) => render_file_read_error("readiness", "rows", &args.path, &error.to_string(), args.json),
         },
         Command::ReportCheck(args) => match fs::read_to_string(&args.path) {
-            Ok(content) => render_report_check_result(&args.path, &content),
-            Err(error) => format!(
-                "reporting\n  issues: 1\n  verdict: blocking\n  - {} [read_error]: {}",
-                args.path, error
-            ),
+            Ok(content) => {
+                if args.json {
+                    render_report_check_json_result(&args.path, &content)
+                } else {
+                    render_report_check_result(&args.path, &content)
+                }
+            }
+            Err(error) => render_file_read_error("reporting", "issues", &args.path, &error.to_string(), args.json),
         },
     }
 }
@@ -2484,7 +2495,7 @@ fn render_check_json(
     .unwrap_or_else(|_| "{\"status\":\"blocked\"}".to_string())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct ReportShapeIssue {
     code: String,
     message: String,
@@ -3472,7 +3483,7 @@ fn render_init_info(json: bool) -> Result<String, String> {
         serde_json::to_string(&payload).map_err(|error| error.to_string())
     } else {
         Ok(format!(
-            "docflow init\n  mode: agent_bootstrap\n  status: ready\n  purpose: {}\n  runtime_root: {}\n  read_first:\n    - AGENTS.md\n    - AGENTS.sidecar.md\n    - docs/project-root-map.md\n    - docs/process/documentation-tooling-map.md\n  safe_first_commands:\n    - docflow init --json\n    - docflow doctor --root .\n    - docflow check-file --path <file>\n    - docflow readiness-check --profile active-canon\n  artifact_init:\n    command: {}\n  agent_instructions:\n    1) Read bootstrap docs before mutation.\n    2) Prefer --json for handoff, blockers, and next_actions.\n    3) Validate/readiness-check touched docs before closure.\n    4) Use artifact init mode only for new canonical markdown artifacts.\n  next_actions:\n    - docflow doctor --root .\n    - docflow readiness-check --profile active-canon\n    - docflow help",
+            "docflow init\n  mode: agent_bootstrap\n  status: ready\n  purpose: {}\n  runtime_root: {}\n  read_first:\n    - AGENTS.md\n    - AGENTS.sidecar.md\n    - docs/project-root-map.md\n    - docs/process/documentation-tooling-map.md\n  safe_first_commands:\n    - docflow init --json\n    - docflow doctor --root .\n    - docflow check-file --path <file> --json\n    - docflow readiness-check --profile active-canon\n  artifact_init:\n    command: {}\n  agent_instructions:\n    1) Read bootstrap docs before mutation.\n    2) Prefer --json for handoff, blockers, and next_actions.\n    3) Validate/readiness-check touched docs before closure.\n    4) Use artifact init mode only for new canonical markdown artifacts.\n  next_actions:\n    - docflow doctor --root .\n    - docflow readiness-check --profile active-canon\n    - docflow help",
             payload["purpose"]
                 .as_str()
                 .unwrap_or("DocFlow documentation utility."),
@@ -4271,6 +4282,26 @@ fn render_validation_result(path: &str, content: &str) -> String {
     }
 }
 
+fn render_validation_json_result(path: &str, content: &str) -> String {
+    let (scope_root, rel) = resolve_validation_scope(path);
+    let issues = collect_file_validation_issues(&scope_root, &rel, content);
+    let verdict = summarize_verdict(&issues_to_readiness_rows(&issues));
+    serde_json::to_string(&serde_json::json!({
+        "validation": {
+            "path": path,
+            "issues": issues,
+            "issue_count": issues.len(),
+            "verdict": verdict_label(verdict),
+        }
+    }))
+    .unwrap_or_else(|error| {
+        format!(
+            "{{\"validation\":{{\"path\":\"{}\",\"issues\":[],\"issue_count\":1,\"verdict\":\"blocking\",\"encode_error\":\"{}\"}}}}",
+            path, error
+        )
+    })
+}
+
 fn render_readiness_result(path: &str, content: &str) -> String {
     let (scope_root, rel) = resolve_validation_scope(path);
     let issues = collect_file_validation_issues(&scope_root, &rel, content);
@@ -4302,6 +4333,27 @@ fn render_readiness_result(path: &str, content: &str) -> String {
     }
 }
 
+fn render_readiness_json_result(path: &str, content: &str) -> String {
+    let (scope_root, rel) = resolve_validation_scope(path);
+    let issues = collect_file_validation_issues(&scope_root, &rel, content);
+    let rows = issues_to_readiness_rows(&issues);
+    let verdict = summarize_verdict(&rows);
+    serde_json::to_string(&serde_json::json!({
+        "readiness": {
+            "path": path,
+            "rows": rows,
+            "row_count": rows.len(),
+            "verdict": verdict_label(verdict),
+        }
+    }))
+    .unwrap_or_else(|error| {
+        format!(
+            "{{\"readiness\":{{\"path\":\"{}\",\"rows\":[],\"row_count\":1,\"verdict\":\"blocking\",\"encode_error\":\"{}\"}}}}",
+            path, error
+        )
+    })
+}
+
 fn render_report_check_result(path: &str, content: &str) -> String {
     let issues = report_shape_issues(content);
     if issues.is_empty() {
@@ -4318,6 +4370,66 @@ fn render_report_check_result(path: &str, content: &str) -> String {
             issue_lines
         )
     }
+}
+
+fn render_report_check_json_result(path: &str, content: &str) -> String {
+    let issues = report_shape_issues(content);
+    let verdict = if issues.is_empty() { "ok" } else { "blocking" };
+    serde_json::to_string(&serde_json::json!({
+        "reporting": {
+            "path": path,
+            "issues": issues,
+            "issue_count": issues.len(),
+            "verdict": verdict,
+        }
+    }))
+    .unwrap_or_else(|error| {
+        format!(
+            "{{\"reporting\":{{\"path\":\"{}\",\"issues\":[],\"issue_count\":1,\"verdict\":\"blocking\",\"encode_error\":\"{}\"}}}}",
+            path, error
+        )
+    })
+}
+
+fn render_file_read_error(
+    surface: &str,
+    count_key: &str,
+    path: &str,
+    error: &str,
+    json: bool,
+) -> String {
+    if json {
+        let mut surface_payload = serde_json::Map::new();
+        surface_payload.insert("path".to_string(), serde_json::json!(path));
+        surface_payload.insert(count_key.to_string(), serde_json::json!(1));
+        surface_payload.insert("verdict".to_string(), serde_json::json!("blocking"));
+        surface_payload.insert(
+            "errors".to_string(),
+            serde_json::json!([{
+                "code": "read_error",
+                "message": error,
+            }]),
+        );
+        let mut root = serde_json::Map::new();
+        root.insert(
+            surface.to_string(),
+            serde_json::Value::Object(surface_payload),
+        );
+        return serde_json::to_string(&serde_json::Value::Object(root))
+        .unwrap_or_else(|encode_error| {
+            format!(
+                "{{\"{}\":{{\"path\":\"{}\",\"{}\":1,\"verdict\":\"blocking\",\"encode_error\":\"{}\"}}}}",
+                surface, path, count_key, encode_error
+            )
+        });
+    }
+
+    let detail = if surface == "readiness" {
+        format!("[read_error: {error}]")
+    } else {
+        format!("[read_error]: {error}")
+    };
+    format!("{surface}\n  {count_key}: 1\n  verdict: blocking\n  - {path} {detail}")
 }
 
 fn collect_tree_issues(
@@ -5626,6 +5738,36 @@ mod tests {
         assert!(rendered.contains("validation"));
         assert!(rendered.contains("issues: 1"));
         assert!(rendered.contains("[missing_footer]"));
+        fs::remove_file(path).expect("temp markdown should be removed");
+    }
+
+    #[test]
+    fn check_file_command_supports_json_output() {
+        let path = temp_path("check-file-json");
+        fs::write(&path, "# title\n").expect("temp markdown should be written");
+        let cli = Cli::parse_from(["docflow", "check-file", "--path", &path, "--json"]);
+        let rendered = run(cli);
+        let payload: Value =
+            serde_json::from_str(&rendered).expect("check-file --json should render JSON");
+        let validation = payload
+            .get("validation")
+            .expect("validation payload should be present");
+        assert_eq!(
+            validation.get("verdict").and_then(Value::as_str),
+            Some("blocking")
+        );
+        assert_eq!(
+            validation.get("issue_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert!(
+            validation
+                .get("issues")
+                .and_then(Value::as_array)
+                .expect("issues should be an array")
+                .iter()
+                .any(|issue| issue.get("code").and_then(Value::as_str) == Some("missing_footer"))
+        );
         fs::remove_file(path).expect("temp markdown should be removed");
     }
 
