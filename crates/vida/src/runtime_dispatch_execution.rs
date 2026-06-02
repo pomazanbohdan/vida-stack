@@ -2137,33 +2137,32 @@ fn write_host_bridge_request_file(
             canonical_parent.display()
         ));
     }
-    let encoded = serde_json::to_string_pretty(request)
-        .map_err(|error| format!("Failed to encode host bridge request: {error}"))?;
-    let mut open_options = std::fs::OpenOptions::new();
-    open_options.write(true);
-    if replace_existing {
-        open_options.create(true).truncate(true);
-    } else {
-        open_options.create_new(true);
-    }
-    let mut file = match open_options.open(path) {
-        Ok(file) => file,
-        Err(error) if !replace_existing && error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let mut retry_options = std::fs::OpenOptions::new();
-            retry_options.write(true).truncate(true).open(path).map_err(|retry_error| {
-                format!(
-                    "Failed to replace existing host bridge request `{}` after create race: {retry_error}",
-                    path.display()
-                )
-            })?
-        }
-        Err(error) => {
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() {
             return Err(format!(
-                "Failed to create host bridge request `{}`: {error}",
+                "Host bridge request path `{}` is a symlink; refusing to follow it.",
                 path.display()
             ));
         }
-    };
+        if replace_existing {
+            std::fs::remove_file(path).map_err(|error| {
+                format!(
+                    "Failed to remove existing host bridge request `{}` before replacement: {error}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    let encoded = serde_json::to_string_pretty(request)
+        .map_err(|error| format!("Failed to encode host bridge request: {error}"))?;
+    let mut open_options = std::fs::OpenOptions::new();
+    open_options.write(true).create_new(true);
+    let mut file = open_options.open(path).map_err(|error| {
+        format!(
+            "Failed to create host bridge request `{}`: {error}",
+            path.display()
+        )
+    })?;
     file.write_all(encoded.as_bytes()).map_err(|error| {
         format!(
             "Failed to write host bridge request `{}`: {error}",
@@ -2172,7 +2171,49 @@ fn write_host_bridge_request_file(
     })
 }
 
+fn ensure_host_bridge_state_parent(path: &Path, label: &str) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Host bridge {label} path `{}` has no parent directory.",
+            path.display()
+        )
+    })?;
+    let Some(state_root) = path
+        .ancestors()
+        .find(|ancestor| ancestor.ends_with(".vida/data/state"))
+        .map(Path::to_path_buf)
+    else {
+        return Err(format!(
+            "Host bridge {label} path `{}` is not under VIDA state root.",
+            path.display()
+        ));
+    };
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+        format!(
+            "Failed to canonicalize host bridge {label} directory `{}`: {error}",
+            parent.display()
+        )
+    })?;
+    let canonical_state_root = std::fs::canonicalize(&state_root).map_err(|error| {
+        format!(
+            "Failed to canonicalize VIDA state root `{}`: {error}",
+            state_root.display()
+        )
+    })?;
+    if !canonical_parent.starts_with(&canonical_state_root) {
+        return Err(format!(
+            "Host bridge {label} directory `{}` escapes VIDA state root.",
+            canonical_parent.display()
+        ));
+    }
+    Ok(())
+}
+
 fn remove_stale_host_bridge_artifact(path: &Path, label: &str) -> Result<(), String> {
+    if std::fs::symlink_metadata(path).is_err() {
+        return Ok(());
+    }
+    ensure_host_bridge_state_parent(path, label)?;
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -2184,8 +2225,15 @@ fn remove_stale_host_bridge_artifact(path: &Path, label: &str) -> Result<(), Str
 }
 
 fn read_existing_host_bridge_request(path: &Path) -> Result<Option<serde_json::Value>, String> {
-    if std::fs::symlink_metadata(path).is_err() {
-        return Ok(None);
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(None),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Host bridge request path `{}` is a symlink; refusing to read it.",
+            path.display()
+        ));
     }
     let raw = std::fs::read_to_string(path).map_err(|error| {
         format!(
@@ -2295,6 +2343,64 @@ fn host_tool_bridge_request_id(
     )
 }
 
+fn host_bridge_request_value_matches(
+    existing: &serde_json::Value,
+    expected: &serde_json::Value,
+    field: &str,
+) -> bool {
+    existing.get(field) == expected.get(field)
+}
+
+fn validate_existing_host_bridge_request_matches_expected(
+    existing: &serde_json::Value,
+    expected: &serde_json::Value,
+    request_path: &Path,
+) -> Result<(), String> {
+    let status = existing
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !matches!(status, "pending" | "completed") {
+        return Err(format!(
+            "Existing host bridge request `{}` has inadmissible status `{status}`.",
+            request_path.display()
+        ));
+    }
+    for field in [
+        "schema_version",
+        "request_id",
+        "run_id",
+        "task_id",
+        "dispatch_target",
+        "packet_path",
+        "runtime_role",
+        "task_class",
+        "backend_id",
+        "carrier_id",
+        "execution_boundary",
+        "dispatch_transport",
+        "receipt_mode",
+        "adapter_kind",
+        "adapter_capability_id",
+        "invocation_mode",
+        "adapter_params",
+        "owned_paths",
+        "read_only_paths",
+        "proof_target",
+        "request_path",
+        "result_path",
+        "receipt_path",
+    ] {
+        if !host_bridge_request_value_matches(existing, expected, field) {
+            return Err(format!(
+                "Existing host bridge request `{}` does not match expected `{field}` for the active dispatch lane.",
+                request_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn materialize_host_tool_bridge_request(
     project_root: &Path,
     selected_cli_entry: Option<&serde_yaml::Value>,
@@ -2306,37 +2412,6 @@ fn materialize_host_tool_bridge_request(
 ) -> Result<serde_json::Value, String> {
     let request_id = host_tool_bridge_request_id(receipt, dispatch_packet_path);
     let paths = host_tool_bridge_artifact_paths(project_root, selected_cli_entry, &request_id);
-    let mut replace_existing_request = false;
-    if let Some(existing) = read_existing_host_bridge_request(&paths.request_path)? {
-        if existing.get("run_id").and_then(serde_json::Value::as_str)
-            != Some(receipt.run_id.as_str())
-            || existing
-                .get("dispatch_target")
-                .and_then(serde_json::Value::as_str)
-                != Some(receipt.dispatch_target.as_str())
-            || existing
-                .get("dispatch_transport")
-                .and_then(serde_json::Value::as_str)
-                != Some("host_tool_bridge")
-        {
-            return Err(format!(
-                "Existing host bridge request `{}` does not match the active dispatch lane.",
-                paths.request_path.display()
-            ));
-        }
-        if existing
-            .get("packet_path")
-            .and_then(serde_json::Value::as_str)
-            == Some(dispatch_packet_path)
-        {
-            return Ok(existing);
-        }
-        replace_existing_request = true;
-    }
-    if replace_existing_request {
-        remove_stale_host_bridge_artifact(&paths.result_path, "result")?;
-        remove_stale_host_bridge_artifact(&paths.receipt_path, "receipt")?;
-    }
     let adapter_kind = configured_host_tool_bridge_string(selected_cli_entry, "adapter_kind")
         .unwrap_or_else(|| "unconfigured_host_agent_adapter".to_string());
     let adapter_capability_id =
@@ -2383,6 +2458,42 @@ fn materialize_host_tool_bridge_request(
         "result_path": paths.result_path.display().to_string(),
         "receipt_path": paths.receipt_path.display().to_string(),
     });
+    let mut replace_existing_request = false;
+    if let Some(existing) = read_existing_host_bridge_request(&paths.request_path)? {
+        if existing.get("run_id").and_then(serde_json::Value::as_str)
+            != Some(receipt.run_id.as_str())
+            || existing
+                .get("dispatch_target")
+                .and_then(serde_json::Value::as_str)
+                != Some(receipt.dispatch_target.as_str())
+            || existing
+                .get("dispatch_transport")
+                .and_then(serde_json::Value::as_str)
+                != Some("host_tool_bridge")
+        {
+            return Err(format!(
+                "Existing host bridge request `{}` does not match the active dispatch lane.",
+                paths.request_path.display()
+            ));
+        }
+        if existing
+            .get("packet_path")
+            .and_then(serde_json::Value::as_str)
+            == Some(dispatch_packet_path)
+        {
+            validate_existing_host_bridge_request_matches_expected(
+                &existing,
+                &request,
+                &paths.request_path,
+            )?;
+            return Ok(existing);
+        }
+        replace_existing_request = true;
+    }
+    if replace_existing_request {
+        remove_stale_host_bridge_artifact(&paths.result_path, "result")?;
+        remove_stale_host_bridge_artifact(&paths.receipt_path, "receipt")?;
+    }
     if let Some(parent) = paths.request_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("Failed to create host bridge request directory: {error}"))?;
@@ -2451,6 +2562,205 @@ fn host_bridge_state_path_from_request(
     Ok(path)
 }
 
+fn host_bridge_required_string<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+    artifact_label: &str,
+) -> Result<&'a str, String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("Host bridge {artifact_label} is missing non-empty `{field}`."))
+}
+
+fn validate_host_bridge_request_dispatch_binding(
+    request: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    backend_id: &str,
+    carrier_id: &str,
+    execution_boundary: &str,
+    dispatch_transport: &str,
+    receipt_mode: &str,
+) -> Result<(), String> {
+    for (field, expected) in [
+        ("run_id", receipt.run_id.as_str()),
+        ("task_id", receipt.run_id.as_str()),
+        ("dispatch_target", receipt.dispatch_target.as_str()),
+        ("backend_id", backend_id),
+        ("carrier_id", carrier_id),
+        ("execution_boundary", execution_boundary),
+        ("dispatch_transport", dispatch_transport),
+        ("receipt_mode", receipt_mode),
+    ] {
+        if request.get(field).and_then(serde_json::Value::as_str) != Some(expected) {
+            return Err(format!(
+                "Host bridge request `{field}` does not match active dispatch."
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_completed_host_bridge_artifacts(
+    request: &serde_json::Value,
+    result: &serde_json::Value,
+    bridge_receipt: &serde_json::Value,
+    result_path: &Path,
+    receipt_path: &Path,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    backend_id: &str,
+) -> Result<(), String> {
+    let request_id = host_bridge_required_string(request, "request_id", "request")?;
+    let request_path = host_bridge_required_string(request, "request_path", "request")?;
+    let request_result_path = host_bridge_required_string(request, "result_path", "request")?;
+    let request_receipt_path = host_bridge_required_string(request, "receipt_path", "request")?;
+    let packet_path = host_bridge_required_string(request, "packet_path", "request")?;
+    let rendered_result_path = result_path.display().to_string();
+    let rendered_receipt_path = receipt_path.display().to_string();
+    if request_result_path != rendered_result_path {
+        return Err(
+            "Host bridge request result_path does not match the resolved result path.".into(),
+        );
+    }
+    if request_receipt_path != rendered_receipt_path {
+        return Err(
+            "Host bridge request receipt_path does not match the resolved receipt path.".into(),
+        );
+    }
+    for (artifact, label) in [(result, "result"), (bridge_receipt, "receipt")] {
+        if artifact.get("run_id").and_then(serde_json::Value::as_str)
+            != Some(receipt.run_id.as_str())
+        {
+            return Err(format!(
+                "Host bridge {label} run_id does not match active dispatch."
+            ));
+        }
+        if artifact
+            .get("dispatch_target")
+            .and_then(serde_json::Value::as_str)
+            != Some(receipt.dispatch_target.as_str())
+        {
+            return Err(format!(
+                "Host bridge {label} dispatch_target does not match active dispatch."
+            ));
+        }
+        if artifact
+            .get("request_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(request_id)
+        {
+            return Err(format!(
+                "Host bridge {label} request_id does not match the active bridge request."
+            ));
+        }
+        if artifact
+            .get("source_dispatch_packet_path")
+            .and_then(serde_json::Value::as_str)
+            != Some(packet_path)
+        {
+            return Err(format!(
+                "Host bridge {label} source_dispatch_packet_path does not match the active bridge request."
+            ));
+        }
+    }
+    if result
+        .get("artifact_kind")
+        .and_then(serde_json::Value::as_str)
+        != Some("host_tool_bridge_result")
+    {
+        return Err("Host bridge result artifact_kind is not host_tool_bridge_result.".into());
+    }
+    if bridge_receipt
+        .get("artifact_kind")
+        .and_then(serde_json::Value::as_str)
+        != Some("host_tool_bridge_receipt")
+    {
+        return Err("Host bridge receipt artifact_kind is not host_tool_bridge_receipt.".into());
+    }
+    if result.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
+        return Err("Host bridge result status is not pass.".into());
+    }
+    if bridge_receipt
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        != Some("pass")
+    {
+        return Err("Host bridge receipt status is not pass.".into());
+    }
+    if result
+        .get("execution_state")
+        .and_then(serde_json::Value::as_str)
+        != Some("executed")
+    {
+        return Err("Host bridge result execution_state is not executed.".into());
+    }
+    if bridge_receipt
+        .get("receipt_backed")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Err("Host bridge receipt is not receipt_backed=true.".into());
+    }
+    if result
+        .get("execution_evidence")
+        .and_then(|evidence| evidence.get("receipt_backed"))
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Err("Host bridge result execution_evidence is not receipt_backed=true.".into());
+    }
+    if result
+        .get("execution_evidence")
+        .and_then(|evidence| evidence.get("backend_id"))
+        .and_then(serde_json::Value::as_str)
+        != Some(backend_id)
+    {
+        return Err(
+            "Host bridge result execution_evidence backend_id does not match active dispatch."
+                .into(),
+        );
+    }
+    if request.get("status").and_then(serde_json::Value::as_str) != Some("completed") {
+        return Err(
+            "Host bridge request status is not completed for completed result ingestion.".into(),
+        );
+    }
+    let completion_receipt_id =
+        host_bridge_required_string(request, "completion_receipt_id", "completed request")?;
+    for (artifact, label) in [(result, "result"), (bridge_receipt, "receipt")] {
+        if artifact
+            .get("completion_receipt_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(completion_receipt_id)
+        {
+            return Err(format!(
+                "Host bridge {label} completion_receipt_id does not match the completed bridge request."
+            ));
+        }
+    }
+    if bridge_receipt
+        .get("request_path")
+        .and_then(serde_json::Value::as_str)
+        != Some(request_path)
+    {
+        return Err(
+            "Host bridge receipt request_path does not match the active bridge request.".into(),
+        );
+    }
+    if bridge_receipt
+        .get("result_path")
+        .and_then(serde_json::Value::as_str)
+        != Some(rendered_result_path.as_str())
+    {
+        return Err(
+            "Host bridge receipt result_path does not match the active bridge result.".into(),
+        );
+    }
+    Ok(())
+}
+
 fn ingest_completed_host_bridge_result(
     state_root: &Path,
     request: &serde_json::Value,
@@ -2495,52 +2805,24 @@ fn ingest_completed_host_bridge_result(
                 receipt_path.display()
             )
         })?;
-    if result.get("run_id").and_then(serde_json::Value::as_str) != Some(receipt.run_id.as_str())
-        || bridge_receipt
-            .get("run_id")
-            .and_then(serde_json::Value::as_str)
-            != Some(receipt.run_id.as_str())
-    {
-        return Err("Host bridge result or receipt run_id does not match active dispatch.".into());
-    }
-    if result
-        .get("dispatch_target")
-        .and_then(serde_json::Value::as_str)
-        != Some(receipt.dispatch_target.as_str())
-        || bridge_receipt
-            .get("dispatch_target")
-            .and_then(serde_json::Value::as_str)
-            != Some(receipt.dispatch_target.as_str())
-    {
-        return Err(
-            "Host bridge result or receipt dispatch_target does not match active dispatch.".into(),
-        );
-    }
-    if bridge_receipt
-        .get("receipt_backed")
-        .and_then(serde_json::Value::as_bool)
-        != Some(true)
-    {
-        return Err("Host bridge receipt is not receipt_backed=true.".into());
-    }
-    if result.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
-        return Err("Host bridge result status is not pass.".into());
-    }
-    if result
-        .get("execution_state")
-        .and_then(serde_json::Value::as_str)
-        != Some("executed")
-    {
-        return Err("Host bridge result execution_state is not executed.".into());
-    }
-    if result
-        .get("execution_evidence")
-        .and_then(|evidence| evidence.get("receipt_backed"))
-        .and_then(serde_json::Value::as_bool)
-        != Some(true)
-    {
-        return Err("Host bridge result execution_evidence is not receipt_backed=true.".into());
-    }
+    validate_host_bridge_request_dispatch_binding(
+        request,
+        receipt,
+        backend_id,
+        carrier_id,
+        execution_boundary,
+        dispatch_transport,
+        receipt_mode,
+    )?;
+    validate_completed_host_bridge_artifacts(
+        request,
+        &result,
+        &bridge_receipt,
+        &result_path,
+        &receipt_path,
+        receipt,
+        backend_id,
+    )?;
     let body = result
         .as_object_mut()
         .ok_or_else(|| "Host bridge result must be a JSON object.".to_string())?;
@@ -5238,6 +5520,23 @@ agent_system:
                 "selected_model_profile_id": "internal_fast"
             }
         }));
+        let selected_cli_entry = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+execution_class: internal
+dispatch_transport: host_tool_bridge
+receipt_mode: host_bridge_receipt
+host_tool_bridge:
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+carriers:
+  middle:
+    model: gpt-5.5
+    model_reasoning_effort: medium
+    sandbox_mode: read-only
+"#,
+        )
+        .expect("selected cli entry should parse");
         let receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()
@@ -5245,7 +5544,7 @@ agent_system:
         );
         let request = materialize_host_tool_bridge_request(
             &project_root,
-            None,
+            Some(&selected_cli_entry),
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -5265,6 +5564,15 @@ agent_system:
                 .as_str()
                 .expect("request receipt path should render"),
         );
+        let request_id = request["request_id"]
+            .as_str()
+            .expect("request id should render");
+        let request_path = request["request_path"]
+            .as_str()
+            .expect("request path should render");
+        let packet_path = request["packet_path"]
+            .as_str()
+            .expect("packet path should render");
         std::fs::write(
             &result_path,
             serde_json::to_string_pretty(&serde_json::json!({
@@ -5272,8 +5580,11 @@ agent_system:
                 "schema_version": 1,
                 "status": "pass",
                 "execution_state": "executed",
+                "request_id": request_id,
                 "run_id": receipt.run_id,
                 "dispatch_target": receipt.dispatch_target,
+                "completion_receipt_id": "host-bridge-completion-test",
+                "source_dispatch_packet_path": packet_path,
                 "activation_semantics": {
                     "activation_kind": "execution_evidence",
                     "view_only": false,
@@ -5282,6 +5593,7 @@ agent_system:
                 },
                 "execution_evidence": {
                     "status": "recorded",
+                    "backend_id": "internal_subagents",
                     "receipt_backed": true
                 }
             }))
@@ -5295,13 +5607,31 @@ agent_system:
                 "schema_version": 1,
                 "status": "pass",
                 "receipt_backed": true,
+                "request_id": request_id,
                 "run_id": receipt.run_id,
                 "dispatch_target": receipt.dispatch_target,
-                "result_path": result_path.display().to_string()
+                "completion_receipt_id": "host-bridge-completion-test",
+                "request_path": request_path,
+                "result_path": result_path.display().to_string(),
+                "source_dispatch_packet_path": packet_path
             }))
             .expect("encode host bridge receipt"),
         )
         .expect("write host bridge receipt");
+        let mut completed_request = request.clone();
+        let completed_request_body = completed_request
+            .as_object_mut()
+            .expect("request should be an object");
+        completed_request_body.insert("status".to_string(), serde_json::json!("completed"));
+        completed_request_body.insert(
+            "completion_receipt_id".to_string(),
+            serde_json::json!("host-bridge-completion-test"),
+        );
+        std::fs::write(
+            request_path,
+            serde_json::to_string_pretty(&completed_request).expect("encode completed request"),
+        )
+        .expect("write completed bridge request");
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -5408,6 +5738,23 @@ agent_system:
                 "selected_tier": "middle",
                 "selected_model_profile_id": "internal_fast"
             }}));
+        let selected_cli_entry = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+execution_class: internal
+dispatch_transport: host_tool_bridge
+receipt_mode: host_bridge_receipt
+host_tool_bridge:
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+carriers:
+  middle:
+    model: gpt-5.5
+    model_reasoning_effort: medium
+    sandbox_mode: read-only
+"#,
+        )
+        .expect("selected cli entry should parse");
         let receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()
@@ -5415,7 +5762,7 @@ agent_system:
         );
         let request = materialize_host_tool_bridge_request(
             &project_root,
-            None,
+            Some(&selected_cli_entry),
             dispatch_packet_path
                 .to_str()
                 .expect("dispatch packet path should render"),
@@ -5435,6 +5782,15 @@ agent_system:
                 .as_str()
                 .expect("request receipt path should render"),
         );
+        let request_id = request["request_id"]
+            .as_str()
+            .expect("request id should render");
+        let request_path = request["request_path"]
+            .as_str()
+            .expect("request path should render");
+        let packet_path = request["packet_path"]
+            .as_str()
+            .expect("packet path should render");
         std::fs::write(
             &result_path,
             serde_json::to_string_pretty(&serde_json::json!({
@@ -5442,10 +5798,14 @@ agent_system:
                 "schema_version": 1,
                 "status": "fail",
                 "execution_state": "blocked",
+                "request_id": request_id,
                 "run_id": receipt.run_id,
                 "dispatch_target": receipt.dispatch_target,
+                "completion_receipt_id": "host-bridge-completion-test",
+                "source_dispatch_packet_path": packet_path,
                 "execution_evidence": {
                     "status": "failed",
+                    "backend_id": "internal_subagents",
                     "receipt_backed": false
                 }
             }))
@@ -5459,13 +5819,31 @@ agent_system:
                 "schema_version": 1,
                 "status": "pass",
                 "receipt_backed": true,
+                "request_id": request_id,
                 "run_id": receipt.run_id,
                 "dispatch_target": receipt.dispatch_target,
-                "result_path": result_path.display().to_string()
+                "completion_receipt_id": "host-bridge-completion-test",
+                "request_path": request_path,
+                "result_path": result_path.display().to_string(),
+                "source_dispatch_packet_path": packet_path
             }))
             .expect("encode host bridge receipt"),
         )
         .expect("write host bridge receipt");
+        let mut completed_request = request.clone();
+        let completed_request_body = completed_request
+            .as_object_mut()
+            .expect("request should be an object");
+        completed_request_body.insert("status".to_string(), serde_json::json!("completed"));
+        completed_request_body.insert(
+            "completion_receipt_id".to_string(),
+            serde_json::json!("host-bridge-completion-test"),
+        );
+        std::fs::write(
+            request_path,
+            serde_json::to_string_pretty(&completed_request).expect("encode completed request"),
+        )
+        .expect("write completed bridge request");
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -5497,6 +5875,148 @@ agent_system:
         );
 
         let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn host_bridge_rejects_existing_request_with_forged_backend_identity() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-forged-request-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = project_root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("create state root");
+        let dispatch_packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(dispatch_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(
+            &dispatch_packet_path,
+            r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"]}"#,
+        )
+        .expect("write dispatch packet");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "selected_tier": "middle",
+                "selected_model_profile_id": "internal_fast"
+            }
+        }));
+        let receipt = internal_codex_fallback_receipt(
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("host bridge request should materialize");
+        let mut forged_request = request.clone();
+        forged_request
+            .as_object_mut()
+            .expect("request should be an object")
+            .insert(
+                "backend_id".to_string(),
+                serde_json::json!("attacker_backend_not_internal_subagents"),
+            );
+        let request_path = PathBuf::from(
+            request["request_path"]
+                .as_str()
+                .expect("request path should render"),
+        );
+        std::fs::write(
+            &request_path,
+            serde_json::to_string_pretty(&forged_request).expect("encode forged request"),
+        )
+        .expect("overwrite request with forged backend");
+
+        let error = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect_err("forged same-lane request must fail closed");
+
+        assert!(
+            error.contains("does not match expected `backend_id`"),
+            "unexpected error: {error}"
+        );
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn host_bridge_rejects_receipt_result_path_not_bound_to_request_result() {
+        let receipt = internal_codex_fallback_receipt("/tmp/dispatch.json");
+        let request = serde_json::json!({
+            "request_id": "run-target-dispatch-host-tool-bridge",
+            "request_path": "/tmp/.vida/data/state/host-bridge/requests/request.json",
+            "result_path": "/tmp/.vida/data/state/host-bridge/results/result.json",
+            "receipt_path": "/tmp/.vida/data/state/host-bridge/receipts/receipt.json",
+            "packet_path": "/tmp/dispatch.json",
+            "status": "completed",
+            "completion_receipt_id": "host-bridge-completion-test"
+        });
+        let result = serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "schema_version": 1,
+            "status": "pass",
+            "execution_state": "executed",
+            "request_id": "run-target-dispatch-host-tool-bridge",
+            "run_id": receipt.run_id,
+            "dispatch_target": receipt.dispatch_target,
+            "completion_receipt_id": "host-bridge-completion-test",
+            "source_dispatch_packet_path": "/tmp/dispatch.json",
+            "execution_evidence": {
+                "status": "recorded",
+                "backend_id": "internal_subagents",
+                "receipt_backed": true
+            }
+        });
+        let bridge_receipt = serde_json::json!({
+            "artifact_kind": "host_tool_bridge_receipt",
+            "schema_version": 1,
+            "status": "pass",
+            "receipt_backed": true,
+            "request_id": "run-target-dispatch-host-tool-bridge",
+            "run_id": receipt.run_id,
+            "dispatch_target": receipt.dispatch_target,
+            "completion_receipt_id": "host-bridge-completion-test",
+            "request_path": "/tmp/.vida/data/state/host-bridge/requests/request.json",
+            "result_path": "/tmp/.vida/data/state/host-bridge/results/attacker-result.json",
+            "source_dispatch_packet_path": "/tmp/dispatch.json"
+        });
+
+        let error = super::validate_completed_host_bridge_artifacts(
+            &request,
+            &result,
+            &bridge_receipt,
+            Path::new("/tmp/.vida/data/state/host-bridge/results/result.json"),
+            Path::new("/tmp/.vida/data/state/host-bridge/receipts/receipt.json"),
+            &receipt,
+            "internal_subagents",
+        )
+        .expect_err("receipt result path must be bound to the active request result");
+
+        assert!(
+            error.contains("receipt result_path does not match"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
