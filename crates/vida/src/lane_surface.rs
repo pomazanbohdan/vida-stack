@@ -35,6 +35,8 @@ struct LaneEnvelope {
     exception_path_receipt_id: Option<String>,
     exception_path_metadata_path: Option<String>,
     exception_path_metadata: Option<ExceptionTakeoverMetadata>,
+    root_local_write_allowed: bool,
+    owned_write_scope: Vec<String>,
     root_local_write_allowed_for_only_these_paths: Vec<String>,
 }
 
@@ -72,11 +74,38 @@ struct BlockedLaneEnvelope {
     reason: String,
 }
 
+#[derive(Serialize)]
+struct LaneTakeoverReadyEnvelope {
+    surface: &'static str,
+    status: &'static str,
+    trace_id: Option<String>,
+    workflow_class: Option<String>,
+    risk_tier: Option<String>,
+    artifact_refs: serde_json::Value,
+    run_id: String,
+    lane_status: String,
+    dispatch_status: String,
+    takeover_state: String,
+    takeover_ready: bool,
+    root_local_write_allowed: bool,
+    owned_write_scope: Vec<String>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+    next_action: Option<LaneNextAction>,
+    next_actions: Vec<String>,
+    blocker_codes: Vec<String>,
+    reason: String,
+}
+
 enum LaneCommand<'a> {
     ShowLatest {
         as_json: bool,
     },
     ShowRun {
+        run_id: &'a str,
+        as_json: bool,
+    },
+    TakeoverReady {
         run_id: &'a str,
         as_json: bool,
     },
@@ -284,7 +313,7 @@ impl ExceptionTakeoverMetadata {
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]"
 }
 
 fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
@@ -319,6 +348,16 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                 return Err(lane_usage().to_string());
             };
             Ok(LaneCommand::ShowRun { run_id, as_json })
+        }
+        [head, run_id, rest @ ..] if head == "takeover-ready" => {
+            let mut as_json = false;
+            for arg in rest {
+                match arg.as_str() {
+                    "--json" => as_json = true,
+                    _ => return Err(lane_usage().to_string()),
+                }
+            }
+            Ok(LaneCommand::TakeoverReady { run_id, as_json })
         }
         [head, run_id, rest @ ..] if head == "complete" => {
             let mut as_json = false;
@@ -644,6 +683,8 @@ fn build_lane_envelope_with_owned_scope(
     let dispatch_status = summary.dispatch_status.clone();
     let root_local_write_allowed_for_only_these_paths =
         active_exception_write_scope(&summary, exception_path_metadata.as_ref());
+    let root_local_write_allowed = !root_local_write_allowed_for_only_these_paths.is_empty();
+    let owned_write_scope = root_local_write_allowed_for_only_these_paths.clone();
     let next_action = lane_ready_downstream_next_action(&summary, blocked).or_else(|| {
         lane_blocked_next_action(
             &summary,
@@ -663,6 +704,8 @@ fn build_lane_envelope_with_owned_scope(
         "latest_run_graph_dispatch_receipt_id": run_id.clone(),
         "exception_path_receipt_id": exception_path_receipt_id.clone(),
         "exception_path_metadata_path": exception_path_metadata_path.clone(),
+        "root_local_write_allowed": root_local_write_allowed,
+        "owned_write_scope": owned_write_scope.clone(),
         "root_local_write_allowed_for_only_these_paths": exception_path_metadata
             .as_ref()
             .map(|_| root_local_write_allowed_for_only_these_paths.clone())
@@ -714,8 +757,90 @@ fn build_lane_envelope_with_owned_scope(
         supersedes_receipt_id,
         exception_path_receipt_id,
         exception_path_metadata_path,
+        root_local_write_allowed,
+        owned_write_scope,
         root_local_write_allowed_for_only_these_paths,
         exception_path_metadata,
+    }
+}
+
+fn lane_takeover_state_label(envelope: &LaneEnvelope) -> &'static str {
+    if envelope.root_local_write_allowed {
+        return "active";
+    }
+    match envelope.recommended_surface.as_deref() {
+        Some("vida lane exception-takeover") => "ready_to_record",
+        Some("vida task show") => "missing_owned_scope",
+        Some("vida lane supersede") => "supersession_required",
+        _ => "not_ready",
+    }
+}
+
+fn build_lane_takeover_ready_envelope(envelope: LaneEnvelope) -> LaneTakeoverReadyEnvelope {
+    let takeover_state = lane_takeover_state_label(&envelope).to_string();
+    let takeover_ready = matches!(takeover_state.as_str(), "active" | "ready_to_record");
+    let reason = match takeover_state.as_str() {
+        "active" => "exception takeover is active; local writes are lawful only inside owned_write_scope",
+        "ready_to_record" => {
+            "delegated lane is blocked and lane surface has enough evidence to record exception takeover"
+        }
+        "missing_owned_scope" => {
+            "delegated lane is blocked but owned write scope must be inspected before takeover"
+        }
+        "supersession_required" => {
+            "exception receipt is recorded but supersession is required before local writes become lawful"
+        }
+        _ => "lane is not currently ready for exception takeover",
+    }
+    .to_string();
+    let artifact_refs = serde_json::json!({
+        "latest_run_graph_dispatch_receipt_id": envelope.run_id.clone(),
+        "root_local_write_allowed": envelope.root_local_write_allowed,
+        "owned_write_scope": envelope.owned_write_scope.clone(),
+        "recommended_command": envelope.recommended_command.clone(),
+        "recommended_surface": envelope.recommended_surface.clone(),
+    });
+    let operator_contracts = render_operator_contract_envelope(
+        if takeover_ready { "pass" } else { "blocked" },
+        if takeover_ready {
+            Vec::new()
+        } else {
+            envelope.blocker_codes.clone()
+        },
+        envelope.next_actions.clone(),
+        artifact_refs,
+    );
+    let status = if operator_contracts["status"].as_str() == Some("blocked") {
+        "blocked"
+    } else {
+        "pass"
+    };
+    LaneTakeoverReadyEnvelope {
+        surface: "vida lane takeover-ready",
+        status,
+        trace_id: operator_contracts["trace_id"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        workflow_class: operator_contracts["workflow_class"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        risk_tier: operator_contracts["risk_tier"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        artifact_refs: operator_contracts["artifact_refs"].clone(),
+        run_id: envelope.run_id,
+        lane_status: envelope.lane_status,
+        dispatch_status: envelope.dispatch_status,
+        takeover_state,
+        takeover_ready,
+        root_local_write_allowed: envelope.root_local_write_allowed,
+        owned_write_scope: envelope.owned_write_scope,
+        recommended_command: envelope.recommended_command,
+        recommended_surface: envelope.recommended_surface,
+        next_action: envelope.next_action,
+        next_actions: envelope.next_actions,
+        blocker_codes: envelope.blocker_codes,
+        reason,
     }
 }
 
@@ -1304,6 +1429,18 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
             &metadata.reason_class,
         );
     }
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "root_local_write_allowed",
+        &envelope.root_local_write_allowed.to_string(),
+    );
+    if !envelope.owned_write_scope.is_empty() {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "owned_write_scope",
+            &envelope.owned_write_scope.join(", "),
+        );
+    }
     if !envelope
         .root_local_write_allowed_for_only_these_paths
         .is_empty()
@@ -1323,6 +1460,68 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
     );
     if let Some(next_action) = envelope.next_actions.first() {
         crate::print_surface_line(crate::RenderMode::Plain, "next_action", next_action);
+    }
+    if envelope.status == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    }
+}
+
+fn emit_lane_takeover_ready_envelope(
+    envelope: &LaneTakeoverReadyEnvelope,
+    as_json: bool,
+) -> ExitCode {
+    if crate::surface_render::print_surface_json(
+        envelope,
+        as_json,
+        "lane takeover-ready surface should serialize",
+    ) {
+        return if envelope.status == "pass" {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(2)
+        };
+    }
+
+    crate::print_surface_header(crate::RenderMode::Plain, envelope.surface);
+    crate::print_surface_line(crate::RenderMode::Plain, "status", envelope.status);
+    crate::print_surface_line(crate::RenderMode::Plain, "run_id", &envelope.run_id);
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "takeover_state",
+        &envelope.takeover_state,
+    );
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "takeover_ready",
+        &envelope.takeover_ready.to_string(),
+    );
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "root_local_write_allowed",
+        &envelope.root_local_write_allowed.to_string(),
+    );
+    if !envelope.owned_write_scope.is_empty() {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "owned_write_scope",
+            &envelope.owned_write_scope.join(", "),
+        );
+    }
+    if let Some(command) = envelope.recommended_command.as_deref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "recommended_command", command);
+    }
+    if let Some(surface) = envelope.recommended_surface.as_deref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "recommended_surface", surface);
+    }
+    crate::print_surface_line(crate::RenderMode::Plain, "reason", &envelope.reason);
+    if !envelope.blocker_codes.is_empty() {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "blocker_codes",
+            &envelope.blocker_codes.join(", "),
+        );
     }
     if envelope.status == "pass" {
         ExitCode::SUCCESS
@@ -2330,6 +2529,82 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 &state_dir, run_id, &envelope, *as_json,
             );
         }
+        LaneCommand::TakeoverReady { run_id, as_json } => {
+            let store = match StateStore::open_existing_read_only_with_timeout(
+                state_dir.clone(),
+                LANE_SURFACE_LOCK_TIMEOUT,
+            )
+            .await
+            {
+                Ok(store) => store,
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let operator_session_projection =
+                match crate::operator_session_projection::build_operator_session_projection(&store)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!("Failed to build operator session projection: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let Some(receipt) = (match store
+                .run_graph_dispatch_receipt_for_status(run_id, None)
+                .await
+            {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                eprintln!("Missing lane receipt for `{run_id}`.");
+                return ExitCode::from(2);
+            };
+            let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+            let status = store.run_graph_status(run_id).await.ok();
+            let recovery = status.as_ref().map(|status| {
+                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
+            });
+            let owned_write_scope_hint =
+                task_owned_write_scope_for_status(&store, status.as_ref()).await;
+            let exception_path_metadata_path =
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let lane_envelope = build_lane_envelope_with_owned_scope(
+                summary,
+                status,
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
+                operator_session_projection,
+                truth.blocked,
+                truth.blocker_codes,
+                truth.next_actions,
+                &owned_write_scope_hint,
+            );
+            let takeover_envelope = build_lane_takeover_ready_envelope(lane_envelope);
+            return emit_lane_takeover_ready_envelope(&takeover_envelope, *as_json);
+        }
         _ => {}
     }
 
@@ -2446,6 +2721,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.next_actions,
             );
             emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
+        }
+        LaneCommand::TakeoverReady { .. } => {
+            eprintln!("takeover-ready is a read-only lane command and should be handled before the writable lane store is opened.");
+            ExitCode::from(2)
         }
         LaneCommand::Complete {
             run_id,
@@ -3933,6 +4212,8 @@ mod tests {
         assert!(stale_envelope
             .root_local_write_allowed_for_only_these_paths
             .is_empty());
+        assert!(!stale_envelope.root_local_write_allowed);
+        assert!(stale_envelope.owned_write_scope.is_empty());
         assert_eq!(
             stale_envelope.artifact_refs["root_local_write_allowed_for_only_these_paths"]
                 .as_array()
@@ -3960,6 +4241,90 @@ mod tests {
         assert_eq!(
             active_envelope.root_local_write_allowed_for_only_these_paths,
             vec!["crates/vida/src/lane_surface.rs".to_string()]
+        );
+        assert!(active_envelope.root_local_write_allowed);
+        assert_eq!(
+            active_envelope.owned_write_scope,
+            vec!["crates/vida/src/lane_surface.rs".to_string()]
+        );
+        assert_eq!(
+            active_envelope.artifact_refs["root_local_write_allowed"],
+            true
+        );
+        assert_eq!(
+            active_envelope.artifact_refs["owned_write_scope"],
+            serde_json::json!(["crates/vida/src/lane_surface.rs"])
+        );
+    }
+
+    #[test]
+    fn takeover_ready_envelope_reports_active_write_scope() {
+        let metadata = ExceptionTakeoverMetadata {
+            run_id: Some("run-lane-test".to_string()),
+            dispatch_target: Some("implementer".to_string()),
+            dispatch_packet_path: None,
+            source_exception_path_receipt_id: Some("exception-1".to_string()),
+            reason_class: "pending_implementation_evidence".to_string(),
+            active_bounded_unit: "run-lane-test:implementer:exception-takeover".to_string(),
+            owned_write_scope: vec!["crates/vida/src/lane_surface.rs".to_string()],
+            why_delegated_or_rerouted_path_is_not_currently_lawful: "delegated lane is blocked"
+                .to_string(),
+            why_local_write_is_the_smallest_safe_bounded_workaround: "bounded owned scope only"
+                .to_string(),
+            return_to_normal_posture_condition: "focused proof passes".to_string(),
+            verification_plan: vec!["cargo test -p vida lane_surface".to_string()],
+            recorded_at: "2026-06-02T00:00:00Z".to_string(),
+        };
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = "run-lane-test".to_string();
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        receipt.downstream_dispatch_blockers = vec!["pending_implementation_evidence".to_string()];
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-lane-test",
+            "implementation",
+            "implementer",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "implementer_blocked".to_string();
+        let mut recovery = crate::state_store::RunGraphRecoverySummary::from_status(status.clone());
+        recovery.delegation_gate.local_exception_takeover_gate =
+            "blocked_open_delegated_cycle".to_string();
+        recovery.delegation_gate.delegated_cycle_open = true;
+        let truth = derive_lane_show_truth(&summary, Some(&recovery));
+        let lane_envelope = build_lane_envelope(
+            summary,
+            Some(status),
+            Some("/tmp/exception.json".to_string()),
+            Some(metadata),
+            serde_json::json!({}),
+            truth.blocked,
+            truth.blocker_codes,
+            truth.next_actions,
+        );
+
+        let takeover = build_lane_takeover_ready_envelope(lane_envelope);
+
+        assert_eq!(takeover.status, "pass");
+        assert_eq!(takeover.takeover_state, "active");
+        assert!(takeover.takeover_ready);
+        assert!(takeover.root_local_write_allowed);
+        assert_eq!(
+            takeover.owned_write_scope,
+            vec!["crates/vida/src/lane_surface.rs".to_string()]
+        );
+        assert_eq!(
+            takeover.artifact_refs["root_local_write_allowed"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            takeover.artifact_refs["owned_write_scope"],
+            serde_json::json!(["crates/vida/src/lane_surface.rs"])
         );
     }
 
