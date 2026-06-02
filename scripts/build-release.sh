@@ -66,7 +66,7 @@ select_python() {
   fail "Missing working Python command: tried python3, python"
 }
 
-if ! skip_build_enabled || [[ -z "$RELEASE_SUFFIX" ]]; then
+if ! skip_build_enabled; then
   require_cmd cargo
 fi
 PYTHON_BIN="$(select_python)"
@@ -76,9 +76,15 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 if [[ -z "$RELEASE_SUFFIX" ]]; then
-  CARGO_HOST_TRIPLE="$(infer_cargo_host_triple || true)"
-  if [[ "$CARGO_HOST_TRIPLE" == *windows* ]]; then
-    RELEASE_SUFFIX="windows-x86_64"
+  if command -v cargo >/dev/null 2>&1; then
+    CARGO_HOST_TRIPLE="$(infer_cargo_host_triple || true)"
+    if [[ "$CARGO_HOST_TRIPLE" == *windows* ]]; then
+      RELEASE_SUFFIX="windows-x86_64"
+    fi
+  else
+    case "${OSTYPE:-}" in
+      msys*|cygwin*|win32*) RELEASE_SUFFIX="windows-x86_64" ;;
+    esac
   fi
 fi
 
@@ -93,6 +99,7 @@ DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_ROOT="$DIST_DIR/package"
 STAGE_DIR="$PACKAGE_ROOT/$ARCHIVE_BASE"
 CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
+RELEASE_BIN_DIR="${VIDA_RELEASE_BIN_DIR:-$CARGO_TARGET_ROOT/release}"
 if [[ "$WINDOWS_RELEASE" == "yes" ]]; then
   VIDA_BIN="$STAGE_DIR/bin/vida.exe"
   TASKFLOW_BIN="$STAGE_DIR/bin/taskflow.exe"
@@ -131,16 +138,16 @@ find "$STAGE_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$STAGE_DIR" -type f -name '*.pyc' -delete
 
 if skip_build_enabled; then
-    printf '[release-build] Using existing target/release binaries\n'
+    printf '[release-build] Using existing release binaries from %s\n' "$RELEASE_BIN_DIR"
 else
     cargo build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
 fi
 copy_runtime_binary() {
   local binary_name="$1"
   local destination="$2"
-  local source="$CARGO_TARGET_ROOT/release/$binary_name"
+  local source="$RELEASE_BIN_DIR/$binary_name"
   if [[ "$WINDOWS_RELEASE" == "yes" ]]; then
-    source="$CARGO_TARGET_ROOT/release/${binary_name}.exe"
+    source="$RELEASE_BIN_DIR/${binary_name}.exe"
   fi
   [[ -f "$source" ]] || fail "Missing built runtime binary for release target ${RELEASE_SUFFIX:-default}: $source"
   cp "$source" "$destination"

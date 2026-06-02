@@ -257,8 +257,8 @@ jobs:
           set -euo pipefail
           cargo build --locked -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
 
-  package-linux:
-    name: Package Linux release
+  build-release-linux:
+    name: Build Linux release binaries
     needs: test-gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -289,11 +289,96 @@ jobs:
           cache-workspace-crates: "true"
           cache-on-failure: "true"
 
+      - name: Build release runtime entrypoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
+          mkdir -p release-bin
+          cp target/release/vida release-bin/
+          cp target/release/taskflow release-bin/
+          cp target/release/docflow release-bin/
+          cp target/release/vida-pi-agent release-bin/
+
+      - name: Upload Linux release binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-release-binaries
+          path: release-bin/*
+          if-no-files-found: error
+
+  build-release-windows:
+    name: Build Windows release binaries
+    needs: test-gate
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Configure sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-${{ runner.os }}
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
+
+      - name: Build release runtime entrypoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
+          mkdir -p release-bin
+          cp target/release/vida.exe release-bin/
+          cp target/release/taskflow.exe release-bin/
+          cp target/release/docflow.exe release-bin/
+          cp target/release/vida-pi-agent.exe release-bin/
+
+      - name: Upload Windows release binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-release-binaries
+          path: release-bin/*
+          if-no-files-found: error
+
+  package-linux:
+    name: Package Linux release
+    needs: build-release-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Download Linux release binaries
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-release-binaries
+          path: release-bin
+
       - name: Build release assets and verify runtime-only package
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/build-release.sh
+          chmod +x release-bin/vida release-bin/taskflow release-bin/docflow release-bin/vida-pi-agent
+          VIDA_RELEASE_SKIP_BUILD=1 VIDA_RELEASE_BIN_DIR="$PWD/release-bin" bash scripts/build-release.sh
           python3 - <<'PY'
           import json
           import tarfile
@@ -361,7 +446,7 @@ jobs:
 
   package-windows:
     name: Package Windows release
-    needs: test-gate
+    needs: build-release-windows
     runs-on: windows-latest
     timeout-minutes: 35
 
@@ -369,33 +454,19 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
-
-      - name: Configure sccache
-        shell: bash
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
+      - name: Download Windows release binaries
+        uses: actions/download-artifact@v6
         with:
-          shared-key: vida-ci-${{ runner.os }}
-          add-job-id-key: "false"
-          workspaces: . -> target
-          cache-targets: "true"
-          cache-workspace-crates: "true"
-          cache-on-failure: "true"
+          name: windows-release-binaries
+          path: release-bin
 
       - name: Build Windows release assets
         shell: bash
         run: |
           set -euo pipefail
           export VIDA_RELEASE_SUFFIX=windows-x86_64
+          export VIDA_RELEASE_SKIP_BUILD=1
+          export VIDA_RELEASE_BIN_DIR="$PWD/release-bin"
           bash scripts/build-release.sh
 
       - name: Upload Windows release assets

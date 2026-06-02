@@ -33,6 +33,7 @@ Modes:
 
 Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
+  release-package honors VIDA_RELEASE_SKIP_BUILD=1 and VIDA_RELEASE_BIN_DIR=<dir> for packaging already-built release binaries.
   JSON mode records operation timing and log artifact paths under .vida/data/state/command-timing.
 "@
 }
