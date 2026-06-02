@@ -1241,6 +1241,9 @@ pub(crate) struct AgentInitArgs {
     #[arg(long = "execute-dispatch")]
     pub(crate) execute_dispatch: bool,
 
+    #[arg(long = "auto-dispatch-packet")]
+    pub(crate) auto_dispatch_packet: bool,
+
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
 

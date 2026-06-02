@@ -1464,6 +1464,7 @@ fn agent_init_dispatch_mode(
         "mode": mode,
         "requested_execute_dispatch": args.execute_dispatch,
         "has_packet_source": has_packet,
+        "auto_dispatch_packet": args.auto_dispatch_packet,
         "selection_mode": selection["mode"].clone(),
         "activation_view_only": !args.execute_dispatch,
         "execution_dispatch": args.execute_dispatch,
@@ -1520,6 +1521,33 @@ fn agent_init_execute_dispatch_missing_packet_payload(
             "artifact_refs": artifact_refs
         }
     })
+}
+
+fn validate_agent_init_auto_dispatch_packet_args(
+    args: &AgentInitArgs,
+    packet_arg_count: usize,
+) -> Result<(), String> {
+    if !args.auto_dispatch_packet {
+        return Ok(());
+    }
+    if !args.execute_dispatch {
+        return Err(
+            "`--auto-dispatch-packet` is only valid with `--execute-dispatch`.".to_string(),
+        );
+    }
+    if packet_arg_count > 0 {
+        return Err(
+            "`--auto-dispatch-packet` is exclusive with `--dispatch-packet` and `--downstream-packet`."
+                .to_string(),
+        );
+    }
+    if args.role.is_some() || args.request_text.is_some() {
+        return Err(
+            "`--auto-dispatch-packet` uses the active bounded runtime unit; do not combine it with `--role` or request text."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn emit_agent_init_execute_dispatch_missing_packet(args: &AgentInitArgs) -> ExitCode {
@@ -4993,6 +5021,10 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
         .unwrap_or_else(state_store::default_state_dir);
     let packet_arg_count =
         usize::from(args.dispatch_packet.is_some()) + usize::from(args.downstream_packet.is_some());
+    if let Err(error) = validate_agent_init_auto_dispatch_packet_args(&args, packet_arg_count) {
+        eprintln!("{error}");
+        return ExitCode::from(2);
+    }
 
     if !args.execute_dispatch && packet_arg_count > 0 {
         if packet_arg_count > 1 {
@@ -5117,7 +5149,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
         Ok(Ok(store)) => {
             let store_state_root = store.root().to_path_buf();
             if args.execute_dispatch {
-                if packet_arg_count == 0 {
+                if packet_arg_count == 0 && !args.auto_dispatch_packet {
                     return emit_agent_init_execute_dispatch_missing_packet(&args);
                 }
                 if packet_arg_count > 1 {
@@ -5126,7 +5158,9 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     );
                     return ExitCode::from(2);
                 }
-                let resume_inputs = if agent_init_execute_dispatch_worker_active() {
+                let resume_inputs = if agent_init_execute_dispatch_worker_active()
+                    && packet_arg_count > 0
+                {
                     let packet_path = args
                         .dispatch_packet
                         .as_deref()
@@ -5382,11 +5416,13 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
 
             if args.execute_dispatch {
                 let dispatch_setup = {
-                    if packet_arg_count == 0 {
+                    if packet_arg_count == 0 && !args.auto_dispatch_packet {
                         return emit_agent_init_execute_dispatch_missing_packet(&args);
                     }
 
-                    let resume_inputs = if agent_init_execute_dispatch_worker_active() {
+                    let resume_inputs = if agent_init_execute_dispatch_worker_active()
+                        && packet_arg_count > 0
+                    {
                         let packet_path = args
                             .dispatch_packet
                             .as_deref()
@@ -6628,6 +6664,81 @@ mod agent_init_surface_tests {
 
     fn test_config_path() -> &'static str {
         "/tmp/vida.test.config.yaml"
+    }
+
+    fn default_agent_init_args() -> AgentInitArgs {
+        AgentInitArgs {
+            request_text: None,
+            role: None,
+            dispatch_packet: None,
+            downstream_packet: None,
+            execute_dispatch: false,
+            auto_dispatch_packet: false,
+            state_dir: None,
+            json: true,
+        }
+    }
+
+    #[test]
+    fn agent_init_auto_dispatch_packet_args_fail_closed() {
+        let mut args = default_agent_init_args();
+        args.auto_dispatch_packet = true;
+        assert_eq!(
+            validate_agent_init_auto_dispatch_packet_args(&args, 0)
+                .expect_err("auto dispatch without execution must fail"),
+            "`--auto-dispatch-packet` is only valid with `--execute-dispatch`."
+        );
+
+        args.execute_dispatch = true;
+        args.dispatch_packet = Some("/tmp/dispatch.json".to_string());
+        assert_eq!(
+            validate_agent_init_auto_dispatch_packet_args(&args, 1)
+                .expect_err("auto dispatch must not combine with manual packet"),
+            "`--auto-dispatch-packet` is exclusive with `--dispatch-packet` and `--downstream-packet`."
+        );
+
+        args.dispatch_packet = None;
+        args.role = Some("worker".to_string());
+        assert_eq!(
+            validate_agent_init_auto_dispatch_packet_args(&args, 0)
+                .expect_err("auto dispatch must use active bounded runtime unit"),
+            "`--auto-dispatch-packet` uses the active bounded runtime unit; do not combine it with `--role` or request text."
+        );
+
+        args.role = None;
+        args.request_text = Some("implement this".to_string());
+        assert_eq!(
+            validate_agent_init_auto_dispatch_packet_args(&args, 0)
+                .expect_err("auto dispatch must not accept request text"),
+            "`--auto-dispatch-packet` uses the active bounded runtime unit; do not combine it with `--role` or request text."
+        );
+
+        args.request_text = None;
+        validate_agent_init_auto_dispatch_packet_args(&args, 0)
+            .expect("execute-only auto dispatch should be admissible");
+    }
+
+    #[test]
+    fn agent_init_auto_dispatch_packet_mode_is_execution_without_packet_source() {
+        let mut args = default_agent_init_args();
+        args.execute_dispatch = true;
+        args.auto_dispatch_packet = true;
+
+        let dispatch_mode =
+            agent_init_dispatch_mode(&args, &serde_json::json!({ "mode": "active_runtime_unit" }));
+
+        assert_eq!(dispatch_mode["mode"], "execution_dispatch");
+        assert_eq!(dispatch_mode["requested_execute_dispatch"], true);
+        assert_eq!(dispatch_mode["has_packet_source"], false);
+        assert_eq!(dispatch_mode["auto_dispatch_packet"], true);
+        assert_eq!(dispatch_mode["selection_mode"], "active_runtime_unit");
+        assert_eq!(dispatch_mode["activation_view_only"], false);
+        assert_eq!(
+            dispatch_mode["completion_requires_receipt_backed_execution"],
+            true
+        );
+        assert_eq!(dispatch_mode["root_session_write_authority_granted"], false);
+        assert_eq!(dispatch_mode["continuation_authority_granted"], false);
     }
 
     #[test]
