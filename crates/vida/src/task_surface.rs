@@ -5354,6 +5354,45 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::ReconcileClosedRuns(command) => {
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match store
+                    .reconcile_historical_closed_task_active_runs(command.limit)
+                    .await
+                {
+                    Ok(summary) => {
+                        if command.json {
+                            crate::print_json_pretty(&serde_json::json!({
+                                "status": "pass",
+                                "surface": "vida task reconcile-closed-runs",
+                                "summary": summary,
+                                "blocker_codes": [],
+                                "next_actions": [],
+                            }));
+                        } else {
+                            print_surface_line(
+                                command.render,
+                                "reconciled closed-task runs",
+                                &summary.reconciled_count.to_string(),
+                            );
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to reconcile closed-task runs: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         TaskCommand::Deps(command) => {
             let state_dir = command
                 .state_dir

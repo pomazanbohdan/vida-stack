@@ -15,6 +15,21 @@ struct TaskSnapshotMeta {
     generated_at_unix_nanos: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ClosedTaskRunReconciliation {
+    pub(crate) run_id: String,
+    pub(crate) task_id: String,
+    pub(crate) previous_status: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ClosedTaskRunReconciliationSummary {
+    pub(crate) scanned_count: usize,
+    pub(crate) reconciled_count: usize,
+    pub(crate) skipped_count: usize,
+    pub(crate) reconciled_runs: Vec<ClosedTaskRunReconciliation>,
+}
+
 impl StateStore {
     pub(crate) fn task_status_is_closed_like(status: &str) -> bool {
         matches!(status, "closed" | "completed")
@@ -862,6 +877,71 @@ impl StateStore {
             self.record_run_graph_continuation_binding(&binding).await?;
         }
         Ok(())
+    }
+
+    pub(crate) async fn reconcile_historical_closed_task_active_runs(
+        &self,
+        limit: usize,
+    ) -> Result<ClosedTaskRunReconciliationSummary, StateStoreError> {
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct HistoricalRunRow {
+            run_id: String,
+            task_id: String,
+            status: String,
+            #[allow(dead_code)]
+            updated_at: String,
+        }
+
+        let limit = limit.max(1);
+        let mut query = self
+            .db
+            .query(format!(
+                "SELECT run_id, task_id, status, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC LIMIT {limit};"
+            ))
+            .await?;
+        let rows: Vec<HistoricalRunRow> = query.take(0)?;
+        let scanned_count = rows.len();
+        let mut reconciled_runs = Vec::new();
+        let mut skipped_count = 0usize;
+
+        for row in rows {
+            if row.status == "completed" {
+                skipped_count += 1;
+                continue;
+            }
+            let task = match self.show_task(&row.task_id).await {
+                Ok(task) => task,
+                Err(StateStoreError::MissingTask { .. }) => {
+                    skipped_count += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if !Self::task_status_is_closed_like(&task.status) {
+                skipped_count += 1;
+                continue;
+            }
+            let status = self.run_graph_status(&row.run_id).await?;
+            let retired_status = Self::task_close_retired_run_graph_status(
+                status,
+                "historical_closed_task_stale_run_retired",
+            );
+            self.record_run_graph_status(&retired_status).await?;
+            self.clear_run_graph_continuation_binding(&row.run_id)
+                .await?;
+            reconciled_runs.push(ClosedTaskRunReconciliation {
+                run_id: row.run_id,
+                task_id: row.task_id,
+                previous_status: row.status,
+            });
+        }
+
+        Ok(ClosedTaskRunReconciliationSummary {
+            scanned_count,
+            reconciled_count: reconciled_runs.len(),
+            skipped_count,
+            reconciled_runs,
+        })
     }
 
     pub async fn import_tasks_from_jsonl(

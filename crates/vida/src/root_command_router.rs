@@ -143,6 +143,7 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         TaskCommand::Update(command) => command.state_dir.is_some(),
         TaskCommand::OwnedStatus(command) => command.state_dir.is_some(),
         TaskCommand::Close(command) => command.state_dir.is_some(),
+        TaskCommand::ReconcileClosedRuns(command) => command.state_dir.is_some(),
         TaskCommand::Split(command) => command.state_dir.is_some(),
         TaskCommand::SpawnBlocker(command) => command.state_dir.is_some(),
         TaskCommand::Deps(command)

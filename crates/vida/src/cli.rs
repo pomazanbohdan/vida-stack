@@ -329,6 +329,8 @@ pub(crate) enum TaskCommand {
     #[command(about = "record delegated agent handoff receipts for a task")]
     Handoff(TaskHandoffArgs),
     Close(TaskCloseArgs),
+    #[command(about = "retire historical run-graph rows for already-closed tasks")]
+    ReconcileClosedRuns(TaskReconcileClosedRunsArgs),
     #[command(about = "split one oversized task into bounded child tasks")]
     Split(TaskSplitArgs),
     #[command(about = "create a blocker/dependency task linked to one blocked source task")]
@@ -883,6 +885,21 @@ pub(crate) struct TaskCloseArgs {
         help = "Commit message for --commit; defaults to a task-close message"
     )]
     pub(crate) commit_message: Option<String>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskReconcileClosedRunsArgs {
+    #[arg(long = "limit", default_value_t = 100)]
+    pub(crate) limit: usize,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,

@@ -5313,6 +5313,92 @@ fn task_close_retires_closed_task_active_run_projection() {
 }
 
 #[test]
+fn task_reconcile_closed_runs_retires_historical_closed_task_active_batch() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "task-reconcile-closed-runs-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Task reconcile closed runs parent",
+        "open",
+    );
+    for task_id in [
+        "task-reconcile-closed-runs-a",
+        "task-reconcile-closed-runs-b",
+    ] {
+        let created = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                "Task reconcile closed run",
+                "--type",
+                "task",
+                "--status",
+                "in_progress",
+                "--priority",
+                "1",
+                "--parent-id",
+                parent_id,
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(created["status"], "pass");
+        let _ = run_and_assert_success(
+            &["taskflow", "run-graph", "init", task_id, "implementation"],
+            &state_dir,
+        );
+    }
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        for task_id in [
+            "task-reconcile-closed-runs-a",
+            "task-reconcile-closed-runs-b",
+            parent_id,
+        ] {
+            db.query("UPDATE type::record('task', $task) SET status = 'closed'")
+                .bind(("task", task_id))
+                .await
+                .expect("close canonical task without mutating run graph");
+        }
+        drop(db);
+    });
+
+    let before = run_command_json(&["doctor", "--json"], &state_dir);
+    let before_blockers = require_json_string_array(&before["blocker_codes"], "before blockers");
+    assert!(before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
+
+    let reconcile = run_command_json(
+        &["task", "reconcile-closed-runs", "--limit", "25", "--json"],
+        &state_dir,
+    );
+    assert_eq!(reconcile["status"], "pass");
+    assert_eq!(reconcile["summary"]["reconciled_count"], 2);
+
+    let after = run_command_json(&["doctor", "--json"], &state_dir);
+    let after_blockers = require_json_string_array(&after["blocker_codes"], "after blockers");
+    assert!(
+        !after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "closed-task active run batch should be retired after one reconcile command: {after}"
+    );
+    assert!(after["latest_terminal_task_active_run_graph_status"].is_null());
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
