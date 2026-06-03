@@ -2803,29 +2803,6 @@ impl StateStore {
         Ok(Some(receipt))
     }
 
-    pub async fn latest_active_exception_takeover_dispatch_receipt(
-        &self,
-    ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
-        let mut query = self
-            .db
-            .query(
-                "SELECT * FROM run_graph_dispatch_receipt \
-                 WHERE lane_status = 'lane_exception_takeover' \
-                 ORDER BY recorded_at DESC, run_id DESC \
-                 LIMIT 25;",
-            )
-            .await?;
-        let rows: Vec<RunGraphDispatchReceiptStored> = query.take(0)?;
-        for receipt in rows {
-            if !stored_receipt_has_active_exception_takeover(&receipt) {
-                continue;
-            }
-            let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
-            return Ok(Some(receipt.into()));
-        }
-        Ok(None)
-    }
-
     pub async fn run_graph_dispatch_receipt(
         &self,
         run_id: &str,
