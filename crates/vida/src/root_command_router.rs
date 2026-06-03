@@ -257,6 +257,9 @@ impl Drop for RuntimeStateDirGuard {
 pub(crate) fn prepare_runtime_state_dir_for_parse(
     args: &[OsString],
 ) -> Result<Option<RuntimeStateDirGuard>, String> {
+    if raw_args_are_taskflow_state_surface(args) && std::env::var_os("VIDA_STATE_DIR").is_some() {
+        return Ok(preserve_runtime_state_dir_env_for_project_bound_command());
+    }
     if raw_args_need_project_root_state_dir(args) {
         return bind_runtime_state_dir_for_project_bound_command();
     }
@@ -350,6 +353,18 @@ fn raw_args_need_project_root_state_dir(args: &[OsString]) -> bool {
             | "route"
             | "taskflow"
     )
+}
+
+fn raw_args_are_taskflow_state_surface(args: &[OsString]) -> bool {
+    if raw_args_request_help_or_version(args) || raw_args_have_explicit_state_dir(args) {
+        return false;
+    }
+    let mut positional = args
+        .iter()
+        .skip(1)
+        .filter_map(|arg| arg.to_str())
+        .filter(|arg| !arg.starts_with('-'));
+    matches!(positional.next(), Some("taskflow"))
 }
 
 fn raw_args_request_help_or_version(args: &[OsString]) -> bool {
@@ -578,6 +593,75 @@ mod tests {
             std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
             Some(stale_state_dir)
         );
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_preserves_env_for_taskflow_packet_surface() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let active_project =
+            TempStateHarness::new().expect("active temp harness should initialize");
+        let packet_project =
+            TempStateHarness::new().expect("packet temp harness should initialize");
+        make_project_root(active_project.path());
+        make_project_root(packet_project.path());
+        fs::create_dir_all(
+            active_project
+                .path()
+                .join(crate::state_store::default_state_dir()),
+        )
+        .expect("active state dir should exist");
+        let packet_state_dir = packet_project
+            .path()
+            .join(crate::state_store::default_state_dir());
+        fs::create_dir_all(&packet_state_dir).expect("packet state dir should exist");
+        {
+            let _cwd = crate::test_cli_support::guard_current_dir(active_project.path());
+            let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &packet_state_dir);
+            let raw_args = ["vida", "taskflow", "packet", "latest", "--json"]
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>();
+
+            let guard = prepare_runtime_state_dir_for_parse(&raw_args)
+                .expect("packet surface should preserve env state-dir");
+
+            assert!(guard.is_some());
+            assert_eq!(
+                std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+                Some(packet_state_dir.clone())
+            );
+            assert_eq!(
+                std::env::var_os("VIDA_ROOT").map(std::path::PathBuf::from),
+                Some(packet_project.path().to_path_buf())
+            );
+            assert_eq!(
+                std::env::current_dir().expect("cwd should read"),
+                packet_project.path()
+            );
+            drop(guard);
+        }
+
+        {
+            let _cwd = crate::test_cli_support::guard_current_dir(active_project.path());
+            let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &packet_state_dir);
+            let run_graph_args = ["vida", "taskflow", "run-graph", "latest", "--json"]
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>();
+            let run_graph_guard = prepare_runtime_state_dir_for_parse(&run_graph_args)
+                .expect("run-graph surface should preserve env state-dir");
+
+            assert!(run_graph_guard.is_some());
+            assert_eq!(
+                std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+                Some(packet_state_dir.clone())
+            );
+            assert_eq!(
+                std::env::var_os("VIDA_ROOT").map(std::path::PathBuf::from),
+                Some(packet_project.path().to_path_buf())
+            );
+            drop(run_graph_guard);
+        }
     }
 
     #[test]

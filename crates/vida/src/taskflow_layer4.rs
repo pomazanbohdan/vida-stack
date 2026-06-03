@@ -649,10 +649,13 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow packet render <run-id> [--json]");
             println!("  vida taskflow packet task <task-id> [--json]");
             println!("  vida taskflow packet latest [--json]");
+            println!(
+                "  vida taskflow packet repair --run-id <run-id> --from-task <task-id> [--json]"
+            );
             println!();
             println!("Returned semantics:");
             println!(
-                "  dispatch receipt, dispatch/downstream packet bodies, persisted packet paths, continue command"
+                "  dispatch receipt, dispatch/downstream packet bodies, persisted packet paths, continue command, repair plan"
             );
             println!();
             println!("Failure modes:");
@@ -661,6 +664,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!(
                 "  `packet latest` fails closed when no latest persisted dispatch receipt exists yet, or when the latest receipt points at packet evidence that is missing."
+            );
+            println!(
+                "  `packet repair` fails closed when canonical task metadata is missing owned paths or proof/acceptance targets."
             );
             println!();
             println!("Operator recipes:");
@@ -672,6 +678,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!(
                 "  Inspect the latest routed packet without resolving run id first: vida taskflow packet latest --json"
+            );
+            println!(
+                "  Repair/rebind an invalid packet from canonical task metadata: vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json"
             );
             return;
         }

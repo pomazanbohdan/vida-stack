@@ -1,8 +1,10 @@
 use std::{path::Path, process::ExitCode, time::Duration};
 
 use crate::{
-    print_surface_header, print_surface_line, state_store::StateStore,
-    taskflow_task_bridge::proxy_state_dir, RenderMode,
+    print_surface_header, print_surface_line,
+    state_store::{StateStore, TaskRecord},
+    taskflow_task_bridge::proxy_state_dir,
+    RenderMode,
 };
 
 const TASKFLOW_PACKET_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
@@ -37,6 +39,18 @@ fn packet_projection_name(
     }
 }
 
+fn packet_repair_projection_name(run_id: &str, task_id: &str) -> String {
+    format!(
+        "taskflow-packet-repair-{}-from-{}",
+        projection_component(run_id),
+        projection_component(task_id)
+    )
+}
+
+fn usage() -> &'static str {
+    "Usage: vida taskflow packet render <run-id> [--json]\n       vida taskflow packet task <task-id> [--json]\n       vida taskflow packet latest [--json]\n       vida taskflow packet repair --run-id <run-id> --from-task <task-id> [--json]"
+}
+
 fn read_packet_body(path: &str) -> Result<serde_json::Value, String> {
     let resolved_path = canonicalize_packet_path(path)?;
     let display_path = resolved_path.display().to_string();
@@ -44,6 +58,104 @@ fn read_packet_body(path: &str) -> Result<serde_json::Value, String> {
         .map_err(|error| format!("Failed to read persisted packet `{display_path}`: {error}"))?;
     serde_json::from_str(&body)
         .map_err(|error| format!("Failed to decode persisted packet `{display_path}`: {error}"))
+}
+
+fn dispatch_init_cache_dir(state_root: &Path) -> std::path::PathBuf {
+    state_root
+        .join("runtime-consumption")
+        .join("dispatch-init-cache")
+}
+
+fn read_dispatch_init_cache_payload(
+    state_root: &Path,
+    run_id: &str,
+) -> Result<serde_json::Value, String> {
+    let path = dispatch_init_cache_dir(state_root).join(format!("{run_id}.json"));
+    let body = std::fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "Failed to read dispatch-init cache `{}`: {error}",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&body).map_err(|error| {
+        format!(
+            "Failed to decode dispatch-init cache `{}`: {error}",
+            path.display()
+        )
+    })
+}
+
+fn latest_dispatch_init_cache_run_id(state_root: &Path) -> Result<Option<String>, String> {
+    let cache_dir = dispatch_init_cache_dir(state_root);
+    let Ok(entries) = std::fs::read_dir(&cache_dir) else {
+        return Ok(None);
+    };
+    let mut latest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Failed to read dispatch-init cache entry from `{}`: {error}",
+                cache_dir.display()
+            )
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if latest
+            .as_ref()
+            .map(|(current, _)| modified > *current)
+            .unwrap_or(true)
+        {
+            latest = Some((modified, path));
+        }
+    }
+    let Some((_, path)) = latest else {
+        return Ok(None);
+    };
+    let body = std::fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "Failed to read latest dispatch-init cache `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let payload: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
+        format!(
+            "Failed to decode latest dispatch-init cache `{}`: {error}",
+            path.display()
+        )
+    })?;
+    Ok(payload["run_id"]
+        .as_str()
+        .or_else(|| payload["dispatch_receipt"]["run_id"].as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|value| value.to_str())
+                .map(str::to_string)
+        }))
+}
+
+fn cached_dispatch_receipt(
+    cache_payload: &serde_json::Value,
+) -> Result<crate::state_store::RunGraphDispatchReceipt, String> {
+    serde_json::from_value(cache_payload["dispatch_receipt"].clone())
+        .map_err(|error| format!("Failed to decode cached dispatch_receipt: {error}"))
+}
+
+fn cached_dispatch_packet_path<'a>(
+    cache_payload: &'a serde_json::Value,
+    receipt: &'a crate::state_store::RunGraphDispatchReceipt,
+) -> Option<&'a str> {
+    cache_payload["dispatch_packet_path"]
+        .as_str()
+        .or(receipt.dispatch_packet_path.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn canonicalize_packet_path(path: &str) -> Result<std::path::PathBuf, String> {
@@ -116,15 +228,16 @@ async fn resolve_packet_render_run_id(
 }
 
 async fn resolve_latest_packet_run_id(store: &StateStore) -> Result<String, String> {
+    let state_root = proxy_state_dir();
     let Some(receipt) = store
         .latest_run_graph_dispatch_receipt()
         .await
         .map_err(|error| format!("Failed to read latest persisted dispatch receipt: {error}"))?
     else {
-        return Err(
-            "No latest persisted run-graph dispatch receipt exists; run `vida taskflow run-graph dispatch-init <task-id> --json` first."
-                .to_string(),
-        );
+        if let Some(run_id) = latest_dispatch_init_cache_run_id(&state_root)? {
+            return Ok(run_id);
+        }
+        return Err("No latest persisted run-graph dispatch receipt or dispatch-init cache exists; run `vida taskflow run-graph dispatch-init <task-id> --json` first.".to_string());
     };
     Ok(receipt.run_id)
 }
@@ -207,6 +320,212 @@ fn preview_bool(body: &serde_json::Value, section: &str, key: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn parse_packet_repair_args(args: &[String]) -> Result<Option<(String, String, bool)>, String> {
+    let [head, subcommand, rest @ ..] = args else {
+        return Ok(None);
+    };
+    if head != "packet" || subcommand != "repair" {
+        return Ok(None);
+    }
+    if rest
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        return Err(usage().to_string());
+    }
+
+    let mut run_id = None;
+    let mut task_id = None;
+    let mut as_json = false;
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--run-id" => {
+                index += 1;
+                let Some(value) = rest.get(index) else {
+                    return Err("Missing value for --run-id.".to_string());
+                };
+                run_id = Some(value.clone());
+            }
+            "--from-task" => {
+                index += 1;
+                let Some(value) = rest.get(index) else {
+                    return Err("Missing value for --from-task.".to_string());
+                };
+                task_id = Some(value.clone());
+            }
+            "--json" => as_json = true,
+            other => return Err(format!("Unsupported packet repair argument `{other}`.")),
+        }
+        index += 1;
+    }
+
+    let run_id = run_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "packet repair requires --run-id <id>.".to_string())?;
+    let task_id = task_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "packet repair requires --from-task <task-id>.".to_string())?;
+
+    Ok(Some((run_id, task_id, as_json)))
+}
+
+async fn load_task_for_packet_repair(
+    store: &StateStore,
+    task_id: &str,
+) -> Result<TaskRecord, String> {
+    let tasks = store
+        .all_tasks()
+        .await
+        .map_err(|error| format!("Failed to read canonical task metadata: {error}"))?;
+    tasks
+        .into_iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| format!("No canonical task `{task_id}` exists."))
+}
+
+fn task_has_packet_repair_metadata(task: &TaskRecord) -> bool {
+    !task.planner_metadata.owned_paths.is_empty()
+        && (!task.planner_metadata.proof_targets.is_empty()
+            || !task.planner_metadata.acceptance_targets.is_empty())
+}
+
+fn build_taskflow_packet_repair_payload(
+    run_id: &str,
+    task: Option<&TaskRecord>,
+    load_error: Option<&str>,
+) -> serde_json::Value {
+    let dispatch_init_command =
+        task.map(|task| format!("vida taskflow run-graph dispatch-init {} --json", task.id));
+    let render_command = format!("vida taskflow packet render {run_id} --json");
+    let repair_command = task.map(|task| {
+        format!(
+            "vida taskflow packet repair --run-id {run_id} --from-task {} --json",
+            task.id
+        )
+    });
+
+    let mut blocker_codes = Vec::new();
+    if load_error.is_some() {
+        blocker_codes.push("task_metadata_not_found");
+    } else if let Some(task) = task {
+        if task.planner_metadata.owned_paths.is_empty() {
+            blocker_codes.push("task_metadata_missing_owned_paths");
+        }
+        if task.planner_metadata.proof_targets.is_empty()
+            && task.planner_metadata.acceptance_targets.is_empty()
+        {
+            blocker_codes.push("task_metadata_missing_proof_or_acceptance_targets");
+        }
+    }
+
+    let status = if blocker_codes.is_empty() {
+        "repair_ready"
+    } else {
+        "blocked"
+    };
+
+    let task_metadata = task.map(|task| {
+        serde_json::json!({
+            "task_id": task.id,
+            "title": task.title,
+            "status": task.status,
+            "issue_type": task.issue_type,
+            "planner_metadata": task.planner_metadata,
+        })
+    });
+
+    let next_actions = if status == "repair_ready" {
+        serde_json::json!([
+            dispatch_init_command.clone().unwrap_or_default(),
+            render_command,
+        ])
+    } else if load_error.is_some() {
+        serde_json::json!([
+            format!(
+                "vida task show {} --json",
+                task.map(|task| task.id.as_str()).unwrap_or("<task-id>")
+            ),
+            "Create or bind the canonical task before re-running packet repair.".to_string(),
+        ])
+    } else {
+        serde_json::json!([
+            format!(
+                "vida task update {} --owned-path <path> --proof-target <command> --json",
+                task.map(|task| task.id.as_str()).unwrap_or("<task-id>")
+            ),
+            repair_command.clone().unwrap_or_default(),
+        ])
+    };
+
+    serde_json::json!({
+        "surface": "vida taskflow packet repair",
+        "status": status,
+        "run_id": run_id,
+        "from_task": task.map(|task| task.id.as_str()),
+        "task_metadata": task_metadata,
+        "metadata_complete": task.map(task_has_packet_repair_metadata).unwrap_or(false),
+        "blocker_codes": blocker_codes,
+        "load_error": load_error,
+        "repair_model": "rebind_from_canonical_task_metadata",
+        "repair_command": repair_command,
+        "dispatch_init_command": dispatch_init_command,
+        "bind_command": dispatch_init_command,
+        "render_command": render_command,
+        "next_actions": next_actions,
+    })
+}
+
+async fn run_taskflow_packet_repair(run_id: &str, task_id: &str, as_json: bool) -> ExitCode {
+    let store = match StateStore::open_existing(proxy_state_dir()).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let loaded_task = load_task_for_packet_repair(&store, task_id).await;
+    let (task, load_error) = match loaded_task {
+        Ok(task) => (Some(task), None),
+        Err(error) => (None, Some(error)),
+    };
+    let payload =
+        build_taskflow_packet_repair_payload(run_id, task.as_ref(), load_error.as_deref());
+
+    if as_json {
+        crate::print_json_pretty(&payload);
+        crate::operator_projection_cache::write_json_projection(
+            &proxy_state_dir(),
+            &packet_repair_projection_name(run_id, task_id),
+            &payload,
+        );
+    } else {
+        print_surface_header(RenderMode::Plain, "vida taskflow packet repair");
+        print_surface_line(
+            RenderMode::Plain,
+            "status",
+            payload["status"].as_str().unwrap_or("blocked"),
+        );
+        print_surface_line(RenderMode::Plain, "run", run_id);
+        print_surface_line(RenderMode::Plain, "from_task", task_id);
+        if let Some(command) = payload["dispatch_init_command"].as_str() {
+            print_surface_line(RenderMode::Plain, "bind_command", command);
+        }
+        if let Some(error) = payload["load_error"].as_str() {
+            print_surface_line(RenderMode::Plain, "blocker", error);
+        }
+    }
+
+    if payload["status"].as_str() == Some("repair_ready") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
     match args {
         [head] if head == "packet" => {
@@ -218,6 +537,22 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         _ => {}
+    }
+
+    match parse_packet_repair_args(args) {
+        Ok(Some((run_id, task_id, as_json))) => {
+            return run_taskflow_packet_repair(&run_id, &task_id, as_json).await;
+        }
+        Ok(None) => {}
+        Err(error) if error.starts_with("Usage:") => {
+            println!("{error}");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            eprintln!("{}", usage());
+            return ExitCode::from(2);
+        }
     }
 
     let (requested_run_id, requested_task_id, as_json, latest_mode) = match args {
@@ -254,13 +589,12 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         _ => {
-            eprintln!(
-                "Usage: vida taskflow packet render <run-id> [--json]\n       vida taskflow packet task <task-id> [--json]\n       vida taskflow packet latest [--json]"
-            );
+            eprintln!("{}", usage());
             return ExitCode::from(2);
         }
     };
 
+    let state_root = proxy_state_dir();
     let projection_name =
         packet_projection_name(&requested_run_id, requested_task_id.as_deref(), latest_mode);
     if as_json {
@@ -268,7 +602,7 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         // (state store + dispatch receipt + canonical packet path checks), not raw cache.
     }
 
-    let store = match StateStore::open_existing(proxy_state_dir()).await {
+    let store = match StateStore::open_existing(state_root.clone()).await {
         Ok(store) => store,
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
@@ -301,7 +635,7 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let Some(receipt) = (match store.run_graph_dispatch_receipt(&effective_run_id).await {
+    let receipt_from_store = match store.run_graph_dispatch_receipt(&effective_run_id).await {
         Ok(receipt) => receipt,
         Err(error) => {
             eprintln!(
@@ -309,14 +643,37 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             );
             return ExitCode::from(1);
         }
-    }) else {
-        eprintln!(
-            "No persisted run-graph dispatch receipt exists for run_id `{effective_run_id}`; run `vida taskflow run-graph dispatch-init {run_id} --json` first."
-        );
-        return ExitCode::from(1);
+    };
+    let cached_packet = if receipt_from_store.is_none() {
+        match read_dispatch_init_cache_payload(&state_root, &effective_run_id) {
+            Ok(payload) => Some(payload),
+            Err(error) => {
+                eprintln!(
+                    "No persisted run-graph dispatch receipt exists for run_id `{effective_run_id}`, and cache recovery failed: {error}. Run `vida taskflow run-graph dispatch-init {run_id} --json` first."
+                );
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        None
+    };
+    let receipt = if let Some(receipt) = receipt_from_store {
+        receipt
+    } else {
+        match cached_dispatch_receipt(cached_packet.as_ref().expect("cache payload should exist")) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+        }
     };
 
-    let dispatch_packet_path = match receipt.dispatch_packet_path.as_deref() {
+    let dispatch_packet_path = match cached_packet
+        .as_ref()
+        .and_then(|payload| cached_dispatch_packet_path(payload, &receipt))
+        .or(receipt.dispatch_packet_path.as_deref())
+    {
         Some(path) if !path.trim().is_empty() => path,
         _ => {
             eprintln!(
@@ -449,10 +806,12 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_taskflow_packet_render_payload, resolve_latest_packet_run_id,
+        build_taskflow_packet_render_payload, build_taskflow_packet_repair_payload,
+        latest_dispatch_init_cache_run_id, parse_packet_repair_args,
+        read_dispatch_init_cache_payload, resolve_latest_packet_run_id,
         resolve_packet_render_run_id,
     };
-    use crate::state_store::StateStore;
+    use crate::state_store::{StateStore, TaskPlannerMetadata, TaskRecord};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -575,6 +934,133 @@ mod tests {
             payload["execution_preparation_artifacts"]["architecture_preparation_report"]["ready"],
             true
         );
+    }
+
+    fn packet_repair_task_with_metadata() -> TaskRecord {
+        TaskRecord {
+            id: "task-with-metadata".to_string(),
+            display_id: None,
+            title: "Task with metadata".to_string(),
+            description: String::new(),
+            status: "open".to_string(),
+            priority: 1,
+            issue_type: "task".to_string(),
+            created_at: String::new(),
+            created_by: "test".to_string(),
+            updated_at: String::new(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: "vida-stack".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: vec![],
+            execution_semantics: Default::default(),
+            planner_metadata: TaskPlannerMetadata {
+                owned_paths: vec!["crates/vida/src/taskflow_packet.rs".to_string()],
+                acceptance_targets: vec!["repair command is discoverable".to_string()],
+                proof_targets: vec!["cargo test -p vida packet_repair -- --nocapture".to_string()],
+                risk: None,
+                estimate: None,
+                lane_hint: None,
+            },
+            provider_mapping: None,
+            dependencies: vec![],
+        }
+    }
+
+    #[test]
+    fn packet_repair_args_require_run_id_and_from_task() {
+        let args = vec![
+            "packet".to_string(),
+            "repair".to_string(),
+            "--run-id".to_string(),
+            "run-1".to_string(),
+            "--from-task".to_string(),
+            "task-1".to_string(),
+            "--json".to_string(),
+        ];
+
+        let parsed = parse_packet_repair_args(&args)
+            .expect("valid repair args")
+            .expect("repair args");
+
+        assert_eq!(parsed, ("run-1".to_string(), "task-1".to_string(), true));
+    }
+
+    #[test]
+    fn packet_repair_payload_reports_rebind_plan_from_task_metadata() {
+        let task = packet_repair_task_with_metadata();
+
+        let payload = build_taskflow_packet_repair_payload("run-1", Some(&task), None);
+
+        assert_eq!(payload["status"], "repair_ready");
+        assert_eq!(payload["metadata_complete"], true);
+        assert_eq!(
+            payload["bind_command"],
+            "vida taskflow run-graph dispatch-init task-with-metadata --json"
+        );
+        assert_eq!(
+            payload["task_metadata"]["planner_metadata"]["owned_paths"][0],
+            "crates/vida/src/taskflow_packet.rs"
+        );
+    }
+
+    #[test]
+    fn packet_repair_payload_blocks_missing_metadata_with_actionable_command() {
+        let mut task = packet_repair_task_with_metadata();
+        task.planner_metadata.owned_paths.clear();
+        task.planner_metadata.proof_targets.clear();
+        task.planner_metadata.acceptance_targets.clear();
+
+        let payload = build_taskflow_packet_repair_payload("run-1", Some(&task), None);
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"][0],
+            "task_metadata_missing_owned_paths"
+        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action")
+            .contains("vida task update task-with-metadata --owned-path"));
+    }
+
+    #[test]
+    fn latest_dispatch_init_cache_run_id_recovers_latest_cached_packet() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-packet-latest-cache-fallback-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let cache_dir = root.join("runtime-consumption").join("dispatch-init-cache");
+        fs::create_dir_all(&cache_dir).expect("cache dir should exist");
+        fs::write(
+            cache_dir.join("run-cached.json"),
+            serde_json::json!({
+                "run_id": "run-cached",
+                "dispatch_receipt": {
+                    "run_id": "run-cached"
+                }
+            })
+            .to_string(),
+        )
+        .expect("cache file should write");
+
+        let resolved = latest_dispatch_init_cache_run_id(&root)
+            .expect("cache read should succeed")
+            .expect("latest cache should resolve");
+        let cached = read_dispatch_init_cache_payload(&root, "run-cached")
+            .expect("cache payload should read");
+
+        assert_eq!(resolved, "run-cached");
+        assert_eq!(cached["run_id"], "run-cached");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
