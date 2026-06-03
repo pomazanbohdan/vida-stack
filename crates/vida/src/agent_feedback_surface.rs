@@ -477,6 +477,29 @@ fn has_concrete_canonical_close_phrase(normalized: &str) -> bool {
         .any(|phrase| normalized.contains(phrase))
 }
 
+const CONCRETE_CANONICAL_CLOSE_FIELD_LABELS: &[&str] = &[
+    "blocked flag",
+    "blocked field",
+    "blocker detail",
+    "blocker details",
+    "blocker field",
+    "blocker fields",
+    "blocker flag",
+    "blocker flags",
+    "continuation blocker",
+    "continuation blockers",
+    "continuation_blocked",
+    "continuation_blocked flag",
+];
+
+fn has_concrete_canonical_close_field_label(normalized: &str) -> bool {
+    CONCRETE_CANONICAL_CLOSE_FIELD_LABELS.iter().any(|label| {
+        [format!("{label}:"), format!("{label}=")]
+            .iter()
+            .any(|field_label| normalized.contains(field_label))
+    })
+}
+
 fn has_contrastive_blocker_clause(normalized: &str) -> bool {
     normalized
         .split_once(", but ")
@@ -557,6 +580,9 @@ pub(crate) fn canonical_close_status_from_reason(
     reason: &str,
 ) -> Option<(&'static str, &'static str)> {
     let mut normalized = reason.to_ascii_lowercase();
+    if has_concrete_canonical_close_field_label(&normalized) {
+        return Some(("blocked", "blocked"));
+    }
     for phrase in ignored_canonical_close_meta_language(reason) {
         normalized = normalized.replace(&phrase, " canonical_close_context_language ");
     }
@@ -1403,6 +1429,23 @@ mod tests {
             super::canonical_close_status_from_reason(reason),
             Some(("blocked", "blocked"))
         );
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_blocker_field_label_reasons() {
+        for reason in [
+            "Blocker details: missing verifier receipt",
+            "blocker field=missing verifier receipt",
+            "blocked flag: true",
+            "continuation blocker: missing follow-up dispatch",
+            "continuation_blocked flag=true",
+        ] {
+            assert_eq!(
+                super::canonical_close_status_from_reason(reason),
+                Some(("blocked", "blocked")),
+                "concrete blocker field-label reason should remain fail-closed: {reason}"
+            );
+        }
     }
 
     #[test]
