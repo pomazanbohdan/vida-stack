@@ -1,4 +1,4 @@
-use std::process::ExitCode;
+use std::{ffi::OsString, process::ExitCode};
 
 use super::{
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
@@ -223,32 +223,76 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
 pub(crate) struct RuntimeStateDirGuard {
     previous: Option<std::ffi::OsString>,
     active: bool,
+    previous_root: Option<std::ffi::OsString>,
+    root_active: bool,
+    previous_cwd: Option<std::path::PathBuf>,
+    cwd_active: bool,
 }
 
 impl Drop for RuntimeStateDirGuard {
     fn drop(&mut self) {
-        if !self.active {
+        if self.active {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("VIDA_STATE_DIR", previous);
+            } else {
+                std::env::remove_var("VIDA_STATE_DIR");
+            }
+        }
+        if !self.root_active {
             return;
         }
-        if let Some(previous) = &self.previous {
-            std::env::set_var("VIDA_STATE_DIR", previous);
+        if let Some(previous_root) = &self.previous_root {
+            std::env::set_var("VIDA_ROOT", previous_root);
         } else {
-            std::env::remove_var("VIDA_STATE_DIR");
+            std::env::remove_var("VIDA_ROOT");
+        }
+        if self.cwd_active {
+            if let Some(previous_cwd) = &self.previous_cwd {
+                let _ = std::env::set_current_dir(previous_cwd);
+            }
         }
     }
+}
+
+pub(crate) fn prepare_runtime_state_dir_for_parse(
+    args: &[OsString],
+) -> Result<Option<RuntimeStateDirGuard>, String> {
+    if raw_args_need_project_root_state_dir(args) {
+        return bind_runtime_state_dir_for_project_bound_command();
+    }
+    if std::env::var_os("VIDA_STATE_DIR").is_some() {
+        return Ok(normalize_runtime_state_dir_env_for_parse());
+    }
+    Ok(None)
 }
 
 fn prepare_runtime_state_dir(
     command: &Option<Command>,
 ) -> Result<Option<RuntimeStateDirGuard>, String> {
-    if std::env::var_os("VIDA_STATE_DIR").is_some() {
-        return Ok(normalize_runtime_state_dir_env_for_parse());
-    }
-
     if !command_needs_project_root_state_dir(command) {
+        if std::env::var_os("VIDA_STATE_DIR").is_some() {
+            return Ok(normalize_runtime_state_dir_env_for_parse());
+        }
         return Ok(None);
     }
 
+    bind_runtime_state_dir_for_project_bound_command()
+}
+
+fn bind_runtime_state_dir_for_project_bound_command() -> Result<Option<RuntimeStateDirGuard>, String>
+{
+    match bind_runtime_state_dir_to_current_project() {
+        Ok(guard) => Ok(guard),
+        Err(error) => {
+            if std::env::var_os("VIDA_STATE_DIR").is_some() {
+                return Ok(preserve_runtime_state_dir_env_for_project_bound_command());
+            }
+            Err(error)
+        }
+    }
+}
+
+fn bind_runtime_state_dir_to_current_project() -> Result<Option<RuntimeStateDirGuard>, String> {
     match resolve_runtime_project_root() {
         Ok(project_root) => {
             let previous = std::env::var_os("VIDA_STATE_DIR");
@@ -259,10 +303,72 @@ fn prepare_runtime_state_dir(
             Ok(Some(RuntimeStateDirGuard {
                 previous,
                 active: true,
+                previous_root: None,
+                root_active: false,
+                previous_cwd: None,
+                cwd_active: false,
             }))
         }
         Err(error) => Err(error),
     }
+}
+
+fn raw_args_need_project_root_state_dir(args: &[OsString]) -> bool {
+    let Some(command) = args
+        .iter()
+        .skip(1)
+        .find_map(|arg| arg.to_str())
+        .filter(|arg| !arg.starts_with('-'))
+    else {
+        return false;
+    };
+    if raw_args_request_help_or_version(args) || raw_args_have_explicit_state_dir(args) {
+        return false;
+    }
+    matches!(
+        command,
+        "orchestrator-init"
+            | "agent-init"
+            | "agent"
+            | "project-activator"
+            | "agent-feedback"
+            | "task"
+            | "memory"
+            | "status"
+            | "doctor"
+            | "diagnostics"
+            | "service"
+            | "project"
+            | "wizard"
+            | "job"
+            | "receipt"
+            | "orchestrator-session"
+            | "consume"
+            | "lane"
+            | "approval"
+            | "recovery"
+            | "route"
+            | "taskflow"
+    )
+}
+
+fn raw_args_request_help_or_version(args: &[OsString]) -> bool {
+    args.iter()
+        .skip(1)
+        .filter_map(|arg| arg.to_str())
+        .any(|arg| {
+            matches!(
+                arg,
+                "help" | "--help" | "-h" | "--version" | "-V" | "--HELP" | "-H"
+            )
+        })
+}
+
+fn raw_args_have_explicit_state_dir(args: &[OsString]) -> bool {
+    args.iter()
+        .skip(1)
+        .filter_map(|arg| arg.to_str())
+        .any(|arg| arg == "--state-dir" || arg.starts_with("--state-dir="))
 }
 
 pub(crate) fn normalize_runtime_state_dir_env_for_parse() -> Option<RuntimeStateDirGuard> {
@@ -276,7 +382,44 @@ pub(crate) fn normalize_runtime_state_dir_env_for_parse() -> Option<RuntimeState
     Some(RuntimeStateDirGuard {
         previous: Some(existing),
         active: true,
+        previous_root: None,
+        root_active: false,
+        previous_cwd: None,
+        cwd_active: false,
     })
+}
+
+fn preserve_runtime_state_dir_env_for_project_bound_command() -> Option<RuntimeStateDirGuard> {
+    let mut guard = normalize_runtime_state_dir_env_for_parse().unwrap_or(RuntimeStateDirGuard {
+        previous: None,
+        active: false,
+        previous_root: None,
+        root_active: false,
+        previous_cwd: None,
+        cwd_active: false,
+    });
+    let state_dir = std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from)?;
+    let project_root = crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_dir)?;
+    let previous_root = std::env::var_os("VIDA_ROOT");
+    let root_already_bound = previous_root
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .as_ref()
+        == Some(&project_root);
+    if !root_already_bound {
+        std::env::set_var("VIDA_ROOT", &project_root);
+        guard.previous_root = previous_root;
+        guard.root_active = true;
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        if !current_dir.starts_with(&project_root)
+            && std::env::set_current_dir(&project_root).is_ok()
+        {
+            guard.previous_cwd = Some(current_dir);
+            guard.cwd_active = true;
+        }
+    }
+    (guard.active || guard.root_active || guard.cwd_active).then_some(guard)
 }
 
 fn normalize_runtime_state_dir_override(path: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -292,7 +435,7 @@ fn normalize_runtime_state_dir_override(path: &std::path::Path) -> Option<std::p
 mod tests {
     use super::{
         command_needs_project_root_state_dir, normalize_runtime_state_dir_env_for_parse,
-        prepare_runtime_state_dir, Cli,
+        prepare_runtime_state_dir, prepare_runtime_state_dir_for_parse, Cli,
     };
     use crate::temp_state::TempStateHarness;
     use crate::Command;
@@ -370,6 +513,7 @@ mod tests {
         fs::create_dir_all(harness.path().join(crate::state_store::default_state_dir()))
             .expect("canonical state dir should exist");
         let legacy_state_dir = harness.path().join(".vida");
+        let _cwd = crate::test_cli_support::guard_current_dir(harness.path());
         let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &legacy_state_dir);
         let cli = Cli::try_parse_from(["vida", "status"]).expect("status cli should parse");
 
@@ -386,6 +530,107 @@ mod tests {
             std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
             Some(legacy_state_dir)
         );
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_overrides_stale_env_for_project_bound_agent_surface() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let active_project =
+            TempStateHarness::new().expect("active temp harness should initialize");
+        let stale_project = TempStateHarness::new().expect("stale temp harness should initialize");
+        make_project_root(active_project.path());
+        make_project_root(stale_project.path());
+        let active_state_dir = active_project
+            .path()
+            .join(crate::state_store::default_state_dir());
+        let stale_state_dir = stale_project
+            .path()
+            .join(crate::state_store::default_state_dir());
+        fs::create_dir_all(&active_state_dir).expect("active state dir should exist");
+        fs::create_dir_all(&stale_state_dir).expect("stale state dir should exist");
+        let _cwd = crate::test_cli_support::guard_current_dir(active_project.path());
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &stale_state_dir);
+        let raw_args = ["vida", "agent", "dispatch-next", "--json"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+
+        let guard = prepare_runtime_state_dir_for_parse(&raw_args)
+            .expect("pre-parse state dir preparation should succeed");
+        let cli = Cli::try_parse_from(raw_args).expect("agent dispatch-next cli should parse");
+
+        assert!(guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(active_state_dir.clone())
+        );
+        match cli.command {
+            Some(Command::Agent(args)) => match args.command {
+                crate::AgentCommand::DispatchNext(command) => {
+                    assert_eq!(command.state_dir, Some(active_state_dir));
+                }
+                other => panic!("expected dispatch-next command, got {other:?}"),
+            },
+            other => panic!("expected agent command, got {other:?}"),
+        }
+        drop(guard);
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(stale_state_dir)
+        );
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_allows_valid_env_state_when_cwd_is_outside_project() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let project = TempStateHarness::new().expect("project temp harness should initialize");
+        let outside = TempStateHarness::new().expect("outside temp harness should initialize");
+        make_project_root(project.path());
+        fs::create_dir_all(project.path().join(crate::state_store::default_state_dir()))
+            .expect("canonical state dir should exist");
+        let legacy_state_dir = project.path().join(".vida");
+        let expected_state_dir = project.path().join(crate::state_store::default_state_dir());
+        let _cwd = crate::test_cli_support::guard_current_dir(outside.path());
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &legacy_state_dir);
+        let _root_env_guard = EnvVarGuard::unset("VIDA_ROOT");
+        let raw_args = ["vida", "status", "--json"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+
+        let parse_guard = prepare_runtime_state_dir_for_parse(&raw_args)
+            .expect("pre-parse env fallback should be accepted outside a project");
+        let cli = Cli::try_parse_from(raw_args).expect("status cli should parse");
+
+        assert!(parse_guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(expected_state_dir.clone())
+        );
+        assert_eq!(
+            std::env::var_os("VIDA_ROOT").map(std::path::PathBuf::from),
+            Some(project.path().to_path_buf())
+        );
+        match &cli.command {
+            Some(Command::Status(args)) => {
+                assert_eq!(args.state_dir, Some(expected_state_dir.clone()));
+            }
+            other => panic!("expected status command, got {other:?}"),
+        }
+        let runtime_guard = prepare_runtime_state_dir(&cli.command)
+            .expect("env fallback should survive post-parse");
+        assert!(runtime_guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(expected_state_dir)
+        );
+        drop(runtime_guard);
+        drop(parse_guard);
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(legacy_state_dir)
+        );
+        assert!(std::env::var_os("VIDA_ROOT").is_none());
     }
 
     #[test]

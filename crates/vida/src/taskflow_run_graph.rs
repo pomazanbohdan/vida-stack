@@ -195,6 +195,26 @@ fn blocked_status_signal(value: &str) -> bool {
     normalized == "blocked" || normalized == "lane_blocked" || normalized.ends_with("_blocked")
 }
 
+fn completed_status_signal(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized == "completed" || normalized == "complete" || normalized.ends_with("_complete")
+}
+
+fn terminal_run_graph_status_resolved(status: &RunGraphStatus) -> bool {
+    completed_status_signal(&status.status) && completed_status_signal(&status.lifecycle_stage)
+}
+
+fn terminal_recovery_summary_resolved(
+    summary: &crate::state_store::RunGraphRecoverySummary,
+) -> bool {
+    completed_status_signal(&summary.resume_status)
+        && completed_status_signal(&summary.lifecycle_stage)
+        && !summary.recovery_ready
+        && summary.resume_target == "none"
+        && !summary.delegation_gate.delegated_cycle_open
+        && summary.delegation_gate.blocker_code.is_none()
+}
+
 fn fallback_dispatch_blocker_code() -> String {
     crate::contract_profile_adapter::blocker_code_str(
         crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
@@ -1156,6 +1176,10 @@ fn recovery_surface_contract_with_owned_scope(
     Option<String>,
     Option<String>,
 ) {
+    if terminal_recovery_summary_resolved(summary) {
+        return (Vec::new(), None, None, None, None);
+    }
+
     let projection_resolves_open_cycle =
         recovery_projection_resolves_persisted_open_cycle(summary, projection_truth);
     let ready_handoff_resolves_open_cycle = recovery_ready_handoff_resolves_open_cycle(summary);
@@ -1783,6 +1807,10 @@ fn run_graph_status_surface_blocker_codes(
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
 ) -> Vec<String> {
+    if terminal_run_graph_status_resolved(status) {
+        return Vec::new();
+    }
+
     let mut blocked_evidence_present =
         blocked_status_signal(&status.status) || blocked_status_signal(&status.lifecycle_stage);
     let mut blocker_codes = projection_truth_blocker_codes_for_ready_handoff(
@@ -13282,6 +13310,111 @@ mod tests {
             Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json")
         );
         assert_eq!(recommended_surface.as_deref(), Some("vida agent-init"));
+    }
+
+    #[test]
+    fn recovery_surface_contract_suppresses_stale_receipt_blocker_after_terminal_completion() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-terminal-materialization".to_string(),
+            task_id: "run-terminal-materialization".to_string(),
+            active_node: "work-pool-pack".to_string(),
+            lifecycle_stage: "work_pool_pack_complete".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            resume_status: "completed".to_string(),
+            recovery_ready: false,
+            handoff_state: "none".to_string(),
+            policy_gate: "not_required".to_string(),
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "work-pool-pack".to_string(),
+                lifecycle_stage: "work_pool_pack_complete".to_string(),
+                delegated_cycle_open: false,
+                delegated_cycle_state: "clear".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                blocker_code: None,
+                reporting_pause_gate: "closure_candidate".to_string(),
+                continuation_signal: "continue_after_reports".to_string(),
+            },
+        };
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-terminal-materialization");
+        receipt.dispatch_target = "work-pool-pack".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("internal_activation_view_only".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["internal_activation_view_only".to_string()];
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida taskflow run-graph status run-terminal-materialization --json".to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract(&summary, &projection_truth);
+
+        assert!(blocker_codes.is_empty());
+        assert!(why_not_now.is_none());
+        assert!(next_action.is_none());
+        assert!(recommended_command.is_none());
+        assert!(recommended_surface.is_none());
+    }
+
+    #[test]
+    fn run_graph_status_surface_suppresses_stale_receipt_blocker_after_terminal_completion() {
+        let mut status = default_run_graph_status(
+            "run-terminal-materialization-status",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "work-pool-pack".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "work_pool_pack_complete".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "none".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.handoff_state = "none".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.context_state = "sealed".to_string();
+
+        let mut receipt =
+            clean_ready_downstream_dispatch_receipt("run-terminal-materialization-status");
+        receipt.dispatch_target = "work-pool-pack".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("internal_activation_view_only".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["internal_activation_view_only".to_string()];
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida taskflow run-graph status run-terminal-materialization-status --json"
+                    .to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let blocker_codes = run_graph_status_surface_blocker_codes(&status, &projection_truth);
+
+        assert!(blocker_codes.is_empty());
     }
 
     #[test]

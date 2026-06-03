@@ -264,7 +264,11 @@ pub(crate) fn merge_live_exception_takeover_write_guard_with_task_authority(
         "latest_run_graph_task_stale".to_string(),
         serde_json::Value::Bool(latest_run_graph_task_stale),
     );
-    let owned_write_scope = exception_takeover_owned_write_scope(state_root, latest_receipt);
+    let owned_write_scope = if latest_run_graph_task_stale {
+        Vec::new()
+    } else {
+        exception_takeover_owned_write_scope(state_root, latest_receipt)
+    };
     guard_obj.insert(
         "root_local_write_allowed_for_only_these_paths".to_string(),
         serde_json::json!(owned_write_scope),
@@ -603,5 +607,9 @@ mod tests {
         );
         assert_eq!(merged["latest_run_graph_task_stale"], true);
         assert_eq!(merged["reason"], "latest_run_graph_task_stale");
+        assert_eq!(
+            merged["root_local_write_allowed_for_only_these_paths"],
+            serde_json::json!([])
+        );
     }
 }

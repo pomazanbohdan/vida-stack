@@ -451,6 +451,17 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
                         &in_progress_tasks,
                     );
+                let latest_run_graph_task_stale_for_write_guard = latest_run_graph_task_missing
+                    || latest_run_graph_task_closed
+                    || latest_run_graph_task_orthogonal_to_taskflow_active_work(
+                        latest_run_graph_status
+                            .as_ref()
+                            .map(|status| status.task_id.as_str()),
+                        latest_run_graph_dispatch_receipt
+                            .as_ref()
+                            .map(|receipt| receipt.run_id.as_str()),
+                        &taskflow_active_candidates,
+                    );
                 let has_taskflow_active_candidates = !taskflow_active_candidates.is_empty();
                 let continuation_binding =
                     crate::continuation_binding_summary::add_taskflow_active_work_truth(
@@ -488,7 +499,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         store.root(),
                         latest_run_graph_dispatch_receipt.as_ref(),
                         latest_run_graph_recovery.as_ref(),
-                        latest_run_graph_task_missing || latest_run_graph_task_closed,
+                        latest_run_graph_task_stale_for_write_guard,
                     );
                 let mut host_agents = host_agents;
                 if let Some(host_agents_value) = host_agents.as_mut() {
@@ -755,6 +766,23 @@ fn status_json_projection_name(summary_only: bool) -> &'static str {
     }
 }
 
+fn latest_run_graph_task_orthogonal_to_taskflow_active_work(
+    latest_run_graph_status_task_id: Option<&str>,
+    latest_run_graph_receipt_run_id: Option<&str>,
+    taskflow_active_candidates: &[serde_json::Value],
+) -> bool {
+    let [candidate] = taskflow_active_candidates else {
+        return false;
+    };
+    let Some(candidate_task_id) = candidate.get("task_id").and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+
+    latest_run_graph_status_task_id.is_some_and(|task_id| task_id != candidate_task_id)
+        || latest_run_graph_receipt_run_id.is_some_and(|run_id| run_id != candidate_task_id)
+}
+
 async fn build_operator_session_projection_for_status(
     store: &StateStore,
 ) -> Result<serde_json::Value, state_store::StateStoreError> {
@@ -997,6 +1025,17 @@ async fn refresh_cached_status_projection_runtime_fields(
         crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
             &in_progress_tasks,
         );
+    let latest_run_graph_task_stale_for_write_guard = latest_run_graph_task_missing
+        || latest_run_graph_task_closed
+        || latest_run_graph_task_orthogonal_to_taskflow_active_work(
+            latest_run_graph_status
+                .as_ref()
+                .map(|status| status.task_id.as_str()),
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+            &taskflow_active_candidates,
+        );
     let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
         continuation_binding,
         taskflow_active_candidates,
@@ -1008,7 +1047,7 @@ async fn refresh_cached_status_projection_runtime_fields(
             store.root(),
             latest_run_graph_dispatch_receipt.as_ref(),
             latest_run_graph_recovery.as_ref(),
-            latest_run_graph_task_missing || latest_run_graph_task_closed,
+            latest_run_graph_task_stale_for_write_guard,
         );
 
     let project_root =
@@ -1265,6 +1304,57 @@ mod tests {
     }
 
     #[test]
+    fn latest_run_graph_task_orthogonal_to_taskflow_active_work_rejects_stale_exception_authority()
+    {
+        let active_candidate = serde_json::json!({
+            "task_id": "active-task",
+            "status": "in_progress"
+        });
+
+        assert!(
+            !super::latest_run_graph_task_orthogonal_to_taskflow_active_work(
+                Some("active-task"),
+                Some("active-task"),
+                &[active_candidate.clone()]
+            )
+        );
+        assert!(
+            super::latest_run_graph_task_orthogonal_to_taskflow_active_work(
+                Some("stale-run"),
+                Some("active-task"),
+                &[active_candidate.clone()]
+            )
+        );
+        assert!(
+            super::latest_run_graph_task_orthogonal_to_taskflow_active_work(
+                Some("active-task"),
+                Some("stale-run"),
+                &[active_candidate.clone()]
+            )
+        );
+        assert!(
+            !super::latest_run_graph_task_orthogonal_to_taskflow_active_work(
+                Some("stale-run"),
+                Some("stale-run"),
+                &[]
+            )
+        );
+        assert!(
+            !super::latest_run_graph_task_orthogonal_to_taskflow_active_work(
+                Some("stale-run"),
+                Some("stale-run"),
+                &[
+                    active_candidate,
+                    serde_json::json!({
+                        "task_id": "other-active-task",
+                        "status": "in_progress"
+                    })
+                ]
+            )
+        );
+    }
+
+    #[test]
     fn status_full_cached_projection_renders_operator_compact_view() {
         let cached = serde_json::json!({
             "surface": "vida status",
@@ -1304,6 +1394,132 @@ mod tests {
                 ["count"],
             2
         );
+    }
+
+    #[test]
+    fn runtime_continuation_overlay_does_not_keep_stale_root_session_write_guard() {
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-stale-write-guard-overlay-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create temp state root");
+        let marker =
+            crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                &root,
+            );
+        fs::write(&marker, "task-marker-1").expect("task marker should write");
+
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "root_session_write_guard": {
+                "status": "blocked_by_default",
+                "root_session_role": "orchestrator",
+                "lawful_write_surface": "vida agent-init",
+                "host_local_write_capability_is_not_authority": true,
+                "local_write_requires_exception_path": true,
+                "root_local_write_allowed": false,
+                "root_local_write_allowed_for_only_these_paths": ["crates/vida/src/cli.rs"],
+                "required_exception_evidence": "predecessor-receipt",
+                "pre_write_checkpoint_required": true,
+                "latest_run_graph_task_stale": true,
+                "latest_lane_status": "lane_completed",
+                "local_exception_takeover_state": "receipt_recorded"
+            },
+            "continuation_binding": {
+                "status": "bound",
+                "active_bounded_unit": {
+                    "kind": "task_graph_task",
+                    "run_id": "architecture-refactor-cli-help-complete-coverage-task",
+                    "task_id": "architecture-refactor-status-explicit-binding-stale-projection-defect"
+                }
+            },
+            "latest_run_graph_status": {
+                "run_id": "architecture-refactor-cli-help-complete-coverage-task",
+                "task_id": "architecture-refactor-cli-help-complete-coverage-task",
+                "status": "completed"
+            }
+        });
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            super::status_json_projection_name(false),
+            &cached,
+        );
+        let cached = crate::operator_projection_cache::read_state_stale_recent_json_projection(
+            &root,
+            super::status_json_projection_name(false),
+            std::time::Duration::from_secs(60),
+        )
+        .expect("cached status projection should be readable");
+        let overlay = serde_json::json!({
+            "binding": {
+                "run_id": "architecture-refactor-status-explicit-binding-stale-projection-defect",
+                "task_id": "architecture-refactor-status-explicit-binding-stale-projection-defect",
+                "status": "bound",
+                "active_bounded_unit": {
+                    "kind": "task_graph_task",
+                    "run_id": "architecture-refactor-status-explicit-binding-stale-projection-defect",
+                    "task_id": "architecture-refactor-status-explicit-binding-stale-projection-defect",
+                    "task_status": "open",
+                    "issue_type": "defect"
+                },
+                "binding_source": "explicit_continuation_bind_task",
+                "why_this_unit": "Bind the open status projection defect as the explicit continuation task.",
+                "primary_path": "normal_delivery_path",
+                "sequential_vs_parallel_posture": "sequential_only_explicit_task_bound",
+                "request_text": "architecture-refactor-status-explicit-binding-stale-projection-defect",
+                "recorded_at": "2026-06-02T21:15:49Z"
+            },
+            "continuation_binding": {
+                "status": "bound",
+                "continuation_allowed": true,
+                "continuation_required_now": false,
+                "active_bounded_unit": {
+                    "kind": "task_graph_task",
+                    "run_id": "architecture-refactor-status-explicit-binding-stale-projection-defect",
+                    "task_id": "architecture-refactor-status-explicit-binding-stale-projection-defect",
+                    "task_status": "open",
+                    "issue_type": "defect"
+                },
+                "binding_source": "explicit_continuation_bind_task",
+                "why_this_unit": "Bind the open status projection defect as the explicit continuation task.",
+                "primary_path": "normal_delivery_path",
+                "sequential_vs_parallel_posture": "sequential_only_explicit_task_bound",
+                "pause_boundary_gate": "allowed_if_no_further_bound_work_is_evidenced",
+                "ambiguity_reason": null,
+                "next_actions": []
+            }
+        });
+
+        let rendered = crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
+            &root,
+            &cached,
+            &overlay,
+        )
+        .expect("validated continuation overlay should render cached status payload");
+        let payload: serde_json::Value =
+            serde_json::from_str(&rendered).expect("rendered status should remain json");
+
+        assert_eq!(
+            payload["active_bounded_unit"]["task_id"],
+            "architecture-refactor-status-explicit-binding-stale-projection-defect"
+        );
+        assert_ne!(
+            payload["root_session_write_guard"]["run_id"],
+            "architecture-refactor-cli-help-complete-coverage-task",
+            "cached status projection must not pair a fresh explicit binding with predecessor write-guard authority"
+        );
+        assert_ne!(
+            payload["root_session_write_guard"]["latest_lane_status"],
+            "lane_completed",
+            "cached status projection must refresh or fail closed instead of keeping predecessor lane completion state"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

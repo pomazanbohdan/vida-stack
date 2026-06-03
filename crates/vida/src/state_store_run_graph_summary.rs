@@ -6,6 +6,7 @@ use crate::taskflow_run_graph::{
 };
 
 fn reconcile_run_graph_status_with_dispatch_receipt(
+    state_root: Option<&std::path::Path>,
     mut status: RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceiptStored>,
 ) -> Result<RunGraphStatus, StateStoreError> {
@@ -57,6 +58,8 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             Some("lane_open") | Some("lane_running") | Some("packet_ready") | None
         )
         && receipt.downstream_dispatch_status.is_none();
+    let tracked_flow_materialization_completed =
+        tracked_flow_materialization_result_passed(state_root, &receipt);
     let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
             receipt.lane_status.as_deref(),
@@ -92,6 +95,29 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         && status.resume_target == format!("dispatch.{retry_target}_lane")
         && status.recovery_ready;
     if blocked_receipt {
+        if tracked_flow_materialization_completed {
+            if let Some(selected_backend) = receipt
+                .selected_backend
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                status.selected_backend = selected_backend.to_string();
+            }
+            let completed_target = receipt.dispatch_target.trim();
+            let lifecycle_target = completed_target.replace('-', "_");
+            status.active_node = completed_target.to_string();
+            status.next_node = None;
+            status.status = "completed".to_string();
+            status.lifecycle_stage = format!("{lifecycle_target}_complete");
+            status.policy_gate = "not_required".to_string();
+            status.handoff_state = "none".to_string();
+            status.resume_target = "none".to_string();
+            status.context_state = "sealed".to_string();
+            status.checkpoint_kind = "none".to_string();
+            status.recovery_ready = false;
+            return Ok(status);
+        }
         if retry_ready_same_lane {
             if let Some(selected_backend) = receipt
                 .selected_backend
@@ -213,6 +239,85 @@ fn blocked_agent_lane_receipt_keeps_resume_target(receipt: &RunGraphDispatchRece
         "internal_activation_view_only"
             | crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
     )
+}
+
+fn tracked_flow_materialization_result_passed(
+    state_root: Option<&std::path::Path>,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    if receipt.dispatch_status != "blocked"
+        || receipt.blocker_code.as_deref() != Some("internal_activation_view_only")
+        || receipt.dispatch_surface.as_deref() != Some("vida task ensure")
+        || !matches!(
+            receipt.dispatch_target.as_str(),
+            "work-pool-pack" | "dev-pack"
+        )
+    {
+        return false;
+    }
+    let mut candidate_paths = Vec::new();
+    if let Some(result_path) = receipt
+        .dispatch_result_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        candidate_paths.push(std::path::PathBuf::from(result_path));
+    }
+    if let Some(root) = state_root {
+        let results_dir = root.join("runtime-consumption").join("dispatch-results");
+        if let Ok(entries) = std::fs::read_dir(results_dir) {
+            let mut result_paths = entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .is_some_and(|name| {
+                            name.starts_with(&format!("{}-", receipt.run_id))
+                                && name.ends_with(".json")
+                        })
+                })
+                .collect::<Vec<_>>();
+            result_paths.sort();
+            candidate_paths.extend(result_paths.into_iter().rev());
+        }
+    }
+    candidate_paths.into_iter().any(|result_path| {
+        let Ok(result_body) = std::fs::read_to_string(&result_path) else {
+            return false;
+        };
+        tracked_flow_materialization_result_body_passed(&result_body, receipt)
+    })
+}
+
+fn tracked_flow_materialization_result_body_passed(
+    result_body: &str,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    let Ok(result_json) = serde_json::from_str::<serde_json::Value>(&result_body) else {
+        return false;
+    };
+    if result_json["status"].as_str() != Some("pass")
+        || result_json["surface"].as_str() != Some("vida task ensure")
+    {
+        return false;
+    }
+    let expected_packet_key = match receipt.dispatch_target.as_str() {
+        "work-pool-pack" => "work_pool_task",
+        "dev-pack" => "dev_task",
+        _ => return false,
+    };
+    if result_json["packet_key"].as_str() != Some(expected_packet_key) {
+        return false;
+    }
+    let task_id_present = result_json["task"]["task_id"]
+        .as_str()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    let task_materialized = result_json["task"]["created"].as_bool() == Some(true)
+        || result_json["task"]["reused_existing"].as_bool() == Some(true);
+    task_id_present && task_materialized
 }
 
 fn ready_dispatch_handoff_matches_downstream_receipt(
@@ -2257,7 +2362,11 @@ impl StateStore {
             recovery_ready: resumability.recovery_ready,
         };
         let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
-        let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
+        let status = reconcile_run_graph_status_with_dispatch_receipt(
+            Some(self.root()),
+            status,
+            receipt.as_ref(),
+        )?;
         let task = if task_rows.is_empty() {
             self.show_task(&status.task_id).await.ok()
         } else {
@@ -2441,21 +2550,12 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<bool, StateStoreError> {
-        let mut query = self
-            .db
-            .query(
-                "SELECT lane_status, supersedes_receipt_id \
-                 FROM run_graph_dispatch_receipt \
-                 WHERE run_id = $run_id \
-                 LIMIT 1;",
-            )
-            .bind(("run_id", run_id.to_string()))
-            .await?;
-        let rows: Vec<RunGraphLatestReceiptRow> = query.take(0)?;
-        Ok(rows.into_iter().next().is_some_and(|receipt| {
-            receipt.lane_status.as_deref() == Some("lane_superseded")
-                && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
-        }))
+        let Some(receipt) = self.run_graph_dispatch_receipt_stored(run_id).await? else {
+            return Ok(false);
+        };
+        Ok((receipt.lane_status.as_deref() == Some("lane_superseded")
+            && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref()))
+            || stored_receipt_has_active_exception_takeover(&receipt))
     }
 
     async fn run_graph_latest_row_points_to_terminal_task_active(
@@ -3615,7 +3715,7 @@ mod tests {
 
         let stored_receipt = receipt.into();
         let reconciled =
-            reconcile_run_graph_status_with_dispatch_receipt(status, Some(&stored_receipt))
+            reconcile_run_graph_status_with_dispatch_receipt(None, status, Some(&stored_receipt))
                 .expect("routed pre-execution receipt should reconcile");
 
         assert_eq!(reconciled.status, "ready");
@@ -4829,6 +4929,173 @@ mod tests {
         assert_eq!(reconciled.status, "ready");
         assert_eq!(reconciled.resume_target, "dispatch.review_ensemble");
         assert!(reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn tracked_flow_materialization_pass_completes_activation_view_only_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-tracked-flow-materialization-pass-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-tracked-flow-materialization",
+            "spec-pack",
+            "scope_discussion",
+        );
+        status.task_id = "task-tracked-flow-materialization".to_string();
+        status.active_node = "work-pool-pack".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "work_pool_pack_blocked".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked materialization status");
+
+        let result_path = root.join("tracked-flow-materialization-result.json");
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "surface": "vida task ensure",
+                "status": "pass",
+                "packet_key": "work_pool_task",
+                "task": {
+                    "task_id": "feature-example-work-pool",
+                    "created": false,
+                    "reused_existing": true,
+                    "label": "work-pool-pack"
+                },
+                "epic": {
+                    "task_id": "feature-example",
+                    "created": false
+                },
+                "changed_files": []
+            }))
+            .expect("render materialization result"),
+        )
+        .expect("write materialization result");
+
+        let mut receipt = sample_dispatch_receipt("run-tracked-flow-materialization");
+        receipt.dispatch_target = "work-pool-pack".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.dispatch_surface = Some("vida task ensure".to_string());
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+        receipt.blocker_code = Some("internal_activation_view_only".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist blocked materialization receipt");
+
+        let reconciled = store
+            .run_graph_status("run-tracked-flow-materialization")
+            .await
+            .expect("load reconciled run graph status");
+        assert_eq!(reconciled.active_node, "work-pool-pack");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.lifecycle_stage, "work_pool_pack_complete");
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(!reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn work_pool_materialization_pass_reconciles_missing_result_path_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-work-pool-materialization-missing-result-path-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-work-pool-materialization",
+            "spec-pack",
+            "scope_discussion",
+        );
+        status.task_id = "task-work-pool-materialization".to_string();
+        status.active_node = "work-pool-pack".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "work_pool_pack_blocked".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked materialization status");
+
+        let results_dir = root.join("runtime-consumption").join("dispatch-results");
+        fs::create_dir_all(&results_dir).expect("create dispatch results dir");
+        fs::write(
+            results_dir.join("run-work-pool-materialization-2026-06-03T01-00-00Z.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "surface": "vida task ensure",
+                "status": "pass",
+                "packet_key": "work_pool_task",
+                "task": {
+                    "task_id": "feature-example-work-pool",
+                    "created": false,
+                    "reused_existing": true,
+                    "label": "work-pool-pack"
+                },
+                "epic": {
+                    "task_id": "feature-example",
+                    "created": false
+                },
+                "changed_files": []
+            }))
+            .expect("render materialization result"),
+        )
+        .expect("write materialization result");
+
+        let mut receipt = sample_dispatch_receipt("run-work-pool-materialization");
+        receipt.dispatch_target = "work-pool-pack".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.dispatch_surface = Some("vida task ensure".to_string());
+        receipt.dispatch_result_path = None;
+        receipt.blocker_code = Some("internal_activation_view_only".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist blocked materialization receipt");
+
+        let reconciled = store
+            .run_graph_status("run-work-pool-materialization")
+            .await
+            .expect("load reconciled run graph status");
+        assert_eq!(reconciled.active_node, "work-pool-pack");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.lifecycle_stage, "work_pool_pack_complete");
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(!reconciled.recovery_ready);
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6114,6 +6381,91 @@ mod tests {
         assert_eq!(reconciled.lifecycle_stage, "closure_complete");
         assert_eq!(reconciled.selected_backend, "opencode_cli");
         assert!(!reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn terminal_task_active_projection_ignores_exception_takeover_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-terminal-task-active-exception-takeover-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "task-closed-exception-takeover",
+                title: "Closed task with active exception takeover",
+                display_id: None,
+                description: "",
+                issue_type: "bug",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-closed-exception-takeover",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "task-closed-exception-takeover".to_string();
+        status.active_node = "test_author".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "dispatch.test_author".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked run-graph status");
+
+        let mut receipt = sample_dispatch_receipt("run-closed-exception-takeover");
+        receipt.dispatch_target = "test_author".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.blocker_code = Some("pending_test_author_evidence".to_string());
+        receipt.exception_path_receipt_id = Some("exception-receipt".to_string());
+        receipt.supersedes_receipt_id = Some("exception-receipt".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist exception takeover receipt");
+
+        store
+            .close_task(
+                "task-closed-exception-takeover",
+                "superseded by exception takeover",
+            )
+            .await
+            .expect("close task");
+
+        let terminal_active = store
+            .latest_terminal_task_active_run_graph_status()
+            .await
+            .expect("load terminal task active projection");
+        assert!(
+            terminal_active.is_none(),
+            "exception takeover receipt should keep closed task out of active projection"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

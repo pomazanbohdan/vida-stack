@@ -3487,6 +3487,24 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             serde_json::json!("bridge_request_pending"),
         );
         body.insert(
+            "dispatch_mode".to_string(),
+            serde_json::json!({
+                "mode": "execution_dispatch",
+                "requested_execute_dispatch": true,
+                "has_packet_source": true,
+                "activation_view_only": false,
+                "execution_dispatch": true,
+                "activation_view_is_execution_evidence": false,
+                "activation_view_completes_delegated_work": false,
+                "execution_evidence_required_for_completion": true,
+                "completion_requires_receipt_backed_execution": true,
+                "required_completion_evidence": "host_tool_bridge_receipt",
+                "missing_execution_evidence_semantics": "non_executing_bridge_blocker",
+                "root_session_write_authority_granted": false,
+                "continuation_authority_granted": false,
+            }),
+        );
+        body.insert(
             "blocker_code".to_string(),
             serde_json::json!("host_tool_bridge_adapter_required"),
         );
@@ -4581,7 +4599,7 @@ mod tests {
         configured_internal_host_dispatch_wall_timeout_seconds,
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
         dispatch_packet_prompt, execute_external_agent_lane_dispatch,
-        external_provider_output_confirms_execution,
+        execute_internal_agent_lane_dispatch, external_provider_output_confirms_execution,
         external_provider_output_confirms_execution_for_mode, host_tool_bridge_artifact_paths,
         host_tool_bridge_request_id, internal_codex_output_confirms_execution,
         internal_host_activation_only_blocker_code, internal_host_app_bridge_requires_fail_closed,
@@ -5669,6 +5687,135 @@ carriers:
         assert_eq!(
             result["backend_dispatch"]["backend_id"],
             "internal_subagents"
+        );
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn internal_host_tool_bridge_pending_result_preserves_execute_dispatch_mode() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-pending-result-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = project_root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("create state root");
+        let dispatch_packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(dispatch_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(
+            &dispatch_packet_path,
+            r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"],"proof_target":"cargo test -p vida internal_host_tool_bridge_pending_result_preserves_execute_dispatch_mode"}"#,
+        )
+        .expect("write dispatch packet");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
+      host_tool_bridge:
+        adapter_kind: codex_host_tools
+        adapter_capability_id: codex.multi_agent_v1
+        invocation_mode: parent_host_tool_api
+      carriers:
+        middle:
+          model: gpt-5.5
+          model_reasoning_effort: medium
+          sandbox_mode: read-only
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      default_model_profile: internal_fast
+      model_profiles:
+        internal_fast:
+          provider: openai
+          model_ref: gpt-5.5
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          write_scope: orchestrator_native
+          runtime_roles: [business_analyst]
+          task_classes: [analysis]
+"#,
+        )
+        .expect("write overlay");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "implementation": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "analysis": {
+                    "executor_backend": "internal_subagents"
+                }
+            },
+            "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "selected_tier": "middle",
+                "selected_model_profile_id": "internal_fast"
+            }
+        }));
+        let receipt = internal_codex_fallback_receipt(
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                execute_internal_agent_lane_dispatch(
+                    &state_root,
+                    &project_root,
+                    dispatch_packet_path
+                        .to_str()
+                        .expect("dispatch packet path should render"),
+                    Some("internal_subagents"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "internal",
+                        "selected_cli_system": "codex"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return")
+            .expect("pending bridge result should be returned");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "bridge_request_pending");
+        assert_eq!(result["blocker_code"], "host_tool_bridge_adapter_required");
+        assert_eq!(result["dispatch_mode"]["mode"], "execution_dispatch");
+        assert_eq!(result["dispatch_mode"]["requested_execute_dispatch"], true);
+        assert_eq!(result["dispatch_mode"]["execution_dispatch"], true);
+        assert_eq!(result["dispatch_mode"]["activation_view_only"], false);
+        assert_eq!(
+            result["dispatch_mode"]["required_completion_evidence"],
+            "host_tool_bridge_receipt"
+        );
+        assert_eq!(
+            result["backend_dispatch"]["host_tool_bridge_request"]["status"],
+            "pending"
         );
 
         let _ = std::fs::remove_dir_all(&project_root);

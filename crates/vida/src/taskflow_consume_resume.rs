@@ -2815,6 +2815,38 @@ fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
         );
         normalized = true;
     }
+    if normalize_top_level_packet_scope_mirrors(packet, &packet_template_kind) {
+        normalized = true;
+    }
+    normalized
+}
+
+fn normalize_top_level_packet_scope_mirrors(
+    packet: &mut serde_json::Value,
+    packet_template_kind: &str,
+) -> bool {
+    let Some(active_packet) = packet.get(packet_template_kind) else {
+        return false;
+    };
+    let mirrors = ["owned_paths", "read_only_paths"]
+        .into_iter()
+        .filter_map(|key| {
+            active_packet
+                .get(key)
+                .and_then(serde_json::Value::as_array)
+                .map(|value| (key, serde_json::Value::Array(value.clone())))
+        })
+        .collect::<Vec<_>>();
+    let Some(packet_object) = packet.as_object_mut() else {
+        return false;
+    };
+    let mut normalized = false;
+    for (key, active_value) in mirrors {
+        if packet_object.get(key) != Some(&active_value) {
+            packet_object.insert(key.to_string(), active_value);
+            normalized = true;
+        }
+    }
     normalized
 }
 
@@ -17440,6 +17472,54 @@ agent_system:
 
         let persisted = fs::read_to_string(&packet_path).expect("normalized packet should persist");
         assert!(persisted.contains("\"read_only_paths\""));
+        let _ = fs::remove_file(packet_path);
+    }
+
+    #[test]
+    fn read_dispatch_packet_repairs_stale_top_level_scope_mirror_before_validation() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let packet_path = std::env::temp_dir().join(format!(
+            "vida-stale-top-level-scope-mirror-packet-{}-{}.json",
+            std::process::id(),
+            nanos
+        ));
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_template_kind": "coach_review_packet",
+                "owned_paths": [
+                    "crates/vida/src/doctor_surface.rs",
+                    "crates/vida/src/state_store_run_graph_summary.rs",
+                    "crates/vida/src/status_surface.rs"
+                ],
+                "coach_review_packet": {
+                    "packet_id": "run-1::coach::coach-review",
+                    "review_goal": "review bounded packet",
+                    "owned_paths": [],
+                    "read_only_paths": [".vida/data/state/runtime-consumption", "docs/product/spec", "docs/process"],
+                    "definition_of_done": ["return bounded review evidence"],
+                    "proof_target": "bounded proof target",
+                    "blocking_question": "is it aligned?"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write stale mirror packet");
+
+        let packet =
+            read_dispatch_packet(packet_path.to_str().expect("packet path should be utf-8"))
+                .expect("stale top-level mirror should normalize and validate");
+        assert_eq!(packet["owned_paths"], serde_json::json!([]));
+        assert_eq!(
+            packet["read_only_paths"],
+            serde_json::json!(DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS)
+        );
+
+        let persisted = fs::read_to_string(&packet_path).expect("normalized packet should persist");
+        assert!(persisted.contains("\"owned_paths\": []"));
         let _ = fs::remove_file(packet_path);
     }
 

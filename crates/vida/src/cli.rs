@@ -16,6 +16,16 @@ const DOCFLOW_LONG_ABOUT: &str = "Delegate to the DocFlow runtime family.\n\nDoc
 
 const DOCFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida docflow help\n  vida docflow init\n  vida docflow init --json\n  vida docflow init --help\n  vida docflow repair-footer --help\n  vida docflow finalize-edit --help\n  vida docflow doctor --root .\n  vida docflow check-file --path <file> --json\n  vida docflow check --root . --json <file>\n  vida docflow readiness-check --profile active-canon\n  vida docflow registry --root .\n\nInit/repair contract:\n  `vida docflow init` without positional args prints agent bootstrap instructions.\n  `vida docflow init --json` prints the same contract as machine-readable JSON.\n  `vida docflow init <markdown_file> <artifact_path> <artifact_type> <change_note>` initializes a canonical markdown artifact.\n  `vida docflow repair-footer <markdown_file>` initializes missing footer metadata on legacy markdown files.";
 
+const SERVICE_AFTER_HELP: &str = "Service operations:\n  vida service hello --json\n  vida service status --json\n  vida service capabilities --json\n  vida service endpoints --json\n  vida service endpoint-status --json\n  vida service lifecycle-plan --json\n  vida service lifecycle-status --json\n  vida service events --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
+
+const PROJECT_AFTER_HELP: &str = "Project operations:\n  vida project list --json\n  vida project resolve --project <project-id> --json\n  vida project status --project <project-id> --json\n\nOptions:\n  --project <project-id>    Project id or reference for project-scoped operations\n  --json                    Emit machine-readable JSON output";
+
+const WIZARD_AFTER_HELP: &str = "Wizard operations:\n  vida wizard inspect --json\n  vida wizard draft --json\n  vida wizard validate --json\n  vida wizard diff --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
+
+const JOB_AFTER_HELP: &str = "Job operations:\n  vida job status --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
+
+const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
+
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
 const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id> --json\n  vida task create <task-id> --title <title> --json\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n\nNotes:\n  Provide exactly one title source: positional <title> or --title <title>.\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary --json` to verify parallel-safe admission after mutation.";
@@ -105,15 +115,30 @@ pub(crate) enum Command {
     Doctor(DoctorArgs),
     #[command(about = "run canonical runtime diagnostics for completed slices")]
     Diagnostics(DiagnosticsArgs),
-    #[command(about = "service-first CLI surface backed by VidaClient service operations")]
+    #[command(
+        about = "service-first CLI surface backed by VidaClient service operations",
+        after_help = SERVICE_AFTER_HELP
+    )]
     Service(ProxyArgs),
-    #[command(about = "service-first CLI surface backed by VidaClient project operations")]
+    #[command(
+        about = "service-first CLI surface backed by VidaClient project operations",
+        after_help = PROJECT_AFTER_HELP
+    )]
     Project(ProxyArgs),
-    #[command(about = "service-first CLI surface backed by VidaClient wizard operations")]
+    #[command(
+        about = "service-first CLI surface backed by VidaClient wizard operations",
+        after_help = WIZARD_AFTER_HELP
+    )]
     Wizard(ProxyArgs),
-    #[command(about = "service-first CLI surface backed by VidaClient job operations")]
+    #[command(
+        about = "service-first CLI surface backed by VidaClient job operations",
+        after_help = JOB_AFTER_HELP
+    )]
     Job(ProxyArgs),
-    #[command(about = "service-first CLI surface backed by VidaClient receipt operations")]
+    #[command(
+        about = "service-first CLI surface backed by VidaClient receipt operations",
+        after_help = RECEIPT_AFTER_HELP
+    )]
     Receipt(ProxyArgs),
     #[command(about = "update scoped VIDA project documentation carriers")]
     Docs(DocsArgs),
@@ -151,7 +176,11 @@ pub(crate) enum Command {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct ProxyArgs {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        help = "Family command arguments and options forwarded to the selected runtime surface"
+    )]
     pub(crate) args: Vec<String>,
 }
 
@@ -298,18 +327,27 @@ pub(crate) struct TaskArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum TaskCommand {
+    #[command(about = "show TaskFlow-owned help topics and compatibility aliases")]
     Help(TaskHelpArgs),
+    #[command(about = "import backlog tasks from a JSONL snapshot file")]
     ImportJsonl(TaskImportJsonlArgs),
     #[command(about = "authoritatively replace backlog state from a canonical snapshot artifact")]
     ReplaceJsonl(TaskReplaceJsonlArgs),
+    #[command(about = "export backlog tasks to a JSONL snapshot file")]
     ExportJsonl(TaskExportJsonlArgs),
+    #[command(about = "list tracked backlog tasks with optional status filtering")]
     List(TaskListArgs),
+    #[command(about = "show one tracked task with dependency and planner metadata")]
     Show(TaskShowArgs),
+    #[command(about = "show progress and dependency context for one tracked task")]
     Progress(TaskDepsArgs),
+    #[command(about = "list tasks ready for execution from canonical graph truth")]
     Ready(TaskReadyArgs),
+    #[command(about = "select the next TaskFlow work item from current graph state")]
     Next(TaskNextArgs),
     #[command(about = "resolve the next lawful task continuation item without heuristic guessing")]
     NextLawful(TaskNextLawfulArgs),
+    #[command(about = "allocate the next child display id under a parent display id")]
     NextDisplayId(TaskNextDisplayIdArgs),
     #[command(
         about = TASK_CREATE_ABOUT,
@@ -317,6 +355,7 @@ pub(crate) enum TaskCommand {
         after_help = TASK_CREATE_AFTER_HELP
     )]
     Create(TaskCreateArgs),
+    #[command(about = "create the task if missing while preserving an existing task")]
     Ensure(TaskCreateArgs),
     #[command(
         about = TASK_UPDATE_ABOUT,
@@ -328,6 +367,7 @@ pub(crate) enum TaskCommand {
     OwnedStatus(TaskOwnedStatusArgs),
     #[command(about = "record delegated agent handoff receipts for a task")]
     Handoff(TaskHandoffArgs),
+    #[command(about = "close one tracked task with evidence and optional release automation")]
     Close(TaskCloseArgs),
     #[command(about = "retire historical run-graph rows for already-closed tasks")]
     ReconcileClosedRuns(TaskReconcileClosedRunsArgs),
@@ -339,8 +379,11 @@ pub(crate) enum TaskCommand {
         about = "preview adaptive replanner finding classification without mutating graph state"
     )]
     AdaptivePreview(TaskAdaptivePreviewArgs),
+    #[command(about = "show direct dependency edges for one task")]
     Deps(TaskDepsArgs),
+    #[command(about = "show tasks that depend on one task")]
     ReverseDeps(TaskDepsArgs),
+    #[command(about = "list blocked tasks and graph blockers")]
     Blocked(TaskBlockedArgs),
     #[command(about = "inspect direct children for one task from the authoritative backlog store")]
     Children(TaskDepsArgs),
@@ -359,8 +402,11 @@ pub(crate) enum TaskCommand {
         alias = "subtree"
     )]
     Tree(TaskDepsArgs),
+    #[command(about = "validate dependency graph consistency and parent-child structure")]
     ValidateGraph(TaskBlockedArgs),
+    #[command(about = "mutate direct dependency edges for tracked tasks")]
     Dep(TaskDepArgs),
+    #[command(about = "show the current critical path through blocked and ready tasks")]
     CriticalPath(TaskBlockedArgs),
 }
 
@@ -372,8 +418,11 @@ pub(crate) struct TaskDepArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum TaskDependencyCommand {
+    #[command(about = "add one dependency edge between two tracked tasks")]
     Add(TaskDependencyMutationCommandArgs),
+    #[command(about = "add multiple dependency edges from flags or an edge file")]
     AddBulk(TaskDependencyBulkAddCommandArgs),
+    #[command(about = "remove one dependency edge between two tracked tasks")]
     Remove(TaskDependencyTargetCommandArgs),
 }
 
@@ -384,36 +433,62 @@ pub(crate) struct TaskHelpArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskDependencyMutationCommandArgs {
+    #[arg(help = "Task id that will receive the dependency edge")]
     pub(crate) task_id: String,
+    #[arg(help = "Task id that the task depends on")]
     pub(crate) depends_on_id: String,
+    #[arg(help = "Dependency edge type, such as parent-child or blocks")]
     pub(crate) edge_type: String,
 
     #[arg(long = "created-by", default_value = "vida")]
     pub(crate) created_by: String,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskDependencyTargetCommandArgs {
+    #[arg(help = "Task id that currently owns the dependency edge")]
     pub(crate) task_id: String,
+    #[arg(help = "Task id currently referenced by the dependency edge")]
     pub(crate) depends_on_id: String,
+    #[arg(help = "Dependency edge type to remove")]
     pub(crate) edge_type: String,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
@@ -449,6 +524,7 @@ pub(crate) struct TaskDependencyBulkAddCommandArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskImportJsonlArgs {
+    #[arg(help = "Path to the JSONL task snapshot to import")]
     pub(crate) path: PathBuf,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
@@ -463,6 +539,7 @@ pub(crate) struct TaskImportJsonlArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskReplaceJsonlArgs {
+    #[arg(help = "Path to the canonical JSONL task snapshot to apply")]
     pub(crate) path: PathBuf,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
@@ -477,6 +554,7 @@ pub(crate) struct TaskReplaceJsonlArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskExportJsonlArgs {
+    #[arg(help = "Path where the JSONL task snapshot should be written")]
     pub(crate) path: PathBuf,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
@@ -512,20 +590,32 @@ pub(crate) struct TaskListArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskShowArgs {
+    #[arg(help = "Task id to inspect")]
     pub(crate) task_id: String,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskOwnedStatusArgs {
+    #[arg(help = "Task id whose owned paths should be checked against git status")]
     pub(crate) task_id: String,
 
     #[arg(
@@ -558,6 +648,7 @@ pub(crate) enum TaskHandoffCommand {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskHandoffAcceptArgs {
+    #[arg(help = "Task id receiving the delegated handoff receipt")]
     pub(crate) task_id: String,
 
     #[arg(
@@ -594,32 +685,54 @@ pub(crate) struct TaskHandoffAcceptArgs {
     )]
     pub(crate) next_actions: Vec<String>,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskNextDisplayIdArgs {
+    #[arg(help = "Parent display id whose next child display id should be allocated")]
     pub(crate) parent_display_id: String,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct TaskCreateArgs {
+    #[arg(help = "Stable task id to create in the authoritative backlog store")]
     pub(crate) task_id: String,
 
     #[arg(value_name = "TITLE", help = "Task title; alternatively pass --title")]
@@ -632,34 +745,56 @@ pub(crate) struct TaskCreateArgs {
     )]
     pub(crate) title: Option<String>,
 
-    #[arg(long = "type", default_value = "task")]
+    #[arg(
+        long = "type",
+        default_value = "task",
+        help = "Task issue type to store, such as task, todo, defect, or epic"
+    )]
     pub(crate) issue_type: String,
 
-    #[arg(long = "status", default_value = "open")]
+    #[arg(
+        long = "status",
+        default_value = "open",
+        help = "Initial task status to store in the backlog"
+    )]
     pub(crate) status: String,
 
-    #[arg(long = "priority", default_value_t = 2)]
+    #[arg(
+        long = "priority",
+        default_value_t = 2,
+        help = "Task priority where lower numbers are selected earlier"
+    )]
     pub(crate) priority: u32,
 
-    #[arg(long = "display-id")]
+    #[arg(long = "display-id", help = "Human-readable display id to assign")]
     pub(crate) display_id: Option<String>,
 
-    #[arg(long = "parent-id")]
+    #[arg(long = "parent-id", help = "Parent task id for a child task edge")]
     pub(crate) parent_id: Option<String>,
 
-    #[arg(long = "parent-display-id")]
+    #[arg(
+        long = "parent-display-id",
+        help = "Parent display id used when resolving or deriving display ids"
+    )]
     pub(crate) parent_display_id: Option<String>,
 
-    #[arg(long = "auto-display-from")]
+    #[arg(
+        long = "auto-display-from",
+        help = "Parent display id whose next child display id should be generated"
+    )]
     pub(crate) auto_display_from: Option<String>,
 
-    #[arg(long = "description", default_value = "")]
+    #[arg(
+        long = "description",
+        default_value = "",
+        help = "Task description stored in the backlog"
+    )]
     pub(crate) description: String,
 
-    #[arg(long = "notes")]
+    #[arg(long = "notes", help = "Task notes stored in the backlog")]
     pub(crate) notes: Option<String>,
 
-    #[arg(long = "notes-file")]
+    #[arg(long = "notes-file", help = "Read task notes from this file path")]
     pub(crate) notes_file: Option<PathBuf>,
 
     #[arg(
@@ -669,16 +804,28 @@ pub(crate) struct TaskCreateArgs {
     )]
     pub(crate) labels: Vec<String>,
 
-    #[arg(long = "execution-mode")]
+    #[arg(
+        long = "execution-mode",
+        help = "Execution scheduling mode: sequential, parallel_safe, or exclusive"
+    )]
     pub(crate) execution_mode: Option<String>,
 
-    #[arg(long = "order-bucket")]
+    #[arg(
+        long = "order-bucket",
+        help = "Ordering bucket used to keep related work sequenced"
+    )]
     pub(crate) order_bucket: Option<String>,
 
-    #[arg(long = "parallel-group")]
+    #[arg(
+        long = "parallel-group",
+        help = "Parallel admission group for compatible parallel-safe tasks"
+    )]
     pub(crate) parallel_group: Option<String>,
 
-    #[arg(long = "conflict-domain")]
+    #[arg(
+        long = "conflict-domain",
+        help = "Conflict domain that prevents unsafe co-scheduling"
+    )]
     pub(crate) conflict_domain: Option<String>,
 
     #[arg(
@@ -702,42 +849,56 @@ pub(crate) struct TaskCreateArgs {
     )]
     pub(crate) proof_targets: Vec<String>,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskUpdateArgs {
+    #[arg(help = "Task id to update in the authoritative backlog store")]
     pub(crate) task_id: String,
 
-    #[arg(long = "title")]
+    #[arg(long = "title", help = "Replacement task title")]
     pub(crate) title: Option<String>,
 
-    #[arg(long = "status")]
+    #[arg(long = "status", help = "Replacement task status")]
     pub(crate) status: Option<String>,
 
-    #[arg(long = "priority")]
+    #[arg(long = "priority", help = "Replacement task priority")]
     pub(crate) priority: Option<u32>,
 
-    #[arg(long = "notes")]
+    #[arg(long = "notes", help = "Replacement task notes")]
     pub(crate) notes: Option<String>,
 
-    #[arg(long = "notes-file")]
+    #[arg(
+        long = "notes-file",
+        help = "Read replacement task notes from this file path"
+    )]
     pub(crate) notes_file: Option<PathBuf>,
 
-    #[arg(long = "description")]
+    #[arg(long = "description", help = "Replacement task description")]
     pub(crate) description: Option<String>,
 
-    #[arg(long = "parent-id")]
+    #[arg(long = "parent-id", help = "Replacement parent task id")]
     pub(crate) parent_id: Option<String>,
 
-    #[arg(long = "clear-parent-id")]
+    #[arg(long = "clear-parent-id", help = "Remove the current parent task edge")]
     pub(crate) clear_parent_id: bool,
 
     #[arg(
@@ -760,16 +921,19 @@ pub(crate) struct TaskUpdateArgs {
     )]
     pub(crate) set_labels: Option<String>,
 
-    #[arg(long = "execution-mode")]
+    #[arg(
+        long = "execution-mode",
+        help = "Replacement execution scheduling mode"
+    )]
     pub(crate) execution_mode: Option<String>,
 
-    #[arg(long = "order-bucket")]
+    #[arg(long = "order-bucket", help = "Replacement ordering bucket")]
     pub(crate) order_bucket: Option<String>,
 
-    #[arg(long = "parallel-group")]
+    #[arg(long = "parallel-group", help = "Replacement parallel admission group")]
     pub(crate) parallel_group: Option<String>,
 
-    #[arg(long = "conflict-domain")]
+    #[arg(long = "conflict-domain", help = "Replacement conflict domain")]
     pub(crate) conflict_domain: Option<String>,
 
     #[arg(
@@ -793,33 +957,53 @@ pub(crate) struct TaskUpdateArgs {
     )]
     pub(crate) proof_targets: Vec<String>,
 
-    #[arg(long = "clear-execution-mode")]
+    #[arg(
+        long = "clear-execution-mode",
+        help = "Remove the task execution scheduling mode"
+    )]
     pub(crate) clear_execution_mode: bool,
 
-    #[arg(long = "clear-order-bucket")]
+    #[arg(long = "clear-order-bucket", help = "Remove the task ordering bucket")]
     pub(crate) clear_order_bucket: bool,
 
-    #[arg(long = "clear-parallel-group")]
+    #[arg(
+        long = "clear-parallel-group",
+        help = "Remove the task parallel admission group"
+    )]
     pub(crate) clear_parallel_group: bool,
 
-    #[arg(long = "clear-conflict-domain")]
+    #[arg(
+        long = "clear-conflict-domain",
+        help = "Remove the task conflict domain"
+    )]
     pub(crate) clear_conflict_domain: bool,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct TaskCloseArgs {
+    #[arg(help = "Task id to close")]
     pub(crate) task_id: String,
 
-    #[arg(long = "reason")]
+    #[arg(long = "reason", help = "Closure reason and evidence summary")]
     pub(crate) reason: String,
 
     #[arg(long = "source", hide = true)]
@@ -913,6 +1097,7 @@ pub(crate) struct TaskReconcileClosedRunsArgs {
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct TaskSplitArgs {
+    #[arg(help = "Oversized parent task id to split")]
     pub(crate) task_id: String,
 
     #[arg(
@@ -922,7 +1107,10 @@ pub(crate) struct TaskSplitArgs {
     )]
     pub(crate) children: Vec<String>,
 
-    #[arg(long = "reason")]
+    #[arg(
+        long = "reason",
+        help = "Reason the task must be split into bounded children"
+    )]
     pub(crate) reason: String,
 
     #[arg(long = "dry-run")]
@@ -940,11 +1128,17 @@ pub(crate) struct TaskSplitArgs {
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct TaskSpawnBlockerArgs {
+    #[arg(help = "Blocked source task id")]
     pub(crate) task_id: String,
+    #[arg(help = "New blocker task id to create")]
     pub(crate) blocker_task_id: String,
+    #[arg(help = "Title for the new blocker task")]
     pub(crate) title: String,
 
-    #[arg(long = "reason")]
+    #[arg(
+        long = "reason",
+        help = "Reason this blocker prevents the source task from progressing"
+    )]
     pub(crate) reason: String,
 
     #[arg(long = "description")]
@@ -1014,10 +1208,14 @@ pub(crate) struct TaskNextArgs {
     #[arg(long = "scope")]
     pub(crate) scope: Option<String>,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
@@ -1038,6 +1236,7 @@ pub(crate) struct TaskNextLawfulArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskDepsArgs {
+    #[arg(help = "Task id whose dependency graph should be inspected")]
     pub(crate) task_id: String,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
@@ -1052,7 +1251,9 @@ pub(crate) struct TaskDepsArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskBulkReparentArgs {
+    #[arg(help = "Current parent task id for children being moved")]
     pub(crate) from_parent_id: String,
+    #[arg(help = "New parent task id for moved children")]
     pub(crate) to_parent_id: String,
 
     #[arg(
@@ -1076,7 +1277,9 @@ pub(crate) struct TaskBulkReparentArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskDefectBatchRehomeArgs {
+    #[arg(help = "Current parent task id for defect tasks being moved")]
     pub(crate) from_parent_id: String,
+    #[arg(help = "New parent task id for defect tasks being moved")]
     pub(crate) to_parent_id: String,
 
     #[arg(
@@ -1227,27 +1430,47 @@ pub(crate) struct AgentFeedbackArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct AgentInitArgs {
+    #[arg(help = "Optional request text to classify into a bounded agent lane")]
     pub(crate) request_text: Option<String>,
 
-    #[arg(long = "role")]
+    #[arg(
+        long = "role",
+        help = "Requested runtime role or conversation role for lane activation"
+    )]
     pub(crate) role: Option<String>,
 
-    #[arg(long = "dispatch-packet")]
+    #[arg(
+        long = "dispatch-packet",
+        help = "Runtime dispatch packet path to activate"
+    )]
     pub(crate) dispatch_packet: Option<String>,
 
-    #[arg(long = "downstream-packet")]
+    #[arg(
+        long = "downstream-packet",
+        help = "Runtime downstream dispatch packet path to activate"
+    )]
     pub(crate) downstream_packet: Option<String>,
 
-    #[arg(long = "execute-dispatch")]
+    #[arg(
+        long = "execute-dispatch",
+        help = "Execute the packet handoff instead of rendering only an activation view"
+    )]
     pub(crate) execute_dispatch: bool,
 
-    #[arg(long = "auto-dispatch-packet")]
+    #[arg(
+        long = "auto-dispatch-packet",
+        help = "Build a dispatch packet for the active runtime unit before execution"
+    )]
     pub(crate) auto_dispatch_packet: bool,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
@@ -1331,10 +1554,14 @@ pub(crate) enum DiagnosticsCommand {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct DiagnosticsPostCommitArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
@@ -1390,29 +1617,42 @@ pub(crate) enum OrchestratorSessionCommand {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct OrchestratorSessionShowArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct OrchestratorSessionReclaimArgs {
+    #[arg(help = "Stale orchestrator session id to reclaim")]
     pub(crate) session_id: String,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct OrchestratorSessionTransferArgs {
+    #[arg(help = "Stale orchestrator session id to transfer")]
     pub(crate) session_id: String,
 
-    #[arg(long = "to-current")]
+    #[arg(
+        long = "to-current",
+        help = "Transfer the stale session to the current orchestrator session"
+    )]
     pub(crate) to_current: bool,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
@@ -1426,6 +1666,33 @@ pub(crate) struct OrchestratorSessionTransferArgs {
 mod tests {
     use super::{Cli, TaskCommand};
     use clap::{CommandFactory, Parser};
+
+    fn assert_help_has_no_blank_description_rows(label: &str, help: &str) {
+        let lines: Vec<&str> = help.lines().collect();
+        let blank_rows: Vec<usize> = help
+            .lines()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                let previous = if index == 0 {
+                    ""
+                } else {
+                    lines[index - 1].trim()
+                };
+                let follows_option_or_argument = previous.starts_with('-')
+                    || previous.starts_with('<')
+                    || previous.starts_with('[');
+                if follows_option_or_argument && !line.is_empty() && line.trim().is_empty() {
+                    Some(index + 1)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            blank_rows.is_empty(),
+            "{label} help should not contain blank description rows at lines {blank_rows:?}:\n{help}"
+        );
+    }
 
     #[test]
     fn root_version_includes_build_timestamp_to_seconds() {
@@ -1748,6 +2015,78 @@ mod tests {
         };
         assert_eq!(next_lawful.scope.as_deref(), Some("audit-epic"));
         assert!(next_lawful.json);
+    }
+
+    #[test]
+    fn cli_help_description_inventory_covers_task_family_defect() {
+        let task_error = Cli::try_parse_from(["vida", "task", "--help"])
+            .expect_err("help should render clap display error");
+        let task_help = task_error.to_string();
+        assert_help_has_no_blank_description_rows("task", &task_help);
+        for expected in [
+            "show TaskFlow-owned help topics",
+            "import backlog tasks from a JSONL snapshot file",
+            "list tracked backlog tasks with optional status filtering",
+            "show one tracked task with dependency and planner metadata",
+            "allocate the next child display id",
+            "close one tracked task with evidence",
+            "validate dependency graph consistency",
+            "mutate direct dependency edges for tracked tasks",
+            "show the current critical path",
+        ] {
+            assert!(
+                task_help.contains(expected),
+                "task help should contain description fragment `{expected}`:\n{task_help}"
+            );
+        }
+
+        let dep_error = Cli::try_parse_from(["vida", "task", "dep", "--help"])
+            .expect_err("help should render clap display error");
+        let dep_help = dep_error.to_string();
+        assert_help_has_no_blank_description_rows("task dep", &dep_help);
+        for expected in [
+            "add one dependency edge",
+            "add multiple dependency edges",
+            "remove one dependency edge",
+        ] {
+            assert!(
+                dep_help.contains(expected),
+                "task dep help should contain `{expected}`:\n{dep_help}"
+            );
+        }
+
+        let create_error = Cli::try_parse_from(["vida", "task", "create", "--help"])
+            .expect_err("help should render clap display error");
+        let create_help = create_error.to_string();
+        assert_help_has_no_blank_description_rows("task create", &create_help);
+        assert!(create_help.contains("Stable task id to create"));
+        assert!(create_help.contains("Emit machine-readable JSON output"));
+
+        let update_error = Cli::try_parse_from(["vida", "task", "update", "--help"])
+            .expect_err("help should render clap display error");
+        let update_help = update_error.to_string();
+        assert_help_has_no_blank_description_rows("task update", &update_help);
+        assert!(update_help.contains("Replacement execution scheduling mode"));
+
+        let show_error = Cli::try_parse_from(["vida", "task", "show", "--help"])
+            .expect_err("help should render clap display error");
+        let show_help = show_error.to_string();
+        assert_help_has_no_blank_description_rows("task show", &show_help);
+        assert!(show_help.contains("Task id to inspect"));
+
+        let agent_init_error = Cli::try_parse_from(["vida", "agent-init", "--help"])
+            .expect_err("help should render clap display error");
+        let agent_init_help = agent_init_error.to_string();
+        assert_help_has_no_blank_description_rows("agent-init", &agent_init_help);
+        assert!(agent_init_help.contains("Optional request text"));
+        assert!(agent_init_help.contains("Execute the packet handoff"));
+
+        let reclaim_error =
+            Cli::try_parse_from(["vida", "orchestrator-session", "reclaim", "--help"])
+                .expect_err("help should render clap display error");
+        let reclaim_help = reclaim_error.to_string();
+        assert_help_has_no_blank_description_rows("orchestrator-session reclaim", &reclaim_help);
+        assert!(reclaim_help.contains("Stale orchestrator session id"));
     }
 
     #[test]

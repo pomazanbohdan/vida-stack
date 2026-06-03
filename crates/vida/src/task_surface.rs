@@ -2625,8 +2625,12 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                             "current_session_id": current_session_id,
                         }));
                     } else {
-                        eprintln!("Another orchestrator session holds an active exclusive claim on this work scope.");
-                        eprintln!("Inspect active sessions and claims with `vida orchestrator-session show --json`");
+                        eprintln!(
+                            "Another orchestrator session holds an active exclusive claim on this work scope."
+                        );
+                        eprintln!(
+                            "Inspect active sessions and claims with `vida orchestrator-session show --json`"
+                        );
                     }
                     return ExitCode::from(1);
                 }
@@ -2868,6 +2872,10 @@ struct TaskNextLawfulReceipt {
     binding_source: Option<String>,
     why_this_unit: String,
     sequential_vs_parallel_posture: String,
+    recommended_primary: Option<TaskContinuationCandidate>,
+    recommended_parallel_batch: Vec<TaskContinuationCandidate>,
+    why_not_auto_bound: Option<String>,
+    bind_command: Option<String>,
     ready_task_candidates: Vec<TaskContinuationCandidate>,
     blocker_codes: Vec<String>,
     next_action: Option<String>,
@@ -3641,6 +3649,52 @@ fn task_continuation_active_unit(task: &state_store::TaskRecord) -> serde_json::
     })
 }
 
+fn task_next_lawful_bind_command(candidate: &TaskContinuationCandidate) -> String {
+    format!(
+        "vida taskflow run-graph dispatch-init {} --json",
+        crate::shell_quote(&candidate.task_id)
+    )
+}
+
+fn task_next_lawful_recommended_primary(
+    ready_task_candidates: &[TaskContinuationCandidate],
+) -> Option<TaskContinuationCandidate> {
+    ready_task_candidates.first().cloned()
+}
+
+fn task_next_lawful_recommended_parallel_batch(
+    ready_task_candidates: &[TaskContinuationCandidate],
+) -> Vec<TaskContinuationCandidate> {
+    ready_task_candidates
+        .iter()
+        .filter(|candidate| candidate.ready_parallel_safe)
+        .cloned()
+        .collect()
+}
+
+fn task_next_lawful_why_not_auto_bound(
+    blocker_code: Option<&str>,
+    ready_task_candidates: &[TaskContinuationCandidate],
+) -> Option<String> {
+    match blocker_code {
+        Some("ambiguous_ready_task_candidates") => Some(format!(
+            "multiple ready candidates ({}) require an explicit bounded-unit binding; recommendations are ranked guidance only",
+            ready_task_candidates.len()
+        )),
+        Some("multiple_active_tasks") => Some(
+            "multiple active TaskFlow tasks require reconciliation before automatic binding".to_string(),
+        ),
+        Some("runtime_ready_candidate_conflict") => Some(
+            "runtime binding conflicts with ready TaskFlow candidates, so operator confirmation is required".to_string(),
+        ),
+        Some("continuation_source_drift") => Some(
+            "continuation sources disagree, so automatic binding would risk selecting the wrong bounded unit".to_string(),
+        ),
+        Some(_) => Some("blocking runtime evidence prevents automatic binding".to_string()),
+        None => None,
+    }
+}
+
 fn task_continuation_source_surfaces() -> Vec<String> {
     vec![
         "vida task next-lawful".to_string(),
@@ -3832,12 +3886,24 @@ fn blocked_task_next_lawful_receipt(
     next_action: &str,
 ) -> TaskNextLawfulReceipt {
     let next_actions = vec![next_action.to_string()];
+    let recommended_primary = task_next_lawful_recommended_primary(&ready_task_candidates);
+    let bind_command = recommended_primary
+        .as_ref()
+        .map(task_next_lawful_bind_command);
+    let recommended_parallel_batch =
+        task_next_lawful_recommended_parallel_batch(&ready_task_candidates);
+    let why_not_auto_bound =
+        task_next_lawful_why_not_auto_bound(Some(blocker_code), &ready_task_candidates);
     TaskNextLawfulReceipt {
         status: "blocked".to_string(),
         active_bounded_unit,
         binding_source: None,
         why_this_unit: "blocked_until_unique_lawful_continuation_is_evidenced".to_string(),
         sequential_vs_parallel_posture: "unknown_until_explicit_binding".to_string(),
+        recommended_primary,
+        recommended_parallel_batch,
+        why_not_auto_bound,
+        bind_command,
         ready_task_candidates,
         blocker_codes: vec![blocker_code.to_string()],
         next_action: next_actions.first().cloned(),
@@ -3855,12 +3921,22 @@ fn pass_task_next_lawful_receipt(
     next_action: String,
 ) -> TaskNextLawfulReceipt {
     let next_actions = vec![next_action];
+    let recommended_primary = task_next_lawful_recommended_primary(&ready_task_candidates);
+    let bind_command = recommended_primary
+        .as_ref()
+        .map(task_next_lawful_bind_command);
+    let recommended_parallel_batch =
+        task_next_lawful_recommended_parallel_batch(&ready_task_candidates);
     TaskNextLawfulReceipt {
         status: task_json_success_status().to_string(),
         active_bounded_unit,
         binding_source,
         why_this_unit: why_this_unit.to_string(),
         sequential_vs_parallel_posture: sequential_vs_parallel_posture.to_string(),
+        recommended_primary,
+        recommended_parallel_batch,
+        why_not_auto_bound: None,
+        bind_command,
         ready_task_candidates,
         blocker_codes: Vec::new(),
         next_action: next_actions.first().cloned(),
@@ -4847,8 +4923,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     Ok(binding) => binding,
                                     Err(error) => {
                                         eprintln!(
-                                        "Failed to read current latest-run continuation binding: {error}"
-                                    );
+                                            "Failed to read current latest-run continuation binding: {error}"
+                                        );
                                         return ExitCode::from(1);
                                     }
                                 }
@@ -6749,6 +6825,21 @@ mod tests {
         );
         assert_eq!(receipt.active_bounded_unit, serde_json::Value::Null);
         assert_eq!(receipt.ready_task_candidates.len(), 2);
+        assert_eq!(
+            receipt
+                .recommended_primary
+                .as_ref()
+                .map(|candidate| candidate.task_id.as_str()),
+            Some("task-a")
+        );
+        assert_eq!(
+            receipt.bind_command.as_deref(),
+            Some("vida taskflow run-graph dispatch-init task-a --json")
+        );
+        assert!(receipt
+            .why_not_auto_bound
+            .as_deref()
+            .is_some_and(|reason| reason.contains("multiple ready candidates")));
     }
 
     #[test]
@@ -7114,9 +7205,9 @@ mod tests {
             .next_actions
             .iter()
             .any(|action| action.contains("consume_continue_after_downstream_chain")));
-        assert!(receipt.next_action.as_deref().is_some_and(
-            |action| action.contains("vida taskflow recovery status current-run --json")
-        ));
+        assert!(receipt.next_action.as_deref().is_some_and(|action| {
+            action.contains("vida taskflow recovery status current-run --json")
+        }));
     }
 
     #[test]
@@ -8879,6 +8970,94 @@ mod tests {
                 .await
                 .expect("validate")
                 .is_empty());
+        });
+    }
+
+    #[test]
+    fn task_close_child_does_not_auto_close_parent_task() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "parent-epic",
+                "Parent epic",
+                "epic",
+                "open",
+                1,
+                None,
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "parent-task",
+                "Parent",
+                "task",
+                "open",
+                1,
+                Some("parent-epic"),
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "child-todo",
+                "Child TODO",
+                "todo",
+                "in_progress",
+                2,
+                Some("parent-task"),
+            )
+            .await;
+        });
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::Close(crate::TaskCloseArgs {
+                    task_id: "child-todo".to_string(),
+                    reason: "implementation proof passed".to_string(),
+                    source: Some("task_close_child_regression".to_string()),
+                    release: false,
+                    install: false,
+                    install_target: "current".to_string(),
+                    skip_release_build: false,
+                    source_binary: None,
+                    install_root: None,
+                    commit: false,
+                    push: false,
+                    stage_owned: false,
+                    commit_files: vec![],
+                    commit_message: None,
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::SUCCESS
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let parent = store
+                .show_task("parent-task")
+                .await
+                .expect("parent task should still exist");
+            let child = store
+                .show_task("child-todo")
+                .await
+                .expect("child task should still exist");
+
+            assert_eq!(child.status, "closed");
+            assert_eq!(
+                parent.status, "open",
+                "closing a child TODO must not implicitly close its parent task"
+            );
         });
     }
 

@@ -422,6 +422,81 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             return;
         }
+        Some("route") => {
+            println!("VIDA TaskFlow help: route");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Explain TaskFlow route selection, carrier/model assignment, and dispatch-admission truth before execution."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida taskflow route explain [--json]");
+            println!("  vida route explain [--json]");
+            println!("  vida taskflow validate-routing [--json]");
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  status, blocker_codes, route rows, selected backend/model profile, rejected candidates, config source paths, and next_actions"
+            );
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  Route explanation is diagnostic truth only; it does not dispatch work or claim execution evidence."
+            );
+            println!(
+                "  Missing config, unsupported runtime roles, or incompatible carrier/profile mappings fail closed with blocker_codes."
+            );
+            return;
+        }
+        Some("validate-routing") | Some("routing") => {
+            println!("VIDA TaskFlow help: validate-routing");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Validate route/config wiring before dispatch so unavailable commands, options, carriers, or model profiles fail closed."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida taskflow validate-routing [--json]");
+            println!("  vida taskflow route explain [--json]");
+            println!("  vida taskflow config-actuation census [--json]");
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  status, blocker_codes, validator rows, runtime consumer coverage, operator surface coverage, and next_actions"
+            );
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  Validation does not repair config by itself; blocked rows must be fixed in the owning config or runtime consumer."
+            );
+            return;
+        }
+        Some("status") => {
+            println!("VIDA TaskFlow help: status");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Inspect family-scoped TaskFlow/operator posture through the standardized status envelope."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida taskflow status [--summary] [--json]");
+            println!("  vida status [--json]");
+            println!("  vida taskflow graph-summary --json");
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  status, blocker_codes, next_actions, operator_contracts, shared_fields, latest runtime receipts, state spine, and session projection"
+            );
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  Status is read-only operator truth; it must not be treated as task closure or dispatch evidence."
+            );
+            return;
+        }
         Some("dependencies") => {
             println!("VIDA TaskFlow help: dependencies");
             println!();
@@ -830,7 +905,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|pricing|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|route|validate-routing|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|pricing|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -869,6 +944,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  replan     preview-first adaptive split/spawn-blocker mutation planning");
     println!("  scheduler  preview-first task selection under max_parallel_agents");
     println!("  parallelism explicit sequencing and parallel-safe scheduling contract");
+    println!("  route      route diagnostics and model/carrier selection explanation");
+    println!("  validate-routing  route/config validation before dispatch");
     println!("  status      family-scoped alias to the root operator status surface");
     println!("  continuation explicit bounded-unit binding");
     println!("  packet      persisted runtime packet inspection");
@@ -947,6 +1024,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!(
         "  Inspect routing/model config actuation: vida taskflow config-actuation census --json"
     );
+    println!("  Inspect route selection: vida taskflow route explain --json");
+    println!("  Validate route/config wiring: vida taskflow validate-routing --json");
     println!("  Inspect resumability state: vida taskflow help run-graph");
     println!(
         "  Bootstrap one design-first feature slice: vida taskflow bootstrap-spec \"feature request\" --json"

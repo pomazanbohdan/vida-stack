@@ -33,7 +33,17 @@ fn cli_service_first_families_emit_vida_client_operations() {
             "vida.service.status",
         ),
         (
+            &["service", "hello", "--json"][..],
+            "service",
+            "vida.service.hello",
+        ),
+        (
             &["service", "endpoints", "--json"][..],
+            "service",
+            "vida.service.endpoint.status",
+        ),
+        (
+            &["service", "endpoint-status", "--json"][..],
             "service",
             "vida.service.endpoint.status",
         ),
@@ -105,6 +115,43 @@ fn cli_service_first_families_emit_vida_client_operations() {
         assert_eq!(payload["family"], family);
         assert_eq!(payload["operation"], operation);
         assert_eq!(payload["status"], "pass");
+    }
+}
+
+#[test]
+fn cli_help_description_inventory_covers_service_first_proxy_commands() {
+    for (args, expected) in [
+        (
+            &["service", "--help"][..],
+            "vida service endpoint-status --json",
+        ),
+        (&["service", "--help"][..], "vida service hello --json"),
+        (
+            &["project", "--help"][..],
+            "vida project resolve --project <project-id> --json",
+        ),
+        (&["wizard", "--help"][..], "vida wizard validate --json"),
+        (&["job", "--help"][..], "vida job status --json"),
+        (&["receipt", "--help"][..], "vida receipt get --json"),
+    ] {
+        let output = vida()
+            .args(args)
+            .output()
+            .expect("help command should execute");
+        assert!(
+            output.status.success(),
+            "help command {args:?} should succeed: stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(expected),
+            "help command {args:?} should describe `{expected}`:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("--json"),
+            "help command {args:?} should describe --json:\n{stdout}"
+        );
     }
 }
 

@@ -825,7 +825,9 @@ impl StateStore {
                         });
                     }
                 }
-            } else if task.status == "open" || task.status == "in_progress" {
+            } else if (task.status == "open" || task.status == "in_progress")
+                && work_item_is_program_container(&task.issue_type)
+            {
                 let has_non_closed_child = children.iter().any(|child_id| {
                     by_id
                         .get(child_id)

@@ -1978,7 +1978,7 @@ dev_team:
     default_delivery:
       enabled: true
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       fail_closed_on_missing_step_contract: true
       steps: [developer, coach]
 "#,
@@ -2084,7 +2084,7 @@ dev_team:
       flow_class: development
       work_item_bindings: [epic, defect]
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       lifecycle_hook_templates: [command_timing_summary]
       proof_gates:
         required_commands: [cargo test -p vida development_flow_catalog]
@@ -2211,6 +2211,45 @@ dev_team:
     }
 
     #[test]
+    fn dev_team_template_keeps_lane_sequence_sequential_while_enabling_parallel_handoffs() {
+        let template_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/framework/templates/vida.config.yaml.template");
+        let template = std::fs::read_to_string(&template_path)
+            .expect("framework vida.config.yaml template should be readable");
+        let config: serde_yaml::Value =
+            serde_yaml::from_str(&template).expect("framework config template should parse");
+        let flows = crate::yaml_lookup(&config, &["dev_team", "flows"])
+            .and_then(serde_yaml::Value::as_mapping)
+            .expect("dev_team flows should exist in the framework template");
+
+        for flow_id in [
+            "defect_repair_verified",
+            "pr_repair_verified",
+            "runtime_defect_remediation",
+            "architecture_design",
+            "service_tui_orchestration",
+            "hook_enabled_internal_agent_development",
+            "default_delivery",
+        ] {
+            let flow = flows
+                .get(serde_yaml::Value::String(flow_id.to_string()))
+                .unwrap_or_else(|| {
+                    panic!("expected dev_team flow {flow_id} in framework template")
+                });
+            assert_eq!(
+                crate::yaml_bool(crate::yaml_lookup(flow, &["sequential"]), false),
+                true,
+                "{flow_id} must keep per-task lane order sequential"
+            );
+            assert_eq!(
+                crate::yaml_bool(crate::yaml_lookup(flow, &["allow_parallel_handoffs"]), false),
+                true,
+                "{flow_id} must permit cross-task parallel handoffs when execution semantics admit disjoint work"
+            );
+        }
+    }
+
+    #[test]
     fn flow_validation_blocks_unsupported_knobs_hooks_and_approval_modes() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let config_path = harness.path().join("vida.config.yaml");
@@ -2313,7 +2352,7 @@ dev_team:
     default_delivery:
       enabled: true
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       steps: [developer]
         "#,
         )
@@ -2427,7 +2466,7 @@ dev_team:
     default_delivery:
       enabled: true
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       steps: [test_author]
         "#,
         )
@@ -2502,7 +2541,7 @@ dev_team:
     default_delivery:
       enabled: true
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       steps: [developer]
         "#,
         )

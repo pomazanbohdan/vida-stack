@@ -438,6 +438,8 @@ pub struct DoctorArgs {
 pub struct ProofcheckArgs {
     #[arg(long)]
     pub layer: Option<usize>,
+    #[arg(long)]
+    pub root: Option<String>,
     #[arg(long, default_value = "active-canon-strict")]
     pub profile: String,
     #[arg(long = "format", default_value = "toon")]
@@ -1586,14 +1588,15 @@ fn render_proofcheck(args: &ProofcheckArgs) -> String {
                     layer, error
                 ),
             },
-            None => match render_proofcheck_profile(&args.profile) {
+            None => match render_proofcheck_profile(args.root.as_deref(), &args.profile) {
                 Ok(rendered) => rendered,
                 Err(error) => format!(
                     "context:\n  command: proofcheck\n  root: {}\n  layer: \n  files_mode: profile\ntotals:\n  fastcheck_rows: 0\n  protocol_coverage_rows: 0\n  readiness_rows: 0\n  doctor_error_rows: 0\n  doctor_warning_rows: 0\nerror:\n  message: {}",
-                    args.profile, error
+                    args.root.as_deref().unwrap_or(&args.profile), error
                 ),
             },
         },
+        "json" => render_proofcheck_json(args),
         "jsonl" => render_proofcheck_jsonl(args),
         other => serde_json::to_string(&serde_json::json!({
             "command": "proofcheck",
@@ -1607,40 +1610,56 @@ fn render_proofcheck(args: &ProofcheckArgs) -> String {
     }
 }
 
+fn render_proofcheck_json(args: &ProofcheckArgs) -> String {
+    let summary = match proofcheck_summary(args) {
+        Ok(summary) => summary,
+        Err(error) => {
+            return serde_json::to_string_pretty(&serde_json::json!({
+                "command": "proofcheck",
+                "profile": args.profile,
+                "root": args.root,
+                "layer": args.layer,
+                "files_mode": if args.layer.is_some() { "layer" } else { "profile" },
+                "verdict": "blocking",
+                "error": error,
+            }))
+            .unwrap_or_else(|_| {
+                "{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                    .to_string()
+            });
+        }
+    };
+    serde_json::to_string_pretty(&summary).unwrap_or_else(|error| {
+        serde_json::to_string(&serde_json::json!({
+            "command": "proofcheck",
+            "verdict": "blocking",
+            "error": format!("encode_error:{error}"),
+        }))
+        .unwrap_or_else(|_| {
+            "{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                .to_string()
+        })
+    })
+}
+
 fn render_proofcheck_jsonl(args: &ProofcheckArgs) -> String {
-    let summary = match args.layer {
-        Some(layer) => match layer_scope_paths(layer) {
-            Ok(paths) => proofcheck_layer_summary(layer, &paths),
-            Err(error) => {
-                return serde_json::to_string(&serde_json::json!({
-                    "command": "proofcheck",
-                    "layer": layer,
-                    "files_mode": "layer",
-                    "verdict": "blocking",
-                    "error": error,
-                }))
-                .unwrap_or_else(|_| {
-                    "{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
-                        .to_string()
-                });
-            }
-        },
-        None => match proofcheck_profile_summary(&args.profile) {
-            Ok(summary) => summary,
-            Err(error) => {
-                return serde_json::to_string(&serde_json::json!({
-                    "command": "proofcheck",
-                    "profile": args.profile,
-                    "files_mode": "profile",
-                    "verdict": "blocking",
-                    "error": error,
-                }))
-                .unwrap_or_else(|_| {
-                    "{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
-                        .to_string()
-                });
-            }
-        },
+    let summary = match proofcheck_summary(args) {
+        Ok(summary) => summary,
+        Err(error) => {
+            return serde_json::to_string(&serde_json::json!({
+                "command": "proofcheck",
+                "profile": args.profile,
+                "root": args.root,
+                "layer": args.layer,
+                "files_mode": if args.layer.is_some() { "layer" } else { "profile" },
+                "verdict": "blocking",
+                "error": error,
+            }))
+            .unwrap_or_else(|_| {
+                "{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                    .to_string()
+            });
+        }
     };
     encode_line(&summary).unwrap_or_else(|error| {
         serde_json::to_string(&serde_json::json!({
@@ -1653,6 +1672,16 @@ fn render_proofcheck_jsonl(args: &ProofcheckArgs) -> String {
                 .to_string()
         })
     })
+}
+
+fn proofcheck_summary(args: &ProofcheckArgs) -> Result<ProofcheckSummaryRow, String> {
+    match args.layer {
+        Some(layer) => match layer_scope_paths(layer) {
+            Ok(paths) => Ok(proofcheck_layer_summary(layer, &paths)),
+            Err(error) => Err(error),
+        },
+        None => proofcheck_profile_summary(args.root.as_deref(), &args.profile),
+    }
 }
 
 fn proofcheck_layer_summary(layer: usize, paths: &[String]) -> ProofcheckSummaryRow {
@@ -1691,11 +1720,14 @@ fn proofcheck_layer_summary(layer: usize, paths: &[String]) -> ProofcheckSummary
     }
 }
 
-fn proofcheck_profile_summary(profile: &str) -> Result<ProofcheckSummaryRow, String> {
-    let targets = resolve_profile_targets(None, profile, &[])?;
-    let fast_rows = fastcheck_rows(None, profile, &[])?;
-    let protocol_rows = protocol_coverage_rows(None, profile, &[])?;
-    let readiness_rows = readiness_rows(None, profile, &[])?;
+fn proofcheck_profile_summary(
+    root: Option<&str>,
+    profile: &str,
+) -> Result<ProofcheckSummaryRow, String> {
+    let targets = resolve_profile_targets(root, profile, &[])?;
+    let fast_rows = fastcheck_rows(root, profile, &[])?;
+    let protocol_rows = protocol_coverage_rows(root, profile, &[])?;
+    let readiness_rows = readiness_rows(root, profile, &[])?;
     let doctor_rows = doctor_rows_for_targets(&targets, false);
     let doctor_error_rows = doctor_rows
         .iter()
@@ -1728,11 +1760,11 @@ fn proofcheck_profile_summary(profile: &str) -> Result<ProofcheckSummaryRow, Str
     })
 }
 
-fn render_proofcheck_profile(profile: &str) -> Result<String, String> {
-    let targets = resolve_profile_targets(None, profile, &[])?;
-    let fast_rows = fastcheck_rows(None, profile, &[])?;
-    let protocol_rows = protocol_coverage_rows(None, profile, &[])?;
-    let readiness_rows = readiness_rows(None, profile, &[])?;
+fn render_proofcheck_profile(root: Option<&str>, profile: &str) -> Result<String, String> {
+    let targets = resolve_profile_targets(root, profile, &[])?;
+    let fast_rows = fastcheck_rows(root, profile, &[])?;
+    let protocol_rows = protocol_coverage_rows(root, profile, &[])?;
+    let readiness_rows = readiness_rows(root, profile, &[])?;
     let doctor_rows = doctor_rows_for_targets(&targets, false);
     let doctor_error_rows = doctor_rows
         .iter()
@@ -1745,7 +1777,7 @@ fn render_proofcheck_profile(profile: &str) -> Result<String, String> {
     let mut lines = vec![
         "context:".to_string(),
         "  command: proofcheck".to_string(),
-        format!("  root: {profile}"),
+        format!("  root: {}", root.unwrap_or(profile)),
         "  layer: ".to_string(),
         "  files_mode: profile".to_string(),
         "totals:".to_string(),
@@ -4177,8 +4209,7 @@ fn summarize_artifact_types(rows: &[docflow_contracts::RegistryRow]) -> Vec<(&st
 }
 
 fn read_layer_matrix() -> std::io::Result<Vec<Vec<(String, String)>>> {
-    let matrix_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md");
+    let matrix_path = layer_matrix_path();
     let text = fs::read_to_string(matrix_path)?;
     let mut table_lines = Vec::new();
     let mut in_table = false;
@@ -4219,6 +4250,19 @@ fn read_layer_matrix() -> std::io::Result<Vec<Vec<(String, String)>>> {
         }
     }
     Ok(rows)
+}
+
+fn layer_matrix_path() -> std::path::PathBuf {
+    let relative = std::path::Path::new(
+        "docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md",
+    );
+    let runtime_path = runtime_root().join(relative);
+    if runtime_path.is_file() {
+        return runtime_path;
+    }
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative)
 }
 
 fn write_registry_jsonl(
@@ -4779,6 +4823,55 @@ mod tests {
         assert!(rendered.contains("\"profile\":\"active-canon-strict\""));
         assert!(rendered.contains("\"files_mode\":\"profile\""));
         assert!(rendered.contains("\"verdict\":"));
+    }
+
+    #[test]
+    fn proofcheck_command_supports_root_and_json_format() {
+        let root = temp_dir("proofcheck-root-json");
+        fs::create_dir_all(root.join("docs/product/spec")).expect("create docs");
+        fs::write(
+            root.join("docs/product/spec/example.md"),
+            "# Example\n\n-----\nartifact_path: product/spec/example\nartifact_type: product_spec\nartifact_version: 1\nartifact_revision: 2026-06-03\nschema_version: 1\nstatus: canonical\nsource_path: docs/product/spec/example.md\n",
+        )
+        .expect("write artifact");
+        let cli = Cli::parse_from([
+            "docflow",
+            "proofcheck",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "active-canon-strict",
+            "--format",
+            "json",
+        ]);
+
+        let rendered = run(cli);
+        let value: Value = serde_json::from_str(&rendered)
+            .expect("proofcheck json format should render valid JSON");
+
+        assert_eq!(value["command"], "proofcheck");
+        assert_eq!(value["profile"], "active-canon-strict");
+        assert_eq!(value["files_mode"], "profile");
+        assert!(value.get("verdict").is_some());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proofcheck_plain_profile_output_honors_root_override() {
+        let root = temp_dir("proofcheck-root-plain");
+        let cli = Cli::parse_from([
+            "docflow",
+            "proofcheck",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "active-canon-strict",
+        ]);
+
+        let rendered = run(cli);
+
+        assert!(rendered.contains(&format!("root: {}", root.display())));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

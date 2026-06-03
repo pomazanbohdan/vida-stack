@@ -12972,10 +12972,21 @@ fn docflow_proxy_can_run_rust_layer_status_surface() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("layer-status"));
     assert!(stdout.contains("layer: 6"));
-    assert!(stdout.contains("Layer name: Canonical Operator"));
-    assert!(stdout.contains("Status: ✅"));
+    assert!(
+        !stdout.contains("os error 3") && !stderr.contains("os error 3"),
+        "docflow layer-status must resolve the layer matrix through the proxy path without Windows missing-path errors\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("Layer name: Canonical Operator"),
+        "docflow layer-status layer 6 should render the Canonical Operator row\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("Status: ✅"),
+        "docflow layer-status layer 6 should render the Canonical Operator status\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
 }
 
 #[test]

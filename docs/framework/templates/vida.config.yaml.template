@@ -621,7 +621,7 @@ dev_team:
       work_item_bindings:
         - debug
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       lifecycle_hook_templates:
         - command_timing_summary
       adapter_projection:
@@ -644,7 +644,7 @@ dev_team:
       work_item_bindings:
         - defect
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       lifecycle_hook_templates:
         - command_timing_summary
       adapter_projection:
@@ -693,7 +693,7 @@ dev_team:
       flow_class: development
       work_item_bindings: [pull_request, pr_repair]
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       lifecycle_hook_templates: [command_timing_summary]
       adapter_projection:
         host_agent_bridge_contract: required
@@ -755,7 +755,7 @@ dev_team:
       flow_class: development
       work_item_bindings: [runtime_defect]
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       lifecycle_hook_templates: [command_timing_summary]
       adapter_projection:
         host_agent_bridge_contract: required
@@ -803,7 +803,7 @@ dev_team:
       flow_class: development
       work_item_bindings: [architecture]
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       lifecycle_hook_templates: [command_timing_summary, approval_wait, approval_complete]
       adapter_projection:
         host_agent_bridge_contract: required
@@ -843,7 +843,7 @@ dev_team:
       flow_class: release
       work_item_bindings: [release_readiness]
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       lifecycle_hook_templates: [command_timing_summary]
       adapter_projection:
         host_agent_bridge_contract: required
@@ -873,7 +873,7 @@ dev_team:
       flow_class: development
       work_item_bindings: [service_tui]
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       lifecycle_hook_templates: [command_timing_summary]
       adapter_projection:
         host_agent_bridge_contract: required
@@ -912,7 +912,7 @@ dev_team:
       flow_class: development
       work_item_bindings: [internal_agent_development]
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       lifecycle_hook_templates: [command_timing_summary]
       adapter_projection:
         host_agent_bridge_contract: required
@@ -962,7 +962,7 @@ dev_team:
         - epic
         - task
       sequential: true
-      allow_parallel_handoffs: false
+      allow_parallel_handoffs: true
       fail_closed_on_missing_step_contract: true
       lifecycle_hook_templates:
         - command_timing_summary

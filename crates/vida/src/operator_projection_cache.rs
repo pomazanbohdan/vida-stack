@@ -400,6 +400,7 @@ fn apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
     let continuation_binding = overlay.get("continuation_binding")?.clone();
     let binding = overlay.get("binding").cloned();
     let object = payload.as_object_mut()?;
+    clear_stale_root_session_write_guard_after_continuation_overlay(object, &continuation_binding);
 
     object.insert(
         "projection_cache".to_string(),
@@ -452,6 +453,125 @@ fn apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
         object.insert("explicit_continuation_binding".to_string(), binding);
     }
     serde_json::to_string_pretty(&payload).ok()
+}
+
+fn clear_stale_root_session_write_guard_after_continuation_overlay(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    continuation_binding: &serde_json::Value,
+) {
+    let Some(active_unit) = continuation_binding
+        .get("active_bounded_unit")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+    let active_run_id = active_unit
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let active_task_id = active_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let cached_unit = object
+        .get("active_bounded_unit")
+        .or_else(|| {
+            object
+                .get("continuation_binding")
+                .and_then(|binding| binding.get("active_bounded_unit"))
+        })
+        .and_then(serde_json::Value::as_object);
+    let cached_run_id = cached_unit
+        .and_then(|unit| unit.get("run_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let cached_task_id = cached_unit
+        .and_then(|unit| unit.get("task_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let cached_run_graph_task_id = object
+        .get("latest_run_graph_status")
+        .and_then(|status| status.get("task_id"))
+        .or_else(|| {
+            object
+                .get("latest_run_graph_gate")
+                .and_then(|gate| gate.get("task_id"))
+        })
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let Some(guard) = object
+        .get_mut("root_session_write_guard")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+
+    let guard_run_id = guard
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let guard_task_id = guard
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let guard_marks_stale_run_graph_task = guard
+        .get("latest_run_graph_task_stale")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let stale_guard = guard_run_id
+        .is_some_and(|run_id| active_run_id.is_some_and(|active| run_id != active))
+        || guard_task_id
+            .is_some_and(|task_id| active_task_id.is_some_and(|active| task_id != active))
+        || cached_run_id
+            .as_deref()
+            .is_some_and(|run_id| active_run_id.is_some_and(|active| run_id != active))
+        || cached_task_id
+            .as_deref()
+            .is_some_and(|task_id| active_task_id.is_some_and(|active| task_id != active))
+        || (guard_marks_stale_run_graph_task
+            && cached_run_graph_task_id
+                .as_deref()
+                .is_some_and(|task_id| active_task_id.is_some_and(|active| task_id != active)));
+    if !stale_guard {
+        return;
+    }
+
+    guard.insert(
+        "status".to_string(),
+        serde_json::Value::String("blocked_by_default".to_string()),
+    );
+    guard.insert(
+        "reason".to_string(),
+        serde_json::Value::String("stale_continuation_overlay_write_guard".to_string()),
+    );
+    guard.insert(
+        "root_local_write_allowed".to_string(),
+        serde_json::Value::Bool(false),
+    );
+    guard.insert(
+        "root_local_write_allowed_for_only_these_paths".to_string(),
+        serde_json::json!([]),
+    );
+    guard.insert("run_id".to_string(), serde_json::Value::Null);
+    guard.insert("task_id".to_string(), serde_json::Value::Null);
+    guard.insert(
+        "latest_lane_status".to_string(),
+        serde_json::Value::String("stale_continuation_overlay_blocked".to_string()),
+    );
+    guard.insert(
+        "local_exception_takeover_state".to_string(),
+        serde_json::Value::String("stale_task_blocked".to_string()),
+    );
 }
 
 pub(crate) fn touch_state_mutation_marker(state_dir: &Path) {

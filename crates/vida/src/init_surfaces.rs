@@ -56,22 +56,16 @@ fn agent_init_execute_dispatch_should_handoff(
     dispatch_handoff_timeout_seconds: u64,
     uses_internal_host: bool,
 ) -> bool {
-    #[cfg(test)]
-    {
-        let _ = dispatch_handoff_timeout_seconds;
-        let _ = uses_internal_host;
-        false
-    }
     #[cfg(not(test))]
     {
         if agent_init_execute_dispatch_worker_active() {
             return false;
         }
-        let _ = uses_internal_host;
-        agent_init_execute_dispatch_window_requires_operator_handoff(
+    }
+    !uses_internal_host
+        && agent_init_execute_dispatch_window_requires_operator_handoff(
             dispatch_handoff_timeout_seconds,
         )
-    }
 }
 
 fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
@@ -1051,6 +1045,17 @@ fn agent_init_execute_dispatch_resume_error_next_actions(
                 crate::shell_quote(run_id)
             ),
             "Regenerate a fresh dispatch packet only after the recovery surface reports receipt-backed dispatch context.".to_string(),
+        ],
+        (_, Some(run_id)) => vec![
+            format!(
+                "Inspect continuation evidence with `vida taskflow recovery status {} --json`.",
+                crate::shell_quote(run_id)
+            ),
+            format!(
+                "Refresh the blocked run through the taskflow surface with `vida taskflow consume continue --run-id {} --json`; `vida agent-init` does not accept `--run-id`.",
+                crate::shell_quote(run_id)
+            ),
+            "Do not retry `vida agent-init --execute-dispatch --json` until the recovery surface reports recovery_ready=true and a dispatch resume target.".to_string(),
         ],
         _ => vec![
             "Inspect continuation evidence with `vida status --json` and `vida taskflow recovery latest --json`.".to_string(),
@@ -2079,6 +2084,18 @@ mod tests {
         assert!(
             agent_init_execute_dispatch_window_requires_operator_handoff(2),
             "2s dispatch windows must return operator-visible in-flight evidence instead of waiting for terminal agent output"
+        );
+    }
+
+    #[test]
+    fn agent_init_internal_execute_dispatch_does_not_handoff_to_background_worker() {
+        assert!(
+            !agent_init_execute_dispatch_should_handoff(240, true),
+            "internal dispatch must execute synchronously enough to produce an adapter receipt"
+        );
+        assert!(
+            agent_init_execute_dispatch_should_handoff(240, false),
+            "external dispatch keeps the operator handoff path for long-running CLI work"
         );
     }
 
@@ -8109,6 +8126,28 @@ mod agent_init_surface_tests {
             .as_str()
             .expect("third action should render")
             .contains("vida taskflow route explain --json"));
+    }
+
+    #[test]
+    fn agent_init_execute_dispatch_resume_error_payload_never_suggests_agent_init_run_id() {
+        let payload = agent_init_execute_dispatch_resume_error_payload(
+            &serde_json::json!({
+                "mode": "dispatch_packet",
+                "execution_dispatch": true
+            }),
+            "Run-graph resume gate denied for `output-contract-run`: terminal continue snapshot without next bounded unit",
+        );
+
+        let next_actions = payload["next_actions"]
+            .as_array()
+            .expect("next actions should render");
+        assert!(next_actions
+            .iter()
+            .any(|action| action.as_str().is_some_and(|value| value
+                .contains("vida taskflow consume continue --run-id output-contract-run --json"))));
+        assert!(next_actions.iter().all(|action| action
+            .as_str()
+            .map_or(true, |value| !value.contains("vida agent-init --run-id"))));
     }
 
     #[test]

@@ -508,10 +508,7 @@ fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() 
         standalone["selected_profile"]["profile_id"],
         "codex_gpt55_low_write"
     );
-    assert_eq!(
-        standalone["selected_profile"]["provider"],
-        "openai-codex"
-    );
+    assert_eq!(standalone["selected_profile"]["provider"], "openai-codex");
     assert_eq!(
         standalone["source_paths"]["selected_model_profile_id"],
         "carrier_runtime.roles[internal_subagents].model_profiles.codex_gpt55_low_write.profile_id"
@@ -1165,6 +1162,100 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
 }
 
 #[test]
+fn dead_code_proof_protects_public_command_entrypoints() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    for (args, expected_usage) in [
+        (&["task", "--help"][..], "vida task"),
+        (&["taskflow", "--help"][..], "vida taskflow"),
+        (&["docflow", "--help"][..], "vida docflow"),
+        (&["lane", "--help"][..], "vida lane"),
+        (&["status", "--help"][..], "vida status"),
+        (&["doctor", "--help"][..], "vida doctor"),
+        (
+            &["orchestrator-init", "--help"][..],
+            "vida orchestrator-init",
+        ),
+        (&["agent-init", "--help"][..], "vida agent-init"),
+    ] {
+        let output = run_command_capture(args, &state_dir);
+        assert!(
+            output.status.success(),
+            "public entrypoint should be reachable: {args:?}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(expected_usage),
+            "public entrypoint help should keep its command label: {args:?}\nexpected: {expected_usage}\nstdout: {stdout}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn cli_help_description_inventory_covers_taskflow_proxy_topics() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let root_help = run_command_capture(&["taskflow", "help"], &state_dir);
+    assert!(
+        root_help.status.success(),
+        "taskflow help should execute: stderr={}",
+        String::from_utf8_lossy(&root_help.stderr)
+    );
+    let root_stdout = String::from_utf8_lossy(&root_help.stdout);
+    for expected in [
+        "vida taskflow help",
+        "route",
+        "validate-routing",
+        "status",
+        "vida taskflow route explain --json",
+        "vida taskflow validate-routing --json",
+        "vida taskflow status --summary --json",
+    ] {
+        assert!(
+            root_stdout.contains(expected),
+            "taskflow root help should discover `{expected}`:\n{root_stdout}"
+        );
+    }
+
+    for (topic, expected) in [
+        ("route", "vida taskflow route explain [--json]"),
+        (
+            "validate-routing",
+            "vida taskflow validate-routing [--json]",
+        ),
+        ("status", "vida taskflow status [--summary] [--json]"),
+    ] {
+        let output = run_command_capture(&["taskflow", "help", topic], &state_dir);
+        assert!(
+            output.status.success(),
+            "taskflow help topic `{topic}` should execute: stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(expected),
+            "taskflow help topic `{topic}` should describe `{expected}`:\n{stdout}"
+        );
+        for field in ["Purpose:", "Canonical commands:", "Failure modes:"] {
+            assert!(
+                stdout.contains(field),
+                "taskflow help topic `{topic}` should include `{field}`:\n{stdout}"
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_close_feedback_treats_successful_evidence_words_as_context() {
     let (project_root, state_dir) = project_bound_state_dir();
     create_epic_parent(
@@ -1445,6 +1536,77 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     assert_eq!(graph_after_closure["status"], "pass");
     assert_eq!(graph_after_closure["valid"], true);
     assert_eq!(graph_after_closure["issue_count"], 0);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn taskflow_tracked_flow_spec_close_keeps_parent_open_until_work_pool_exists() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let feature_id = "tracked-flow-parent";
+    let spec_id = "tracked-flow-parent-spec";
+
+    let parent = run_command_json(
+        &[
+            "task",
+            "create",
+            feature_id,
+            "Tracked flow parent",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent["status"], "pass");
+
+    let spec = run_command_json(
+        &[
+            "task",
+            "create",
+            spec_id,
+            "Spec pack: tracked flow parent",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            feature_id,
+            "--labels",
+            "spec-pack,documentation",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(spec["status"], "pass");
+
+    let closed_spec = run_command_json(
+        &[
+            "task",
+            "close",
+            spec_id,
+            "--reason",
+            "design packet finalized and handed off into tracked work-pool shaping",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_spec["status"], "pass");
+    assert_eq!(closed_spec["task"]["status"], "closed");
+
+    let parent_after_spec_close =
+        run_command_json(&["task", "show", feature_id, "--json"], &state_dir);
+    assert_ne!(
+        parent_after_spec_close["task"]["status"], "closed",
+        "closing only the generated spec-pack child must not close the feature parent before work-pool/dev handoff is materialized"
+    );
+    assert!(parent_after_spec_close["task"]["closed_at"].is_null());
+    assert!(parent_after_spec_close["task"]["close_reason"].is_null());
 
     let _ = fs::remove_dir_all(&state_dir);
 }

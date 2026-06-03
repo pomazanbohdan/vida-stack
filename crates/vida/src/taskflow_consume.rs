@@ -51,34 +51,84 @@ impl ConsumeFinalMode {
     }
 }
 
-fn parse_taskflow_consume_final_args(
-    request: &[String],
-) -> Result<(bool, ConsumeFinalMode, String), String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConsumeFinalArgs {
+    as_json: bool,
+    mode: ConsumeFinalMode,
+    request_text: String,
+    task_id: Option<String>,
+    owned_paths: Vec<String>,
+    from_task_metadata: bool,
+}
+
+fn consume_final_usage() -> String {
+    "Usage: vida taskflow consume final <request_text> [--task-id <task-id>] [--owned-path <path>] [--from-task-metadata] [--preview | --validate-only] [--json]".to_string()
+}
+
+fn parse_consume_final_value<'a>(
+    iter: &mut std::slice::Iter<'a, String>,
+    flag: &str,
+) -> Result<String, String> {
+    iter.next()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "{flag} requires a non-empty value. {}",
+                consume_final_usage()
+            )
+        })
+}
+
+fn push_consume_final_owned_path_values(target: &mut Vec<String>, raw: &str) {
+    for value in raw.split(',') {
+        let value = value.trim();
+        if !value.is_empty() && !target.iter().any(|existing| existing == value) {
+            target.push(value.to_string());
+        }
+    }
+}
+
+fn parse_taskflow_consume_final_args(request: &[String]) -> Result<ConsumeFinalArgs, String> {
     let mut as_json = false;
     let mut mode = ConsumeFinalMode::Execute;
     let mut request_parts = Vec::new();
-    for arg in request {
+    let mut task_id = None;
+    let mut owned_paths = Vec::new();
+    let mut from_task_metadata = false;
+    let mut iter = request.iter();
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--json" => as_json = true,
             "--preview" => mode = ConsumeFinalMode::Preview,
             "--validate-only" => mode = ConsumeFinalMode::ValidateOnly,
-            "--help" | "-h" => {
-                return Err(
-                    "Usage: vida taskflow consume final <request_text> [--preview | --validate-only] [--json]"
-                        .to_string(),
-                )
+            "--task-id" => task_id = Some(parse_consume_final_value(&mut iter, "--task-id")?),
+            "--owned-path" => {
+                let value = parse_consume_final_value(&mut iter, "--owned-path")?;
+                push_consume_final_owned_path_values(&mut owned_paths, &value);
             }
+            "--from-task-metadata" => from_task_metadata = true,
+            "--help" | "-h" => return Err(consume_final_usage()),
             _ => request_parts.push(arg.clone()),
         }
     }
-    let request_text = request_parts.join(" ").trim().to_string();
+    let mut request_text = request_parts.join(" ").trim().to_string();
     if request_text.is_empty() {
-        return Err(
-            "Usage: vida taskflow consume final <request_text> [--preview | --validate-only] [--json]"
-                .to_string(),
-        );
+        if let Some(task_id) = task_id.as_deref() {
+            request_text = task_id.to_string();
+        }
     }
-    Ok((as_json, mode, request_text))
+    if request_text.is_empty() {
+        return Err(consume_final_usage());
+    }
+    Ok(ConsumeFinalArgs {
+        as_json,
+        mode,
+        request_text,
+        task_id,
+        owned_paths,
+        from_task_metadata,
+    })
 }
 
 fn requested_help(args: &[String]) -> bool {
@@ -93,23 +143,37 @@ fn print_consume_final_help() {
     println!("  Create or validate the bounded final runtime-consumption handoff for one request.");
     println!();
     println!("Usage:");
-    println!("  vida taskflow consume final <request_text> [--preview | --validate-only] [--json]");
+    println!(
+        "  vida taskflow consume final <request_text> [--task-id <task-id>] [--owned-path <path>] [--from-task-metadata] [--preview | --validate-only] [--json]"
+    );
+    println!("  vida taskflow consume final --task-id <task-id> --from-task-metadata [--json]");
     println!();
     println!("Options:");
-    println!("  --preview        Render the handoff preview without execute-mode mutation.");
-    println!("  --validate-only  Validate the handoff path without execute-mode mutation.");
-    println!("  --json           Emit machine-readable output.");
-    println!("  -h, --help       Print help.");
+    println!("  --task-id <id>          Use a canonical TaskFlow task id as the bounded request.");
+    println!(
+        "  --owned-path <path>     Add packet owned path override. Accepts comma-separated values and repeated flags."
+    );
+    println!(
+        "  --from-task-metadata    Pull owned paths from the task planner_metadata.owned_paths."
+    );
+    println!("  --preview              Render the handoff preview without execute-mode mutation.");
+    println!("  --validate-only        Validate the handoff path without execute-mode mutation.");
+    println!("  --json                 Emit machine-readable output.");
+    println!("  -h, --help             Print help.");
     println!();
     println!("Remediation:");
-    println!("  If closure is blocked, run `vida taskflow consume bundle check --json` and follow its `next_actions`.");
+    println!(
+        "  If closure is blocked, run `vida taskflow consume bundle check --json` and follow its `next_actions`."
+    );
 }
 
 fn print_consume_continue_help() {
     println!("VIDA TaskFlow consume continue");
     println!();
     println!("Usage:");
-    println!("  vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]");
+    println!(
+        "  vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]"
+    );
     println!();
     println!("Remediation:");
     println!("  If resume is blocked, inspect `vida taskflow recovery latest --json`.");
@@ -123,6 +187,35 @@ fn print_consume_advance_help() {
     println!();
     println!("Remediation:");
     println!("  If advance is blocked, inspect `vida taskflow recovery latest --json`.");
+}
+
+async fn consume_final_owned_paths_override(
+    store: &super::StateStore,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    args: &ConsumeFinalArgs,
+) -> Vec<String> {
+    let mut owned_paths = super::implementation_owned_paths_for_dispatch_context(
+        store,
+        role_selection,
+        dispatch_receipt,
+    )
+    .await;
+    if args.from_task_metadata {
+        if let Some(task_id) = args.task_id.as_deref() {
+            for path in super::planner_metadata_owned_paths_from_task(store, task_id).await {
+                if !owned_paths.iter().any(|existing| existing == &path) {
+                    owned_paths.push(path);
+                }
+            }
+        }
+    }
+    for path in &args.owned_paths {
+        if !owned_paths.iter().any(|existing| existing == path) {
+            owned_paths.push(path.clone());
+        }
+    }
+    owned_paths
 }
 
 pub(crate) fn try_print_taskflow_consume_nested_help(args: &[String]) -> bool {
@@ -232,14 +325,16 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                 print_consume_final_help();
                 return ExitCode::SUCCESS;
             }
-            let (as_json, consume_final_mode, request_text) =
-                match parse_taskflow_consume_final_args(request) {
-                    Ok(parsed) => parsed,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(2);
-                    }
-                };
+            let consume_final_args = match parse_taskflow_consume_final_args(request) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let as_json = consume_final_args.as_json;
+            let consume_final_mode = consume_final_args.mode;
+            let request_text = consume_final_args.request_text.clone();
             if request_text.is_empty() {
                 eprintln!(
                     "Usage: vida taskflow consume final <request_text> [--preview | --validate-only] [--json]"
@@ -509,13 +604,13 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             return ExitCode::from(1);
                         }
                         let dispatch_packet_preview = {
-                            let owned_paths_override =
-                                super::implementation_owned_paths_for_dispatch_context(
-                                    &store,
-                                    &role_selection,
-                                    &dispatch_receipt,
-                                )
-                                .await;
+                            let owned_paths_override = consume_final_owned_paths_override(
+                                &store,
+                                &role_selection,
+                                &dispatch_receipt,
+                                &consume_final_args,
+                            )
+                            .await;
                             let ctx = crate::RuntimeDispatchPacketContext::new(
                                 store.root(),
                                 &role_selection,
@@ -584,13 +679,13 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             dispatch_receipt.blocker_code = Some(blocker_code);
                         }
                         if !consume_final_mode.is_read_only() {
-                            let owned_paths_override =
-                                super::implementation_owned_paths_for_dispatch_context(
-                                    &store,
-                                    &role_selection,
-                                    &dispatch_receipt,
-                                )
-                                .await;
+                            let owned_paths_override = consume_final_owned_paths_override(
+                                &store,
+                                &role_selection,
+                                &dispatch_receipt,
+                                &consume_final_args,
+                            )
+                            .await;
                             let ctx = crate::RuntimeDispatchPacketContext::new(
                                 store.root(),
                                 &role_selection,
@@ -1752,19 +1847,18 @@ mod tests {
             "--validate-only".to_string(),
         ];
 
-        let (preview_json, preview_mode, preview_request) =
+        let preview =
             parse_taskflow_consume_final_args(&preview_args).expect("preview args should parse");
-        let (validate_json, validate_mode, validate_request) =
-            parse_taskflow_consume_final_args(&validate_args)
-                .expect("validate-only args should parse");
+        let validate = parse_taskflow_consume_final_args(&validate_args)
+            .expect("validate-only args should parse");
 
-        assert!(preview_json);
-        assert_eq!(preview_mode, ConsumeFinalMode::Preview);
-        assert_eq!(preview_request, "ship this");
+        assert!(preview.as_json);
+        assert_eq!(preview.mode, ConsumeFinalMode::Preview);
+        assert_eq!(preview.request_text, "ship this");
 
-        assert!(!validate_json);
-        assert_eq!(validate_mode, ConsumeFinalMode::ValidateOnly);
-        assert_eq!(validate_request, "ship this");
+        assert!(!validate.as_json);
+        assert_eq!(validate.mode, ConsumeFinalMode::ValidateOnly);
+        assert_eq!(validate.request_text, "ship this");
     }
 
     #[test]
@@ -2784,12 +2878,12 @@ mod tests {
             "--preview".to_string(),
             "--json".to_string(),
         ];
-        let (as_json, mode, request_text) =
+        let parsed =
             super::parse_taskflow_consume_final_args(&args).expect("final args should parse");
 
-        assert!(as_json);
-        assert_eq!(mode, super::ConsumeFinalMode::Preview);
-        assert_eq!(request_text, "fix dispatch");
+        assert!(parsed.as_json);
+        assert_eq!(parsed.mode, super::ConsumeFinalMode::Preview);
+        assert_eq!(parsed.request_text, "fix dispatch");
     }
 
     #[test]
@@ -2799,12 +2893,48 @@ mod tests {
             "shape".to_string(),
             "packet".to_string(),
         ];
-        let (as_json, mode, request_text) = super::parse_taskflow_consume_final_args(&args)
+        let parsed = super::parse_taskflow_consume_final_args(&args)
             .expect("validate-only args should parse");
 
-        assert!(!as_json);
-        assert_eq!(mode, super::ConsumeFinalMode::ValidateOnly);
-        assert_eq!(request_text, "shape packet");
+        assert!(!parsed.as_json);
+        assert_eq!(parsed.mode, super::ConsumeFinalMode::ValidateOnly);
+        assert_eq!(parsed.request_text, "shape packet");
+    }
+
+    #[test]
+    fn parse_taskflow_consume_final_args_supports_task_metadata_and_owned_path_options() {
+        let args = vec![
+            "--task-id".to_string(),
+            "universal-surfaces-menu-route-binding-mismatch".to_string(),
+            "--from-task-metadata".to_string(),
+            "--owned-path".to_string(),
+            "lib/features/menu/menu_route_registry.dart,test/features/menu/menu_route_registry_test.dart"
+                .to_string(),
+            "--owned-path".to_string(),
+            "lib/features/menu/menu_route_registry.dart".to_string(),
+            "--json".to_string(),
+        ];
+
+        let parsed = super::parse_taskflow_consume_final_args(&args)
+            .expect("task metadata args should parse");
+
+        assert!(parsed.as_json);
+        assert_eq!(
+            parsed.task_id.as_deref(),
+            Some("universal-surfaces-menu-route-binding-mismatch")
+        );
+        assert!(parsed.from_task_metadata);
+        assert_eq!(
+            parsed.request_text,
+            "universal-surfaces-menu-route-binding-mismatch"
+        );
+        assert_eq!(
+            parsed.owned_paths,
+            vec![
+                "lib/features/menu/menu_route_registry.dart".to_string(),
+                "test/features/menu/menu_route_registry_test.dart".to_string()
+            ]
+        );
     }
 
     #[test]

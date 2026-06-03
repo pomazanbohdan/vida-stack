@@ -123,6 +123,10 @@ impl StateStore {
                 break;
             }
 
+            if !work_item_is_program_container(&tasks[parent_index].issue_type) {
+                break;
+            }
+
             let has_unresolved_non_parent_blockers = tasks[parent_index]
                 .dependencies
                 .iter()
