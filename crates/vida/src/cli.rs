@@ -1235,6 +1235,18 @@ pub(crate) struct TaskNextLawfulArgs {
     pub(crate) strategy: Option<String>,
 
     #[arg(
+        long = "select",
+        help = "Select a ready task id and return its canonical bind command"
+    )]
+    pub(crate) select: Option<String>,
+
+    #[arg(
+        long = "explain",
+        help = "Include operator rationale for the returned next-lawful decision"
+    )]
+    pub(crate) explain: bool,
+
+    #[arg(
         long = "state-dir",
         env = "VIDA_STATE_DIR",
         help = "Override the TaskFlow state directory for this command"
@@ -2017,6 +2029,8 @@ mod tests {
         assert!(next_lawful_help.contains("--scope"));
         assert!(next_lawful_help.contains("--strategy"));
         assert!(next_lawful_help.contains("epic-sequential"));
+        assert!(next_lawful_help.contains("--select"));
+        assert!(next_lawful_help.contains("--explain"));
         assert!(next_lawful_help.contains("--state-dir"));
         assert!(next_lawful_help.contains("--json"));
 
@@ -2028,6 +2042,9 @@ mod tests {
             "audit-epic",
             "--strategy",
             "epic-sequential",
+            "--select",
+            "task-1",
+            "--explain",
             "--json",
         ])
         .expect("next-lawful should parse");
@@ -2039,6 +2056,8 @@ mod tests {
         };
         assert_eq!(next_lawful.scope.as_deref(), Some("audit-epic"));
         assert_eq!(next_lawful.strategy.as_deref(), Some("epic-sequential"));
+        assert_eq!(next_lawful.select.as_deref(), Some("task-1"));
+        assert!(next_lawful.explain);
         assert!(next_lawful.json);
     }
 

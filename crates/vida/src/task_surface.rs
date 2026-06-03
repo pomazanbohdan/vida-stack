@@ -2881,6 +2881,8 @@ struct TaskNextLawfulReceipt {
     next_action: Option<String>,
     next_actions: Vec<String>,
     source_surfaces: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operator_explanation: Option<serde_json::Value>,
 }
 
 fn task_close_automation_requested(command: &TaskCloseArgs) -> bool {
@@ -3953,6 +3955,7 @@ fn blocked_task_next_lawful_receipt(
         next_action: next_actions.first().cloned(),
         next_actions,
         source_surfaces: task_continuation_source_surfaces(),
+        operator_explanation: None,
     }
 }
 
@@ -3986,7 +3989,72 @@ fn pass_task_next_lawful_receipt(
         next_action: next_actions.first().cloned(),
         next_actions,
         source_surfaces: task_continuation_source_surfaces(),
+        operator_explanation: None,
     }
+}
+
+fn task_next_lawful_attach_explanation(
+    mut receipt: TaskNextLawfulReceipt,
+    explain: bool,
+    strategy: Option<&str>,
+    selected_task_id: Option<&str>,
+) -> TaskNextLawfulReceipt {
+    if explain {
+        receipt.operator_explanation = Some(serde_json::json!({
+            "strategy": strategy.unwrap_or("default"),
+            "selected_task_id": selected_task_id,
+            "status": receipt.status,
+            "blocker_codes": receipt.blocker_codes,
+            "why_this_unit": receipt.why_this_unit,
+            "why_not_auto_bound": receipt.why_not_auto_bound,
+            "bind_command": receipt.bind_command,
+            "candidate_count": receipt.ready_task_candidates.len()
+        }));
+    }
+    receipt
+}
+
+fn task_next_lawful_select_ready_candidate_receipt(
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+    selected_task_id: &str,
+) -> TaskNextLawfulReceipt {
+    let Some(selected_index) = ready_task_candidates
+        .iter()
+        .position(|candidate| candidate.task_id == selected_task_id)
+    else {
+        return blocked_task_next_lawful_receipt(
+            serde_json::Value::Null,
+            ready_task_candidates,
+            "selected_task_not_ready",
+            &format!(
+                "Selected task `{}` is not a ready lawful candidate; choose one of the returned ready_task_candidates.",
+                selected_task_id
+            ),
+        );
+    };
+    let mut ordered_candidates = ready_task_candidates;
+    let selected = ordered_candidates.remove(selected_index);
+    ordered_candidates.insert(0, selected.clone());
+    pass_task_next_lawful_receipt(
+        serde_json::json!({
+            "task_id": selected.task_id,
+            "title": selected.title,
+            "status": selected.status,
+            "issue_type": selected.issue_type,
+        }),
+        Some("operator_selected_ready_candidate".to_string()),
+        "Operator selected a ready TaskFlow candidate with --select.",
+        if selected.ready_parallel_safe {
+            "parallel_safe_operator_selected_candidate"
+        } else {
+            "sequential_only_operator_selected_candidate"
+        },
+        ordered_candidates,
+        format!(
+            "Bind selected ready task `{}` with the returned bind_command.",
+            selected_task_id
+        ),
+    )
 }
 
 fn runtime_binding_task_closed_next_action(
@@ -5076,70 +5144,92 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         crate::latest_terminal_consume_continue_snapshot_run_id(&state_dir)
                             .ok()
                             .flatten();
-                    let receipt = match scoped_runtime_binding {
-                        Some(binding)
-                            if latest_dispatch_receipt.as_ref().is_some_and(|dispatch| {
-                                dispatch.run_id == binding.run_id
-                                    && runtime_dispatch_receipt_has_ready_downstream_handoff(
-                                        Some(binding.run_id.as_str()),
-                                        Some(dispatch),
-                                    )
-                            }) =>
-                        {
-                            pass_ready_downstream_handoff_task_next_lawful_receipt(
-                                binding,
-                                ready_task_candidates,
-                                terminal_consume_continue_run_id.as_deref(),
-                                latest_dispatch_receipt
-                                    .as_ref()
-                                    .and_then(downstream_dispatch_command_for_task_next_lawful)
-                                    .as_deref(),
-                            )
-                        }
-                        Some(binding)
-                            if runtime_recovery_blocks_task_next_lawful(
-                                runtime_recovery.as_ref(),
-                                latest_dispatch_receipt.as_ref(),
-                            ) && runtime_binding_has_active_exception_takeover(
-                                binding,
-                                latest_dispatch_receipt.as_ref(),
-                            ) =>
-                        {
-                            pass_exception_takeover_task_next_lawful_receipt(
-                                binding,
-                                ready_task_candidates,
-                            )
-                        }
-                        Some(binding)
-                            if runtime_dispatch_receipt_has_completed_lane(
-                                Some(binding.run_id.as_str()),
-                                latest_dispatch_receipt.as_ref(),
-                            ) =>
-                        {
-                            pass_completed_lane_task_next_lawful_receipt(
-                                binding,
-                                ready_task_candidates,
-                            )
-                        }
-                        Some(binding)
-                            if runtime_recovery_blocks_task_next_lawful(
-                                runtime_recovery.as_ref(),
-                                latest_dispatch_receipt.as_ref(),
-                            ) =>
-                        {
+                    let mut receipt = if let Some(selected_task_id) = command.select.as_deref() {
+                        if scoped_runtime_binding.is_some() {
                             blocked_task_next_lawful_receipt(
-                                binding.active_bounded_unit.clone(),
+                                serde_json::Value::Null,
                                 ready_task_candidates,
-                                "open_delegated_cycle",
-                                &runtime_binding_open_delegated_cycle_next_action(binding),
+                                "select_conflicts_with_active_runtime_binding",
+                                "Cannot apply --select while an active runtime binding is present; resolve or complete the current binding first.",
+                            )
+                        } else {
+                            task_next_lawful_select_ready_candidate_receipt(
+                                ready_task_candidates,
+                                selected_task_id,
                             )
                         }
-                        _ => task_next_lawful_receipt(
-                            &tasks,
-                            ready_task_candidates,
-                            scoped_runtime_binding,
-                        ),
+                    } else {
+                        match scoped_runtime_binding {
+                            Some(binding)
+                                if latest_dispatch_receipt.as_ref().is_some_and(|dispatch| {
+                                    dispatch.run_id == binding.run_id
+                                        && runtime_dispatch_receipt_has_ready_downstream_handoff(
+                                            Some(binding.run_id.as_str()),
+                                            Some(dispatch),
+                                        )
+                                }) =>
+                            {
+                                pass_ready_downstream_handoff_task_next_lawful_receipt(
+                                    binding,
+                                    ready_task_candidates,
+                                    terminal_consume_continue_run_id.as_deref(),
+                                    latest_dispatch_receipt
+                                        .as_ref()
+                                        .and_then(downstream_dispatch_command_for_task_next_lawful)
+                                        .as_deref(),
+                                )
+                            }
+                            Some(binding)
+                                if runtime_recovery_blocks_task_next_lawful(
+                                    runtime_recovery.as_ref(),
+                                    latest_dispatch_receipt.as_ref(),
+                                ) && runtime_binding_has_active_exception_takeover(
+                                    binding,
+                                    latest_dispatch_receipt.as_ref(),
+                                ) =>
+                            {
+                                pass_exception_takeover_task_next_lawful_receipt(
+                                    binding,
+                                    ready_task_candidates,
+                                )
+                            }
+                            Some(binding)
+                                if runtime_dispatch_receipt_has_completed_lane(
+                                    Some(binding.run_id.as_str()),
+                                    latest_dispatch_receipt.as_ref(),
+                                ) =>
+                            {
+                                pass_completed_lane_task_next_lawful_receipt(
+                                    binding,
+                                    ready_task_candidates,
+                                )
+                            }
+                            Some(binding)
+                                if runtime_recovery_blocks_task_next_lawful(
+                                    runtime_recovery.as_ref(),
+                                    latest_dispatch_receipt.as_ref(),
+                                ) =>
+                            {
+                                blocked_task_next_lawful_receipt(
+                                    binding.active_bounded_unit.clone(),
+                                    ready_task_candidates,
+                                    "open_delegated_cycle",
+                                    &runtime_binding_open_delegated_cycle_next_action(binding),
+                                )
+                            }
+                            _ => task_next_lawful_receipt(
+                                &tasks,
+                                ready_task_candidates,
+                                scoped_runtime_binding,
+                            ),
+                        }
                     };
+                    receipt = task_next_lawful_attach_explanation(
+                        receipt,
+                        command.explain,
+                        command.strategy.as_deref(),
+                        command.select.as_deref(),
+                    );
                     if command.json {
                         let receipt_json = serde_json::to_value(&receipt)
                             .expect("task next-lawful receipt should serialize");
@@ -6080,9 +6170,10 @@ mod tests {
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
         task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
         task_handoff_receipt_root, task_json_success_status, task_next_lawful_apply_strategy,
-        task_next_lawful_receipt, task_owned_status_receipt, task_parent_id,
-        task_ready_authoritative_first, task_update_planner_metadata_arg,
-        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_next_lawful_receipt, task_next_lawful_select_ready_candidate_receipt,
+        task_owned_status_receipt, task_parent_id, task_ready_authoritative_first,
+        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -6947,6 +7038,62 @@ mod tests {
             .map(|candidate| candidate.task_id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["task-a-first", "task-a-second"]);
+    }
+
+    #[test]
+    fn task_next_lawful_select_ready_candidate_returns_selected_bind_command() {
+        let mut first = owned_task_record("task-a", vec![]);
+        first.status = "open".to_string();
+        let mut second = owned_task_record("task-b", vec![]);
+        second.status = "open".to_string();
+        let ready = vec![
+            task_continuation_candidate(&first, false),
+            task_continuation_candidate(&second, true),
+        ];
+
+        let receipt = task_next_lawful_select_ready_candidate_receipt(ready, "task-b");
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.active_bounded_unit["task_id"], "task-b");
+        assert_eq!(
+            receipt.binding_source.as_deref(),
+            Some("operator_selected_ready_candidate")
+        );
+        assert_eq!(
+            receipt.bind_command.as_deref(),
+            Some("vida taskflow run-graph dispatch-init task-b --json")
+        );
+        assert_eq!(
+            receipt.sequential_vs_parallel_posture,
+            "parallel_safe_operator_selected_candidate"
+        );
+        assert_eq!(
+            receipt
+                .recommended_primary
+                .as_ref()
+                .map(|candidate| candidate.task_id.as_str()),
+            Some("task-b")
+        );
+    }
+
+    #[test]
+    fn task_next_lawful_select_missing_candidate_fails_closed() {
+        let mut first = owned_task_record("task-a", vec![]);
+        first.status = "open".to_string();
+        let ready = vec![task_continuation_candidate(&first, false)];
+
+        let receipt = task_next_lawful_select_ready_candidate_receipt(ready, "task-missing");
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["selected_task_not_ready"]);
+        assert_eq!(receipt.active_bounded_unit, serde_json::Value::Null);
+        assert_eq!(
+            receipt
+                .recommended_primary
+                .as_ref()
+                .map(|candidate| candidate.task_id.as_str()),
+            Some("task-a")
+        );
     }
 
     #[test]
