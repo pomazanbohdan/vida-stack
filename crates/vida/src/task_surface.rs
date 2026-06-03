@@ -120,6 +120,22 @@ struct TaskTakeoverStatusReceipt {
     blocker_codes: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskBlockReceipt {
+    surface: &'static str,
+    status: &'static str,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    task_id: String,
+    blocked: bool,
+    closed: bool,
+    previous_status: String,
+    reason: String,
+    evidence: Option<String>,
+    notes_appended: bool,
+    task: state_store::TaskRecord,
+}
+
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
 }
@@ -551,6 +567,64 @@ fn print_task_takeover_status(render: RenderMode, receipt: &TaskTakeoverStatusRe
     );
     if let Some(command) = receipt.recommended_command.as_deref() {
         print_surface_line(render, "recommended command", command);
+    }
+}
+
+fn normalize_task_block_list(values: &[String]) -> Vec<String> {
+    parse_label_values(values)
+}
+
+fn append_task_block_note(
+    existing_notes: Option<&str>,
+    reason: &str,
+    evidence: Option<&str>,
+    blocker_codes: &[String],
+    next_actions: &[String],
+) -> String {
+    let mut note = format!(
+        "task_block:\n  recorded_at_unix_nanos: {}\n  reason: {}",
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
+        reason.trim()
+    );
+    if let Some(evidence) = evidence.map(str::trim).filter(|value| !value.is_empty()) {
+        note.push_str("\n  evidence: ");
+        note.push_str(evidence);
+    }
+    if !blocker_codes.is_empty() {
+        note.push_str("\n  blocker_codes: ");
+        note.push_str(&blocker_codes.join(", "));
+    }
+    if !next_actions.is_empty() {
+        note.push_str("\n  next_actions:");
+        for action in next_actions {
+            note.push_str("\n    - ");
+            note.push_str(action.trim());
+        }
+    }
+
+    match existing_notes
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(existing) => format!("{existing}\n\n{note}"),
+        None => note,
+    }
+}
+
+fn print_task_block_receipt(render: RenderMode, receipt: &TaskBlockReceipt, as_json: bool) {
+    if as_json {
+        let payload =
+            serde_json::to_value(receipt).expect("task block receipt should serialize to JSON");
+        crate::print_json_pretty(&payload);
+        return;
+    }
+    print_task_mutation(render, receipt.surface, &receipt.task, false);
+    print_surface_line(render, "reason", &receipt.reason);
+    if !receipt.blocker_codes.is_empty() {
+        print_surface_line(render, "blocker codes", &receipt.blocker_codes.join(", "));
+    }
+    if !receipt.next_actions.is_empty() {
+        print_surface_line(render, "next actions", &receipt.next_actions.join(" | "));
     }
 }
 
@@ -6171,6 +6245,126 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Block(command) => {
+            let reason = command.reason.trim();
+            if reason.is_empty() {
+                eprintln!("--reason cannot be empty");
+                return ExitCode::from(2);
+            }
+            let evidence = command
+                .evidence
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let blocker_codes = normalize_task_block_list(&command.blockers);
+            let next_actions = command
+                .next_actions
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => {
+                    let existing = match store.show_task(&command.task_id).await {
+                        Ok(task) => task,
+                        Err(error) => {
+                            eprintln!("Failed to read task before block mutation: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let previous_status = existing.status.clone();
+                    if state_store::StateStore::task_status_is_closed_like(&existing.status) {
+                        let receipt = TaskBlockReceipt {
+                            surface: "vida task block",
+                            status: "blocked",
+                            blocker_codes: vec!["task_already_closed".to_string()],
+                            next_actions: vec![
+                                "Inspect the closed task or reopen it before recording a runtime blocker."
+                                    .to_string(),
+                            ],
+                            task_id: existing.id.clone(),
+                            blocked: false,
+                            closed: true,
+                            previous_status,
+                            reason: reason.to_string(),
+                            evidence: evidence.map(str::to_string),
+                            notes_appended: false,
+                            task: existing,
+                        };
+                        print_task_block_receipt(command.render, &receipt, command.json);
+                        return ExitCode::from(1);
+                    }
+
+                    let notes = append_task_block_note(
+                        existing.notes.as_deref(),
+                        reason,
+                        evidence,
+                        &blocker_codes,
+                        &next_actions,
+                    );
+                    match store
+                        .update_task(state_store::UpdateTaskRequest {
+                            task_id: &command.task_id,
+                            title: None,
+                            status: Some("blocked"),
+                            priority: None,
+                            notes: Some(&notes),
+                            description: None,
+                            parent_id: None,
+                            add_labels: &[],
+                            remove_labels: &[],
+                            set_labels: None,
+                            execution_mode: None,
+                            order_bucket: None,
+                            parallel_group: None,
+                            conflict_domain: None,
+                            planner_metadata: None,
+                        })
+                        .await
+                    {
+                        Ok(task) => {
+                            if let Err(code) =
+                                refresh_task_snapshot_after_mutation(&store, "vida task block")
+                                    .await
+                            {
+                                return code;
+                            }
+                            let receipt = TaskBlockReceipt {
+                                surface: "vida task block",
+                                status: task_json_success_status(),
+                                blocker_codes,
+                                next_actions,
+                                task_id: task.id.clone(),
+                                blocked: task.status == "blocked",
+                                closed: state_store::StateStore::task_status_is_closed_like(
+                                    &task.status,
+                                ),
+                                previous_status,
+                                reason: reason.to_string(),
+                                evidence: evidence.map(str::to_string),
+                                notes_appended: true,
+                                task,
+                            };
+                            print_task_block_receipt(command.render, &receipt, command.json);
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to block task: {error}");
+                            ExitCode::from(1)
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         TaskCommand::Split(command) => run_task_split_like(command, "vida task split").await,
         TaskCommand::SpawnBlocker(command) => {
             run_task_spawn_blocker_like(command, "vida task spawn-blocker").await
@@ -6994,6 +7188,203 @@ mod tests {
             ),
             "active"
         );
+    }
+
+    #[test]
+    fn task_block_cli_accepts_reason_evidence_and_repeated_recovery_fields() {
+        let parsed = cli(&[
+            "task",
+            "block",
+            "task-1",
+            "--reason",
+            "runtime bridge unavailable",
+            "--evidence",
+            "agent-init receipt path",
+            "--blocker",
+            "host_tool_capability_missing,bridge_request_pending",
+            "--next-action",
+            "run host bridge repair",
+            "--next-action",
+            "retry agent-init",
+            "--json",
+        ]);
+        let Some(crate::Command::Task(args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let crate::TaskCommand::Block(command) = args.command else {
+            panic!("block command should parse");
+        };
+
+        assert_eq!(command.task_id, "task-1");
+        assert_eq!(command.reason, "runtime bridge unavailable");
+        assert_eq!(command.evidence.as_deref(), Some("agent-init receipt path"));
+        assert_eq!(
+            command.blockers,
+            vec![
+                "host_tool_capability_missing".to_string(),
+                "bridge_request_pending".to_string()
+            ]
+        );
+        assert_eq!(
+            command.next_actions,
+            vec![
+                "run host bridge repair".to_string(),
+                "retry agent-init".to_string()
+            ]
+        );
+        assert!(command.json);
+    }
+
+    #[test]
+    fn task_block_command_marks_task_blocked_without_closing() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "parent-epic",
+                "Parent epic",
+                "epic",
+                "open",
+                1,
+                None,
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "blocked-task",
+                "Blocked task",
+                "task",
+                "in_progress",
+                2,
+                Some("parent-epic"),
+            )
+            .await;
+            store
+                .update_task(crate::state_store::UpdateTaskRequest {
+                    task_id: "blocked-task",
+                    title: None,
+                    status: None,
+                    priority: None,
+                    notes: Some("existing note"),
+                    description: None,
+                    parent_id: None,
+                    add_labels: &[],
+                    remove_labels: &[],
+                    set_labels: None,
+                    execution_mode: None,
+                    order_bucket: None,
+                    parallel_group: None,
+                    conflict_domain: None,
+                    planner_metadata: None,
+                })
+                .await
+                .expect("notes update should persist");
+        });
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::Block(crate::TaskBlockArgs {
+                    task_id: "blocked-task".to_string(),
+                    reason: "runtime bridge unavailable".to_string(),
+                    evidence: Some("agent-init returned host_tool_capability_missing".to_string()),
+                    blockers: vec!["host_tool_capability_missing".to_string()],
+                    next_actions: vec!["retry after host bridge repair".to_string()],
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::SUCCESS
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let task = store
+                .show_task("blocked-task")
+                .await
+                .expect("blocked task should load");
+            assert_eq!(task.status, "blocked");
+            assert_eq!(task.closed_at, None);
+            assert_eq!(task.close_reason, None);
+            let notes = task.notes.expect("block note should persist");
+            assert!(notes.contains("existing note"));
+            assert!(notes.contains("task_block:"));
+            assert!(notes.contains("runtime bridge unavailable"));
+            assert!(notes.contains("host_tool_capability_missing"));
+            assert!(notes.contains("retry after host bridge repair"));
+        });
+    }
+
+    #[test]
+    fn task_block_command_rejects_closed_task_without_mutation() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "parent-epic",
+                "Parent epic",
+                "epic",
+                "open",
+                1,
+                None,
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "closed-task",
+                "Closed task",
+                "task",
+                "open",
+                2,
+                Some("parent-epic"),
+            )
+            .await;
+            store
+                .close_task("closed-task", "done")
+                .await
+                .expect("task should close");
+        });
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::Block(crate::TaskBlockArgs {
+                    task_id: "closed-task".to_string(),
+                    reason: "runtime bridge unavailable".to_string(),
+                    evidence: Some("receipt path".to_string()),
+                    blockers: Vec::new(),
+                    next_actions: Vec::new(),
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::from(1)
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let task = store
+                .show_task("closed-task")
+                .await
+                .expect("closed task should load");
+            assert_eq!(task.status, "closed");
+            assert_eq!(task.close_reason.as_deref(), Some("done"));
+            assert!(task.notes.is_none());
+        });
     }
 
     fn minimal_task_create_args(

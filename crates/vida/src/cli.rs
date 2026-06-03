@@ -34,6 +34,9 @@ const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <t
 const TASK_UPDATE_ABOUT: &str = "Update one tracked task in the authoritative backlog store.";
 const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field";
 const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress --json\n  vida task update <task-id> --title \"Retitled task\" --priority 1 --json\n  vida task update <task-id> --parent-id <parent-id> --json\n  vida task update <task-id> --clear-parent-id --json\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain --json\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  Re-check `vida taskflow graph-summary --json` after updates to confirm `ready_parallel_safe` and `parallel_blockers`.";
+const TASK_BLOCK_ABOUT: &str = "record a runtime blocker on one task without closing it";
+const TASK_BLOCK_LONG_ABOUT: &str = "Record a runtime blocker on one task without closing it.\n\nThe command marks the task status as `blocked`, appends a structured blocker note to existing task notes, refreshes the canonical TaskFlow snapshot, and emits a machine-readable receipt when `--json` is set.";
+const TASK_BLOCK_AFTER_HELP: &str = "Examples:\n  vida task block <task-id> --reason \"runtime bridge unavailable\" --evidence \"agent-init returned host_tool_capability_missing\" --json\n  vida task block <task-id> --reason \"browser proof unavailable\" --blocker web_runtime_unhealthy --next-action \"run vida runtime web status --json\" --json\n\nOptions:\n  --reason <text>       Human-readable blocker reason; required\n  --evidence <text>     Evidence command, file, receipt, or observation\n  --blocker <code>      Canonical blocker code; accepts comma-separated values and repeated flags\n  --next-action <text>  Suggested recovery or continuation action; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output";
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
 pub(crate) enum RenderMode {
@@ -529,6 +532,12 @@ pub(crate) enum TaskCommand {
         after_help = TASK_UPDATE_AFTER_HELP
     )]
     Update(TaskUpdateArgs),
+    #[command(
+        about = TASK_BLOCK_ABOUT,
+        long_about = TASK_BLOCK_LONG_ABOUT,
+        after_help = TASK_BLOCK_AFTER_HELP
+    )]
+    Block(TaskBlockArgs),
     #[command(about = "inspect dirty git files against one task's owned paths")]
     OwnedStatus(TaskOwnedStatusArgs),
     #[command(about = "record delegated agent handoff receipts for a task")]
@@ -1231,6 +1240,53 @@ pub(crate) struct TaskUpdateArgs {
         help = "Remove the task conflict domain"
     )]
     pub(crate) clear_conflict_domain: bool,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskBlockArgs {
+    #[arg(help = "Task id to mark blocked in the authoritative backlog store")]
+    pub(crate) task_id: String,
+
+    #[arg(long = "reason", help = "Human-readable blocker reason")]
+    pub(crate) reason: String,
+
+    #[arg(
+        long = "evidence",
+        help = "Evidence command, file path, receipt path, or observation for the blocker"
+    )]
+    pub(crate) evidence: Option<String>,
+
+    #[arg(
+        long = "blocker",
+        value_delimiter = ',',
+        help = "Canonical blocker code. Accepts comma-separated values and repeated flags."
+    )]
+    pub(crate) blockers: Vec<String>,
+
+    #[arg(
+        long = "next-action",
+        help = "Suggested recovery or continuation action. Accepts repeated flags."
+    )]
+    pub(crate) next_actions: Vec<String>,
 
     #[arg(
         long = "state-dir",
