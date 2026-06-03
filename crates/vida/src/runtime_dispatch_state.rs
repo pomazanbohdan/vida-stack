@@ -7528,6 +7528,62 @@ mod tests {
     }
 
     #[test]
+    fn executable_dispatch_packet_template_bypasses_activation_view_only_prelaunch_blocker() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("delivery-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "activation_semantics": {
+                    "activation_kind": "activation_view",
+                    "executes_packet": false,
+                    "records_completion_receipt": false,
+                    "view_only": true
+                },
+                "activation_evidence": {
+                    "evidence_state": "activation_view_only"
+                }
+            }))
+            .expect("packet json should encode"),
+        )
+        .expect("packet should write");
+
+        assert!(!dispatch_packet_declares_activation_view_only(Some(
+            packet_path
+                .to_str()
+                .expect("packet path should be valid utf8")
+        )));
+    }
+
+    #[test]
+    fn non_executable_activation_view_packet_still_requires_prelaunch_blocker() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("activation-view-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "activation_semantics": {
+                    "activation_kind": "activation_view",
+                    "executes_packet": false,
+                    "records_completion_receipt": false,
+                    "view_only": true
+                }
+            }))
+            .expect("packet json should encode"),
+        )
+        .expect("packet should write");
+
+        assert!(dispatch_packet_declares_activation_view_only(Some(
+            packet_path
+                .to_str()
+                .expect("packet path should be valid utf8")
+        )));
+    }
+
+    #[test]
     fn apply_owned_paths_if_missing_rejects_unsafe_owned_paths() {
         let mut packet = serde_json::json!({ "owned_paths": [] });
         let owned_paths = vec![
@@ -23154,6 +23210,9 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
     else {
         return false;
     };
+    if dispatch_packet_has_executable_template(&packet) {
+        return false;
+    }
     let activation_semantics = packet
         .get("activation_semantics")
         .or_else(|| packet.pointer("/activation_evidence/activation_semantics"))
@@ -23171,9 +23230,6 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
             == Some("activation_view_only");
     if declares_view_only || evidence_declares_view_only {
         return true;
-    }
-    if dispatch_packet_has_executable_template(&packet) {
-        return false;
     }
     false
 }
