@@ -99,6 +99,27 @@ struct TaskProofTargetStatus {
     next_action: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskTakeoverStatusReceipt {
+    surface: &'static str,
+    status: String,
+    task_id: String,
+    allowed: bool,
+    local_exception_takeover_state: String,
+    root_local_write_allowed: bool,
+    paths: Vec<String>,
+    packet: serde_json::Value,
+    lane: serde_json::Value,
+    root_write_guard: serde_json::Value,
+    active_takeover_state: String,
+    takeover_ready_state: String,
+    recommended_surface: Option<String>,
+    reason: String,
+    recommended_command: Option<String>,
+    next_actions: Vec<String>,
+    blocker_codes: Vec<String>,
+}
+
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
 }
@@ -258,6 +279,279 @@ fn print_task_proof_status(
         "next",
         payload["next_required_command"].as_str().unwrap_or(""),
     );
+}
+
+fn exception_takeover_state_label(
+    state: crate::release1_contracts::ExceptionTakeoverState,
+) -> &'static str {
+    match state {
+        crate::release1_contracts::ExceptionTakeoverState::NotRecorded => "not_recorded",
+        crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded => "receipt_recorded",
+        crate::release1_contracts::ExceptionTakeoverState::ActiveTakeover => "active",
+    }
+}
+
+async fn task_takeover_status_receipt(
+    store: &StateStore,
+    task: &state_store::TaskRecord,
+    status_override: Option<state_store::RunGraphStatus>,
+    lane_source_override: Option<&str>,
+) -> TaskTakeoverStatusReceipt {
+    let (lane_source, status) = if let Some(status) = status_override {
+        (lane_source_override.unwrap_or("run_id"), Some(status))
+    } else {
+        let current_status = store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .ok()
+            .flatten();
+        match current_status {
+            Some(status) => ("current_session", Some(status)),
+            None => (
+                "latest",
+                store.latest_run_graph_status().await.ok().flatten(),
+            ),
+        }
+    };
+    let Some(status) = status else {
+        return TaskTakeoverStatusReceipt {
+            surface: "vida task takeover status",
+            status: "blocked".to_string(),
+            task_id: task.id.clone(),
+            allowed: false,
+            local_exception_takeover_state: "not_recorded".to_string(),
+            root_local_write_allowed: false,
+            paths: Vec::new(),
+            packet: serde_json::json!({
+                "dispatch_packet_path": serde_json::Value::Null,
+                "dispatch_result_path": serde_json::Value::Null,
+            }),
+            lane: serde_json::json!({
+                "source": lane_source,
+                "run_id": serde_json::Value::Null,
+                "task_id": serde_json::Value::Null,
+            }),
+            root_write_guard: serde_json::json!({
+                "status": "blocked_by_default",
+                "root_local_write_allowed": false,
+                "root_local_write_allowed_for_only_these_paths": [],
+                "local_exception_takeover_state": "not_recorded",
+                "latest_lane_status": serde_json::Value::Null,
+                "local_exception_takeover_gate": serde_json::Value::Null,
+                "latest_run_graph_task_stale": false,
+                "reason": "no run-graph lane evidence is available",
+            }),
+            active_takeover_state: "not_recorded".to_string(),
+            takeover_ready_state: "not_ready".to_string(),
+            recommended_surface: Some("vida lane show".to_string()),
+            reason: "no run-graph lane evidence is available for takeover status".to_string(),
+            recommended_command: Some("vida lane show --latest --json".to_string()),
+            next_actions: vec![
+                "Run `vida lane show --latest --json` to inspect lane evidence before attempting exception takeover."
+                    .to_string(),
+            ],
+            blocker_codes: vec!["missing_latest_lane_receipt".to_string()],
+        };
+    };
+    let summary = store
+        .run_graph_dispatch_receipt_summary_for_status(&status)
+        .await
+        .ok()
+        .flatten();
+    let recovery = store.run_graph_recovery_summary(&status.run_id).await.ok();
+    let recovery_gate = recovery.as_ref().map(|recovery| {
+        recovery
+            .delegation_gate
+            .local_exception_takeover_gate
+            .as_str()
+    });
+    let (summary, takeover_state) = match summary {
+        Some(summary) => {
+            let state = crate::release1_contracts::exception_takeover_state(
+                summary.exception_path_receipt_id.as_deref(),
+                summary.supersedes_receipt_id.as_deref(),
+                recovery_gate,
+            );
+            (Some(summary), state)
+        }
+        None => (
+            None,
+            crate::release1_contracts::ExceptionTakeoverState::NotRecorded,
+        ),
+    };
+    let task_matches_lane = status.task_id.trim() == task.id.trim();
+    let paths = task
+        .planner_metadata
+        .owned_paths
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let state_label = exception_takeover_state_label(takeover_state).to_string();
+    let root_local_write_allowed =
+        task_matches_lane && takeover_state.is_active() && !paths.is_empty();
+    let allowed = root_local_write_allowed;
+    let (reason, blocker_codes, next_actions, recommended_command, recommended_surface) =
+        if !task_matches_lane {
+            (
+            format!(
+                "latest lane task `{}` does not match requested task `{}`",
+                status.task_id, task.id
+            ),
+            vec!["latest_lane_task_mismatch".to_string()],
+            vec![format!(
+                "Bind or inspect the correct bounded unit before local writes: `vida task show {} --json` and `vida lane show --latest --json`.",
+                crate::shell_quote(&task.id)
+            )],
+            Some("vida lane show --latest --json".to_string()),
+            Some("vida lane show".to_string()),
+        )
+        } else if allowed {
+            (
+            "exception takeover is active for this task; local writes are lawful only inside listed paths"
+                .to_string(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        )
+        } else if takeover_state
+            == crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded
+        {
+            let command = summary.as_ref().and_then(|summary| {
+                summary
+                    .exception_path_receipt_id
+                    .as_deref()
+                    .map(|receipt_id| {
+                        format!(
+                            "vida lane supersede {} --receipt-id {} --json",
+                            crate::shell_quote(&summary.run_id),
+                            crate::shell_quote(receipt_id)
+                        )
+                    })
+            });
+            (
+            "exception receipt is recorded but supersession is required before local write is active"
+                .to_string(),
+            vec!["supersession_required".to_string()],
+            command
+                .iter()
+                .cloned()
+                .chain([
+                    "Run `vida lane show --latest --json` if the receipt id is missing or stale."
+                        .to_string(),
+                ])
+                .collect(),
+            command,
+            Some("vida lane supersede".to_string()),
+        )
+        } else {
+            let command = format!(
+                "vida lane takeover-ready {} --json",
+                crate::shell_quote(&status.run_id)
+            );
+            (
+                "exception takeover is not recorded for this task".to_string(),
+                vec!["exception_takeover_not_recorded".to_string()],
+                vec![command.clone()],
+                Some(command),
+                Some("vida lane takeover-ready".to_string()),
+            )
+        };
+    let packet = serde_json::json!({
+        "dispatch_packet_path": summary
+            .as_ref()
+            .and_then(|summary| summary.dispatch_packet_path.clone()),
+        "dispatch_result_path": summary
+            .as_ref()
+            .and_then(|summary| summary.dispatch_result_path.clone()),
+        "downstream_dispatch_packet_path": summary
+            .as_ref()
+            .and_then(|summary| summary.downstream_dispatch_packet_path.clone()),
+        "downstream_dispatch_result_path": summary
+            .as_ref()
+            .and_then(|summary| summary.downstream_dispatch_result_path.clone()),
+    });
+    let lane = serde_json::json!({
+        "source": lane_source,
+        "run_id": status.run_id,
+        "task_id": status.task_id,
+        "dispatch_target": summary.as_ref().map(|summary| summary.dispatch_target.clone()),
+        "lane_status": summary.as_ref().map(|summary| summary.lane_status.clone()),
+        "dispatch_status": summary.as_ref().map(|summary| summary.dispatch_status.clone()),
+        "selected_backend": summary.as_ref().and_then(|summary| summary.selected_backend.clone()),
+        "exception_path_receipt_id": summary.as_ref().and_then(|summary| summary.exception_path_receipt_id.clone()),
+        "supersedes_receipt_id": summary.as_ref().and_then(|summary| summary.supersedes_receipt_id.clone()),
+        "recovery_gate": recovery_gate,
+    });
+    let takeover_ready_state = if allowed {
+        "active"
+    } else if takeover_state == crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded {
+        "supersession_required"
+    } else if task_matches_lane {
+        "not_ready"
+    } else {
+        "stale_task_blocked"
+    }
+    .to_string();
+    let root_write_guard = serde_json::json!({
+        "status": if root_local_write_allowed { "exception_takeover_active" } else { "blocked_by_default" },
+        "root_local_write_allowed": root_local_write_allowed,
+        "root_local_write_allowed_for_only_these_paths": if root_local_write_allowed { paths.clone() } else { Vec::<String>::new() },
+        "local_exception_takeover_state": state_label.clone(),
+        "latest_lane_status": summary.as_ref().map(|summary| summary.lane_status.clone()),
+        "local_exception_takeover_gate": recovery_gate,
+        "latest_run_graph_task_stale": !task_matches_lane,
+        "reason": if root_local_write_allowed { serde_json::Value::Null } else { serde_json::json!(reason.clone()) },
+    });
+
+    TaskTakeoverStatusReceipt {
+        surface: "vida task takeover status",
+        status: if allowed {
+            task_json_success_status().to_string()
+        } else {
+            "blocked".to_string()
+        },
+        task_id: task.id.clone(),
+        allowed,
+        local_exception_takeover_state: state_label.clone(),
+        root_local_write_allowed,
+        paths,
+        packet,
+        lane,
+        root_write_guard,
+        active_takeover_state: if task_matches_lane {
+            state_label.clone()
+        } else {
+            "stale_task_blocked".to_string()
+        },
+        takeover_ready_state,
+        recommended_surface,
+        reason,
+        recommended_command,
+        next_actions,
+        blocker_codes,
+    }
+}
+
+fn print_task_takeover_status(render: RenderMode, receipt: &TaskTakeoverStatusReceipt) {
+    print_surface_header(render, "vida task takeover status");
+    print_surface_line(render, "status", &receipt.status);
+    print_surface_line(render, "task", &receipt.task_id);
+    print_surface_line(render, "allowed", &receipt.allowed.to_string());
+    print_surface_line(
+        render,
+        "takeover state",
+        &receipt.local_exception_takeover_state,
+    );
+    print_surface_line(
+        render,
+        "root local write",
+        &receipt.root_local_write_allowed.to_string(),
+    );
+    if let Some(command) = receipt.recommended_command.as_deref() {
+        print_surface_line(render, "recommended command", command);
+    }
 }
 
 fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value {
@@ -5120,6 +5414,164 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         },
+        TaskCommand::Takeover(command) => match command.command {
+            TaskTakeoverCommand::Status(command) => {
+                let state_dir = command
+                    .state_dir
+                    .clone()
+                    .unwrap_or_else(state_store::default_state_dir);
+                let requested_task_id = match (&command.task_id, &command.task_id_filter) {
+                    (Some(positional), Some(flag)) if positional.trim() != flag.trim() => {
+                        let receipt = TaskTakeoverStatusReceipt {
+                            surface: "vida task takeover status",
+                            status: "blocked".to_string(),
+                            task_id: positional.clone(),
+                            allowed: false,
+                            local_exception_takeover_state: "not_recorded".to_string(),
+                            root_local_write_allowed: false,
+                            paths: Vec::new(),
+                            packet: serde_json::json!({}),
+                            lane: serde_json::json!({}),
+                            root_write_guard: serde_json::json!({
+                                "status": "blocked_by_default",
+                                "root_local_write_allowed": false,
+                                "root_local_write_allowed_for_only_these_paths": [],
+                                "local_exception_takeover_state": "not_recorded",
+                                "reason": "conflicting task id filters",
+                            }),
+                            active_takeover_state: "not_recorded".to_string(),
+                            takeover_ready_state: "not_ready".to_string(),
+                            recommended_surface: None,
+                            reason: "positional task id and --task-id disagree".to_string(),
+                            recommended_command: None,
+                            next_actions: vec![
+                                "Rerun with one task id source or matching positional and --task-id values."
+                                    .to_string(),
+                            ],
+                            blocker_codes: vec!["task_filter_conflict".to_string()],
+                        };
+                        if command.json {
+                            crate::print_json_pretty(
+                                &serde_json::to_value(&receipt)
+                                    .expect("takeover status receipt should serialize"),
+                            );
+                        } else {
+                            print_task_takeover_status(command.render, &receipt);
+                        }
+                        return ExitCode::from(1);
+                    }
+                    (Some(positional), _) => Some(positional.trim().to_string()),
+                    (_, Some(flag)) => Some(flag.trim().to_string()),
+                    (None, None) => None,
+                };
+                match StateStore::open_existing_read_only(state_dir).await {
+                    Ok(store) => {
+                        let (status_override, lane_source) =
+                            if let Some(run_id) = command.run_id.as_deref() {
+                                match store.run_graph_status(run_id).await {
+                                    Ok(status) => (Some(status), Some("run_id")),
+                                    Err(error) => {
+                                        eprintln!("Failed to inspect run graph status: {error}");
+                                        return ExitCode::from(1);
+                                    }
+                                }
+                            } else {
+                                let current = store
+                                    .latest_run_graph_status_for_current_session()
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                match current {
+                                    Some(status) => (Some(status), Some("current_session")),
+                                    None => (
+                                        store.latest_run_graph_status().await.ok().flatten(),
+                                        Some("latest"),
+                                    ),
+                                }
+                            };
+                        let Some(task_id) = requested_task_id
+                            .filter(|value| !value.trim().is_empty())
+                            .or_else(|| {
+                                status_override
+                                    .as_ref()
+                                    .map(|status| status.task_id.clone())
+                            })
+                        else {
+                            let receipt = TaskTakeoverStatusReceipt {
+                                surface: "vida task takeover status",
+                                status: "blocked".to_string(),
+                                task_id: String::new(),
+                                allowed: false,
+                                local_exception_takeover_state: "not_recorded".to_string(),
+                                root_local_write_allowed: false,
+                                paths: Vec::new(),
+                                packet: serde_json::json!({}),
+                                lane: serde_json::json!({}),
+                                root_write_guard: serde_json::json!({
+                                    "status": "blocked_by_default",
+                                    "root_local_write_allowed": false,
+                                    "root_local_write_allowed_for_only_these_paths": [],
+                                    "local_exception_takeover_state": "not_recorded",
+                                    "reason": "missing task and lane evidence",
+                                }),
+                                active_takeover_state: "not_recorded".to_string(),
+                                takeover_ready_state: "not_ready".to_string(),
+                                recommended_surface: Some("vida lane show".to_string()),
+                                reason: "no task id was supplied and no latest lane task id is available"
+                                    .to_string(),
+                                recommended_command: Some("vida lane show --latest --json".to_string()),
+                                next_actions: vec![
+                                    "Supply --task-id or inspect lane evidence with `vida lane show --latest --json`."
+                                        .to_string(),
+                                ],
+                                blocker_codes: vec!["missing_task_and_lane_evidence".to_string()],
+                            };
+                            if command.json {
+                                crate::print_json_pretty(
+                                    &serde_json::to_value(&receipt)
+                                        .expect("takeover status receipt should serialize"),
+                                );
+                            } else {
+                                print_task_takeover_status(command.render, &receipt);
+                            }
+                            return ExitCode::from(1);
+                        };
+                        match store.show_task(&task_id).await {
+                            Ok(task) => {
+                                let receipt = task_takeover_status_receipt(
+                                    &store,
+                                    &task,
+                                    status_override,
+                                    lane_source,
+                                )
+                                .await;
+                                if command.json {
+                                    crate::print_json_pretty(
+                                        &serde_json::to_value(&receipt)
+                                            .expect("takeover status receipt should serialize"),
+                                    );
+                                } else {
+                                    print_task_takeover_status(command.render, &receipt);
+                                }
+                                if receipt.allowed {
+                                    ExitCode::SUCCESS
+                                } else {
+                                    ExitCode::from(1)
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!("Failed to inspect task takeover status: {error}");
+                                ExitCode::from(1)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to open authoritative state store: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
+        },
         TaskCommand::Progress(command) => {
             let state_dir = command
                 .state_dir
@@ -6422,10 +6874,11 @@ mod tests {
         blocked_task_next_lawful_receipt, build_adaptive_replan_finding_preview,
         build_spawn_blocker_preview, build_split_mutation_preview,
         canonical_json_string_array_entries, classify_task_close_git_stage_failure,
-        ensure_existing_task_mismatch_reason, load_adaptive_preview_finding_json,
-        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
-        parse_label_values, parse_optional_label_value, parse_proof_target_values,
-        parse_split_child_specs, pass_completed_lane_task_next_lawful_receipt,
+        ensure_existing_task_mismatch_reason, exception_takeover_state_label,
+        load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
+        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
+        parse_proof_target_values, parse_split_child_specs,
+        pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
@@ -6479,6 +6932,68 @@ mod tests {
             })
             .await
             .expect("task should create");
+    }
+
+    #[test]
+    fn task_takeover_status_cli_accepts_json_task_and_run_filters() {
+        let parsed = cli(&[
+            "task",
+            "takeover",
+            "status",
+            "--task-id",
+            "task-1",
+            "--run-id",
+            "run-1",
+            "--json",
+        ]);
+        let Some(crate::Command::Task(args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let crate::TaskCommand::Takeover(takeover) = args.command else {
+            panic!("takeover command should parse");
+        };
+        let crate::TaskTakeoverCommand::Status(status) = takeover.command;
+
+        assert_eq!(status.task_id_filter.as_deref(), Some("task-1"));
+        assert_eq!(status.run_id.as_deref(), Some("run-1"));
+        assert!(status.json);
+    }
+
+    #[test]
+    fn task_takeover_status_cli_accepts_positional_task_id() {
+        let parsed = cli(&["task", "takeover", "status", "task-1", "--json"]);
+        let Some(crate::Command::Task(args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let crate::TaskCommand::Takeover(takeover) = args.command else {
+            panic!("takeover command should parse");
+        };
+        let crate::TaskTakeoverCommand::Status(status) = takeover.command;
+
+        assert_eq!(status.task_id.as_deref(), Some("task-1"));
+        assert!(status.json);
+    }
+
+    #[test]
+    fn task_takeover_status_labels_release_takeover_states() {
+        assert_eq!(
+            exception_takeover_state_label(
+                crate::release1_contracts::ExceptionTakeoverState::NotRecorded
+            ),
+            "not_recorded"
+        );
+        assert_eq!(
+            exception_takeover_state_label(
+                crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded
+            ),
+            "receipt_recorded"
+        );
+        assert_eq!(
+            exception_takeover_state_label(
+                crate::release1_contracts::ExceptionTakeoverState::ActiveTakeover
+            ),
+            "active"
+        );
     }
 
     fn minimal_task_create_args(

@@ -533,6 +533,8 @@ pub(crate) enum TaskCommand {
     OwnedStatus(TaskOwnedStatusArgs),
     #[command(about = "record delegated agent handoff receipts for a task")]
     Handoff(TaskHandoffArgs),
+    #[command(about = "inspect task-scoped exception takeover and root-write status")]
+    Takeover(TaskTakeoverArgs),
     #[command(about = "close one tracked task with evidence and optional release automation")]
     Close(TaskCloseArgs),
     #[command(about = "retire historical run-graph rows for already-closed tasks")]
@@ -887,6 +889,55 @@ pub(crate) enum TaskProofCommand {
 pub(crate) struct TaskProofStatusArgs {
     #[arg(help = "Task id whose proof status should be inspected")]
     pub(crate) task_id: String,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskTakeoverArgs {
+    #[command(subcommand)]
+    pub(crate) command: TaskTakeoverCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum TaskTakeoverCommand {
+    #[command(about = "show whether local exception takeover is active for one task")]
+    Status(TaskTakeoverStatusArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskTakeoverStatusArgs {
+    #[arg(help = "Optional task id whose takeover state should be inspected")]
+    pub(crate) task_id: Option<String>,
+
+    #[arg(
+        long = "task-id",
+        help = "Task id filter; equivalent to positional task id"
+    )]
+    pub(crate) task_id_filter: Option<String>,
+
+    #[arg(
+        long = "run-id",
+        help = "Run id filter for the takeover lane to inspect"
+    )]
+    pub(crate) run_id: Option<String>,
 
     #[arg(
         long = "state-dir",

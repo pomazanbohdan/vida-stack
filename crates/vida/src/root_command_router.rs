@@ -170,6 +170,9 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         TaskCommand::Handoff(command) => match &command.command {
             super::TaskHandoffCommand::Accept(command) => command.state_dir.is_some(),
         },
+        TaskCommand::Takeover(command) => match &command.command {
+            super::TaskTakeoverCommand::Status(command) => command.state_dir.is_some(),
+        },
         TaskCommand::Help(_) | TaskCommand::AdaptivePreview(_) => false,
     }
 }
