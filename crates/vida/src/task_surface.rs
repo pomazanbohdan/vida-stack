@@ -690,8 +690,13 @@ fn task_close_result_payload(
             .map(|receipt| receipt.next_actions.clone())
             .unwrap_or_default()
     };
+    let continuation_blocked = automation_blocked || feedback_blocked;
     serde_json::json!({
-        "status": if automation_blocked || feedback_blocked { "blocked" } else { "pass" },
+        "status": "pass",
+        "closed": true,
+        "continuation_blocked": continuation_blocked,
+        "automation_blocked": automation_blocked,
+        "feedback_blocked": feedback_blocked,
         "blocker_codes": blocker_codes,
         "next_actions": next_actions,
         "task": task,
@@ -5563,11 +5568,6 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             };
                             let telemetry_feedback_blocker =
                                 task_close_feedback_blocker_summary(&telemetry);
-                            let automation_blocked = automation
-                                .as_ref()
-                                .map(|receipt| receipt.status != "pass")
-                                .unwrap_or(false);
-                            let feedback_blocked = telemetry_feedback_blocker.is_some();
                             let epic_progress_summary = match store.all_tasks().await {
                                 Ok(rows) => {
                                     match task_close_epic_progress_summary(&rows, &command.task_id)
@@ -5647,11 +5647,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     print_task_close_epic_progress_summary(command.render, summary);
                                 }
                             }
-                            if automation_blocked || feedback_blocked {
-                                ExitCode::from(1)
-                            } else {
-                                ExitCode::SUCCESS
-                            }
+                            ExitCode::SUCCESS
                         }
                         Err(error) => {
                             eprintln!("Failed to close task: {error}");
@@ -6526,6 +6522,8 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["closed"], true);
+        assert_eq!(payload["continuation_blocked"], false);
         assert_eq!(payload["task"]["id"], "child-closed");
         assert_eq!(
             payload["epic_progress_summary"]["epics"][0]["epic_id"],
@@ -6535,6 +6533,30 @@ mod tests {
             payload["epic_progress_summary"]["epics"][0]["closed_count"],
             1
         );
+    }
+
+    #[test]
+    fn task_close_result_payload_keeps_success_status_when_continuation_is_blocked() {
+        let mut closed_task = owned_task_record("closed-with-blocker", vec![]);
+        closed_task.status = "closed".to_string();
+        let telemetry = serde_json::json!({
+            "status": "recorded",
+            "reason": "feedback recorded after close"
+        });
+        let blockers = (
+            vec!["post_close_feedback_blocked".to_string()],
+            vec!["Inspect continuation blocker separately.".to_string()],
+        );
+
+        let payload =
+            task_close_result_payload(&closed_task, &telemetry, None, Some(&blockers), None);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["closed"], true);
+        assert_eq!(payload["continuation_blocked"], true);
+        assert_eq!(payload["feedback_blocked"], true);
+        assert_eq!(payload["automation_blocked"], false);
+        assert_eq!(payload["blocker_codes"][0], "post_close_feedback_blocked");
     }
 
     #[test]
