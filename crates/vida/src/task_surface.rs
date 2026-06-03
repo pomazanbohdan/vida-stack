@@ -3672,6 +3672,50 @@ fn task_next_lawful_recommended_parallel_batch(
         .collect()
 }
 
+fn task_epic_ancestor_id(tasks: &[state_store::TaskRecord], task_id: &str) -> Option<String> {
+    let by_id = tasks
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut current_id = task_id;
+    let mut visited = std::collections::BTreeSet::<String>::new();
+    loop {
+        if !visited.insert(current_id.to_string()) {
+            return None;
+        }
+        let task = by_id.get(current_id)?;
+        if state_store::work_item_is_program_container(&task.issue_type) {
+            return Some(task.id.clone());
+        }
+        let Some(parent_id) = task_parent_id(task) else {
+            return None;
+        };
+        current_id = by_id.get(parent_id.as_str())?.id.as_str();
+    }
+}
+
+fn task_next_lawful_apply_strategy(
+    tasks: &[state_store::TaskRecord],
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+    strategy: Option<&str>,
+) -> Vec<TaskContinuationCandidate> {
+    match strategy.unwrap_or("default") {
+        "epic-sequential" => {
+            let Some(primary) = ready_task_candidates.first() else {
+                return ready_task_candidates;
+            };
+            let primary_epic_id = task_epic_ancestor_id(tasks, &primary.task_id);
+            ready_task_candidates
+                .into_iter()
+                .filter(|candidate| {
+                    task_epic_ancestor_id(tasks, &candidate.task_id) == primary_epic_id
+                })
+                .collect()
+        }
+        _ => ready_task_candidates,
+    }
+}
+
 fn task_next_lawful_why_not_auto_bound(
     blocker_code: Option<&str>,
     ready_task_candidates: &[TaskContinuationCandidate],
@@ -5007,6 +5051,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             )
                         })
                         .collect::<Vec<_>>();
+                    let ready_task_candidates = task_next_lawful_apply_strategy(
+                        &tasks,
+                        ready_task_candidates,
+                        command.strategy.as_deref(),
+                    );
                     let runtime_recovery = match scoped_runtime_binding {
                         Some(binding) => {
                             store.run_graph_recovery_summary(&binding.run_id).await.ok()
@@ -6030,10 +6079,10 @@ mod tests {
         task_create_planner_metadata_arg, task_create_semantics_mismatch,
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
         task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
-        task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
-        task_owned_status_receipt, task_parent_id, task_ready_authoritative_first,
-        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_handoff_receipt_root, task_json_success_status, task_next_lawful_apply_strategy,
+        task_next_lawful_receipt, task_owned_status_receipt, task_parent_id,
+        task_ready_authoritative_first, task_update_planner_metadata_arg,
+        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -6840,6 +6889,64 @@ mod tests {
             .why_not_auto_bound
             .as_deref()
             .is_some_and(|reason| reason.contains("multiple ready candidates")));
+    }
+
+    #[test]
+    fn task_next_lawful_epic_sequential_strategy_keeps_primary_epic_candidates() {
+        let mut epic_a = owned_task_record("epic-a", vec![]);
+        epic_a.issue_type = "epic".to_string();
+        let mut epic_b = owned_task_record("epic-b", vec![]);
+        epic_b.issue_type = "epic".to_string();
+        let mut a_first = owned_task_record("task-a-first", vec![]);
+        a_first.status = "open".to_string();
+        a_first.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: a_first.id.clone(),
+            depends_on_id: epic_a.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-06-03T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+        let mut a_second = owned_task_record("task-a-second", vec![]);
+        a_second.status = "open".to_string();
+        a_second.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: a_second.id.clone(),
+            depends_on_id: epic_a.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-06-03T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+        let mut b_first = owned_task_record("task-b-first", vec![]);
+        b_first.status = "open".to_string();
+        b_first.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: b_first.id.clone(),
+            depends_on_id: epic_b.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-06-03T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+        let ready = vec![
+            task_continuation_candidate(&a_first, false),
+            task_continuation_candidate(&a_second, false),
+            task_continuation_candidate(&b_first, false),
+        ];
+
+        let filtered = task_next_lawful_apply_strategy(
+            &[epic_a, epic_b, a_first, a_second, b_first],
+            ready,
+            Some("epic-sequential"),
+        );
+
+        let ids = filtered
+            .iter()
+            .map(|candidate| candidate.task_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["task-a-first", "task-a-second"]);
     }
 
     #[test]

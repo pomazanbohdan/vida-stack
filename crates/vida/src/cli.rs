@@ -1221,16 +1221,36 @@ pub(crate) struct TaskNextArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskNextLawfulArgs {
-    #[arg(long = "scope")]
+    #[arg(
+        long = "scope",
+        help = "Limit lawful continuation candidates to this task scope"
+    )]
     pub(crate) scope: Option<String>,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "strategy",
+        value_parser = ["default", "epic-sequential"],
+        help = "Continuation selection strategy: default or epic-sequential"
+    )]
+    pub(crate) strategy: Option<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render mode for human-readable output"
+    )]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
@@ -1995,6 +2015,8 @@ mod tests {
             .expect_err("help should render clap display error");
         let next_lawful_help = next_lawful_error.to_string();
         assert!(next_lawful_help.contains("--scope"));
+        assert!(next_lawful_help.contains("--strategy"));
+        assert!(next_lawful_help.contains("epic-sequential"));
         assert!(next_lawful_help.contains("--state-dir"));
         assert!(next_lawful_help.contains("--json"));
 
@@ -2004,6 +2026,8 @@ mod tests {
             "next-lawful",
             "--scope",
             "audit-epic",
+            "--strategy",
+            "epic-sequential",
             "--json",
         ])
         .expect("next-lawful should parse");
@@ -2014,6 +2038,7 @@ mod tests {
             panic!("next-lawful command should parse");
         };
         assert_eq!(next_lawful.scope.as_deref(), Some("audit-epic"));
+        assert_eq!(next_lawful.strategy.as_deref(), Some("epic-sequential"));
         assert!(next_lawful.json);
     }
 
