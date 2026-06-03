@@ -1279,6 +1279,59 @@ agent_system:
   mode: native
   state_owner: orchestrator_only
   max_parallel_agents: 4
+  token_economy:
+    enabled: true
+    goal: reduce_root_orchestrator_tokens_and_paid_model_calls_during_long_refactor_epics
+    weekly_limit_pressure_mode: true
+    root_orchestrator_default_posture: synthesize_not_research
+    default_readonly_prefetch: true
+    prefer_external_free_readonly_carriers:
+      - vibe_cli
+    prefer_internal_low_medium_for_write_carriers:
+      - internal_subagents:codex_gpt55_low_write
+      - internal_subagents:codex_gpt55_medium_write
+    high_cost_carriers_reserved_for:
+      - architecture_boundary_decision
+      - security_or_safety_review
+      - release_readiness_or_mainline_admission
+      - repeated_rework_after_low_medium_failure
+    root_call_reduction_rules:
+      - ask_vibe_for_readonly_pre_analysis_when_scope_is_known_and_no_write_authority_is_needed
+      - ask_internal_low_or_medium_for_bounded_implementation_or_test_authoring
+      - keep_root_session_to_binding_synthesis_task_updates_and_final_validation
+      - prefer_compact_runtime_surfaces_and_snapshot_reads_before_large_json_bundles
+      - batch_related_report_intake_into_one_taskflow_mutation_window
+    task_class_carrier_preferences:
+      research:
+        primary: vibe_cli
+        fallback: internal_subagents:codex_gpt55_low_write
+      analysis:
+        primary: vibe_cli
+        fallback: internal_subagents:codex_gpt55_low_write
+      specification:
+        primary: vibe_cli
+        fallback: internal_subagents:codex_gpt55_medium_write
+      planning:
+        primary: vibe_cli
+        fallback: internal_subagents:codex_gpt55_medium_write
+      review:
+        primary: vibe_cli
+        fallback: internal_subagents:codex_gpt55_medium_write
+      coach:
+        primary: vibe_cli
+        fallback: internal_subagents:codex_gpt55_medium_write
+      implementation:
+        primary: internal_subagents:codex_gpt55_low_write
+        fallback: internal_subagents:codex_gpt55_medium_write
+      regression_test:
+        primary: internal_subagents:codex_gpt55_medium_write
+        fallback: internal_subagents:codex_gpt55_low_write
+      verification:
+        primary: internal_subagents:codex_gpt55_medium_write
+        fallback: vibe_cli
+    escalation_after:
+      consecutive_low_medium_failures: 2
+      repeated_runtime_blocker_count: 2
 
   scoring:
     rule: capability_first_then_score_guard_then_cheapest_tier
@@ -1821,9 +1874,13 @@ agent_system:
       speed_tier: medium
       quality_tier: medium
       runtime_roles:
+        - business_analyst
         - coach
         - verifier
       task_classes:
+        - research
+        - specification
+        - planning
         - ui_review
         - review
         - analysis
@@ -1839,9 +1896,13 @@ agent_system:
           quality_tier: medium
           write_scope: none
           runtime_roles:
+            - business_analyst
             - coach
             - verifier
           task_classes:
+            - research
+            - specification
+            - planning
             - ui_review
             - review
             - analysis

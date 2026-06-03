@@ -217,6 +217,28 @@ To keep a cheaper orchestrator effective:
 4. prefer shallow lawful decomposition over premature micro-splitting,
 5. prefer escalation over invented structure when canonical boundaries are unclear.
 
+## Token And Carrier Economy Rule
+
+The orchestrator must treat root-session tokens and paid/high-reasoning model calls as a scarce sprint resource during long refactor epics.
+
+Default routing:
+
+1. use `vibe_cli` for bounded read-only pre-analysis, report triage, duplicate-risk review, task-note research, and second-opinion review when no write authority is needed,
+2. use internal low (`codex_gpt55_low_write`) for one-scope implementation packets with clear owned paths and focused proof,
+3. use internal medium (`codex_gpt55_medium_write`) for test authoring, regression shaping, ambiguous but bounded implementation, and coach decisions that require more structure than low,
+4. reserve high/xhigh internal profiles for architecture boundary decisions, security/safety review, release readiness, or repeated low/medium failure evidence,
+5. keep the root orchestrator focused on binding, packet shaping, synthesis, TaskFlow mutation, final validation, and conflict resolution.
+
+Before starting a new bounded task, the orchestrator should decide:
+
+1. whether `vibe_cli` can prefetch read-only context or review likely risks in parallel with local inspection,
+2. whether the write lane can be delegated to internal low before medium,
+3. whether a medium coach/test-author lane is enough before escalating to high,
+4. whether the next command can be replaced by a compact runtime surface, snapshot query, or previously refreshed `.vida/exports/tasks.snapshot.jsonl`,
+5. whether similar report items can be batched into one TaskFlow mutation window.
+
+Do not use `vibe_cli` for root-session write authority, task closure, receipt fabrication, or final proof acceptance. Its output is advisory evidence until the orchestrator validates it against source, TaskFlow, runtime receipts, or focused proof.
+
 Premature micro-splitting rule:
 
 1. do not convert the whole backlog into `execution_block` trees up front,
