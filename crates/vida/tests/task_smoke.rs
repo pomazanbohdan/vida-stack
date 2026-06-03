@@ -27,6 +27,16 @@ fn unique_state_dir() -> String {
     )
 }
 
+fn unique_test_id(prefix: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    static UNIQUE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let counter = UNIQUE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{}-{}-{}", prefix, std::process::id(), nanos, counter)
+}
+
 fn project_bound_state_dir() -> (String, String) {
     let project_root = unique_state_dir();
     let state_dir = format!("{project_root}/.vida/data/state");
@@ -5035,14 +5045,14 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
     fs::create_dir_all(&state_dir).expect("create state dir");
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
-    let parent_id = "autonomy-active-parent";
-    create_epic_parent(&state_dir, parent_id, "Autonomy active parent", "open");
-    let active_task_id = "autonomy-active-task";
+    let parent_id = unique_test_id("autonomy-active-parent");
+    create_epic_parent(&state_dir, &parent_id, "Autonomy active parent", "open");
+    let active_task_id = unique_test_id("autonomy-active-task");
     let active = run_command_json(
         &[
             "task",
             "create",
-            active_task_id,
+            &active_task_id,
             "Autonomy active task",
             "--type",
             "task",
@@ -5051,7 +5061,7 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
             "--priority",
             "1",
             "--parent-id",
-            parent_id,
+            &parent_id,
             "--json",
         ],
         &state_dir,
@@ -5059,10 +5069,10 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
     assert_eq!(active["status"], "pass");
     assert_eq!(active["task"]["status"], "in_progress");
 
-    let explicit_run_id = "stale-explicit-run";
-    let explicit_task_id = "stale-explicit-task";
-    let current_run_id = "stale-current-task";
-    let current_task_id = "stale-current-task";
+    let explicit_run_id = unique_test_id("stale-explicit-run");
+    let explicit_task_id = unique_test_id("stale-explicit-task");
+    let current_run_id = unique_test_id("stale-current-run");
+    let current_task_id = unique_test_id("stale-current-task");
     assert_ne!(explicit_run_id, current_run_id);
     assert_ne!(explicit_task_id, current_task_id);
     let _ = run_and_assert_success(
@@ -5070,7 +5080,7 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
             "taskflow",
             "run-graph",
             "init",
-            current_task_id,
+            &current_task_id,
             "implementation",
         ],
         &state_dir,
@@ -5086,13 +5096,13 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
             .await
             .expect("use namespace/database");
         let explicit_binding = serde_json::json!({
-            "run_id": explicit_run_id,
-            "task_id": explicit_task_id,
+            "run_id": explicit_run_id.as_str(),
+            "task_id": explicit_task_id.as_str(),
             "status": "bound",
             "active_bounded_unit": {
                 "kind": "run_graph_task",
-                "task_id": explicit_task_id,
-                "run_id": explicit_run_id,
+                "task_id": explicit_task_id.as_str(),
+                "run_id": explicit_run_id.as_str(),
                 "active_node": "implementation"
             },
             "binding_source": "explicit_continuation_bind_task",
@@ -5102,18 +5112,18 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
             "recorded_at": "2026-05-19T00:00:02Z"
         });
         db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
-            .bind(("run", explicit_run_id))
+            .bind(("run", explicit_run_id.as_str()))
             .bind(("binding", explicit_binding))
             .await
             .expect("seed stale explicit continuation binding");
         let current_binding = serde_json::json!({
-            "run_id": current_run_id,
-            "task_id": current_task_id,
+            "run_id": current_run_id.as_str(),
+            "task_id": current_task_id.as_str(),
             "status": "bound",
             "active_bounded_unit": {
                 "kind": "run_graph_task",
-                "task_id": current_task_id,
-                "run_id": current_run_id,
+                "task_id": current_task_id.as_str(),
+                "run_id": current_run_id.as_str(),
                 "active_node": "implementation"
             },
             "binding_source": "latest_run_graph_status",
@@ -5123,14 +5133,14 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
             "recorded_at": "2026-05-19T00:00:01Z"
         });
         db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
-            .bind(("run", current_run_id))
+            .bind(("run", current_run_id.as_str()))
             .bind(("binding", current_binding))
             .await
             .expect("seed stale current continuation binding");
         drop(db);
     });
 
-    for missing_task_id in [explicit_task_id, current_task_id] {
+    for missing_task_id in [explicit_task_id.as_str(), current_task_id.as_str()] {
         let missing = run_command_capture(&["task", "show", missing_task_id, "--json"], &state_dir);
         assert!(
             !missing.status.success(),
@@ -6470,19 +6480,19 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
     fs::create_dir_all(&state_dir).expect("create state dir");
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
-    let parent_id = "closed-downstream-reconciled-parent";
+    let parent_id = unique_test_id("closed-downstream-reconciled-parent");
     create_epic_parent(
         &state_dir,
-        parent_id,
+        &parent_id,
         "Closed downstream reconciled parent",
         "closed",
     );
-    let closed_task_id = "closed-downstream-reconciled-task";
+    let closed_task_id = unique_test_id("closed-downstream-reconciled-task");
     let closed_task = run_command_json(
         &[
             "task",
             "create",
-            closed_task_id,
+            &closed_task_id,
             "Closed downstream reconciled task",
             "--type",
             "task",
@@ -6491,7 +6501,7 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
             "--priority",
             "1",
             "--parent-id",
-            parent_id,
+            &parent_id,
             "--json",
         ],
         &state_dir,
@@ -6499,19 +6509,19 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
     assert_eq!(closed_task["status"], "pass");
     assert_eq!(closed_task["task"]["status"], "closed");
 
-    let active_parent_id = "active-task-after-closed-downstream-parent";
+    let active_parent_id = unique_test_id("active-task-after-closed-downstream-parent");
     create_epic_parent(
         &state_dir,
-        active_parent_id,
+        &active_parent_id,
         "Active task after closed downstream parent",
         "open",
     );
-    let active_task_id = "active-task-after-closed-downstream";
+    let active_task_id = unique_test_id("active-task-after-closed-downstream");
     let active_task = run_command_json(
         &[
             "task",
             "create",
-            active_task_id,
+            &active_task_id,
             "Active task after closed downstream",
             "--type",
             "task",
@@ -6520,7 +6530,7 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
             "--priority",
             "1",
             "--parent-id",
-            active_parent_id,
+            &active_parent_id,
             "--json",
         ],
         &state_dir,
@@ -6528,7 +6538,7 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
     assert_eq!(active_task["status"], "pass");
     assert_eq!(active_task["task"]["status"], "in_progress");
 
-    let closed_run_id = "closed-downstream-closure-run";
+    let closed_run_id = unique_test_id("closed-downstream-closure-run");
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
@@ -6539,13 +6549,13 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
             .await
             .expect("use namespace/database");
         let binding = serde_json::json!({
-            "run_id": closed_run_id,
-            "task_id": closed_task_id,
+            "run_id": closed_run_id.as_str(),
+            "task_id": closed_task_id.as_str(),
             "status": "bound",
             "active_bounded_unit": {
                 "kind": "downstream_dispatch_target",
-                "task_id": closed_task_id,
-                "run_id": closed_run_id,
+                "task_id": closed_task_id.as_str(),
+                "run_id": closed_run_id.as_str(),
                 "dispatch_target": "closure"
             },
             "binding_source": "task_close_reconcile",
@@ -6555,7 +6565,7 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
             "recorded_at": "2026-05-19T00:00:03Z"
         });
         db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
-            .bind(("run", closed_run_id))
+            .bind(("run", closed_run_id.as_str()))
             .bind(("binding", binding))
             .await
             .expect("seed closed downstream closure continuation binding");
@@ -6602,19 +6612,19 @@ fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_r
     fs::create_dir_all(&state_dir).expect("create state dir");
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
-    let parent_id = "closed-downstream-only-parent";
+    let parent_id = unique_test_id("closed-downstream-only-parent");
     create_epic_parent(
         &state_dir,
-        parent_id,
+        &parent_id,
         "Closed downstream only parent",
         "closed",
     );
-    let closed_task_id = "closed-downstream-only-task";
+    let closed_task_id = unique_test_id("closed-downstream-only-task");
     let closed_task = run_command_json(
         &[
             "task",
             "create",
-            closed_task_id,
+            &closed_task_id,
             "Closed downstream only task",
             "--type",
             "task",
@@ -6623,7 +6633,7 @@ fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_r
             "--priority",
             "1",
             "--parent-id",
-            parent_id,
+            &parent_id,
             "--json",
         ],
         &state_dir,
@@ -6631,7 +6641,7 @@ fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_r
     assert_eq!(closed_task["status"], "pass");
     assert_eq!(closed_task["task"]["status"], "closed");
 
-    let closed_run_id = "closed-downstream-only-run";
+    let closed_run_id = unique_test_id("closed-downstream-only-run");
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
@@ -6642,13 +6652,13 @@ fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_r
             .await
             .expect("use namespace/database");
         let binding = serde_json::json!({
-            "run_id": closed_run_id,
-            "task_id": closed_task_id,
+            "run_id": closed_run_id.as_str(),
+            "task_id": closed_task_id.as_str(),
             "status": "bound",
             "active_bounded_unit": {
                 "kind": "downstream_dispatch_target",
-                "task_id": closed_task_id,
-                "run_id": closed_run_id,
+                "task_id": closed_task_id.as_str(),
+                "run_id": closed_run_id.as_str(),
                 "dispatch_target": "closure"
             },
             "binding_source": "task_close_reconcile",
@@ -6658,7 +6668,7 @@ fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_r
             "recorded_at": "2026-05-19T00:00:04Z"
         });
         db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
-            .bind(("run", closed_run_id))
+            .bind(("run", closed_run_id.as_str()))
             .bind(("binding", binding))
             .await
             .expect("seed closed downstream closure continuation binding");

@@ -4036,6 +4036,8 @@ fn select_task_next_lawful_binding<'a>(
     explicit_binding: Option<&'a state_store::RunGraphContinuationBinding>,
     current_binding: Option<&'a state_store::RunGraphContinuationBinding>,
 ) -> Result<Option<&'a state_store::RunGraphContinuationBinding>, TaskNextLawfulReceipt> {
+    let has_single_active_task =
+        crate::continuation_binding_summary::taskflow_leaf_active_tasks(tasks).len() == 1;
     match (explicit_binding, current_binding) {
         (Some(explicit), Some(current)) if !continuation_bindings_same_unit(explicit, current) => {
             let explicit_live = continuation_binding_has_live_unit(tasks, explicit);
@@ -4090,9 +4092,33 @@ fn select_task_next_lawful_binding<'a>(
                 ),
             ))
         }
-        (Some(explicit), Some(_current)) => Ok(Some(explicit)),
-        (Some(explicit), None) => Ok(Some(explicit)),
-        (None, Some(current)) => Ok(Some(current)),
+        (Some(explicit), Some(_current)) => {
+            if continuation_binding_has_live_unit(tasks, explicit) {
+                Ok(Some(explicit))
+            } else if has_single_active_task {
+                Ok(None)
+            } else {
+                Ok(Some(explicit))
+            }
+        }
+        (Some(explicit), None) => {
+            if continuation_binding_has_live_unit(tasks, explicit) {
+                Ok(Some(explicit))
+            } else if has_single_active_task {
+                Ok(None)
+            } else {
+                Ok(Some(explicit))
+            }
+        }
+        (None, Some(current)) => {
+            if continuation_binding_has_live_unit(tasks, current) {
+                Ok(Some(current))
+            } else if has_single_active_task {
+                Ok(None)
+            } else {
+                Ok(Some(current))
+            }
+        }
         (None, None) => Ok(None),
     }
 }
@@ -4454,8 +4480,14 @@ fn task_next_lawful_receipt(
     let active_tasks = crate::continuation_binding_summary::taskflow_leaf_active_tasks(tasks);
 
     if let Some(binding) = runtime_binding {
-        if !continuation_binding_is_closed_downstream_marker(tasks, binding) {
-            let binding_task = tasks.iter().find(|task| task.id == binding.task_id);
+        let binding_task = tasks.iter().find(|task| task.id == binding.task_id);
+        let missing_runtime_binding_with_single_active_task =
+            continuation_binding_requires_open_task(binding)
+                && binding_task.is_none()
+                && active_tasks.len() == 1;
+        if !missing_runtime_binding_with_single_active_task
+            && !continuation_binding_is_closed_downstream_marker(tasks, binding)
+        {
             let conflicting_active = active_tasks
                 .iter()
                 .find(|task| task.id != binding.task_id)
@@ -7420,6 +7452,53 @@ mod tests {
     }
 
     #[test]
+    fn task_next_lawful_ignores_missing_single_source_binding_for_taskflow_active() {
+        let active_task = owned_task_record("active-task", vec![]);
+        let binding = test_continuation_binding(
+            "missing-run",
+            "missing-runtime-task",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+
+        let selected = select_task_next_lawful_binding(
+            std::slice::from_ref(&active_task),
+            Some(&binding),
+            None,
+        )
+        .expect("missing binding should not fail source selection");
+        assert!(selected.is_none());
+
+        let receipt = task_next_lawful_receipt(&[active_task], Vec::new(), selected);
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(
+            receipt.binding_source,
+            Some("taskflow_single_in_progress".to_string())
+        );
+        assert_eq!(receipt.active_bounded_unit["task_id"], "active-task");
+        assert!(receipt.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn task_next_lawful_keeps_missing_single_source_binding_without_taskflow_active() {
+        let binding = test_continuation_binding(
+            "missing-run",
+            "missing-runtime-task",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+
+        let selected = select_task_next_lawful_binding(&[], Some(&binding), None)
+            .expect("single stale binding should remain selectable without active fallback");
+
+        assert_eq!(
+            selected.map(|binding| binding.task_id.as_str()),
+            Some("missing-runtime-task")
+        );
+    }
+
+    #[test]
     fn task_next_lawful_blocks_explicit_task_binding_with_parallel_active_tasks() {
         let mut runtime_task = owned_task_record("runtime-task", vec![]);
         runtime_task.status = "open".to_string();
@@ -7964,6 +8043,30 @@ mod tests {
                 )
                 && action.contains("missing-feature-task")
         }));
+    }
+
+    #[test]
+    fn task_next_lawful_prefers_single_active_task_over_missing_runtime_binding() {
+        let active_task = owned_task_record("authoritative-active-task", vec![]);
+        let binding = test_continuation_binding(
+            "stale-run",
+            "missing-feature-task",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+
+        let receipt = task_next_lawful_receipt(&[active_task], Vec::new(), Some(&binding));
+
+        assert_eq!(receipt.status, "pass");
+        assert!(receipt.blocker_codes.is_empty());
+        assert_eq!(
+            receipt.active_bounded_unit["task_id"],
+            "authoritative-active-task"
+        );
+        assert_eq!(
+            receipt.binding_source,
+            Some("taskflow_single_in_progress".to_string())
+        );
     }
 
     #[test]

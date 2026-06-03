@@ -375,7 +375,7 @@ fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
         .filter(|arg| !arg.starts_with('-'));
     matches!(
         positional.next(),
-        Some("taskflow") | Some("project-activator")
+        Some("task") | Some("taskflow") | Some("project-activator")
     )
 }
 
@@ -690,6 +690,55 @@ mod tests {
                 Some(packet_project.path().to_path_buf())
             );
             drop(run_graph_guard);
+        }
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_preserves_env_for_task_surface_before_parse() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let active_project =
+            TempStateHarness::new().expect("active temp harness should initialize");
+        let isolated_state =
+            TempStateHarness::new().expect("isolated temp harness should initialize");
+        make_project_root(active_project.path());
+        fs::create_dir_all(
+            active_project
+                .path()
+                .join(crate::state_store::default_state_dir()),
+        )
+        .expect("active state dir should exist");
+        fs::create_dir_all(isolated_state.path()).expect("isolated state dir should exist");
+        let _cwd = crate::test_cli_support::guard_current_dir(active_project.path());
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", isolated_state.path());
+        let raw_args = [
+            "vida",
+            "task",
+            "create",
+            "fixture-task",
+            "Fixture",
+            "--json",
+        ]
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .collect::<Vec<_>>();
+
+        let guard = prepare_runtime_state_dir_for_parse(&raw_args)
+            .expect("task surface should preserve env state-dir");
+        let cli = Cli::try_parse_from(raw_args).expect("task create cli should parse");
+
+        assert!(guard.is_none());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(isolated_state.path().to_path_buf())
+        );
+        match cli.command {
+            Some(Command::Task(args)) => match args.command {
+                crate::TaskCommand::Create(command) => {
+                    assert_eq!(command.state_dir, Some(isolated_state.path().to_path_buf()));
+                }
+                other => panic!("expected task create command, got {other:?}"),
+            },
+            other => panic!("expected task command, got {other:?}"),
         }
     }
 
