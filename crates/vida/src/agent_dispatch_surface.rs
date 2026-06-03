@@ -118,10 +118,90 @@ fn read_host_bridge_request(path: &Path) -> Result<serde_json::Value, String> {
     })
 }
 
+fn legacy_internal_subagents_host_bridge_request(request: &serde_json::Value) -> bool {
+    request
+        .get("backend_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        == Some("internal_subagents")
+        && request
+            .get("dispatch_transport")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            == Some("host_tool_bridge")
+        && (request
+            .get("adapter_kind")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            == Some("unconfigured_host_agent_adapter")
+            || request
+                .get("adapter_capability_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                == Some("unconfigured_host_agent_capability")
+            || request
+                .get("invocation_mode")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                == Some("configured_host_capability_required"))
+}
+
+fn effective_host_bridge_request(request: &serde_json::Value) -> serde_json::Value {
+    if !legacy_internal_subagents_host_bridge_request(request) {
+        return request.clone();
+    }
+    let mut effective = request.clone();
+    if let Some(object) = effective.as_object_mut() {
+        object.insert(
+            "adapter_kind".to_string(),
+            serde_json::json!("codex_host_tools"),
+        );
+        object.insert(
+            "adapter_capability_id".to_string(),
+            serde_json::json!("codex.multi_agent_v1"),
+        );
+        object.insert(
+            "invocation_mode".to_string(),
+            serde_json::json!("parent_host_tool_api"),
+        );
+        object
+            .entry("receipt_mode".to_string())
+            .or_insert_with(|| serde_json::json!("host_bridge_receipt"));
+        object.insert(
+            "adapter_contract_source".to_string(),
+            serde_json::json!("legacy_internal_subagents_default"),
+        );
+        let adapter_params = object
+            .entry("adapter_params".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(params) = adapter_params.as_object_mut() {
+            params.insert(
+                "tool_family".to_string(),
+                serde_json::json!("codex_multi_agent"),
+            );
+            params.insert(
+                "spawn_tool".to_string(),
+                serde_json::json!("multi_agent_v1.spawn_agent"),
+            );
+            params.insert(
+                "wait_tool".to_string(),
+                serde_json::json!("multi_agent_v1.wait_agent"),
+            );
+            params.insert(
+                "close_tool".to_string(),
+                serde_json::json!("multi_agent_v1.close_agent"),
+            );
+        }
+    }
+    effective
+}
+
 fn host_bridge_adapter_payload(
     request_path: &Path,
     request: &serde_json::Value,
 ) -> serde_json::Value {
+    let effective_request = effective_host_bridge_request(request);
+    let request = &effective_request;
     let mut missing = Vec::new();
     let run_id = host_bridge_required_string(request, "run_id", &mut missing);
     let dispatch_target = host_bridge_required_string(request, "dispatch_target", &mut missing);
@@ -148,6 +228,11 @@ fn host_bridge_adapter_payload(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("parent_host_tool_api");
+    let adapter_contract_source = request
+        .get("adapter_contract_source")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or("request");
     let mut blocker_codes = Vec::new();
     if !missing.is_empty() {
         blocker_codes.push("host_bridge_request_missing_fields".to_string());
@@ -273,6 +358,7 @@ fn host_bridge_adapter_payload(
             "adapter_kind": adapter_kind,
             "adapter_capability_id": adapter_capability_id,
             "invocation_mode": invocation_mode,
+            "adapter_contract_source": adapter_contract_source,
             "missing_fields": missing,
             "result_path": result_path,
             "receipt_path": receipt_path,
@@ -2718,6 +2804,47 @@ mod tests {
             payload["host_bridge"]["adapter_capacity"]["blocked_result_code"],
             "host_agent_capacity_unavailable"
         );
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_normalizes_legacy_internal_subagents_adapter_contract() {
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-1",
+            "run_id": "run-1",
+            "dispatch_target": "implementer",
+            "packet_path": "packet.json",
+            "runtime_role": "worker",
+            "task_class": "implementation",
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "unconfigured_host_agent_adapter",
+            "adapter_capability_id": "unconfigured_host_agent_capability",
+            "invocation_mode": "configured_host_capability_required",
+            "request_path": "request.json",
+            "result_path": "result.json",
+            "receipt_path": "receipt.json"
+        });
+        let payload = host_bridge_adapter_payload(std::path::Path::new("request.json"), &request);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            payload["host_bridge"]["adapter_capability_id"],
+            "codex.multi_agent_v1"
+        );
+        assert_eq!(
+            payload["host_bridge"]["adapter_contract_source"],
+            "legacy_internal_subagents_default"
+        );
+        let calls = payload["host_bridge"]["host_tool_calls"]
+            .as_array()
+            .expect("host tool calls should render");
+        assert_eq!(calls[0]["tool"], "multi_agent_v1.spawn_agent");
+        assert_eq!(calls[0]["adapter_capability_id"], "codex.multi_agent_v1");
     }
 
     #[test]

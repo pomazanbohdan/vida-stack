@@ -2257,6 +2257,35 @@ fn configured_host_tool_bridge_string(
         .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["host_tool_bridge", key])))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+        .or_else(|| default_codex_host_tool_bridge_string(system_entry, key))
+}
+
+fn default_codex_host_tool_bridge_string(
+    system_entry: Option<&serde_yaml::Value>,
+    key: &str,
+) -> Option<String> {
+    let entry = system_entry?;
+    if configured_host_dispatch_transport(Some(entry)) != "host_tool_bridge" {
+        return None;
+    }
+    let execution_class = crate::yaml_string(yaml_lookup(entry, &["execution_class"]));
+    let dispatch_command = yaml_lookup(entry, &["dispatch", "command"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim);
+    if execution_class.as_deref() != Some("internal") || dispatch_command != Some("codex") {
+        return None;
+    }
+    match key {
+        "adapter_kind" => Some("codex_host_tools".to_string()),
+        "adapter_capability_id" => Some("codex.multi_agent_v1".to_string()),
+        "invocation_mode" => Some("parent_host_tool_api".to_string()),
+        "tool_family" => Some("codex_multi_agent".to_string()),
+        "spawn_tool" => Some("multi_agent_v1.spawn_agent".to_string()),
+        "wait_tool" => Some("multi_agent_v1.wait_agent".to_string()),
+        "close_tool" => Some("multi_agent_v1.close_agent".to_string()),
+        "receipt_mode" => Some("host_bridge_receipt".to_string()),
+        _ => None,
+    }
 }
 
 fn dispatch_packet_string_list(dispatch_packet_path: &str, field: &str) -> Vec<String> {
@@ -2401,6 +2430,92 @@ fn validate_existing_host_bridge_request_matches_expected(
     Ok(())
 }
 
+fn validate_existing_host_bridge_request_identity_matches_expected(
+    existing: &serde_json::Value,
+    expected: &serde_json::Value,
+    request_path: &Path,
+) -> Result<(), String> {
+    let status = existing
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !matches!(status, "pending" | "completed") {
+        return Err(format!(
+            "Existing host bridge request `{}` has inadmissible status `{status}`.",
+            request_path.display()
+        ));
+    }
+    for field in [
+        "schema_version",
+        "request_id",
+        "run_id",
+        "task_id",
+        "dispatch_target",
+        "packet_path",
+        "runtime_role",
+        "task_class",
+        "backend_id",
+        "carrier_id",
+        "execution_boundary",
+        "dispatch_transport",
+        "owned_paths",
+        "read_only_paths",
+        "proof_target",
+        "request_path",
+        "result_path",
+        "receipt_path",
+    ] {
+        if !host_bridge_request_value_matches(existing, expected, field) {
+            return Err(format!(
+                "Existing host bridge request `{}` does not match expected `{field}` for the active dispatch lane.",
+                request_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn existing_host_bridge_request_needs_adapter_refresh(
+    existing: &serde_json::Value,
+    expected: &serde_json::Value,
+) -> bool {
+    let legacy_unconfigured = existing
+        .get("adapter_kind")
+        .and_then(serde_json::Value::as_str)
+        == Some("unconfigured_host_agent_adapter")
+        || existing
+            .get("adapter_capability_id")
+            .and_then(serde_json::Value::as_str)
+            == Some("unconfigured_host_agent_capability")
+        || existing
+            .get("invocation_mode")
+            .and_then(serde_json::Value::as_str)
+            == Some("configured_host_capability_required");
+    let expected_configured = expected
+        .get("adapter_kind")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value != "unconfigured_host_agent_adapter")
+        && expected
+            .get("adapter_capability_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value != "unconfigured_host_agent_capability")
+        && expected
+            .get("invocation_mode")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value != "configured_host_capability_required");
+    legacy_unconfigured
+        && expected_configured
+        && [
+            "receipt_mode",
+            "adapter_kind",
+            "adapter_capability_id",
+            "invocation_mode",
+            "adapter_params",
+        ]
+        .iter()
+        .any(|field| !host_bridge_request_value_matches(existing, expected, field))
+}
+
 fn materialize_host_tool_bridge_request(
     project_root: &Path,
     selected_cli_entry: Option<&serde_yaml::Value>,
@@ -2481,14 +2596,24 @@ fn materialize_host_tool_bridge_request(
             .and_then(serde_json::Value::as_str)
             == Some(dispatch_packet_path)
         {
-            validate_existing_host_bridge_request_matches_expected(
-                &existing,
-                &request,
-                &paths.request_path,
-            )?;
-            return Ok(existing);
+            if existing_host_bridge_request_needs_adapter_refresh(&existing, &request) {
+                validate_existing_host_bridge_request_identity_matches_expected(
+                    &existing,
+                    &request,
+                    &paths.request_path,
+                )?;
+                replace_existing_request = true;
+            } else {
+                validate_existing_host_bridge_request_matches_expected(
+                    &existing,
+                    &request,
+                    &paths.request_path,
+                )?;
+                return Ok(existing);
+            }
+        } else {
+            replace_existing_request = true;
         }
-        replace_existing_request = true;
     }
     if replace_existing_request {
         remove_stale_host_bridge_artifact(&paths.result_path, "result")?;
@@ -5172,6 +5297,18 @@ dispatch:
             configured_host_dispatch_transport(Some(&system_entry)),
             "host_tool_bridge"
         );
+        assert_eq!(
+            configured_host_tool_bridge_string(Some(&system_entry), "adapter_kind"),
+            Some("codex_host_tools".to_string())
+        );
+        assert_eq!(
+            configured_host_tool_bridge_string(Some(&system_entry), "adapter_capability_id"),
+            Some("codex.multi_agent_v1".to_string())
+        );
+        assert_eq!(
+            configured_host_tool_bridge_string(Some(&system_entry), "spawn_tool"),
+            Some("multi_agent_v1.spawn_agent".to_string())
+        );
     }
 
     #[test]
@@ -6147,6 +6284,114 @@ carriers:
             error.contains("does not match expected `backend_id`"),
             "unexpected error: {error}"
         );
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn host_bridge_refreshes_legacy_unconfigured_same_lane_request_when_codex_defaults_available() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-refresh-legacy-request-{}-{nanos}",
+            std::process::id()
+        ));
+        let dispatch_packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(dispatch_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(
+            &dispatch_packet_path,
+            r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"]}"#,
+        )
+        .expect("write dispatch packet");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "selected_tier": "middle",
+                "selected_model_profile_id": "internal_fast"
+            }
+        }));
+        let receipt = internal_codex_fallback_receipt(
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        let stale_request = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("legacy unconfigured host bridge request should materialize");
+        assert_eq!(
+            stale_request["adapter_capability_id"],
+            "unconfigured_host_agent_capability"
+        );
+        let request_path = PathBuf::from(
+            stale_request["request_path"]
+                .as_str()
+                .expect("request path should render"),
+        );
+        let result_path = PathBuf::from(
+            stale_request["result_path"]
+                .as_str()
+                .expect("result path should render"),
+        );
+        let receipt_path = PathBuf::from(
+            stale_request["receipt_path"]
+                .as_str()
+                .expect("receipt path should render"),
+        );
+        std::fs::write(&result_path, "{}").expect("write stale result");
+        std::fs::write(&receipt_path, "{}").expect("write stale receipt");
+        let legacy_codex_entry = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+execution_class: internal
+dispatch:
+  command: codex
+"#,
+        )
+        .expect("parse legacy codex entry");
+
+        let refreshed_request = materialize_host_tool_bridge_request(
+            &project_root,
+            Some(&legacy_codex_entry),
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("same-lane legacy request should refresh to configured codex host bridge");
+
+        assert_eq!(refreshed_request["adapter_kind"], "codex_host_tools");
+        assert_eq!(
+            refreshed_request["adapter_capability_id"],
+            "codex.multi_agent_v1"
+        );
+        assert_eq!(refreshed_request["invocation_mode"], "parent_host_tool_api");
+        assert_eq!(
+            refreshed_request["adapter_params"]["spawn_tool"],
+            "multi_agent_v1.spawn_agent"
+        );
+        let persisted_request =
+            std::fs::read_to_string(&request_path).expect("refreshed request should be persisted");
+        let persisted_request = serde_json::from_str::<serde_json::Value>(&persisted_request)
+            .expect("persisted request should decode");
+        assert_eq!(
+            persisted_request["adapter_capability_id"],
+            "codex.multi_agent_v1"
+        );
+        assert!(!result_path.exists());
+        assert!(!receipt_path.exists());
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
