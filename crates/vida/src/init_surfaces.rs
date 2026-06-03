@@ -1153,6 +1153,9 @@ fn agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
             "lane_execution_receipt_path".to_string(),
             serde_json::json!(dispatch_result_path),
         );
+        if receipt.blocker_code.as_deref() == Some("internal_codex_carrier_unavailable") {
+            insert_stale_internal_carrier_receipt_repair(object, receipt, dispatch_result_path);
+        }
         if let Some(artifact) = result_artifact {
             for key in [
                 "activation_evidence",
@@ -1182,6 +1185,71 @@ fn agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
         }
     }
     payload
+}
+
+fn insert_stale_internal_carrier_receipt_repair(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    dispatch_result_path: Option<&str>,
+) {
+    let repair_command = format!(
+        "vida taskflow run-graph dispatch-init {} --json",
+        crate::shell_quote(&receipt.run_id)
+    );
+    let recovery_command = format!(
+        "vida taskflow recovery status {} --json",
+        crate::shell_quote(&receipt.run_id)
+    );
+    let actions = vec![
+        format!(
+            "Legacy internal carrier receipt detected; inspect current recovery state with `{recovery_command}` before retrying agent-init."
+        ),
+        format!(
+            "Render a fresh dispatch packet with `{repair_command}` so upgraded host_tool_bridge semantics can replace the stale internal_codex_carrier_unavailable receipt."
+        ),
+        "Do not treat this legacy receipt as current internal carrier capacity evidence; retry execute-dispatch only with the fresh packet emitted after repair.".to_string(),
+    ];
+    object.insert(
+        "stale_internal_carrier_receipt_repair".to_string(),
+        serde_json::json!({
+            "status": "actionable",
+            "legacy_blocker_code": "internal_codex_carrier_unavailable",
+            "legacy_receipt_path": dispatch_result_path,
+            "selected_backend": receipt.selected_backend,
+            "repair_command": repair_command,
+            "recovery_command": recovery_command,
+            "retry_contract": "rerun agent-init with a fresh dispatch packet after run-graph dispatch-init/recovery refresh",
+        }),
+    );
+    prepend_unique_next_actions_value(
+        object
+            .get_mut("next_actions")
+            .expect("resume payload should include next_actions"),
+        &actions,
+    );
+    for key in ["operator_contracts", "shared_fields"] {
+        if let Some(section) = object.get_mut(key) {
+            if let Some(next_actions) = section.get_mut("next_actions") {
+                prepend_unique_next_actions_value(next_actions, &actions);
+            }
+        }
+    }
+}
+
+fn prepend_unique_next_actions_value(value: &mut serde_json::Value, actions: &[String]) {
+    let Some(existing) = value.as_array() else {
+        return;
+    };
+    let mut merged = Vec::new();
+    for action in actions {
+        merged.push(serde_json::json!(action));
+    }
+    for action in existing {
+        if !merged.iter().any(|candidate| candidate == action) {
+            merged.push(action.clone());
+        }
+    }
+    *value = serde_json::Value::Array(merged);
 }
 
 fn insert_dispatch_receipt_evidence_into_operator_section(
@@ -8328,6 +8396,22 @@ mod agent_init_surface_tests {
             payload["activation_vs_execution_evidence"]["evidence_state"],
             "activation_view_only"
         );
+        assert_eq!(
+            payload["stale_internal_carrier_receipt_repair"]["legacy_blocker_code"],
+            "internal_codex_carrier_unavailable"
+        );
+        assert_eq!(
+            payload["stale_internal_carrier_receipt_repair"]["repair_command"],
+            "vida taskflow run-graph dispatch-init epic-2-run --json"
+        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("stale receipt repair action should render first")
+            .contains("Legacy internal carrier receipt detected"));
+        assert!(payload["operator_contracts"]["next_actions"][1]
+            .as_str()
+            .expect("operator repair action should render")
+            .contains("dispatch-init epic-2-run"));
     }
 
     #[test]
