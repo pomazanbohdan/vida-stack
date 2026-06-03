@@ -420,6 +420,22 @@ pub(crate) fn print_task_progress(
         &summary.closure_candidate.to_string(),
     );
     print_surface_line(render, "closure state", &summary.closure_candidate_state);
+    print_surface_line(
+        render,
+        "ready for close",
+        &summary.ready_for_close.to_string(),
+    );
+    print_surface_line(render, "missing proof", &summary.missing_proof.to_string());
+    print_surface_line(
+        render,
+        "blocked by runtime",
+        &summary.blocked_by_runtime.to_string(),
+    );
+    print_surface_line(
+        render,
+        "next required command",
+        summary.next_required_command.as_deref().unwrap_or("none"),
+    );
     print_surface_line(render, "next action", &summary.recommended_next_action);
     if summary.status_counts.is_empty() {
         print_surface_line(render, "status counts", "none");
@@ -1278,6 +1294,13 @@ mod tests {
             closure_candidate_reason: Some(
                 "root container is open while all descendants are closed-like".to_string(),
             ),
+            ready_for_close: true,
+            missing_proof: false,
+            blocked_by_runtime: false,
+            next_required_command: Some(
+                "vida task close epic-ready --reason \"all descendants closed\" --json"
+                    .to_string(),
+            ),
             recommended_next_action:
                 "Close container with `vida task close epic-ready --reason \"all descendants closed\" --json`."
                     .to_string(),
@@ -1299,6 +1322,67 @@ mod tests {
         assert_eq!(
             payload["progress"]["canonical_commands"][0],
             "vida task close epic-ready --reason \"all descendants closed\" --json"
+        );
+        assert_eq!(payload["progress"]["ready_for_close"], true);
+        assert_eq!(payload["progress"]["missing_proof"], false);
+        assert_eq!(payload["progress"]["blocked_by_runtime"], false);
+        assert_eq!(
+            payload["progress"]["next_required_command"],
+            "vida task close epic-ready --reason \"all descendants closed\" --json"
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_progress_payload_exposes_leaf_readiness_fields() {
+        let mut root = sample_task("leaf-defect");
+        root.issue_type = "defect".to_string();
+        root.planner_metadata.proof_targets =
+            vec!["cargo test -p vida task_progress_summary -- --nocapture".to_string()];
+        let summary = TaskProgressSummary {
+            root_task: root,
+            progress_basis: "descendants_excluding_root".to_string(),
+            direct_child_count: 0,
+            descendant_count: 0,
+            open_count: 0,
+            in_progress_count: 0,
+            closed_count: 0,
+            epic_count: 0,
+            status_counts: BTreeMap::new(),
+            percent_closed: 0.0,
+            closure_candidate: false,
+            closure_candidate_state: "leaf_missing_proof".to_string(),
+            closure_candidate_reason: Some(
+                "leaf task uses proof readiness instead of container closure semantics".to_string(),
+            ),
+            ready_for_close: false,
+            missing_proof: true,
+            blocked_by_runtime: false,
+            next_required_command: Some(
+                "Run declared proof targets, then close the leaf task with explicit evidence."
+                    .to_string(),
+            ),
+            recommended_next_action:
+                "Run declared proof targets, then close the leaf task with explicit evidence."
+                    .to_string(),
+            canonical_commands: Vec::new(),
+        };
+
+        let payload = task_progress_payload(&summary);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task progress");
+        assert_eq!(payload["progress"]["closure_candidate"], false);
+        assert_eq!(
+            payload["progress"]["closure_candidate_state"],
+            "leaf_missing_proof"
+        );
+        assert_eq!(payload["progress"]["ready_for_close"], false);
+        assert_eq!(payload["progress"]["missing_proof"], true);
+        assert_eq!(payload["progress"]["blocked_by_runtime"], false);
+        assert_eq!(
+            payload["progress"]["next_required_command"],
+            "Run declared proof targets, then close the leaf task with explicit evidence."
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }

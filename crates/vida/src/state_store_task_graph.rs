@@ -401,6 +401,28 @@ impl StateStore {
             .all(|task| Self::task_status_is_closed_like(&task.status));
         let is_container = work_item_is_program_container(&root_task.issue_type);
         let root_closed = Self::task_status_is_closed_like(&root_task.status);
+        let is_non_container_work_item = !is_container;
+        let non_container_descendants_clear = descendant_count == 0 || all_descendants_closed_like;
+        let blocked_by_runtime = !root_closed
+            && is_non_container_work_item
+            && (root_task.status == "blocked"
+                || root_task
+                    .labels
+                    .iter()
+                    .any(|label| label == "runtime-blocked" || label == "blocked-by-runtime"));
+        let missing_proof = !root_closed
+            && is_non_container_work_item
+            && non_container_descendants_clear
+            && !root_task.planner_metadata.proof_targets.is_empty();
+        let leaf_ready_for_close = !root_closed
+            && is_non_container_work_item
+            && non_container_descendants_clear
+            && !missing_proof
+            && !blocked_by_runtime
+            && matches!(
+                root_task.status.as_str(),
+                "in_progress" | "review" | "verified" | "ready_for_close"
+            );
         let closure_candidate =
             is_container && !root_closed && descendant_count > 0 && all_descendants_closed_like;
         let (
@@ -408,8 +430,13 @@ impl StateStore {
             closure_candidate_reason,
             recommended_next_action,
             canonical_commands,
+            next_required_command,
         ) = if closure_candidate {
             let quoted_root_task_id = shell_quote(&root_task.id);
+            let close_command = format!(
+                "vida task close {} --reason \"all descendants closed\" --json",
+                quoted_root_task_id
+            );
             (
                 "ready_to_close".to_string(),
                 Some(
@@ -419,10 +446,8 @@ impl StateStore {
                     "Close container with `vida task close {} --reason \"all descendants closed\" --json`.",
                     quoted_root_task_id
                 ),
-                vec![format!(
-                    "vida task close {} --reason \"all descendants closed\" --json",
-                    quoted_root_task_id
-                )],
+                vec![close_command.clone()],
+                Some(close_command),
             )
         } else if root_closed {
             (
@@ -430,13 +455,57 @@ impl StateStore {
                 Some("root task is already closed-like".to_string()),
                 "No action; task is already closed.".to_string(),
                 Vec::new(),
+                None,
             )
-        } else if !is_container {
+        } else if is_non_container_work_item {
+            let child_work_remaining = descendant_count > 0 && !all_descendants_closed_like;
+            let next_required_command = if child_work_remaining {
+                Some(
+                    "Close or complete child work before closing the parent work item.".to_string(),
+                )
+            } else if missing_proof {
+                Some(
+                    "Run declared proof targets, then close the leaf task with explicit evidence."
+                        .to_string(),
+                )
+            } else if blocked_by_runtime {
+                Some(
+                    "Record or resolve the runtime blocker before closing the leaf task."
+                        .to_string(),
+                )
+            } else if leaf_ready_for_close {
+                let close_command = format!(
+                    "vida task close {} --reason \"verified\" --json",
+                    shell_quote(&root_task.id)
+                );
+                Some(close_command)
+            } else {
+                Some("Continue the leaf task until verification evidence is available.".to_string())
+            };
+            let closure_candidate_state = if child_work_remaining {
+                "work_item_child_work_remaining"
+            } else if missing_proof {
+                "leaf_missing_proof"
+            } else if blocked_by_runtime {
+                "leaf_blocked_by_runtime"
+            } else if leaf_ready_for_close {
+                "leaf_ready_for_close"
+            } else {
+                "leaf_in_progress"
+            };
+            let closure_candidate_reason = if descendant_count == 0 {
+                "leaf task uses proof readiness instead of container closure semantics"
+            } else {
+                "non-container work item uses proof readiness instead of container closure semantics"
+            };
             (
-                "not_container".to_string(),
-                Some("root task is not a program container".to_string()),
-                "Continue normal task execution or inspect dependencies.".to_string(),
+                closure_candidate_state.to_string(),
+                Some(closure_candidate_reason.to_string()),
+                next_required_command
+                    .clone()
+                    .unwrap_or_else(|| "Continue normal leaf task execution.".to_string()),
                 Vec::new(),
+                next_required_command,
             )
         } else if descendant_count == 0 {
             (
@@ -444,6 +513,7 @@ impl StateStore {
                 Some("container has no descendants to prove closure readiness".to_string()),
                 "Add child work items or close with an explicit operator reason.".to_string(),
                 Vec::new(),
+                Some("Add child work items or close with an explicit operator reason.".to_string()),
             )
         } else {
             (
@@ -452,6 +522,10 @@ impl StateStore {
                 "Continue or close remaining descendant work before closing the container."
                     .to_string(),
                 Vec::new(),
+                Some(
+                    "Continue or close remaining descendant work before closing the container."
+                        .to_string(),
+                ),
             )
         };
 
@@ -469,6 +543,10 @@ impl StateStore {
             closure_candidate,
             closure_candidate_state,
             closure_candidate_reason,
+            ready_for_close: closure_candidate || leaf_ready_for_close,
+            missing_proof,
+            blocked_by_runtime,
+            next_required_command,
             recommended_next_action,
             canonical_commands,
         })

@@ -854,6 +854,10 @@ pub struct TaskProgressSummary {
     pub closure_candidate: bool,
     pub closure_candidate_state: String,
     pub closure_candidate_reason: Option<String>,
+    pub ready_for_close: bool,
+    pub missing_proof: bool,
+    pub blocked_by_runtime: bool,
+    pub next_required_command: Option<String>,
     pub recommended_next_action: String,
     pub canonical_commands: Vec<String>,
 }

@@ -1008,6 +1008,47 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn task_progress_summary_reports_leaf_defect_readiness_fields() {
+        let root = unique_temp_root("vida-task-progress-leaf-readiness");
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let rows = sample_tasks_jsonl().replace(
+            "\"labels\":[\"framework\"],\"dependencies\":[{\"issue_id\":\"vida-a\"",
+            "\"labels\":[\"framework\"],\"planner_metadata\":{\"proof_targets\":[\"cargo test -p vida task_progress_summary -- --nocapture\"]},\"dependencies\":[{\"issue_id\":\"vida-a\"",
+        );
+        fs::write(&source, rows).expect("write sample jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import tasks");
+
+        let summary = store
+            .task_progress_summary("vida-a")
+            .await
+            .expect("leaf progress summary");
+        assert!(!summary.closure_candidate);
+        assert_eq!(summary.closure_candidate_state, "leaf_missing_proof");
+        assert_eq!(
+            summary.closure_candidate_reason.as_deref(),
+            Some("leaf task uses proof readiness instead of container closure semantics")
+        );
+        assert!(!summary.ready_for_close);
+        assert!(summary.missing_proof);
+        assert!(!summary.blocked_by_runtime);
+        assert_eq!(
+            summary.next_required_command.as_deref(),
+            Some("Run declared proof targets, then close the leaf task with explicit evidence.")
+        );
+        assert_eq!(summary.direct_child_count, 0);
+        assert_eq!(summary.descendant_count, 0);
+        assert!(summary.status_counts.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn task_progress_summary_shell_quotes_closure_candidate_task_id() {
         let root = unique_temp_root("vida-task-progress-closure-candidate-quoted-id");
         let source = root.join("issues.jsonl");
