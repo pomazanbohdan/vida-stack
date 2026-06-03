@@ -9,4 +9,3 @@ docflow-contracts = { path = "../docflow-contracts" }
 docflow-core = { path = "../docflow-core" }
 globset.workspace = true
 walkdir.workspace = true
-

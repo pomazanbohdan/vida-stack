@@ -82,3 +82,4 @@ created_at: '2026-04-04T20:24:09+03:00'
 updated_at: 2026-05-18T00:00:00Z
 changelog_ref: README.changelog.jsonl
 - `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
+- `docs/product/spec/design-fast-high-signal-pre-commit-design.md`

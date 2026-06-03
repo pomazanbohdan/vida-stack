@@ -1,4 +1,4 @@
-<# 
+<#
 VIDA Windows installer.
 
 Usage:

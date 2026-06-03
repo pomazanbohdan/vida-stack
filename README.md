@@ -1,7 +1,7 @@
 <div align="center">
   <h1>🌌 Vida Stack</h1>
   <p><b>The active repository for the <code>VIDA 0.9.x</code> transition line: self-hosting stabilization and runtime hardening before <code>1.0.0</code>.</b></p>
-  
+
   <p>
     <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen" alt="Status"></a>
     <a href="#"><img src="https://img.shields.io/badge/Release-v0.9.7-blue" alt="Release"></a>

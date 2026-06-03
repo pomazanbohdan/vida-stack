@@ -56,7 +56,7 @@ fn core_rule_12_override_allowed(close_reason: &str) -> bool {
     let approval_phrases = [
         "user authorized",
         "user approval",
-        "core rule #12", 
+        "core rule #12",
         "core rule 12",
         "explicit user authorization",
         "user conversational approval",

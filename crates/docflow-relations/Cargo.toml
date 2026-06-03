@@ -7,4 +7,3 @@ license.workspace = true
 [dependencies]
 docflow-contracts = { path = "../docflow-contracts" }
 docflow-core = { path = "../docflow-core" }
-

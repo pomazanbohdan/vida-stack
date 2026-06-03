@@ -146,6 +146,67 @@ function Add-SkippedRecord {
     })
 }
 
+function Invoke-DiffWhitespaceCheck {
+    $started = Get-Date
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $artifactRefs = @()
+    $violations = New-Object System.Collections.Generic.List[string]
+
+    foreach ($diffMode in @(@(), @("--cached"))) {
+        $currentFile = ""
+        $newLine = 0
+        $diffOutput = & git diff @diffMode --unified=0 --no-ext-diff --
+        foreach ($line in $diffOutput) {
+            if ($line.StartsWith("+++ b/")) {
+                $currentFile = $line.Substring(6)
+                continue
+            }
+            if ($line -match '^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@') {
+                $newLine = [int]$Matches[1] - 1
+                continue
+            }
+            if ($line.StartsWith("+") -and -not $line.StartsWith("+++ ")) {
+                $newLine++
+                $content = $line.Substring(1) -replace "`r$", ""
+                if ($content -match '[ \t]+$') {
+                    [void]$violations.Add(("{0}:{1}: trailing whitespace." -f $currentFile, $newLine))
+                }
+                if ($content -match '^ +\t') {
+                    [void]$violations.Add(("{0}:{1}: space before tab in indent." -f $currentFile, $newLine))
+                }
+            }
+        }
+    }
+
+    $sw.Stop()
+    if ($Json -and $violations.Count -gt 0) {
+        $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+        $logPath = Join-Path $logDir ("git-diff-check-{0:yyyyMMddHHmmssfff}.log" -f $started)
+        $violations | Set-Content -Path $logPath -Encoding utf8
+        $artifactRefs = @($logPath)
+    } elseif (-not $Json -and $violations.Count -gt 0) {
+        $violations | Write-Error
+    }
+
+    $Records.Add([pscustomobject]@{
+        operation_id = "git-diff-check"
+        command_or_surface = "repo-local diff whitespace check"
+        cwd_or_context = $RootDir
+        started_at = $started.ToString("o")
+        duration_ms = [int64]$sw.ElapsedMilliseconds
+        exit_status = $(if ($violations.Count -eq 0) { "pass" } else { "fail" })
+        classification = $(if ($sw.ElapsedMilliseconds -le 2000) { "fast" } elseif ($sw.ElapsedMilliseconds -le 5000) { "watch" } else { "long_gate_expected" })
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_refs = $artifactRefs
+    })
+
+    if ($violations.Count -gt 0) {
+        exit 2
+    }
+}
+
 function Test-CommandExists {
     param([string]$Name)
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
@@ -205,7 +266,7 @@ try {
             artifact_refs = @()
         })
     } elseif ($Mode -eq "script-check") {
-        Invoke-Timed "git-diff-check" @("git", "diff", "--check")
+        Invoke-DiffWhitespaceCheck
         Invoke-Timed "powershell-dev-gate-parse" @(
             "pwsh",
             "-NoLogo",

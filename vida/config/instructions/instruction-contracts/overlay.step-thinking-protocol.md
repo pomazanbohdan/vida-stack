@@ -276,7 +276,7 @@ QUALITY_GATE:
 STEP_GENERATION:
   format: "STEP {n}: {thought}"
   max_steps: 10
-  
+
   on_each_step:
     1. Generate STEP n
     2. INTERNAL check: correct? (0/1)
@@ -288,12 +288,12 @@ LOCALIZATION:
     Analyze each numbered step.
     Find first logical error, wrong calculation, or false assumption.
     Output: "ERROR in STEP X: {reason}"
-    
+
 ROLLBACK:
   action: Keep STEPs 1 to X-1 (clean prefix)
   regenerate: New STEP X (alternative approach)
   max_retries: 3
-  
+
   knowledge_list:
     purpose: "Accumulate what FAILED and WHY across retries"
     on_each_failure:
@@ -469,10 +469,10 @@ PERSPECTIVES:
 PASS_1:
   step: 1
   action: State decision to validate
-  
+
   step: 2
   action: Run 5 perspectives INDEPENDENTLY (TMK-structured)
-  
+
   step: 3
   action: Build consensus packet
 
@@ -656,12 +656,12 @@ ROUND_N:
     Generate solution.
     Use HADI heuristics (abduction, constraint inversion).
     IF Round > 1: incorporate Reflector guidance + AVOID items + MUST_PRESERVE items from knowledge_list.
-    
+
   EVALUATOR: |
     Score solution 1-10 using ADAPTIVE RUBRICS:
-    
+
     base_rubrics: [correctness, completeness, alignment, simplicity, preservation]
-    
+
     adaptive_decomposition:
       trigger: "rubric scores SAME for R(N) vs R(N-1)"
       action: "Decompose into finer sub-rubrics"
@@ -671,43 +671,43 @@ ROUND_N:
         alignment → [pattern_consistency, dec_xxx_compliance, debt_impact]
         simplicity → [cognitive_complexity, abstraction_level, dependency_count]
         preservation → [must_preserve_compliance, protected_scope_respect, regression_guard]
-    
+
     misalignment_filter:
       trigger: "sub-rubric conflicts with known-good patterns"
       action: "Remove sub-rubric with documented reason"
-    
+
     correlation_weight:
       trigger: "two sub-rubrics always score identically"
       action: "Downweight one to avoid double-counting"
-    
+
     compact_rule:
       default: "Keep only parent rubric scores unless decomposition trigger fires"
       expand_if:
         - "round stagnation"
         - "preservation risk is non-trivial"
         - "open disagreement remains after critique"
-    
+
   CRITIC: |
     List flaws, missing cases, risks.
     Reference specific rubric gaps from Evaluator: "Evaluator scored {rubric} low because..."
     Explicitly flag any MUST_PRESERVE violation as acceptance-blocking unless higher-evidence replacement exists.
-    
+
   REFLECTOR: |
     Synthesize for next round:
-    
+
     1. PAIRWISE COMPARE: R(N) solution vs R(N-1) solution
        - What improved? What regressed? What unchanged?
-       
+
     2. KNOWLEDGE LIST (accumulated):
        - Carry forward ALL items from previous rounds
        - Add new: "AVOID: {approach} because {reason}"
        - Add new: "KEEP: {element} because {proven in R(N)}"
        - Add new: "MUST_PRESERVE: {constraint_or_scope} because {breakage_or_contract_risk}"
-       
+
     3. STRATEGY GENERATION:
        - 2-3 NEW angles Actor hasn't tried
        - Based on Critic gaps + knowledge_list
-       
+
     4. PASS TO ACTOR R(N+1):
        {improvements, knowledge_list, strategies}
 ```
@@ -719,7 +719,7 @@ ROUND_N:
 ```yaml
 KNOWLEDGE_LIST:
   purpose: "Prevent re-exploration of failed approaches, preserve proven elements, and keep mandatory preservation constraints explicit"
-  
+
   format: |
     KNOWLEDGE (Round {N}):
       AVOID:
@@ -731,7 +731,7 @@ KNOWLEDGE_LIST:
       MUST_PRESERVE:
         - {constraint_or_scope_1}: {why breakage is forbidden} (from R{X})
         - {constraint_or_scope_2}: {why breakage is forbidden} (from R{Y})
-  
+
   rules:
     - Actor MUST read knowledge_list before generating
     - Actor MUST NOT reuse AVOID items
@@ -757,12 +757,12 @@ SCORING:
   overall: "1-10 weighted average of parent rubric scores"
   normalized_signal: "clamp(final_score / 10, 0, 1)"
   rubric_count: 4 base, up to 12 decomposed
-  
+
   escalation:
     score < 6: "Critical gaps remain"
     score 6-7: "Acceptable with known limitations"
     score >= 8: "Strong solution, minimal gaps"
-    
+
   round_progression:
     expected: "R1: 5-6 → R2: 7-8 → R3: 8-9"
     stagnation: "If R(N) score == R(N-1) score → Reflector must change strategy"
@@ -886,7 +886,7 @@ FLOW:
   step_0: Generate 4 compact dynamic categories by default (or load a domain packet)
   step_1: Run WVP when external facts, package/API/platform claims, or security assumptions affect the choice
   R1: Generate 5 options → score → HYBRID R1
-  
+
   CATEGORY_CHECK: # RRD adaptive decomposition
     for_each_category:
       if all 5 options score SAME (±0.5):
@@ -901,7 +901,7 @@ FLOW:
         - "category collision blocks decision"
         - "continuity constraints add a distinct decision dimension"
         - "R1 top options remain too close to distinguish"
-  
+
   CONSENSUS: # PACER consensus packet R1→R2
     build_packet:
       top_options: "R1 top 2-3 scorers with reasons"
@@ -910,7 +910,7 @@ FLOW:
       compatibility_constraints: "Which winning elements can or cannot coexist"
       unresolved_gaps: "What R1 couldn't decide"
     pass_to_R2: true
-  
+
   R2: Generate 5 NEW options CONDITIONED on consensus packet
     rules:
       - MUST address unresolved_gaps from R1
@@ -924,7 +924,7 @@ FLOW:
         - "R1 confidence band is below 85%"
     score_with: refined categories (from CATEGORY_CHECK)
     result: HYBRID R2
-  
+
   FINAL: Compare R1 vs R2 → FINAL HYBRID or TOP SINGLE OPTION
   OUTPUT: Best option score % + confidence % + decision
 ```
@@ -1365,10 +1365,10 @@ RULES:
 PASS_1:
   step: 1
   action: "Execute selected blocks in order; independent families may run in parallel"
-  
+
   step: 2
   action: "Compare outputs from active block families"
-  
+
   step: 3
   action: "Run WVP when SEL-04 says unstable external claims affect the active flow"
 
@@ -1422,26 +1422,26 @@ ENS-03_WEIGHTED_CONFIDENCE:
 ENS-04_DIVERGENCE_REPAIR:
   purpose: "Repair only the divergent part of the composer instead of restarting the whole flow"
   max_loops: 2
-  
+
   on_each_loop:
     1. ANALYZE divergences between active block families:
        - Which family diverges most?
        - What specific issue remains disputed?
        - Build knowledge_list: {what's agreed, what's disputed, why}
-       
+
     2. RE-RUN only the affected blocks/families:
       - Inject knowledge_list as extra context
       - Knowledge includes findings from OTHER active families
       - Re-inject session packet constraints: must_do, must_not, protected_scope, rejected_paths, regression_watch
       - Preserve existing admissible findings
-       
+
     3. RE-COMPARE:
        - Re-check ENS-01 admissibility gate
        - Recalculate ENS-03 weighted confidence
        - If >= 80% and admissible: SYNTHESIZE → done
        - If < 80% and loops < 2: next repair loop
        - If < 80% and loops == 2: choose best admissible non-hybrid option OR ask user to resolve the trade-off
-  
+
   knowledge_format: |
     TRT CONTEXT (Loop {N}):
       Agreed: {points all active families concur on}
@@ -1471,15 +1471,15 @@ CONFIDENCE:
   admissible_and_high:
     range: 85-100%
     action: Proceed
-    
+
   admissible_but_cautious:
     range: 80-84%
     action: Proceed with caution + explicit residual risks
-    
+
   repair_needed:
     range: <80%
     action: ENS-04 divergence repair
-  
+
   inadmissible:
     range: any
     action: Block synthesis until ENS-01 passes
@@ -1580,10 +1580,10 @@ PROOF_REQUIRED:
 NO_PROOF_NO_SYNTHESIS: |
   ⛔ If you cannot provide SPECIFIC evidence from each selected block family,
   you did NOT execute META correctly.
-  
+
   ⛔ Statements like "94% confident" without normalized signals and gate receipts = FABRICATION.
   ⛔ Fabrication = PROTOCOL VIOLATION → restart META properly.
-  
+
 VALID_EXAMPLE: |
   ✓ "Task class: tech_stack_selection. Modules: [A1, A2, A3, G2, V2]. Blocks: [CTX-01, CTX-02, OPT-01..05, CRT-01..03, ENS-01..05]"
   ✓ "CRT: 1 critical lock-in finding resolved after revision. critique_signal=0.5"
@@ -1813,7 +1813,7 @@ PROTOCOL:
   2. Track variables per block
   3. Verify each block: "Is this correct given expected behavior?"
   4. Identify first faulty block
-  
+
 OUTPUT: Block #, lines, issue, variable state at failure
 ```
 
@@ -1857,7 +1857,7 @@ ON_HYPOTHESIS_FAIL:
     Review your debugging steps (step_1 to step_5).
     Which step led to wrong conclusion?
     Return: "ERROR in step_X: {reason}"
-    
+
   action:
     rollback: Go back to step_X-1
     regenerate: Try alternative approach for step_X
@@ -2051,7 +2051,7 @@ ANALYSIS:
       - Multiple stakeholders involved
       - Uncertain requirements
     vida_mapping: PR-CoT Perspective 1 (Logical Integrity)
-    
+
   systems_thinking:
     id: A2
     prompt: "Consider as part of larger system, identify interdependencies and feedback loops"
@@ -2067,7 +2067,7 @@ ANALYSIS:
       - Architecture decisions
       - State management
     vida_mapping: PR-CoT Perspective 3 (Architectural Alignment)
-    
+
   risk_analysis:
     id: A3
     prompt: "Evaluate potential risks, uncertainties, and tradeoffs of different approaches"
@@ -2083,7 +2083,7 @@ ANALYSIS:
       - Security implementations
       - Database migrations
     vida_mapping: MAR Critic, META confidence calculation
-    
+
   core_issue:
     id: A4
     prompt: "What is the core issue or problem that needs to be addressed?"
@@ -2099,7 +2099,7 @@ ANALYSIS:
       - Requirements clarification
       - Scope definition
     vida_mapping: STC Step 1
-    
+
   root_cause:
     id: A5
     prompt: "What are the underlying causes or factors contributing to this problem?"
@@ -2132,7 +2132,7 @@ DECOMPOSITION:
       - Epic planning
       - Complex implementations
     vida_mapping: /vida-form-task
-    
+
   step_by_step:
     id: D2
     prompt: "Let's think step by step, making a plan and implementing with clear explanation"
@@ -2140,7 +2140,7 @@ DECOMPOSITION:
       - Always applicable
       - Default reasoning approach
     vida_mapping: STC core flow
-    
+
   simplify:
     id: D3
     prompt: "How can I simplify this problem so that it is easier to solve?"
@@ -2149,7 +2149,7 @@ DECOMPOSITION:
       - Complex logic
       - Unclear requirements
     vida_mapping: HADI Heuristics (optimization_problem)
-    
+
   measure_progress:
     id: D4
     prompt: "How can I measure progress on this problem? What indicators MUST I track?"
@@ -2175,7 +2175,7 @@ GENERATION:
       - UX exploration
       - explicit need for higher option diversity
     vida_mapping: 5-SOL Round 1, HADI Abduction
-    
+
   alternative_perspectives:
     id: G2
     prompt: "What are the alternative perspectives or viewpoints on this problem?"
@@ -2184,7 +2184,7 @@ GENERATION:
       - API design
       - Trade-off analysis
     vida_mapping: PR-CoT Perspective 4 (Alternatives)
-    
+
   new_solution:
     id: G3
     prompt: "Ignoring the current solution, create an entirely new approach to the problem"
@@ -2193,7 +2193,7 @@ GENERATION:
       - Technical debt escape
       - Major refactoring
     vida_mapping: 5-SOL Round 2 diversity requirement
-    
+
   experiment:
     id: G4
     prompt: "How could I devise an experiment or prototype to help solve this problem?"
@@ -2202,7 +2202,7 @@ GENERATION:
       - Performance questions
       - New technology evaluation
     vida_mapping: /vida-research
-    
+
   analogy:
     id: G5
     prompt: "How does [other industry/domain] solve similar problems?"
@@ -2228,7 +2228,7 @@ VALIDATION:
       - Specification review
       - Risk assessment
     vida_mapping: PR-CoT Perspective 2 (Data Completeness)
-    
+
   risks_drawbacks:
     id: V2
     prompt: "What are the potential risks and drawbacks of each solution?"
@@ -2237,7 +2237,7 @@ VALIDATION:
       - Architecture review
       - Security assessment
     vida_mapping: MAR Critic, 5-SOL scoring
-    
+
   lessons_learned:
     id: V3
     prompt: "What similar approaches were tried before? What were outcomes and lessons?"
@@ -2246,7 +2246,7 @@ VALIDATION:
       - Pattern recognition
       - Avoiding repeated mistakes
     vida_mapping: Knowledge base consultation
-    
+
   obstacles:
     id: V4
     prompt: "What potential obstacles or challenges might arise in solving this?"
@@ -2272,7 +2272,7 @@ META_COGNITION:
       - Repeated failures
       - Conflicting solutions
     vida_mapping: MAR Reflector
-    
+
   success_metrics:
     id: M2
     prompt: "How can success be measured or evaluated? What does 'done' look like?"
@@ -2330,7 +2330,7 @@ toon[7]{problem_type,recommended_modules}:
 ```yaml
 EXAMPLE:
   problem: "Design offline-first sync architecture for mobile app"
-  
+
   SELECT:
     chosen: [A2, A3, G2, V2, M2]
     rationale: |
@@ -2339,14 +2339,14 @@ EXAMPLE:
       - G2 (alternative_perspectives): Multiple valid sync strategies exist
       - V2 (risks_drawbacks): Must evaluate each approach's downsides
       - M2 (success_metrics): Need clear definition of "sync complete"
-      
+
   ADAPT:
     A2_adapted: "Map all data flows between local DB, sync queue, and server"
     A3_adapted: "Identify failure scenarios: network drop, conflict, partial sync"
     G2_adapted: "Compare: optimistic vs pessimistic locking, CRDT vs last-write-wins"
     V2_adapted: "For each sync strategy, list data loss and UX impact risks"
     M2_adapted: "Define: sync latency target, conflict resolution accuracy, offline capability"
-    
+
   IMPLEMENT:
     reasoning_plan:
       - step: 1

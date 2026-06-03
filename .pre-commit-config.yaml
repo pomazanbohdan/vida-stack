@@ -1,0 +1,49 @@
+minimum_pre_commit_version: "4.0.0"
+default_install_hook_types: [pre-commit]
+default_stages: [pre-commit]
+
+exclude: |
+  (?x)^(
+    \.vida/|
+    \.git/|
+    target/|
+    vendor/|
+    tmp/|
+    tasks_tmp/|
+    .*\.changelog\.jsonl$
+  )
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-illegal-windows-names
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: vida-script-check
+        name: VIDA script/diff hygiene gate
+        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: vida-rust-quick
+        name: VIDA Rust quick gate (manual)
+        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
