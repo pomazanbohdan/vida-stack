@@ -1301,14 +1301,53 @@ agent_system:
     root_call_reduction_rules:
       - ask_vibe_for_readonly_pre_analysis_when_scope_is_known_and_no_write_authority_is_needed
       - ask_jcode_nim_for_readonly_pre_analysis_when_vibe_is_unavailable_or_independent_second_opinion_is_useful
+      - choose_external_readonly_complete_or_external_patch_proposal_during_research_stage_before_root_implementation
       - ask_internal_low_or_medium_for_bounded_implementation_or_test_authoring
       - keep_root_session_to_binding_synthesis_task_updates_and_final_validation
       - prefer_compact_runtime_surfaces_and_snapshot_reads_before_large_json_bundles
       - batch_related_report_intake_into_one_taskflow_mutation_window
+    research_stage_external_delegation_modes:
+      external_readonly_complete:
+        authority: advisory_readonly
+        allowed_task_classes:
+          - research
+          - analysis
+          - specification
+          - planning
+          - review
+          - proof_diagnosis
+        required_output:
+          - structured_report
+          - evidence_refs
+          - risks
+          - recommended_next_step
+        root_responsibility:
+          - validate_report_against_source_and_runtime
+          - mutate_taskflow_only_after_validation
+          - decide_closure_or_followup
+      external_patch_proposal:
+        authority: patch_proposal_only
+        allowed_task_classes:
+          - implementation_diagnosis
+          - refactor_proposal
+          - test_proposal
+          - proof_runner_proposal
+        required_output:
+          - patch_summary
+          - proposed_diff_or_file_plan
+          - verification_commands
+          - rollback_notes
+        root_responsibility:
+          - apply_or_reject_diff
+          - run_tests
+          - commit_push_and_close_taskflow
     task_class_carrier_preferences:
       research:
         primary: vibe_cli
-        fallback: internal_subagents:codex_gpt55_low_write
+        fallback: jcode_nim_cli
+        delegation_modes:
+          - external_readonly_complete
+          - external_patch_proposal
       analysis:
         primary: vibe_cli
         fallback: jcode_nim_cli

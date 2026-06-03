@@ -378,6 +378,8 @@ pub(crate) enum TaskCommand {
     Show(TaskShowArgs),
     #[command(about = "show progress and dependency context for one tracked task")]
     Progress(TaskDepsArgs),
+    #[command(about = "inspect proof targets and evidence status for one tracked task")]
+    Proof(TaskProofArgs),
     #[command(about = "list tasks ready for execution from canonical graph truth")]
     Ready(TaskReadyArgs),
     #[command(about = "select the next TaskFlow work item from current graph state")]
@@ -721,6 +723,43 @@ pub(crate) struct TaskHandoffAcceptArgs {
         help = "Operator next action for blocked or incomplete handoffs; repeat for multiple actions"
     )]
     pub(crate) next_actions: Vec<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskProofArgs {
+    #[command(subcommand)]
+    pub(crate) command: TaskProofCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum TaskProofCommand {
+    #[command(about = "show configured proof targets and close-evidence coverage for one task")]
+    Status(TaskProofStatusArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskProofStatusArgs {
+    #[arg(help = "Task id whose proof status should be inspected")]
+    pub(crate) task_id: String,
 
     #[arg(
         long = "state-dir",

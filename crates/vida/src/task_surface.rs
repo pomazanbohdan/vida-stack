@@ -2,7 +2,8 @@ use super::*;
 use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_defect_batch_rehome_result,
     print_task_dependency_bulk_add_result, print_task_direct_children,
-    print_task_update_graph_blocked, task_ready_payload, task_show_payload,
+    print_task_update_graph_blocked, task_read_metadata_value, task_ready_payload,
+    task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
 
@@ -88,8 +89,174 @@ struct TaskCloseEpicProgressBlocker {
     title: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskProofTargetStatus {
+    target: String,
+    status: String,
+    evidence_source: String,
+    evidence_detail: String,
+    artifact_status: String,
+    next_action: String,
+}
+
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
+}
+
+fn proof_target_has_close_reason_evidence(task: &state_store::TaskRecord, target: &str) -> bool {
+    let Some(reason) = task.close_reason.as_deref() else {
+        return false;
+    };
+    let target = target.trim();
+    !target.is_empty()
+        && reason
+            .to_ascii_lowercase()
+            .contains(&target.to_ascii_lowercase())
+}
+
+fn task_close_reason_reports_runtime_proof_blocker(task: &state_store::TaskRecord) -> bool {
+    let Some(reason) = task.close_reason.as_deref() else {
+        return false;
+    };
+    let normalized = reason.to_ascii_lowercase();
+    normalized.contains("proof blocked by runtime")
+        || normalized.contains("runtime proof blocker")
+        || normalized.contains("runtime blocker")
+}
+
+fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
+    let target = target.trim().to_string();
+    let runtime_blocked = task_close_reason_reports_runtime_proof_blocker(task);
+    if proof_target_has_close_reason_evidence(task, &target) {
+        return TaskProofTargetStatus {
+            target,
+            status: "satisfied".to_string(),
+            evidence_source: "close_reason".to_string(),
+            evidence_detail: "target text is present in task close_reason".to_string(),
+            artifact_status: "not_recorded".to_string(),
+            next_action: "No action for this proof target.".to_string(),
+        };
+    }
+    if runtime_blocked {
+        return TaskProofTargetStatus {
+            target: target.clone(),
+            status: "blocked_by_runtime".to_string(),
+            evidence_source: "close_reason".to_string(),
+            evidence_detail: "task close_reason reports runtime proof blocker context".to_string(),
+            artifact_status: "not_recorded".to_string(),
+            next_action: format!(
+                "Resolve runtime proof blocker, then record evidence for proof target `{}`.",
+                target
+            ),
+        };
+    }
+    let status = if state_store::StateStore::task_status_is_closed_like(&task.status) {
+        "missing_evidence"
+    } else {
+        "pending"
+    };
+    TaskProofTargetStatus {
+        target: target.clone(),
+        status: status.to_string(),
+        evidence_source: "planner_metadata.proof_targets".to_string(),
+        evidence_detail: "no matching close_reason or structured proof artifact found".to_string(),
+        artifact_status: "not_recorded".to_string(),
+        next_action: format!(
+            "Run or attach evidence for proof target `{}`, then close or update `{}`.",
+            target, task.id
+        ),
+    }
+}
+
+fn task_proof_status_payload(
+    task: &state_store::TaskRecord,
+    read_metadata: Option<&TaskReadMetadata>,
+) -> serde_json::Value {
+    let targets = task
+        .planner_metadata
+        .proof_targets
+        .iter()
+        .map(|target| task_proof_target_status(task, target))
+        .collect::<Vec<_>>();
+    let configured_count = targets.len();
+    let satisfied_count = targets
+        .iter()
+        .filter(|target| target.status == "satisfied")
+        .count();
+    let runtime_blocked_count = targets
+        .iter()
+        .filter(|target| target.status == "blocked_by_runtime")
+        .count();
+    let missing_count = targets
+        .iter()
+        .filter(|target| target.status != "satisfied")
+        .count();
+    let missing_targets = targets
+        .iter()
+        .filter(|target| target.status != "satisfied")
+        .map(|target| target.target.clone())
+        .collect::<Vec<_>>();
+    let next_required_command = if configured_count == 0 {
+        format!(
+            "Add proof targets with `vida task update {} --proof-target <command-or-artifact> --json`.",
+            task.id
+        )
+    } else if missing_count == 0 {
+        "No proof action required; all configured proof targets have close evidence.".to_string()
+    } else {
+        format!(
+            "Run or attach missing proof evidence, then inspect again with `vida task proof status {} --json`.",
+            task.id
+        )
+    };
+    serde_json::json!({
+        "surface": "vida task proof status",
+        "status": task_json_success_status(),
+        "task_id": task.id,
+        "task_status": task.status,
+        "configured_proof_target_count": configured_count,
+        "satisfied_count": satisfied_count,
+        "missing_count": missing_count,
+        "runtime_blocked_count": runtime_blocked_count,
+        "missing_proof": configured_count > 0 && missing_count > 0,
+        "proof_blocked_by_runtime": runtime_blocked_count > 0,
+        "proof_targets": targets,
+        "missing_targets": missing_targets,
+        "next_required_command": next_required_command,
+        "evidence_model": {
+            "configured_targets_source": "task.planner_metadata.proof_targets",
+            "satisfaction_source": "task.close_reason substring match",
+            "artifact_registry": "not_connected_in_this_slice"
+        },
+        "state_access": task_read_metadata_value(read_metadata),
+    })
+}
+
+fn print_task_proof_status(
+    render: RenderMode,
+    task: &state_store::TaskRecord,
+    payload: &serde_json::Value,
+) {
+    print_surface_header(render, "vida task proof status");
+    print_surface_line(render, "task", &task.id);
+    print_surface_line(render, "task status", &task.status);
+    print_surface_line(
+        render,
+        "proof targets",
+        &payload["configured_proof_target_count"].to_string(),
+    );
+    print_surface_line(render, "satisfied", &payload["satisfied_count"].to_string());
+    print_surface_line(render, "missing", &payload["missing_count"].to_string());
+    print_surface_line(
+        render,
+        "runtime blocked",
+        &payload["proof_blocked_by_runtime"].to_string(),
+    );
+    print_surface_line(
+        render,
+        "next",
+        payload["next_required_command"].as_str().unwrap_or(""),
+    );
 }
 
 fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value {
@@ -4932,6 +5099,28 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Proof(command) => match command.command {
+            TaskProofCommand::Status(command) => {
+                let state_dir = command
+                    .state_dir
+                    .unwrap_or_else(state_store::default_state_dir);
+                match task_show_authoritative_first(state_dir, &command.task_id).await {
+                    Ok((task, metadata)) => {
+                        let payload = task_proof_status_payload(&task, Some(&metadata));
+                        if command.json {
+                            crate::print_json_pretty(&payload);
+                        } else {
+                            print_task_proof_status(command.render, &task, &payload);
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to inspect task proof status: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
+        },
         TaskCommand::Ready(command) => {
             let state_dir = command
                 .state_dir
@@ -6533,6 +6722,49 @@ mod tests {
             payload["epic_progress_summary"]["epics"][0]["closed_count"],
             1
         );
+    }
+
+    #[test]
+    fn task_proof_status_payload_reports_missing_and_satisfied_targets() {
+        let mut task = owned_task_record("proof-task", vec![]);
+        task.status = "closed".to_string();
+        task.close_reason =
+            Some("Proof: cargo test -p vida proof_status_payload passed.".to_string());
+        task.planner_metadata.proof_targets = vec![
+            "cargo test -p vida proof_status_payload".to_string(),
+            "cargo build -p vida".to_string(),
+        ];
+
+        let payload = super::task_proof_status_payload(&task, None);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["task_id"], "proof-task");
+        assert_eq!(payload["configured_proof_target_count"], 2);
+        assert_eq!(payload["satisfied_count"], 1);
+        assert_eq!(payload["missing_count"], 1);
+        assert_eq!(payload["missing_proof"], true);
+        assert_eq!(payload["proof_targets"][0]["status"], "satisfied");
+        assert_eq!(
+            payload["proof_targets"][0]["evidence_source"],
+            "close_reason"
+        );
+        assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
+        assert_eq!(payload["missing_targets"][0], "cargo build -p vida");
+    }
+
+    #[test]
+    fn task_proof_status_payload_reports_unconfigured_targets() {
+        let task = owned_task_record("proofless-task", vec![]);
+
+        let payload = super::task_proof_status_payload(&task, None);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["configured_proof_target_count"], 0);
+        assert_eq!(payload["missing_proof"], false);
+        assert!(payload["next_required_command"]
+            .as_str()
+            .expect("next command should render")
+            .contains("vida task update proofless-task --proof-target"));
     }
 
     #[test]
