@@ -1057,6 +1057,40 @@ mod tests {
     }
 
     #[test]
+    fn packet_render_hydration_rejects_unsafe_task_metadata_owned_paths() {
+        let mut task = packet_repair_task_with_metadata();
+        task.planner_metadata.owned_paths = vec![
+            "../outside".to_string(),
+            "/home/user/.ssh".to_string(),
+            ".vida/data/state".to_string(),
+            "windows\\path".to_string(),
+            "C:/Users/admin/.ssh".to_string(),
+            "crates/vida/src/taskflow_packet.rs".to_string(),
+        ];
+        let mut packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": [],
+            "delivery_task_packet": {
+                "handoff_task_class": "implementation",
+                "owned_paths": []
+            }
+        });
+
+        assert!(hydrate_dispatch_packet_owned_paths_from_task(
+            &mut packet,
+            &task
+        ));
+        assert_eq!(
+            packet["owned_paths"],
+            serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+        );
+        assert_eq!(
+            packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+        );
+    }
+
+    #[test]
     fn packet_repair_payload_blocks_missing_metadata_with_actionable_command() {
         let mut task = packet_repair_task_with_metadata();
         task.planner_metadata.owned_paths.clear();

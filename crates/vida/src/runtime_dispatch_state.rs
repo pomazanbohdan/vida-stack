@@ -6764,11 +6764,8 @@ pub(crate) fn apply_owned_paths_if_missing(
     packet: &mut serde_json::Value,
     owned_paths: &[String],
 ) -> bool {
-    let concrete_owned_paths: Vec<String> = owned_paths
-        .iter()
-        .filter(|path| !is_runtime_consumption_fallback_owned_path(path))
-        .cloned()
-        .collect();
+    let mut concrete_owned_paths = Vec::new();
+    append_unique_explicit_owned_scope_paths(&mut concrete_owned_paths, owned_paths, None);
     if concrete_owned_paths.is_empty() {
         return false;
     }
@@ -7500,6 +7497,39 @@ mod tests {
                     > + 'a,
             >,
         >;
+    }
+
+    #[test]
+    fn apply_owned_paths_if_missing_rejects_unsafe_owned_paths() {
+        let mut packet = serde_json::json!({ "owned_paths": [] });
+        let owned_paths = vec![
+            "../outside".to_string(),
+            "/home/user/.ssh".to_string(),
+            ".vida/data/state".to_string(),
+            "windows\\path".to_string(),
+            "C:/Users/admin/.ssh".to_string(),
+            "crates/vida/src/taskflow_packet.rs".to_string(),
+            "crates/vida/src/taskflow_packet.rs".to_string(),
+        ];
+
+        assert!(apply_owned_paths_if_missing(&mut packet, &owned_paths));
+        assert_eq!(
+            packet["owned_paths"],
+            serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+        );
+    }
+
+    #[test]
+    fn apply_owned_paths_if_missing_leaves_packet_when_no_safe_paths_remain() {
+        let mut packet = serde_json::json!({ "owned_paths": [] });
+        let owned_paths = vec![
+            crate::runtime_dispatch_packets::RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH.to_string(),
+            "../outside".to_string(),
+            ".vida/data/state".to_string(),
+        ];
+
+        assert!(!apply_owned_paths_if_missing(&mut packet, &owned_paths));
+        assert_eq!(packet["owned_paths"], serde_json::json!([]));
     }
 
     impl StateStoreFixtureTaskExt for crate::StateStore {
