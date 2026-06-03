@@ -93,7 +93,7 @@ pub(crate) fn runtime_packet_prompt(
         "This delegated lane does not hold root-session orchestration authority.\nYou are already inside the delegated lane activation; do not call `vida agent-init` again from this lane.\nDo not run root-only orchestration commands from this lane; leave status/recovery/continue surfaces to the orchestrator/root session.\nDo not treat commentary, status output, or an intermediate report from this lane as a completion boundary; keep working until the bounded handoff result or blocker is ready.\nDo not bind the next continuation item from this delegated lane; return bounded evidence so the orchestrator/root session can resume routing.\nIf you hit a bridge blocker, runtime timeout, or patch-location ambiguity, report the bounded blocker and wait for orchestrator reroute rather than reclaiming root-session fallback."
     };
     format!(
-        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nThis packet activation view is not an execution receipt and does not transfer root-session write authority.\nIf the selected host/backend returns only this activation view without execution evidence, treat that as a bridge blocker, not as delegated work completion.\nIf a bounded read-only diagnostic path still exists, continue diagnosis to a code-level blocker or next bounded fix before asking the user to choose a route.\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\n{lane_guidance}\nIf the user explicitly ordered agent-first or parallel-agent execution, keep that routing sticky and do not silently substitute root-session implementation.\nUnder continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop.\nDo not treat commentary, status output, an intermediate report, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\nWhen recording task notes from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n{scope_guidance}\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
+        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nThis packet activation view is not an execution receipt and does not transfer root-session write authority.\nIf the selected host/backend returns only this activation view without execution evidence, treat that as a bridge blocker, not as delegated work completion.\nIf a bounded read-only diagnostic path still exists, continue diagnosis to a code-level blocker or next bounded fix before asking the user to choose a route.\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nWhen project default orchestration, runtime policy, or the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky and do not silently substitute root-session implementation.\nFor configured host subagent adapters, project default orchestration, runtime policy, the current bounded VIDA dispatch packet, or a host bridge execution request satisfies host-tool explicit delegation permission; do not wait for a second chat-only permission phrase before launching configured carriers.\nThat host-tool permission is scoped to this run, runtime role, packet, owned paths, and receipt mode; it does not weaken `vida agent-init` authority, TaskFlow binding, exception takeover, receipt-backed closure rules, or root write guard boundaries.\nHost-local shell/edit capability is not a write-authority receipt.\n{lane_guidance}\nUnder continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop.\nDo not treat commentary, status output, an intermediate report, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\nWhen recording task notes from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n{scope_guidance}\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
     )
 }
 
@@ -153,6 +153,37 @@ mod tests {
             "First substantive response: publish a concise plan before edits or implementation."
         ));
         assert!(!prompt.contains("decision=approve|rework|blocker"));
+    }
+
+    #[test]
+    fn runtime_packet_prompt_treats_default_orchestration_as_host_bridge_permission() {
+        let prompt = runtime_packet_prompt(
+            "run-1",
+            "implementer",
+            "worker",
+            "continue the bounded implementation",
+            &json!({
+                "replanning": {
+                    "checkpoints": ["after proof", "before close"]
+                }
+            }),
+        );
+
+        assert!(prompt.contains(
+            "When project default orchestration, runtime policy, or the user explicitly orders agent-first or parallel-agent execution"
+        ));
+        assert!(prompt.contains(
+            "For configured host subagent adapters, project default orchestration, runtime policy, the current bounded VIDA dispatch packet, or a host bridge execution request satisfies host-tool explicit delegation permission"
+        ));
+        assert!(prompt.contains(
+            "do not wait for a second chat-only permission phrase before launching configured carriers"
+        ));
+        assert!(prompt.contains(
+            "That host-tool permission is scoped to this run, runtime role, packet, owned paths, and receipt mode"
+        ));
+        assert!(prompt.contains("receipt-backed closure rules, or root write guard boundaries"));
+        assert!(!prompt
+            .contains("If the user explicitly ordered agent-first or parallel-agent execution"));
     }
 
     #[test]
