@@ -832,6 +832,12 @@ fn task_close_progress_next_action(
     )
 }
 
+fn task_close_automation_is_blocked(automation: Option<&TaskCloseAutomationReceipt>) -> bool {
+    automation
+        .map(|receipt| receipt.status != "pass")
+        .unwrap_or(false)
+}
+
 fn task_close_result_payload(
     task: &state_store::TaskRecord,
     telemetry: &serde_json::Value,
@@ -839,9 +845,7 @@ fn task_close_result_payload(
     telemetry_feedback_blocker: Option<&(Vec<String>, Vec<String>)>,
     epic_progress_summary: Option<&TaskCloseEpicProgressSummary>,
 ) -> serde_json::Value {
-    let automation_blocked = automation
-        .map(|receipt| receipt.status != "pass")
-        .unwrap_or(false);
+    let automation_blocked = task_close_automation_is_blocked(automation);
     let feedback_blocked = telemetry_feedback_blocker.is_some();
     let blocker_codes = if let Some((blocker_codes, _)) = telemetry_feedback_blocker {
         blocker_codes.clone()
@@ -858,8 +862,13 @@ fn task_close_result_payload(
             .unwrap_or_default()
     };
     let continuation_blocked = automation_blocked || feedback_blocked;
+    let status = if automation_blocked {
+        "blocked"
+    } else {
+        "pass"
+    };
     serde_json::json!({
-        "status": "pass",
+        "status": status,
         "closed": true,
         "continuation_blocked": continuation_blocked,
         "automation_blocked": automation_blocked,
@@ -5836,7 +5845,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     print_task_close_epic_progress_summary(command.render, summary);
                                 }
                             }
-                            ExitCode::SUCCESS
+                            if task_close_automation_is_blocked(automation.as_ref()) {
+                                ExitCode::from(1)
+                            } else {
+                                ExitCode::SUCCESS
+                            }
                         }
                         Err(error) => {
                             eprintln!("Failed to close task: {error}");
@@ -6346,11 +6359,11 @@ mod tests {
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
         runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
-        select_task_next_lawful_binding, task_close_automation_receipt,
-        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
-        task_close_epic_progress_summary, task_close_feedback_blocker_summary,
-        task_close_host_agent_telemetry, task_close_result_payload,
-        task_close_uses_isolated_state_dir, task_continuation_candidate,
+        select_task_next_lawful_binding, task_close_automation_is_blocked,
+        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
+        task_close_commit_file_strings, task_close_epic_progress_summary,
+        task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
+        task_close_result_payload, task_close_uses_isolated_state_dir, task_continuation_candidate,
         task_create_planner_metadata_arg, task_create_semantics_mismatch,
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
         task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
@@ -6358,7 +6371,7 @@ mod tests {
         task_next_lawful_receipt, task_next_lawful_select_ready_candidate_receipt,
         task_owned_status_receipt, task_parent_id, task_ready_authoritative_first,
         task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        ADAPTIVE_REPLAN_FINDING_KINDS,
+        TaskCloseAutomationReceipt, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -6789,6 +6802,35 @@ mod tests {
         assert_eq!(payload["feedback_blocked"], true);
         assert_eq!(payload["automation_blocked"], false);
         assert_eq!(payload["blocker_codes"][0], "post_close_feedback_blocked");
+    }
+
+    #[test]
+    fn task_close_result_payload_reports_blocked_status_for_blocked_automation() {
+        let mut closed_task = owned_task_record("closed-with-automation-blocker", vec![]);
+        closed_task.status = "closed".to_string();
+        let telemetry = serde_json::json!({
+            "status": "recorded",
+            "reason": "feedback recorded after close"
+        });
+        let automation = TaskCloseAutomationReceipt {
+            status: "blocked".to_string(),
+            blocker_codes: vec!["push_requires_commit".to_string()],
+            next_actions: vec!["Pass `--commit --commit-file <path>` with `--push`.".to_string()],
+            release_build: None,
+            release_install: None,
+            git: None,
+        };
+
+        let payload =
+            task_close_result_payload(&closed_task, &telemetry, Some(&automation), None, None);
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["closed"], true);
+        assert_eq!(payload["continuation_blocked"], true);
+        assert_eq!(payload["automation_blocked"], true);
+        assert_eq!(payload["feedback_blocked"], false);
+        assert_eq!(payload["blocker_codes"][0], "push_requires_commit");
+        assert!(task_close_automation_is_blocked(Some(&automation)));
     }
 
     #[test]
@@ -9566,6 +9608,66 @@ mod tests {
                 parent.status, "open",
                 "closing a child TODO must not implicitly close its parent task"
             );
+        });
+    }
+
+    #[test]
+    fn task_close_returns_failure_when_requested_automation_is_blocked() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "root-epic", "Root epic", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "close-with-push-blocked",
+                "Close with blocked push",
+                "task",
+                "in_progress",
+                2,
+                Some("root-epic"),
+            )
+            .await;
+        });
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::Close(crate::TaskCloseArgs {
+                    task_id: "close-with-push-blocked".to_string(),
+                    reason: "implementation proof passed".to_string(),
+                    source: Some("task_close_automation_regression".to_string()),
+                    release: false,
+                    install: false,
+                    install_target: "current".to_string(),
+                    skip_release_build: false,
+                    source_binary: None,
+                    install_root: None,
+                    commit: false,
+                    push: true,
+                    stage_owned: false,
+                    commit_files: vec![],
+                    commit_message: None,
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::from(1)
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let task = store
+                .show_task("close-with-push-blocked")
+                .await
+                .expect("task should still close even when automation is blocked");
+            assert_eq!(task.status, "closed");
         });
     }
 
