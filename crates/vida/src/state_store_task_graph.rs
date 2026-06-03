@@ -403,17 +403,26 @@ impl StateStore {
         let root_closed = Self::task_status_is_closed_like(&root_task.status);
         let is_non_container_work_item = !is_container;
         let non_container_descendants_clear = descendant_count == 0 || all_descendants_closed_like;
-        let blocked_by_runtime = !root_closed
+        let proof_blocked_by_runtime = !root_closed
             && is_non_container_work_item
-            && (root_task.status == "blocked"
-                || root_task
-                    .labels
-                    .iter()
-                    .any(|label| label == "runtime-blocked" || label == "blocked-by-runtime"));
+            && non_container_descendants_clear
+            && !root_task.planner_metadata.proof_targets.is_empty()
+            && root_task.labels.iter().any(|label| {
+                label == "proof-blocked-by-runtime" || label == "runtime-proof-blocked"
+            });
+        let blocked_by_runtime = proof_blocked_by_runtime
+            || (!root_closed
+                && is_non_container_work_item
+                && (root_task.status == "blocked"
+                    || root_task
+                        .labels
+                        .iter()
+                        .any(|label| label == "runtime-blocked" || label == "blocked-by-runtime")));
         let missing_proof = !root_closed
             && is_non_container_work_item
             && non_container_descendants_clear
-            && !root_task.planner_metadata.proof_targets.is_empty();
+            && !root_task.planner_metadata.proof_targets.is_empty()
+            && !proof_blocked_by_runtime;
         let leaf_ready_for_close = !root_closed
             && is_non_container_work_item
             && non_container_descendants_clear
@@ -468,6 +477,11 @@ impl StateStore {
                     "Run declared proof targets, then close the leaf task with explicit evidence."
                         .to_string(),
                 )
+            } else if proof_blocked_by_runtime {
+                Some(
+                    "Record or resolve the runtime proof blocker before closing the leaf task."
+                        .to_string(),
+                )
             } else if blocked_by_runtime {
                 Some(
                     "Record or resolve the runtime blocker before closing the leaf task."
@@ -486,6 +500,8 @@ impl StateStore {
                 "work_item_child_work_remaining"
             } else if missing_proof {
                 "leaf_missing_proof"
+            } else if proof_blocked_by_runtime {
+                "leaf_proof_blocked_by_runtime"
             } else if blocked_by_runtime {
                 "leaf_blocked_by_runtime"
             } else if leaf_ready_for_close {
@@ -545,6 +561,7 @@ impl StateStore {
             closure_candidate_reason,
             ready_for_close: closure_candidate || leaf_ready_for_close,
             missing_proof,
+            proof_blocked_by_runtime,
             blocked_by_runtime,
             next_required_command,
             recommended_next_action,
@@ -1162,6 +1179,31 @@ mod tests {
             provider_mapping: None,
             dependencies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn proof_blocked_by_runtime_leaf_reports_runtime_proof_state() {
+        let mut task = task_record("proof-runtime-blocked", "in_progress");
+        task.issue_type = "defect".to_string();
+        task.labels = vec!["proof-blocked-by-runtime".to_string()];
+        task.planner_metadata.proof_targets =
+            vec!["vida proof browser --route /blocked --json".to_string()];
+
+        let summary = StateStore::task_progress_summary_from_rows(&[task], "proof-runtime-blocked")
+            .expect("progress summary should build");
+
+        assert!(!summary.ready_for_close);
+        assert!(!summary.missing_proof);
+        assert!(summary.proof_blocked_by_runtime);
+        assert!(summary.blocked_by_runtime);
+        assert_eq!(
+            summary.closure_candidate_state,
+            "leaf_proof_blocked_by_runtime"
+        );
+        assert_eq!(
+            summary.next_required_command.as_deref(),
+            Some("Record or resolve the runtime proof blocker before closing the leaf task.")
+        );
     }
 
     fn parent_child_dependency(child_id: &str, parent_id: &str) -> TaskDependencyRecord {

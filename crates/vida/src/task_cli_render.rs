@@ -428,6 +428,11 @@ pub(crate) fn print_task_progress(
     print_surface_line(render, "missing proof", &summary.missing_proof.to_string());
     print_surface_line(
         render,
+        "proof blocked by runtime",
+        &summary.proof_blocked_by_runtime.to_string(),
+    );
+    print_surface_line(
+        render,
         "blocked by runtime",
         &summary.blocked_by_runtime.to_string(),
     );
@@ -1296,6 +1301,7 @@ mod tests {
             ),
             ready_for_close: true,
             missing_proof: false,
+            proof_blocked_by_runtime: false,
             blocked_by_runtime: false,
             next_required_command: Some(
                 "vida task close epic-ready --reason \"all descendants closed\" --json"
@@ -1325,6 +1331,7 @@ mod tests {
         );
         assert_eq!(payload["progress"]["ready_for_close"], true);
         assert_eq!(payload["progress"]["missing_proof"], false);
+        assert_eq!(payload["progress"]["proof_blocked_by_runtime"], false);
         assert_eq!(payload["progress"]["blocked_by_runtime"], false);
         assert_eq!(
             payload["progress"]["next_required_command"],
@@ -1357,6 +1364,7 @@ mod tests {
             ),
             ready_for_close: false,
             missing_proof: true,
+            proof_blocked_by_runtime: false,
             blocked_by_runtime: false,
             next_required_command: Some(
                 "Run declared proof targets, then close the leaf task with explicit evidence."
@@ -1379,10 +1387,64 @@ mod tests {
         );
         assert_eq!(payload["progress"]["ready_for_close"], false);
         assert_eq!(payload["progress"]["missing_proof"], true);
+        assert_eq!(payload["progress"]["proof_blocked_by_runtime"], false);
         assert_eq!(payload["progress"]["blocked_by_runtime"], false);
         assert_eq!(
             payload["progress"]["next_required_command"],
             "Run declared proof targets, then close the leaf task with explicit evidence."
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_progress_payload_exposes_proof_blocked_by_runtime() {
+        let mut root = sample_task("leaf-proof-runtime-blocked");
+        root.issue_type = "defect".to_string();
+        root.labels = vec!["proof-blocked-by-runtime".to_string()];
+        root.planner_metadata.proof_targets =
+            vec!["vida proof browser --route /blocked --json".to_string()];
+        let summary = TaskProgressSummary {
+            root_task: root,
+            progress_basis: "descendants_excluding_root".to_string(),
+            direct_child_count: 0,
+            descendant_count: 0,
+            open_count: 0,
+            in_progress_count: 0,
+            closed_count: 0,
+            epic_count: 0,
+            status_counts: BTreeMap::new(),
+            percent_closed: 0.0,
+            closure_candidate: false,
+            closure_candidate_state: "leaf_proof_blocked_by_runtime".to_string(),
+            closure_candidate_reason: Some(
+                "leaf task uses proof readiness instead of container closure semantics".to_string(),
+            ),
+            ready_for_close: false,
+            missing_proof: false,
+            proof_blocked_by_runtime: true,
+            blocked_by_runtime: true,
+            next_required_command: Some(
+                "Record or resolve the runtime proof blocker before closing the leaf task."
+                    .to_string(),
+            ),
+            recommended_next_action:
+                "Record or resolve the runtime proof blocker before closing the leaf task."
+                    .to_string(),
+            canonical_commands: Vec::new(),
+        };
+
+        let payload = task_progress_payload(&summary);
+
+        assert_eq!(
+            payload["progress"]["closure_candidate_state"],
+            "leaf_proof_blocked_by_runtime"
+        );
+        assert_eq!(payload["progress"]["missing_proof"], false);
+        assert_eq!(payload["progress"]["proof_blocked_by_runtime"], true);
+        assert_eq!(payload["progress"]["blocked_by_runtime"], true);
+        assert_eq!(
+            payload["progress"]["next_required_command"],
+            "Record or resolve the runtime proof blocker before closing the leaf task."
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
