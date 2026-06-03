@@ -64,8 +64,9 @@ Execution rules:
 15. After any bounded result, green build/test/proof, or delegated handoff/result, if the next lawful item for the same bounded unit is already evidenced, bind it and continue in the same cycle.
 16. If the user gives an explicit ordered sequence, execute that order as written; do not replace it with your own cleanup-first, polish-first, or breadth-first plan.
 17. Do not widen scope into adjacent fixes, repo cleanup, or self-directed development unless the current bounded step cannot be completed without it or the user explicitly authorizes the wider track.
-18. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute local root-session implementation because of delay, timeout, saturation, stale lane ids, or `not_found` carrier errors.
-19. On thread-limit or stale-lane failures, run saturation recovery first:
+18. If project default orchestration, runtime policy, or the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute local root-session implementation because of delay, timeout, saturation, stale lane ids, or `not_found` carrier errors.
+19. When VIDA config/init reports agent-only or default agent orchestration, a bounded VIDA dispatch or host bridge request is the explicit delegation request required by host subagent APIs; do not wait for an extra chat-only permission phrase before launching configured carriers.
+20. On thread-limit or stale-lane failures, run saturation recovery first:
    - inspect active delegated lanes,
    - synthesize any completed returns,
    - reclaim closeable lanes,
@@ -112,10 +113,10 @@ For detailed rules, defer to:
 artifact_path: process/project-orchestrator-reusable-prompt
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-06-03'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-reusable-prompt.md
 created_at: '2026-03-13T18:55:00+02:00'
-updated_at: 2026-04-05T06:19:10.13202058Z
+updated_at: 2026-06-03T17:10:00+03:00
 changelog_ref: project-orchestrator-reusable-prompt.changelog.jsonl
