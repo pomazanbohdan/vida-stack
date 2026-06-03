@@ -16537,6 +16537,143 @@ agent_system:
     }
 
     #[tokio::test]
+    async fn resolve_default_resume_run_id_skips_stale_active_exception_takeover_behind_ready_handoff(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-stale-exception-ready-handoff-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let stale_run_id = "run-stale-exception-takeover";
+        let mut stale_status = crate::taskflow_run_graph::default_run_graph_status(
+            stale_run_id,
+            "verification",
+            "delivery",
+        );
+        stale_status.task_id = "task-stale-exception-takeover".to_string();
+        stale_status.active_node = "verification".to_string();
+        stale_status.next_node = Some("verification".to_string());
+        stale_status.status = "ready".to_string();
+        stale_status.lifecycle_stage = "verification_ready".to_string();
+        stale_status.policy_gate = "not_required".to_string();
+        stale_status.handoff_state = "ready_for_dispatch".to_string();
+        stale_status.context_state = "sealed".to_string();
+        stale_status.checkpoint_kind = "conversation_cursor".to_string();
+        stale_status.resume_target = "dispatch.verification".to_string();
+        stale_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist stale ready handoff status");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: stale_run_id.to_string(),
+                dispatch_target: "coach".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("receipt-superseded-by-stale-exception".to_string()),
+                exception_path_receipt_id: Some("exception-receipt-stale".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some(format!(
+                    "vida taskflow consume continue --run-id {stale_run_id} --json"
+                )),
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("coach".to_string()),
+                downstream_dispatch_last_target: Some("coach".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("coach".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-05-13T00:02:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale exception receipt");
+
+        let current_run_id = "run-current-ready-handoff";
+        let mut current_status = crate::taskflow_run_graph::default_run_graph_status(
+            current_run_id,
+            "verification",
+            "delivery",
+        );
+        current_status.task_id = "task-current-ready-handoff".to_string();
+        current_status.active_node = "verification".to_string();
+        current_status.next_node = Some("verification".to_string());
+        current_status.status = "ready".to_string();
+        current_status.lifecycle_stage = "verification_ready".to_string();
+        current_status.policy_gate = "not_required".to_string();
+        current_status.handoff_state = "ready_for_dispatch".to_string();
+        current_status.context_state = "sealed".to_string();
+        current_status.checkpoint_kind = "conversation_cursor".to_string();
+        current_status.resume_target = "dispatch.verification".to_string();
+        current_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&current_status)
+            .await
+            .expect("persist current ready handoff status");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: current_run_id.to_string(),
+                    task_id: "task-current-ready-handoff".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": "task-current-ready-handoff",
+                        "run_id": current_run_id,
+                        "task_status": "ready",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "current ready handoff supersedes stale exception takeover"
+                        .to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue current ready handoff".to_string()),
+                    recorded_at: "2026-05-13T00:03:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist current continuation binding");
+
+        let reconciled_stale_status = store
+            .run_graph_status(stale_run_id)
+            .await
+            .expect("read stale status");
+        assert_eq!(reconciled_stale_status.status, "ready");
+        assert_eq!(
+            reconciled_stale_status.resume_target,
+            "dispatch.verification"
+        );
+        assert_eq!(reconciled_stale_status.active_node, "verification");
+
+        let resolved = resolve_default_resume_run_id(&store)
+            .await
+            .expect("stale exception takeover should be skipped");
+        assert_eq!(resolved, current_run_id);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn resolve_runtime_consumption_resume_inputs_for_run_id_allows_matching_explicit_task_graph_binding_lineage(
     ) {
         let nanos = SystemTime::now()
