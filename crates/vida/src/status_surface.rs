@@ -323,6 +323,45 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     },
                     None => None,
                 };
+                let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt
+                    .is_none()
+                    && latest_run_graph_status.is_none()
+                {
+                    match store
+                        .latest_active_exception_takeover_dispatch_receipt()
+                        .await
+                    {
+                        Ok(receipt) => receipt
+                            .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt),
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read latest active exception takeover dispatch receipt: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    }
+                } else {
+                    latest_run_graph_dispatch_receipt
+                };
+                let latest_run_graph_recovery = if latest_run_graph_recovery.is_none() {
+                    match latest_run_graph_dispatch_receipt.as_ref() {
+                        Some(receipt) => {
+                            match store.run_graph_recovery_summary(&receipt.run_id).await {
+                                Ok(summary) => summary,
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to read latest run graph recovery summary: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            }
+                            .into()
+                        }
+                        None => latest_run_graph_recovery,
+                    }
+                } else {
+                    latest_run_graph_recovery
+                };
                 let latest_run_graph_dispatch_receipt_matches_status =
                     latest_run_graph_dispatch_receipt_checkpoint_leakage
                         || state_store::latest_run_graph_dispatch_receipt_matches_status(
@@ -390,18 +429,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let all_tasks = match StateStore::read_fresh_tasks_from_jsonl_snapshot(store.root())
-                {
+                let all_tasks = match store.list_tasks(None, true).await {
                     Ok(tasks) => tasks,
-                    Err(_) => match store.list_tasks(None, true).await {
-                        Ok(tasks) => tasks,
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to read tasks for TaskFlow active work truth: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    },
+                    Err(error) => {
+                        eprintln!("Failed to read tasks for TaskFlow active work truth: {error}");
+                        return ExitCode::from(1);
+                    }
                 };
                 let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
                     match latest_run_graph_status.as_ref() {
@@ -413,6 +446,103 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                         None => (false, false),
                     };
+                let in_progress_tasks = all_tasks
+                    .iter()
+                    .filter(|task| task.status == "in_progress")
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let taskflow_active_candidates =
+                    crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
+                        &in_progress_tasks,
+                    );
+                let latest_run_graph_task_orthogonal_to_taskflow =
+                    latest_run_graph_task_orthogonal_to_taskflow_active_work(
+                        latest_run_graph_status
+                            .as_ref()
+                            .map(|status| status.task_id.as_str()),
+                        latest_run_graph_dispatch_receipt
+                            .as_ref()
+                            .map(|receipt| receipt.run_id.as_str()),
+                        &taskflow_active_candidates,
+                    );
+                let exception_takeover_matches_active_taskflow_work =
+                    exception_takeover_metadata_matches_taskflow_active_work(
+                        store.root(),
+                        latest_run_graph_dispatch_receipt.as_ref(),
+                        &taskflow_active_candidates,
+                    );
+                let latest_run_graph_dispatch_receipt =
+                    if !exception_takeover_matches_active_taskflow_work
+                        && latest_run_graph_task_orthogonal_to_taskflow
+                    {
+                        let mut candidate_run_ids = Vec::new();
+                        for candidate in &taskflow_active_candidates {
+                            if let Some(task_id) = candidate
+                                .get("task_id")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                            {
+                                candidate_run_ids.push(task_id.to_string());
+                            }
+                            candidate_run_ids.extend(
+                                candidate
+                                    .get("parent_task_ids")
+                                    .and_then(serde_json::Value::as_array)
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(serde_json::Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|value| !value.is_empty())
+                                    .map(str::to_string),
+                            );
+                        }
+                        let mut matched_receipt = None;
+                        for candidate_run_id in candidate_run_ids {
+                            match store.run_graph_dispatch_receipt(&candidate_run_id).await {
+                                Ok(receipt) => {
+                                    let receipt = receipt.map(
+                                        crate::state_store::RunGraphDispatchReceiptSummary::from_receipt,
+                                    );
+                                    if exception_takeover_metadata_matches_taskflow_active_work(
+                                        store.root(),
+                                        receipt.as_ref(),
+                                        &taskflow_active_candidates,
+                                    ) {
+                                        matched_receipt = receipt;
+                                        break;
+                                    }
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to read task-bound exception takeover dispatch receipt: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        }
+                        matched_receipt.or(latest_run_graph_dispatch_receipt)
+                    } else {
+                        latest_run_graph_dispatch_receipt
+                    };
+                let latest_run_graph_recovery = match latest_run_graph_dispatch_receipt.as_ref() {
+                    Some(receipt)
+                        if latest_run_graph_recovery
+                            .as_ref()
+                            .is_none_or(|recovery| recovery.run_id != receipt.run_id) =>
+                    {
+                        match store.run_graph_recovery_summary(&receipt.run_id).await {
+                            Ok(summary) => summary.into(),
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read latest run graph recovery summary: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                    _ => latest_run_graph_recovery,
+                };
                 let continuation_binding =
                     crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
                         explicit_continuation_binding.as_ref(),
@@ -442,26 +572,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_task_closed,
                         latest_run_graph_task_missing,
                     );
-                let in_progress_tasks = all_tasks
-                    .iter()
-                    .filter(|task| task.status == "in_progress")
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let taskflow_active_candidates =
-                    crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
-                        &in_progress_tasks,
+                let exception_takeover_matches_active_taskflow_work =
+                    exception_takeover_metadata_matches_taskflow_active_work(
+                        store.root(),
+                        latest_run_graph_dispatch_receipt.as_ref(),
+                        &taskflow_active_candidates,
                     );
                 let latest_run_graph_task_stale_for_write_guard = latest_run_graph_task_missing
                     || latest_run_graph_task_closed
-                    || latest_run_graph_task_orthogonal_to_taskflow_active_work(
-                        latest_run_graph_status
-                            .as_ref()
-                            .map(|status| status.task_id.as_str()),
-                        latest_run_graph_dispatch_receipt
-                            .as_ref()
-                            .map(|receipt| receipt.run_id.as_str()),
-                        &taskflow_active_candidates,
-                    );
+                    || (!exception_takeover_matches_active_taskflow_work
+                        && latest_run_graph_task_orthogonal_to_taskflow);
                 let has_taskflow_active_candidates = !taskflow_active_candidates.is_empty();
                 let continuation_binding =
                     crate::continuation_binding_summary::add_taskflow_active_work_truth(
@@ -783,6 +903,87 @@ fn latest_run_graph_task_orthogonal_to_taskflow_active_work(
         || latest_run_graph_receipt_run_id.is_some_and(|run_id| run_id != candidate_task_id)
 }
 
+fn exception_takeover_metadata_matches_taskflow_active_work(
+    state_root: &std::path::Path,
+    latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    taskflow_active_candidates: &[serde_json::Value],
+) -> bool {
+    let Some(receipt) = latest_receipt else {
+        return false;
+    };
+    if receipt
+        .exception_path_receipt_id
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+        || receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+    {
+        return false;
+    }
+    let [candidate] = taskflow_active_candidates else {
+        return false;
+    };
+    let Some(candidate_task_id) = candidate
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let receipt_run_id = receipt.run_id.trim();
+    let candidate_matches_receipt_run = !receipt_run_id.is_empty()
+        && (candidate_task_id == receipt_run_id
+            || candidate_task_id
+                .strip_prefix(receipt_run_id)
+                .is_some_and(|suffix| suffix.starts_with('-')));
+    let parent_matches_receipt_run = !receipt_run_id.is_empty()
+        && candidate
+            .get("parent_task_ids")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .any(|parent_id| parent_id == receipt_run_id);
+    let metadata_path = state_root
+        .join("lane-exception-path-metadata")
+        .join(format!("{}.json", receipt.run_id));
+    let Some(metadata) = crate::read_json_file_if_present(&metadata_path) else {
+        return false;
+    };
+    let active_bounded_unit_matches = metadata["active_bounded_unit"]
+        .as_str()
+        .map(str::trim)
+        .is_some_and(|unit| {
+            let base_unit = unit.split(':').next().unwrap_or(unit).trim();
+            unit == candidate_task_id
+                || (!base_unit.is_empty()
+                    && candidate_task_id
+                        .strip_prefix(base_unit)
+                        .is_some_and(|suffix| suffix.starts_with('-')))
+                || unit
+                    .split(':')
+                    .any(|segment| segment.trim() == candidate_task_id)
+        });
+    let owned_scope_matches = metadata["owned_write_scope"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .any(|scope| scope == candidate_task_id);
+
+    candidate_matches_receipt_run
+        || parent_matches_receipt_run
+        || active_bounded_unit_matches
+        || owned_scope_matches
+}
+
 async fn build_operator_session_projection_for_status(
     store: &StateStore,
 ) -> Result<serde_json::Value, state_store::StateStoreError> {
@@ -1025,17 +1226,24 @@ async fn refresh_cached_status_projection_runtime_fields(
         crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
             &in_progress_tasks,
         );
-    let latest_run_graph_task_stale_for_write_guard = latest_run_graph_task_missing
-        || latest_run_graph_task_closed
-        || latest_run_graph_task_orthogonal_to_taskflow_active_work(
-            latest_run_graph_status
-                .as_ref()
-                .map(|status| status.task_id.as_str()),
-            latest_run_graph_dispatch_receipt
-                .as_ref()
-                .map(|receipt| receipt.run_id.as_str()),
+    let exception_takeover_matches_active_taskflow_work =
+        exception_takeover_metadata_matches_taskflow_active_work(
+            store.root(),
+            latest_run_graph_dispatch_receipt.as_ref(),
             &taskflow_active_candidates,
         );
+    let latest_run_graph_task_stale_for_write_guard = latest_run_graph_task_missing
+        || latest_run_graph_task_closed
+        || (!exception_takeover_matches_active_taskflow_work
+            && latest_run_graph_task_orthogonal_to_taskflow_active_work(
+                latest_run_graph_status
+                    .as_ref()
+                    .map(|status| status.task_id.as_str()),
+                latest_run_graph_dispatch_receipt
+                    .as_ref()
+                    .map(|receipt| receipt.run_id.as_str()),
+                &taskflow_active_candidates,
+            ));
     let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
         continuation_binding,
         taskflow_active_candidates,
@@ -1352,6 +1560,211 @@ mod tests {
                 ]
             )
         );
+    }
+
+    #[test]
+    fn exception_takeover_metadata_accepts_bound_active_taskflow_scope() {
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-exception-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let metadata_dir = root.join("lane-exception-path-metadata");
+        fs::create_dir_all(&metadata_dir).expect("metadata dir should create");
+        fs::write(
+            metadata_dir.join("run-1.json"),
+            serde_json::json!({
+                "active_bounded_unit": "architecture-refactor-lane-supersede-status-root-write-mismatch-defect:test_author",
+                "owned_write_scope": ["crates/vida/src"]
+            })
+            .to_string(),
+        )
+        .expect("metadata should write");
+
+        let receipt = state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-1".to_string(),
+            dispatch_target: "test_author".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("supersede-1".to_string()),
+            exception_path_receipt_id: Some("exception-1".to_string()),
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida lane supersede".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-06-03T00:00:00Z".to_string(),
+        };
+        let active_candidate = serde_json::json!({
+            "task_id": "architecture-refactor-lane-supersede-status-root-write-mismatch-defect-test-author-code",
+            "status": "in_progress"
+        });
+
+        assert!(
+            super::exception_takeover_metadata_matches_taskflow_active_work(
+                &root,
+                Some(&receipt),
+                &[active_candidate]
+            )
+        );
+        let closeout_candidate = serde_json::json!({
+            "task_id": "architecture-refactor-lane-status-defect-closeout-todo",
+            "parent_task_ids": ["run-1"],
+            "status": "in_progress"
+        });
+        assert!(
+            super::exception_takeover_metadata_matches_taskflow_active_work(
+                &root,
+                Some(&receipt),
+                &[closeout_candidate]
+            )
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn status_root_session_write_guard_uses_active_exception_takeover_when_current_session_status_skips_superseded_lane(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-active-exception-write-guard-{}-{nanos}",
+            std::process::id()
+        ));
+        let metadata_dir = root.join("lane-exception-path-metadata");
+        fs::create_dir_all(&metadata_dir).expect("metadata dir should create");
+        let run_id = "architecture-refactor-lane-supersede-status-root-write-mismatch-defect";
+        fs::write(
+            metadata_dir.join(format!("{run_id}.json")),
+            serde_json::json!({
+                "active_bounded_unit": format!("{run_id}:coach:exception-takeover"),
+                "owned_write_scope": ["crates/vida/src/status_surface.rs"]
+            })
+            .to_string(),
+        )
+        .expect("metadata should write");
+
+        let receipt = state_store::RunGraphDispatchReceiptSummary {
+            run_id: run_id.to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("supersede-1".to_string()),
+            exception_path_receipt_id: Some("exception-1".to_string()),
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida lane supersede".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("vibe_cli".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-06-03T00:00:00Z".to_string(),
+        };
+        let recovery = state_store::RunGraphRecoverySummary {
+            run_id: run_id.to_string(),
+            task_id: run_id.to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "coach_blocked".to_string(),
+            resume_node: None,
+            resume_status: "ready".to_string(),
+            checkpoint_kind: "conversation_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: true,
+            delegation_gate: state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                lifecycle_stage: "coach_blocked".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+            },
+        };
+        let active_candidate = serde_json::json!({
+            "task_id": format!("{run_id}-test-author-code"),
+            "status": "in_progress"
+        });
+
+        let latest_run_graph_task_stale =
+            !super::exception_takeover_metadata_matches_taskflow_active_work(
+                &root,
+                Some(&receipt),
+                &[active_candidate],
+            );
+        let guard = serde_json::json!({
+            "status": "blocked_by_default",
+            "root_session_role": "orchestrator",
+            "lawful_write_surface": "vida agent-init",
+            "explicit_user_ordered_agent_mode_is_sticky": true,
+            "local_write_requires_exception_path": true,
+            "host_local_write_capability_is_not_authority": true,
+            "root_local_write_allowed": false,
+            "root_local_write_allowed_for_only_these_paths": [],
+            "required_exception_evidence": "exception required",
+            "pre_write_checkpoint_required": true
+        });
+        let payload = crate::status_surface_write_guard::merge_live_exception_takeover_write_guard_with_task_authority(
+            guard,
+            &root,
+            Some(&receipt),
+            Some(&recovery),
+            latest_run_graph_task_stale,
+        );
+
+        assert_eq!(payload["status"], "exception_takeover_active");
+        assert_eq!(payload["root_local_write_allowed"], true);
+        assert_eq!(payload["local_exception_takeover_state"], "active");
+        assert_eq!(
+            payload["root_local_write_allowed_for_only_these_paths"],
+            serde_json::json!(["crates/vida/src/status_surface.rs"])
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

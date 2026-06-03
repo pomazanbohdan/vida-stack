@@ -871,8 +871,17 @@ pub(crate) fn taskflow_active_candidates_from_tasks(
     taskflow_leaf_active_tasks(tasks)
         .into_iter()
         .map(|task| {
+            let parent_task_ids = task
+                .dependencies
+                .iter()
+                .filter(|dependency| {
+                    dependency.edge_type == "parent-child" && dependency.issue_id == task.id
+                })
+                .map(|dependency| dependency.depends_on_id.as_str())
+                .collect::<Vec<_>>();
             serde_json::json!({
                 "task_id": task.id,
+                "parent_task_ids": parent_task_ids,
                 "display_id": task.display_id,
                 "status": task.status,
                 "issue_type": task.issue_type,
