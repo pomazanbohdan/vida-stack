@@ -196,17 +196,18 @@ fn task_proof_status_payload(
         .filter(|target| target.status != "satisfied")
         .map(|target| target.target.clone())
         .collect::<Vec<_>>();
+    let quoted_task_id = crate::shell_quote(&task.id);
     let next_required_command = if configured_count == 0 {
         format!(
             "Add proof targets with `vida task update {} --proof-target <command-or-artifact> --json`.",
-            task.id
+            quoted_task_id
         )
     } else if missing_count == 0 {
         "No proof action required; all configured proof targets have close evidence.".to_string()
     } else {
         format!(
             "Run or attach missing proof evidence, then inspect again with `vida task proof status {} --json`.",
-            task.id
+            quoted_task_id
         )
     };
     serde_json::json!({
@@ -6797,6 +6798,36 @@ mod tests {
             .as_str()
             .expect("next command should render")
             .contains("vida task update proofless-task --proof-target"));
+    }
+
+    #[test]
+    fn task_proof_status_payload_quotes_unconfigured_task_id_command_hint() {
+        let task = owned_task_record("safe; touch /tmp/vida_pwned #", vec![]);
+
+        let payload = super::task_proof_status_payload(&task, None);
+        let next_required_command = payload["next_required_command"]
+            .as_str()
+            .expect("next command should render");
+
+        assert!(next_required_command
+            .contains("vida task update 'safe; touch /tmp/vida_pwned #' --proof-target"));
+        assert!(!next_required_command.contains("vida task update safe; touch"));
+    }
+
+    #[test]
+    fn task_proof_status_payload_quotes_missing_proof_task_id_command_hint() {
+        let mut task = owned_task_record("safe; touch /tmp/vida_pwned #", vec![]);
+        task.status = "closed".to_string();
+        task.planner_metadata.proof_targets = vec!["cargo test -p vida".to_string()];
+
+        let payload = super::task_proof_status_payload(&task, None);
+        let next_required_command = payload["next_required_command"]
+            .as_str()
+            .expect("next command should render");
+
+        assert!(next_required_command
+            .contains("vida task proof status 'safe; touch /tmp/vida_pwned #' --json"));
+        assert!(!next_required_command.contains("vida task proof status safe; touch"));
     }
 
     #[test]
