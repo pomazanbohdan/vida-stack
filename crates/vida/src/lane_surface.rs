@@ -3614,7 +3614,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             }
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &updated_summary,
+                recovery.as_ref(),
+                Some(&metadata),
+            );
             let envelope = build_lane_envelope(
                 updated_summary,
                 status,
@@ -5387,7 +5391,7 @@ mod tests {
 
         let mut args = sample_exception_takeover_args(run_id, "receipt-activate-1");
         args.insert(args.len() - 1, "--activate".to_string());
-        assert_eq!(run_lane(ProxyArgs { args }).await, ExitCode::from(2));
+        assert_eq!(run_lane(ProxyArgs { args }).await, ExitCode::SUCCESS);
 
         let store = StateStore::open_existing(root.clone())
             .await
