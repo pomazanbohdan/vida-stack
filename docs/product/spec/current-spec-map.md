@@ -90,6 +90,9 @@ Companion rule:
 8. [host-agent-bridge-adapter-contract-design.md](host-agent-bridge-adapter-contract-design.md)
    Config families: `vida.config.yaml -> host_environment.host_agent_bridge_contract`, `host_environment.systems.<system>.host_tool_bridge`, TaskFlow host-bridge request/result/receipt adapters for Codex, Claude Code, Pi, Vibe Kanban, OpenCode, and custom host adapters
    Registered path: `docs/product/spec/host-agent-bridge-adapter-contract-design.md`
+9. [vida-coder-service-mode-executor-design.md](vida-coder-service-mode-executor-design.md)
+   Config families: `vida.config.yaml -> agent_system.subagents.vida_coder`, `vida.config.yaml -> host_environment.systems.vida_coder`, `vida.config.yaml -> service`, `vida coder`, `vida service`, typed VIDA runtime tools, session state, service worker leases, provider auth/model readiness, MCP policy gateway, and receipt-backed TaskFlow execution
+   Registered path: `docs/product/spec/vida-coder-service-mode-executor-design.md`
 9. [hybrid-host-executor-semantics-host-environment-design.md](hybrid-host-executor-semantics-host-environment-design.md)
    Config families: `vida.config.yaml -> host_environment`, `agent_system.subagents`, policy-selected internal/external executor semantics, and host posture versus executor backend separation
    Registered path: `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
