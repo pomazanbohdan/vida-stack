@@ -4730,6 +4730,26 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
             Ok(summary) => summary,
             Err(_) => None,
         };
+    if let Some(active_exception_receipt) = store
+        .latest_active_exception_takeover_dispatch_receipt()
+        .await
+        .map_err(|error| {
+            format!("Failed to read latest active exception takeover receipt: {error}")
+        })?
+    {
+        let active_exception_run_id = active_exception_receipt.run_id.trim();
+        let current_session_can_mutate_active_exception = store
+            .current_session_can_mutate_run_graph_run(active_exception_run_id)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to validate current-session ownership for active exception takeover run `{active_exception_run_id}`: {error}"
+                )
+        })?;
+        if current_session_can_mutate_active_exception {
+            return Ok(active_exception_run_id.to_string());
+        }
+    }
     let continuation_binding_evidence_ambiguous = latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
