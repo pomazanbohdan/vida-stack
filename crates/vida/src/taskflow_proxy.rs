@@ -1440,9 +1440,6 @@ fn continuation_dispatch_gate_from_decision(
     if decision.candidate_task_context.admissible_now {
         return None;
     }
-    if terminal_continue_gate_allows_ready_head_dispatch(decision) {
-        return None;
-    }
 
     let mut blocker_codes = decision.blocker_codes.clone();
     blocker_codes.extend(graph_summary_runtime_gate_blocker_codes(decision));
@@ -1478,24 +1475,11 @@ fn continuation_dispatch_gate_from_decision(
     })
 }
 
-fn terminal_continue_gate_allows_ready_head_dispatch(decision: &TaskflowNextDecision) -> bool {
-    decision.candidate_task_context.admissibility_gate
-        == "terminal_continue_snapshot_without_next_bounded_unit"
-        && decision.candidate_task_context.ready_head.is_some()
-}
-
 fn apply_scheduler_continuation_dispatch_gate(
     plan: &mut TaskflowSchedulerDispatchPlan,
     gate: &TaskflowContinuationDispatchGate,
 ) {
     if gate.admissible {
-        return;
-    }
-    if gate.admissibility_gate == "terminal_continue_snapshot_without_next_bounded_unit"
-        && !plan.selected_task_ids.is_empty()
-    {
-        push_unique_strings(&mut plan.next_actions, gate.next_actions.clone());
-        plan.dispatch_receipt.preview_only_reason = None;
         return;
     }
 
@@ -10791,7 +10775,7 @@ agent_system:
     }
 
     #[test]
-    fn scheduler_dispatch_plan_keeps_ready_selection_when_continuation_gate_is_terminal() {
+    fn scheduler_dispatch_plan_blocks_ready_selection_when_continuation_gate_is_terminal() {
         let projection = crate::state_store::TaskSchedulingProjection {
             current_task_id: Some("ready-head".to_string()),
             ready: vec![scheduling_candidate(
@@ -10844,35 +10828,36 @@ agent_system:
             ],
             next_actions: vec!["bind an explicit next bounded unit".to_string()],
         };
-        assert!(
-            super::continuation_dispatch_gate_from_decision(&decision, &summary).is_none(),
-            "terminal continuation gate should not block an already selected ready task"
+        let derived_gate = super::continuation_dispatch_gate_from_decision(&decision, &summary)
+            .expect("terminal continuation gate must fail closed even with a ready head");
+        assert_eq!(
+            derived_gate.admissibility_gate,
+            "terminal_continue_snapshot_without_next_bounded_unit"
         );
+        assert!(derived_gate
+            .blocker_codes
+            .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string()));
 
         super::apply_scheduler_continuation_dispatch_gate(&mut plan, &gate);
 
-        assert_eq!(
-            plan.selected_primary_task
-                .as_ref()
-                .map(|task| task.id.as_str()),
-            Some("ready-head")
-        );
-        assert_eq!(plan.status, "pass");
+        assert_eq!(plan.selected_primary_task, None);
+        assert_eq!(plan.status, "blocked");
         assert!(plan.selected_parallel_tasks.is_empty());
-        assert_eq!(plan.selected_task_ids, vec!["ready-head".to_string()]);
-        assert_eq!(plan.reservations.len(), 1);
-        assert!(!plan
+        assert!(plan.selected_task_ids.is_empty());
+        assert!(plan.reservations.is_empty());
+        assert!(plan
             .blocker_codes
             .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string()));
-        assert!(!plan
+        assert!(plan
             .blocker_codes
             .contains(&"continuation_binding_ambiguous".to_string()));
-        assert_eq!(plan.dispatch_receipt.dispatch_status, "pass");
+        assert_eq!(plan.dispatch_receipt.dispatch_status, "blocked");
+        assert!(plan.dispatch_receipt.selected_task_ids.is_empty());
+        assert!(plan.dispatch_receipt.reservation_ids.is_empty());
         assert_eq!(
-            plan.dispatch_receipt.selected_task_ids,
-            vec!["ready-head".to_string()]
+            plan.dispatch_receipt.preview_only_reason.as_deref(),
+            Some("terminal_continue_snapshot_without_next_bounded_unit")
         );
-        assert_eq!(plan.dispatch_receipt.reservation_ids.len(), 1);
         assert!(plan
             .next_actions
             .contains(&"bind an explicit next bounded unit".to_string()));

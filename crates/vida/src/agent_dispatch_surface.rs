@@ -1735,26 +1735,6 @@ fn apply_continuation_dispatch_gate_to_preview(
     if gate.admissible {
         return;
     }
-    if gate.admissibility_gate == "terminal_continue_snapshot_without_next_bounded_unit"
-        && !preview.selected_lanes.is_empty()
-    {
-        for action in &gate.next_actions {
-            if !preview.next_actions.iter().any(|value| value == action) {
-                preview.next_actions.push(action.clone());
-            }
-        }
-        if let Some(planner) = preview.parallelization_planner.as_object_mut() {
-            planner.insert(
-                "terminal_continue_gate_advisory".to_string(),
-                serde_json::json!(true),
-            );
-            planner.insert(
-                "blocked_by_continuation_gate".to_string(),
-                serde_json::json!(false),
-            );
-        }
-        return;
-    }
 
     preview.status = "blocked".to_string();
     preview.selected_lanes.clear();
@@ -4263,7 +4243,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_dispatch_next_preview_terminal_gate_keeps_selected_lanes() {
+    fn agent_dispatch_next_preview_terminal_gate_clears_selected_lanes() {
         let projection = TaskSchedulingProjection {
             current_task_id: Some("task-a".to_string()),
             ready: vec![candidate("task-a", "Task A", true, true, Vec::new())],
@@ -4298,29 +4278,25 @@ mod tests {
             },
         );
 
-        assert_eq!(preview.status, "pass");
-        assert_eq!(preview.lanes_selected, 1);
-        assert_eq!(preview.selected_lanes.len(), 1);
-        assert!(!preview
+        assert_eq!(preview.status, "blocked");
+        assert_eq!(preview.lanes_selected, 0);
+        assert!(preview.selected_lanes.is_empty());
+        assert!(preview
             .blocker_codes
             .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string()));
-        assert!(!preview
+        assert!(preview
             .blocker_codes
             .contains(&"continuation_binding_ambiguous".to_string()));
         assert!(preview
             .next_actions
             .contains(&"bind an explicit next bounded unit".to_string()));
         assert_eq!(
-            preview.parallelization_planner["terminal_continue_gate_advisory"],
-            true
-        );
-        assert_eq!(
             preview.parallelization_planner["blocked_by_continuation_gate"],
-            false
+            true
         );
         assert!(preview.parallelization_planner["packet_proposals"]
             .as_array()
-            .is_some_and(|proposals| !proposals.is_empty()));
+            .is_some_and(|proposals| proposals.is_empty()));
     }
 
     #[test]
