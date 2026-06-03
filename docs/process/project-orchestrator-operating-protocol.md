@@ -234,7 +234,7 @@ Before starting a new bounded task, the orchestrator should decide:
 
 1. whether `vibe_cli` can prefetch read-only context or review likely risks in parallel with local inspection,
 2. whether `jcode_nim_cli` should run the same bounded read-only question as an independent NIM-backed advisory pass,
-3. whether the research stage should use `external_readonly_complete` or `external_patch_proposal`,
+3. whether the research stage should use `external_readonly_complete`, `external_patch_proposal`, or both in parallel,
 4. whether the write lane can be delegated to internal low before medium,
 5. whether a medium coach/test-author lane is enough before escalating to high,
 6. whether the next command can be replaced by a compact runtime surface, snapshot query, or previously refreshed `.vida/exports/tasks.snapshot.jsonl`,
@@ -246,6 +246,7 @@ Research-stage delegation modes:
 
 1. `external_readonly_complete` lets an external carrier fully complete analysis, specification, review, or proof-diagnosis work and return a structured report with evidence refs, risks, and a recommended next step. The root orchestrator validates that report before mutating TaskFlow or accepting closure.
 2. `external_patch_proposal` lets an external carrier prepare a patch proposal, proposed diff or file plan, verification commands, and rollback notes. The root orchestrator applies or rejects the diff, runs proof, commits, pushes, and closes TaskFlow.
+3. Every task research intake must record both mode decisions: `external_readonly_complete` as the read-only evidence path and `external_patch_proposal` as the patch/diff proposal path. A mode may be marked `not_run` only with a reason such as no useful independent question, no lawful owned paths, unavailable carrier, duplicate output, or task risk too low for the extra attempt.
 
 Premature micro-splitting rule:
 

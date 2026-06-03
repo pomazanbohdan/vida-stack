@@ -76,6 +76,27 @@ Required policy fields:
 6. `freshness_boundary`: task revision, git revision, runtime binding, and
    optional packet hash that the attempt must match.
 
+## Task Research Intake Modes
+
+Every task research stage must model the two external advisory modes separately:
+
+1. `external_readonly_complete`: an external carrier completes the analysis,
+   specification, review, or proof-diagnosis slice and returns a structured
+   report. This mode is read-only and may only become canonical after root
+   validation and a consolidation receipt.
+2. `external_patch_proposal`: an external carrier prepares a patch proposal,
+   proposed diff or file plan, verification commands, and rollback notes. The
+   root orchestrator applies or rejects the proposal, runs proof, commits,
+   pushes, and closes TaskFlow.
+
+The research intake record must include both mode decisions for the task. A mode
+may be `submitted`, `running`, `produced`, `accepted`, `rejected`, `stale`,
+`failed`, or `not_run`. `not_run` requires a reason, such as no independent
+question, no lawful owned path, unavailable carrier, duplicate expected output,
+or a task risk tier too low for an extra external attempt. Complex,
+high-ambiguity, or high-risk tasks should run both modes in parallel before the
+consolidator records the canonical stage result.
+
 ## Attempt Ledger
 
 Runtime state should persist a `TaskAttempt` record:
@@ -234,5 +255,5 @@ schema_version: '1'
 status: proposed
 source_path: docs/process/multi-agent-stage-ensemble-protocol.md
 created_at: 2026-06-03T14:40:00+03:00
-updated_at: 2026-06-03T14:40:00+03:00
+updated_at: 2026-06-03T18:30:00+03:00
 changelog_ref: multi-agent-stage-ensemble-protocol.changelog.jsonl
