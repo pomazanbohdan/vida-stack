@@ -209,6 +209,11 @@ pub(crate) enum AgentCommand {
         about = "select a configured carrier/model/reasoning profile for one runtime role and task class"
     )]
     Select(AgentSelectArgs),
+    #[command(
+        name = "host-bridge",
+        about = "render a pending host-tool bridge request as an executable parent-host adapter contract"
+    )]
+    HostBridge(AgentHostBridgeArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -257,6 +262,18 @@ pub(crate) struct AgentSelectArgs {
     pub(crate) state_dir: Option<PathBuf>,
 
     #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct AgentHostBridgeArgs {
+    #[arg(
+        long = "request",
+        help = "Path to a pending host_tool_bridge_request JSON artifact"
+    )]
+    pub(crate) request: PathBuf,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
@@ -2067,6 +2084,7 @@ mod tests {
             .expect_err("help should render clap display error");
         let agent_help = agent_error.to_string();
         assert!(agent_help.contains("dispatch-next"));
+        assert!(agent_help.contains("host-bridge"));
 
         let dispatch_error = Cli::try_parse_from(["vida", "agent", "dispatch-next", "--help"])
             .expect_err("help should render clap display error");
@@ -2147,6 +2165,33 @@ mod tests {
         assert_eq!(select.runtime_role, "verifier");
         assert_eq!(select.task_class, "verification");
         assert!(select.json);
+
+        let host_bridge_error = Cli::try_parse_from(["vida", "agent", "host-bridge", "--help"])
+            .expect_err("help should render clap display error");
+        let host_bridge_help = host_bridge_error.to_string();
+        assert!(host_bridge_help.contains("--request"));
+        assert!(host_bridge_help.contains("--json"));
+
+        let parsed_host_bridge = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "host-bridge",
+            "--request",
+            "/tmp/host-bridge-request.json",
+            "--json",
+        ])
+        .expect("agent host-bridge should parse");
+        let Some(super::Command::Agent(agent_args)) = parsed_host_bridge.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::HostBridge(host_bridge) = agent_args.command else {
+            panic!("agent host-bridge command should parse");
+        };
+        assert_eq!(
+            host_bridge.request.display().to_string(),
+            "/tmp/host-bridge-request.json"
+        );
+        assert!(host_bridge.json);
     }
 
     #[test]

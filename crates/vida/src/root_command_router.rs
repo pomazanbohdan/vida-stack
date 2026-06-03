@@ -182,6 +182,7 @@ fn agent_command_needs_project_root(args: &AgentArgs) -> bool {
     match &args.command {
         AgentCommand::DispatchNext(command) => command.state_dir.is_none(),
         AgentCommand::Select(command) => command.state_dir.is_none(),
+        AgentCommand::HostBridge(_) => true,
     }
 }
 

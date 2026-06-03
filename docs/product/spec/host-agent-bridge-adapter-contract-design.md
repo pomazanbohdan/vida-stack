@@ -158,6 +158,19 @@ If the current environment does not expose the configured adapter capability, VI
 
 The adapter is parent-session code, not a child process launched by `vida.exe`. VIDA may emit the request and validate completion, but the host adapter owns native host-tool invocation because those tools are not available inside the binary process.
 
+Before invoking host tools, the adapter or operator can normalize and validate a
+pending request with:
+
+```powershell
+vida agent host-bridge --request <request_path> --json
+```
+
+The command is read-only. It returns the required `multi_agent_v1.spawn_agent`,
+`multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent` sequence, the
+expected result/receipt artifact paths, capacity blocker vocabulary, and the
+canonical `vida lane complete ... --host-bridge-request ...` command. It must not
+write completion artifacts or claim execution by itself.
+
 Minimum successful result:
 
 ```json
@@ -232,6 +245,7 @@ Internal host bridge transport must not be prelaunch-classified as `internal_cod
 
 - `cargo test -p vida internal_host_tool_bridge_transport_does_not_require_codex_exec_dispatch -- --nocapture`
 - `cargo test -p vida internal_host_bridge_transport_defers_to_host_tool_bridge_request_path -- --nocapture`
+- `cargo test -p vida host_bridge_adapter -- --nocapture`
 - `cargo test -p vida internal_host_bridge_receipt_mode_counts_as_receipt_backed_completion_support -- --nocapture`
 - `cargo test -p vida lane_complete_records_host_bridge_result_and_receipt_evidence -- --nocapture --test-threads=1`
 - `vida taskflow route explain --task-class implementation --runtime-role worker --json`

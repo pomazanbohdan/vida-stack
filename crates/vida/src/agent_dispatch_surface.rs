@@ -1,9 +1,9 @@
-use std::process::ExitCode;
+use std::{path::Path, process::ExitCode};
 
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot;
 use crate::{
     state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
-    AgentSelectArgs,
+    AgentHostBridgeArgs, AgentSelectArgs,
 };
 
 const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
@@ -85,6 +85,227 @@ fn agent_dispatch_source_surfaces() -> Vec<String> {
         "vida agent-init --role worker <task-id> --json".to_string(),
         "vida agent-init --role <runtime-role> <task-id> --json".to_string(),
     ]
+}
+
+fn host_bridge_required_string<'a>(
+    request: &'a serde_json::Value,
+    field: &str,
+    missing: &mut Vec<String>,
+) -> Option<&'a str> {
+    let value = request
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if value.is_none() {
+        missing.push(field.to_string());
+    }
+    value
+}
+
+fn read_host_bridge_request(path: &Path) -> Result<serde_json::Value, String> {
+    let raw = std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "Failed to read host bridge request `{}`: {error}",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "Failed to decode host bridge request `{}` as JSON: {error}",
+            path.display()
+        )
+    })
+}
+
+fn host_bridge_adapter_payload(
+    request_path: &Path,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    let mut missing = Vec::new();
+    let run_id = host_bridge_required_string(request, "run_id", &mut missing);
+    let dispatch_target = host_bridge_required_string(request, "dispatch_target", &mut missing);
+    let packet_path = host_bridge_required_string(request, "packet_path", &mut missing);
+    let backend_id = host_bridge_required_string(request, "backend_id", &mut missing);
+    let carrier_id = host_bridge_required_string(request, "carrier_id", &mut missing);
+    let adapter_kind = host_bridge_required_string(request, "adapter_kind", &mut missing);
+    let adapter_capability_id =
+        host_bridge_required_string(request, "adapter_capability_id", &mut missing);
+    let result_path = host_bridge_required_string(request, "result_path", &mut missing);
+    let receipt_path = host_bridge_required_string(request, "receipt_path", &mut missing);
+    let request_status = request
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or("unknown");
+    let dispatch_transport = request
+        .get("dispatch_transport")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let invocation_mode = request
+        .get("invocation_mode")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("parent_host_tool_api");
+    let mut blocker_codes = Vec::new();
+    if !missing.is_empty() {
+        blocker_codes.push("host_bridge_request_missing_fields".to_string());
+    }
+    if dispatch_transport != Some("host_tool_bridge") {
+        blocker_codes.push("host_bridge_request_wrong_transport".to_string());
+    }
+    if request_status != "pending" {
+        blocker_codes.push("host_bridge_request_not_pending".to_string());
+    }
+    if adapter_capability_id != Some("codex.multi_agent_v1") {
+        blocker_codes.push("host_tool_capability_missing".to_string());
+    }
+    let status = if blocker_codes.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
+    let receipt_id = match (run_id, dispatch_target) {
+        (Some(run_id), Some(dispatch_target)) => {
+            format!("{run_id}-{dispatch_target}-host-bridge-receipt")
+        }
+        _ => "host-bridge-receipt".to_string(),
+    };
+    let host_agent_id_placeholder = "<host-agent-id>";
+    let completion_command = if let Some(run_id) = run_id {
+        format!(
+            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-summary {} --json",
+            crate::shell_quote(run_id),
+            crate::shell_quote(&receipt_id),
+            crate::shell_quote(&request_path.display().to_string()),
+            crate::shell_quote(host_agent_id_placeholder),
+            crate::shell_quote("parent host adapter completed receipt-backed execution")
+        )
+    } else {
+        "repair host bridge request run_id before completion".to_string()
+    };
+    let host_tool_calls = if status == "pass" {
+        serde_json::json!([
+            {
+                "tool": "multi_agent_v1.spawn_agent",
+                "purpose": "start the selected parent-host subagent for the bounded dispatch packet",
+                "adapter_kind": adapter_kind,
+                "adapter_capability_id": adapter_capability_id,
+                "packet_path": packet_path,
+                "backend_id": backend_id,
+                "carrier_id": carrier_id
+            },
+            {
+                "tool": "multi_agent_v1.wait_agent",
+                "purpose": "wait for receipt-backed completion evidence from the spawned host agent"
+            },
+            {
+                "tool": "multi_agent_v1.close_agent",
+                "purpose": "release host thread capacity after completion or blocked result capture"
+            }
+        ])
+    } else {
+        serde_json::json!([])
+    };
+    serde_json::json!({
+        "surface": "vida agent host-bridge",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "shared_fields": {
+            "status": status,
+            "blocker_codes": blocker_codes,
+            "next_actions": if status == "pass" {
+                vec![completion_command.clone()]
+            } else {
+                vec!["repair the host bridge request or selected host adapter capability before invoking parent host tools".to_string()]
+            },
+            "artifact_refs": {
+                "request_path": request_path.display().to_string(),
+                "packet_path": packet_path,
+                "result_path": result_path,
+                "receipt_path": receipt_path
+            }
+        },
+        "operator_contracts": {
+            "contract_id": "host-agent-bridge-adapter-v1",
+            "schema_version": "1",
+            "status": status,
+            "blocker_codes": blocker_codes,
+            "next_actions": if status == "pass" {
+                vec![completion_command.clone()]
+            } else {
+                vec!["repair the host bridge request or selected host adapter capability before invoking parent host tools".to_string()]
+            },
+            "artifact_refs": {
+                "request_path": request_path.display().to_string(),
+                "packet_path": packet_path,
+                "result_path": result_path,
+                "receipt_path": receipt_path
+            }
+        },
+        "host_bridge": {
+            "request_path": request_path.display().to_string(),
+            "request_status": request_status,
+            "run_id": run_id,
+            "dispatch_target": dispatch_target,
+            "packet_path": packet_path,
+            "backend_id": backend_id,
+            "carrier_id": carrier_id,
+            "dispatch_transport": dispatch_transport,
+            "adapter_kind": adapter_kind,
+            "adapter_capability_id": adapter_capability_id,
+            "invocation_mode": invocation_mode,
+            "missing_fields": missing,
+            "result_path": result_path,
+            "receipt_path": receipt_path,
+            "receipt_id": receipt_id,
+            "completion_command": completion_command,
+            "host_tool_calls": host_tool_calls,
+            "blocked_result_contract": {
+                "execution_state": "blocked",
+                "allowed_blocker_codes": [
+                    "host_agent_capacity_unavailable",
+                    "host_tool_capability_missing",
+                    "host_agent_execution_failed"
+                ]
+            },
+            "binary_boundary": "vida.exe emits and validates bridge artifacts; parent host adapter invokes native host tools"
+        }
+    })
+}
+
+fn emit_host_bridge_payload(payload: &serde_json::Value, as_json: bool) -> ExitCode {
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(payload)
+                .expect("host bridge adapter payload should render")
+        );
+    } else {
+        println!(
+            "agent host-bridge: {}",
+            payload["status"].as_str().unwrap_or("unknown")
+        );
+        if let Some(command) = payload["host_bridge"]["completion_command"].as_str() {
+            println!("completion: {command}");
+        }
+        if let Some(blockers) = payload["blocker_codes"].as_array() {
+            if !blockers.is_empty() {
+                let rendered = blockers
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("blockers: {rendered}");
+            }
+        }
+    }
+    if payload["status"].as_str() == Some("pass") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 fn build_parallelization_planner(
@@ -1910,6 +2131,43 @@ pub(crate) async fn run_agent(args: AgentArgs) -> ExitCode {
     match args.command {
         AgentCommand::DispatchNext(command) => run_agent_dispatch_next(command).await,
         AgentCommand::Select(command) => run_agent_select(command).await,
+        AgentCommand::HostBridge(command) => run_agent_host_bridge(command).await,
+    }
+}
+
+async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
+    match read_host_bridge_request(&command.request) {
+        Ok(request) => {
+            let payload = host_bridge_adapter_payload(&command.request, &request);
+            emit_host_bridge_payload(&payload, command.json)
+        }
+        Err(error) => {
+            let payload = serde_json::json!({
+                "surface": "vida agent host-bridge",
+                "status": "blocked",
+                "blocker_codes": ["host_bridge_request_unreadable"],
+                "shared_fields": {
+                    "status": "blocked",
+                    "blocker_codes": ["host_bridge_request_unreadable"],
+                    "next_actions": ["provide a readable host_tool_bridge_request JSON artifact"],
+                    "artifact_refs": {
+                        "request_path": command.request.display().to_string()
+                    }
+                },
+                "operator_contracts": {
+                    "contract_id": "host-agent-bridge-adapter-v1",
+                    "schema_version": "1",
+                    "status": "blocked",
+                    "blocker_codes": ["host_bridge_request_unreadable"],
+                    "next_actions": ["provide a readable host_tool_bridge_request JSON artifact"],
+                    "artifact_refs": {
+                        "request_path": command.request.display().to_string()
+                    }
+                },
+                "error": error
+            });
+            emit_host_bridge_payload(&payload, command.json)
+        }
     }
 }
 
@@ -2280,8 +2538,8 @@ mod tests {
     use super::{
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
         dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
-        resolve_agent_dispatch_next_current_task_ids, single_in_progress_task_id_from_rows,
-        state_store,
+        host_bridge_adapter_payload, resolve_agent_dispatch_next_current_task_ids,
+        single_in_progress_task_id_from_rows, state_store,
     };
     use crate::state_store::{
         CreateTaskRequest, TaskExecutionSemantics, TaskRecord, TaskSchedulingCandidate,
@@ -2291,6 +2549,89 @@ mod tests {
     use crate::test_cli_support::{cli, EnvVarGuard};
     use crate::AgentDispatchNextArgs;
     use std::process::ExitCode;
+
+    #[test]
+    fn host_bridge_adapter_payload_renders_parent_host_tool_contract() {
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-1",
+            "run_id": "run-1",
+            "dispatch_target": "implementer",
+            "packet_path": "packet.json",
+            "runtime_role": "worker",
+            "task_class": "implementation",
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": "request.json",
+            "result_path": "result.json",
+            "receipt_path": "receipt.json"
+        });
+        let payload = host_bridge_adapter_payload(std::path::Path::new("request.json"), &request);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .unwrap()
+            .starts_with("vida lane complete run-1 "));
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .unwrap()
+            .contains("--host-bridge-request request.json"));
+        let calls = payload["host_bridge"]["host_tool_calls"]
+            .as_array()
+            .expect("host tool calls should render");
+        assert_eq!(calls[0]["tool"], "multi_agent_v1.spawn_agent");
+        assert_eq!(calls[1]["tool"], "multi_agent_v1.wait_agent");
+        assert_eq!(calls[2]["tool"], "multi_agent_v1.close_agent");
+        assert_eq!(
+            payload["host_bridge"]["blocked_result_contract"]["allowed_blocker_codes"][0],
+            "host_agent_capacity_unavailable"
+        );
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_blocks_wrong_transport_and_capability() {
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-1",
+            "run_id": "run-1",
+            "dispatch_target": "implementer",
+            "packet_path": "packet.json",
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "codex_cli_exec",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "missing.capability",
+            "result_path": "result.json",
+            "receipt_path": "receipt.json"
+        });
+        let payload = host_bridge_adapter_payload(std::path::Path::new("request.json"), &request);
+
+        assert_eq!(payload["status"], "blocked");
+        let blockers = payload["blocker_codes"]
+            .as_array()
+            .expect("blockers should render")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(blockers.contains(&"host_bridge_request_wrong_transport"));
+        assert!(blockers.contains(&"host_tool_capability_missing"));
+        assert_eq!(
+            payload["host_bridge"]["host_tool_calls"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+    }
 
     #[test]
     fn agent_dispatch_next_scheduler_keeps_explicit_binding_implicit() {
