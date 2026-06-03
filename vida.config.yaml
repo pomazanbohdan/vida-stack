@@ -1287,6 +1287,9 @@ agent_system:
     default_readonly_prefetch: true
     prefer_external_free_readonly_carriers:
       - vibe_cli
+    prefer_external_advisory_readonly_carriers:
+      - vibe_cli
+      - jcode_nim_cli
     prefer_internal_low_medium_for_write_carriers:
       - internal_subagents:codex_gpt55_low_write
       - internal_subagents:codex_gpt55_medium_write
@@ -1297,6 +1300,7 @@ agent_system:
       - repeated_rework_after_low_medium_failure
     root_call_reduction_rules:
       - ask_vibe_for_readonly_pre_analysis_when_scope_is_known_and_no_write_authority_is_needed
+      - ask_jcode_nim_for_readonly_pre_analysis_when_vibe_is_unavailable_or_independent_second_opinion_is_useful
       - ask_internal_low_or_medium_for_bounded_implementation_or_test_authoring
       - keep_root_session_to_binding_synthesis_task_updates_and_final_validation
       - prefer_compact_runtime_surfaces_and_snapshot_reads_before_large_json_bundles
@@ -1307,16 +1311,20 @@ agent_system:
         fallback: internal_subagents:codex_gpt55_low_write
       analysis:
         primary: vibe_cli
-        fallback: internal_subagents:codex_gpt55_low_write
+        fallback: jcode_nim_cli
+        escalation: internal_subagents:codex_gpt55_low_write
       specification:
         primary: vibe_cli
-        fallback: internal_subagents:codex_gpt55_medium_write
+        fallback: jcode_nim_cli
+        escalation: internal_subagents:codex_gpt55_medium_write
       planning:
         primary: vibe_cli
-        fallback: internal_subagents:codex_gpt55_medium_write
+        fallback: jcode_nim_cli
+        escalation: internal_subagents:codex_gpt55_medium_write
       review:
         primary: vibe_cli
-        fallback: internal_subagents:codex_gpt55_medium_write
+        fallback: jcode_nim_cli
+        escalation: internal_subagents:codex_gpt55_medium_write
       coach:
         primary: vibe_cli
         fallback: internal_subagents:codex_gpt55_medium_write
@@ -1329,6 +1337,7 @@ agent_system:
       verification:
         primary: internal_subagents:codex_gpt55_medium_write
         fallback: vibe_cli
+        advisory_alternate: jcode_nim_cli
     escalation_after:
       consecutive_low_medium_failures: 2
       repeated_runtime_blocker_count: 2
@@ -1945,6 +1954,106 @@ agent_system:
           mode: file_contains
           path: ~/.vibe/logs/vibe.log
           substring: Invalid API key
+    jcode_nim_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: jcode
+      role: advisory_secondary
+      orchestration_tier: external_advisory
+      cost_priority: preferred_when_root_token_pressure
+      budget_cost_units: 1
+      models_hint: jcode/nvidia-nim/mistralai/mistral-medium-3.5-128b
+      default_model: mistralai/mistral-medium-3.5-128b
+      default_model_profile: jcode_nim_mistral_medium35_review
+      capability_band: read_only,review_safe,independent_diagnosis
+      default_runtime_role: coach
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 160
+      billing_tier: external_nim_api_key
+      speed_tier: medium
+      quality_tier: medium
+      runtime_roles:
+        - business_analyst
+        - coach
+        - verifier
+      task_classes:
+        - research
+        - specification
+        - planning
+        - review
+        - analysis
+        - coach
+        - verification
+      model_profiles:
+        jcode_nim_mistral_medium35_review:
+          provider: nvidia-nim
+          model_ref: mistralai/mistral-medium-3.5-128b
+          reasoning_effort: provider_default
+          normalized_cost_units: 1
+          speed_tier: medium
+          quality_tier: medium
+          write_scope: none
+          runtime_roles:
+            - business_analyst
+            - coach
+            - verifier
+          task_classes:
+            - research
+            - specification
+            - planning
+            - review
+            - analysis
+            - coach
+            - verification
+          reasoning_control:
+            mode: command_args
+            expected_args:
+              - --provider
+              - nvidia-nim
+              - --model
+              - mistralai/mistral-medium-3.5-128b
+              - --tool-profile
+              - none
+          readiness:
+            mode: external_cli_profile
+            required: true
+      specialties: planning,spec,review,diagnosis
+      dispatch:
+        command: jcode
+        static_args:
+          - run
+          - --no-update
+          - --provider
+          - nvidia-nim
+          - --model
+          - mistralai/mistral-medium-3.5-128b
+          - --tool-profile
+          - none
+          - --json
+        workdir_flag: -C
+        output_mode: json_text
+        prompt_mode: positional
+        startup_timeout_seconds: 60
+        no_output_timeout_seconds: 180
+        progress_idle_timeout_seconds: 105
+        max_runtime_extension_seconds: 75
+      readiness:
+        auth:
+          mode: command_json_field
+          command: jcode auth status --json
+          provider_id: nvidia-nim
+          expected_status: available
+        model:
+          mode: command_text_contains
+          command: jcode model list --provider nvidia-nim --no-update
+          expected_ref: mistralai/mistral-medium-3.5-128b
+          expected_substring: mistralai/mistral-medium-3.5-128b
+        provider_label_caveat:
+          mode: observed_runtime_caveat
+          observed_command: jcode run --no-update --provider nvidia-nim --model mistralai/mistral-medium-3.5-128b --tool-profile none --json
+          observed_issue: run_json_provider_field_reported_openrouter_while_provider_current_resolved_nvidia_nim
+          routing_status: experimental_until_provider_label_is_stable
     pi_cli:
       enabled: false
       subagent_backend_class: external_cli

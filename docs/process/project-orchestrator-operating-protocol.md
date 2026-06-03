@@ -224,20 +224,22 @@ The orchestrator must treat root-session tokens and paid/high-reasoning model ca
 Default routing:
 
 1. use `vibe_cli` for bounded read-only pre-analysis, report triage, duplicate-risk review, task-note research, and second-opinion review when no write authority is needed,
-2. use internal low (`codex_gpt55_low_write`) for one-scope implementation packets with clear owned paths and focused proof,
-3. use internal medium (`codex_gpt55_medium_write`) for test authoring, regression shaping, ambiguous but bounded implementation, and coach decisions that require more structure than low,
-4. reserve high/xhigh internal profiles for architecture boundary decisions, security/safety review, release readiness, or repeated low/medium failure evidence,
-5. keep the root orchestrator focused on binding, packet shaping, synthesis, TaskFlow mutation, final validation, and conflict resolution.
+2. use `jcode_nim_cli` with `mistralai/mistral-medium-3.5-128b` as a secondary read-only advisory carrier when `vibe_cli` is unavailable, when an independent second opinion is useful, or when root-session token pressure is active,
+3. use internal low (`codex_gpt55_low_write`) for one-scope implementation packets with clear owned paths and focused proof,
+4. use internal medium (`codex_gpt55_medium_write`) for test authoring, regression shaping, ambiguous but bounded implementation, and coach decisions that require more structure than low,
+5. reserve high/xhigh internal profiles for architecture boundary decisions, security/safety review, release readiness, or repeated low/medium failure evidence,
+6. keep the root orchestrator focused on binding, packet shaping, synthesis, TaskFlow mutation, final validation, and conflict resolution.
 
 Before starting a new bounded task, the orchestrator should decide:
 
 1. whether `vibe_cli` can prefetch read-only context or review likely risks in parallel with local inspection,
-2. whether the write lane can be delegated to internal low before medium,
-3. whether a medium coach/test-author lane is enough before escalating to high,
-4. whether the next command can be replaced by a compact runtime surface, snapshot query, or previously refreshed `.vida/exports/tasks.snapshot.jsonl`,
-5. whether similar report items can be batched into one TaskFlow mutation window.
+2. whether `jcode_nim_cli` should run the same bounded read-only question as an independent NIM-backed advisory pass,
+3. whether the write lane can be delegated to internal low before medium,
+4. whether a medium coach/test-author lane is enough before escalating to high,
+5. whether the next command can be replaced by a compact runtime surface, snapshot query, or previously refreshed `.vida/exports/tasks.snapshot.jsonl`,
+6. whether similar report items can be batched into one TaskFlow mutation window.
 
-Do not use `vibe_cli` for root-session write authority, task closure, receipt fabrication, or final proof acceptance. Its output is advisory evidence until the orchestrator validates it against source, TaskFlow, runtime receipts, or focused proof.
+Do not use `vibe_cli` or `jcode_nim_cli` for root-session write authority, task closure, receipt fabrication, or final proof acceptance. Their output is advisory evidence until the orchestrator validates it against source, TaskFlow, runtime receipts, or focused proof. `jcode_nim_cli` remains experimental until `jcode run --json` reports a provider label consistent with `jcode provider current` for the selected NIM model.
 
 Premature micro-splitting rule:
 
