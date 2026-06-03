@@ -136,6 +136,24 @@ struct TaskBlockReceipt {
     task: state_store::TaskRecord,
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskVerifyReceipt {
+    surface: &'static str,
+    status: &'static str,
+    task_id: String,
+    partial: bool,
+    closed: bool,
+    source_fixed: bool,
+    tests_green: bool,
+    proof_blocked: bool,
+    proof_blocked_by_runtime: bool,
+    proof_blocker: Option<String>,
+    evidence: Vec<String>,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    task: state_store::TaskRecord,
+}
+
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
 }
@@ -161,9 +179,17 @@ fn task_close_reason_reports_runtime_proof_blocker(task: &state_store::TaskRecor
         || normalized.contains("runtime blocker")
 }
 
+fn task_reports_runtime_proof_blocker(task: &state_store::TaskRecord) -> bool {
+    task_close_reason_reports_runtime_proof_blocker(task)
+        || task
+            .labels
+            .iter()
+            .any(|label| label == "proof-blocked-by-runtime" || label == "runtime-proof-blocked")
+}
+
 fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
     let target = target.trim().to_string();
-    let runtime_blocked = task_close_reason_reports_runtime_proof_blocker(task);
+    let runtime_blocked = task_reports_runtime_proof_blocker(task);
     if proof_target_has_close_reason_evidence(task, &target) {
         return TaskProofTargetStatus {
             target,
@@ -626,6 +652,109 @@ fn print_task_block_receipt(render: RenderMode, receipt: &TaskBlockReceipt, as_j
     if !receipt.next_actions.is_empty() {
         print_surface_line(render, "next actions", &receipt.next_actions.join(" | "));
     }
+}
+
+fn normalized_task_verify_evidence(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn append_task_verify_note(
+    existing_notes: Option<&str>,
+    source_fixed: bool,
+    tests_green: bool,
+    proof_blocked: bool,
+    proof_blocker: Option<&str>,
+    evidence: &[String],
+) -> String {
+    let mut note = format!(
+        "task_partial_verification:\n  recorded_at_unix_nanos: {}\n  source_fixed: {}\n  tests_green: {}\n  proof_blocked: {}",
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
+        source_fixed,
+        tests_green,
+        proof_blocked
+    );
+    if let Some(proof_blocker) = proof_blocker
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        note.push_str("\n  proof_blocker: ");
+        note.push_str(proof_blocker);
+    }
+    if !evidence.is_empty() {
+        note.push_str("\n  evidence:");
+        for item in evidence {
+            note.push_str("\n    - ");
+            note.push_str(item);
+        }
+    }
+
+    match existing_notes
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(existing) => format!("{existing}\n\n{note}"),
+        None => note,
+    }
+}
+
+fn task_verify_labels(source_fixed: bool, tests_green: bool, proof_blocked: bool) -> Vec<String> {
+    let mut labels = Vec::new();
+    if source_fixed {
+        labels.push("source-fixed".to_string());
+    }
+    if tests_green {
+        labels.push("tests-green".to_string());
+    }
+    if proof_blocked {
+        labels.push("proof-blocked-by-runtime".to_string());
+    }
+    labels
+}
+
+fn task_verify_planner_metadata(
+    existing: &state_store::TaskPlannerMetadata,
+    proof_blocked: bool,
+    proof_blocker: Option<&str>,
+    evidence: &[String],
+) -> Option<state_store::TaskPlannerMetadata> {
+    if !proof_blocked || !existing.proof_targets.is_empty() {
+        return None;
+    }
+    let mut metadata = existing.clone();
+    if evidence.is_empty() {
+        if let Some(proof_blocker) = proof_blocker
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            metadata.proof_targets.push(proof_blocker.to_string());
+        }
+    } else {
+        metadata.proof_targets.extend(evidence.iter().cloned());
+    }
+    if metadata.proof_targets.is_empty() {
+        None
+    } else {
+        Some(metadata)
+    }
+}
+
+fn print_task_verify_receipt(render: RenderMode, receipt: &TaskVerifyReceipt, as_json: bool) {
+    if as_json {
+        let payload =
+            serde_json::to_value(receipt).expect("task verify receipt should serialize to JSON");
+        crate::print_json_pretty(&payload);
+        return;
+    }
+    print_task_mutation(render, receipt.surface, &receipt.task, false);
+    print_surface_line(render, "partial", &receipt.partial.to_string());
+    print_surface_line(render, "source fixed", &receipt.source_fixed.to_string());
+    print_surface_line(render, "tests green", &receipt.tests_green.to_string());
+    print_surface_line(render, "proof blocked", &receipt.proof_blocked.to_string());
 }
 
 fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value {
@@ -6365,6 +6494,147 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Verify(command) => {
+            let evidence = normalized_task_verify_evidence(&command.evidence);
+            let proof_blocker = command
+                .proof_blocker
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if command.proof_blocked && proof_blocker.is_none() && evidence.is_empty() {
+                eprintln!("--proof-blocked requires --proof-blocker or --evidence");
+                return ExitCode::from(2);
+            }
+            if !command.source_fixed && !command.tests_green && !command.proof_blocked {
+                eprintln!(
+                    "task verify requires at least one of --source-fixed, --tests-green, or --proof-blocked"
+                );
+                return ExitCode::from(2);
+            }
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => {
+                    let existing = match store.show_task(&command.task_id).await {
+                        Ok(task) => task,
+                        Err(error) => {
+                            eprintln!("Failed to read task before verify mutation: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    if state_store::StateStore::task_status_is_closed_like(&existing.status) {
+                        let receipt = TaskVerifyReceipt {
+                            surface: "vida task verify",
+                            status: "blocked",
+                            task_id: existing.id.clone(),
+                            partial: false,
+                            closed: true,
+                            source_fixed: command.source_fixed,
+                            tests_green: command.tests_green,
+                            proof_blocked: command.proof_blocked,
+                            proof_blocked_by_runtime: false,
+                            proof_blocker: proof_blocker.map(str::to_string),
+                            evidence,
+                            blocker_codes: vec!["task_already_closed".to_string()],
+                            next_actions: vec![
+                                "Inspect the closed task or reopen it before recording partial verification."
+                                    .to_string(),
+                            ],
+                            task: existing,
+                        };
+                        print_task_verify_receipt(command.render, &receipt, command.json);
+                        return ExitCode::from(1);
+                    }
+                    let notes = append_task_verify_note(
+                        existing.notes.as_deref(),
+                        command.source_fixed,
+                        command.tests_green,
+                        command.proof_blocked,
+                        proof_blocker,
+                        &evidence,
+                    );
+                    let add_labels = task_verify_labels(
+                        command.source_fixed,
+                        command.tests_green,
+                        command.proof_blocked,
+                    );
+                    let planner_metadata = task_verify_planner_metadata(
+                        &existing.planner_metadata,
+                        command.proof_blocked,
+                        proof_blocker,
+                        &evidence,
+                    );
+                    match store
+                        .update_task(state_store::UpdateTaskRequest {
+                            task_id: &command.task_id,
+                            title: None,
+                            status: None,
+                            priority: None,
+                            notes: Some(&notes),
+                            description: None,
+                            parent_id: None,
+                            add_labels: &add_labels,
+                            remove_labels: &[],
+                            set_labels: None,
+                            execution_mode: None,
+                            order_bucket: None,
+                            parallel_group: None,
+                            conflict_domain: None,
+                            planner_metadata,
+                        })
+                        .await
+                    {
+                        Ok(task) => {
+                            if let Err(code) =
+                                refresh_task_snapshot_after_mutation(&store, "vida task verify")
+                                    .await
+                            {
+                                return code;
+                            }
+                            let proof_blocked_by_runtime =
+                                command.proof_blocked && task_reports_runtime_proof_blocker(&task);
+                            let receipt = TaskVerifyReceipt {
+                                surface: "vida task verify",
+                                status: task_json_success_status(),
+                                task_id: task.id.clone(),
+                                partial: true,
+                                closed: state_store::StateStore::task_status_is_closed_like(
+                                    &task.status,
+                                ),
+                                source_fixed: command.source_fixed,
+                                tests_green: command.tests_green,
+                                proof_blocked: command.proof_blocked,
+                                proof_blocked_by_runtime,
+                                proof_blocker: proof_blocker.map(str::to_string),
+                                evidence,
+                                blocker_codes: Vec::new(),
+                                next_actions: if command.proof_blocked {
+                                    vec![
+                                        "Resolve or attach final proof evidence before closing this task."
+                                            .to_string(),
+                                    ]
+                                } else {
+                                    Vec::new()
+                                },
+                                task,
+                            };
+                            print_task_verify_receipt(command.render, &receipt, command.json);
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to verify task: {error}");
+                            ExitCode::from(1)
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         TaskCommand::Split(command) => run_task_split_like(command, "vida task split").await,
         TaskCommand::SpawnBlocker(command) => {
             run_task_spawn_blocker_like(command, "vida task spawn-blocker").await
@@ -7233,6 +7503,195 @@ mod tests {
             ]
         );
         assert!(command.json);
+    }
+
+    #[test]
+    fn task_verify_cli_accepts_partial_proof_flags() {
+        let parsed = cli(&[
+            "task",
+            "verify",
+            "task-1",
+            "--source-fixed",
+            "--tests-green",
+            "--proof-blocked",
+            "--proof-blocker",
+            "browser proof unavailable",
+            "--evidence",
+            "cargo test -p vida task_verify",
+            "--evidence",
+            "target/debug/vida task verify smoke",
+            "--json",
+        ]);
+        let Some(crate::Command::Task(args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let crate::TaskCommand::Verify(command) = args.command else {
+            panic!("verify command should parse");
+        };
+
+        assert_eq!(command.task_id, "task-1");
+        assert!(command.source_fixed);
+        assert!(command.tests_green);
+        assert!(command.proof_blocked);
+        assert_eq!(
+            command.proof_blocker.as_deref(),
+            Some("browser proof unavailable")
+        );
+        assert_eq!(command.evidence.len(), 2);
+        assert!(command.json);
+    }
+
+    #[test]
+    fn task_verify_command_records_partial_state_without_closing() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "parent-epic",
+                "Parent epic",
+                "epic",
+                "open",
+                1,
+                None,
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "verify-task",
+                "Verify task",
+                "task",
+                "in_progress",
+                2,
+                Some("parent-epic"),
+            )
+            .await;
+        });
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::Verify(crate::TaskVerifyArgs {
+                    task_id: "verify-task".to_string(),
+                    source_fixed: true,
+                    tests_green: true,
+                    proof_blocked: true,
+                    proof_blocker: Some("browser proof unavailable".to_string()),
+                    evidence: vec!["cargo test -p vida task_verify".to_string()],
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::SUCCESS
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let task = store
+                .show_task("verify-task")
+                .await
+                .expect("verify task should load");
+            assert_eq!(task.status, "in_progress");
+            assert_eq!(task.closed_at, None);
+            assert_eq!(task.close_reason, None);
+            assert!(task.labels.contains(&"source-fixed".to_string()));
+            assert!(task.labels.contains(&"tests-green".to_string()));
+            assert!(task
+                .labels
+                .contains(&"proof-blocked-by-runtime".to_string()));
+            assert_eq!(
+                task.planner_metadata.proof_targets,
+                vec!["cargo test -p vida task_verify".to_string()]
+            );
+            let notes = task
+                .notes
+                .expect("partial verification note should persist");
+            assert!(notes.contains("task_partial_verification:"));
+            assert!(notes.contains("source_fixed: true"));
+            assert!(notes.contains("tests_green: true"));
+            assert!(notes.contains("proof_blocked: true"));
+            assert!(notes.contains("browser proof unavailable"));
+
+            let progress = store
+                .task_progress_summary("verify-task")
+                .await
+                .expect("progress should compute");
+            assert!(progress.proof_blocked_by_runtime);
+            assert!(progress.blocked_by_runtime);
+        });
+    }
+
+    #[test]
+    fn task_verify_command_rejects_closed_task_without_mutation() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "parent-epic",
+                "Parent epic",
+                "epic",
+                "open",
+                1,
+                None,
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "closed-verify-task",
+                "Closed verify task",
+                "task",
+                "open",
+                2,
+                Some("parent-epic"),
+            )
+            .await;
+            store
+                .close_task("closed-verify-task", "done")
+                .await
+                .expect("task should close");
+        });
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::Verify(crate::TaskVerifyArgs {
+                    task_id: "closed-verify-task".to_string(),
+                    source_fixed: true,
+                    tests_green: true,
+                    proof_blocked: true,
+                    proof_blocker: Some("browser proof unavailable".to_string()),
+                    evidence: Vec::new(),
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::from(1)
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let task = store
+                .show_task("closed-verify-task")
+                .await
+                .expect("closed verify task should load");
+            assert_eq!(task.status, "closed");
+            assert_eq!(task.close_reason.as_deref(), Some("done"));
+            assert!(task.labels.is_empty());
+            assert!(task.notes.is_none());
+        });
     }
 
     #[test]

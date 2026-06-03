@@ -37,6 +37,10 @@ const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --
 const TASK_BLOCK_ABOUT: &str = "record a runtime blocker on one task without closing it";
 const TASK_BLOCK_LONG_ABOUT: &str = "Record a runtime blocker on one task without closing it.\n\nThe command marks the task status as `blocked`, appends a structured blocker note to existing task notes, refreshes the canonical TaskFlow snapshot, and emits a machine-readable receipt when `--json` is set.";
 const TASK_BLOCK_AFTER_HELP: &str = "Examples:\n  vida task block <task-id> --reason \"runtime bridge unavailable\" --evidence \"agent-init returned host_tool_capability_missing\" --json\n  vida task block <task-id> --reason \"browser proof unavailable\" --blocker web_runtime_unhealthy --next-action \"run vida runtime web status --json\" --json\n\nOptions:\n  --reason <text>       Human-readable blocker reason; required\n  --evidence <text>     Evidence command, file, receipt, or observation\n  --blocker <code>      Canonical blocker code; accepts comma-separated values and repeated flags\n  --next-action <text>  Suggested recovery or continuation action; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output";
+const TASK_VERIFY_ABOUT: &str =
+    "record partial verification evidence on one task without closing it";
+const TASK_VERIFY_LONG_ABOUT: &str = "Record partial verification evidence on one task without closing it.\n\nUse this when source changes and tests are verified but browser, API, or external proof remains unavailable due to a runtime condition. The command leaves the task open, appends structured verification notes, updates proof-blocking labels, and emits source_fixed/tests_green/proof_blocked fields in JSON.";
+const TASK_VERIFY_AFTER_HELP: &str = "Examples:\n  vida task verify <task-id> --source-fixed --tests-green --proof-blocked --proof-blocker \"browser proof unavailable\" --evidence \"cargo test -p vida task_verify\" --json\n\nOptions:\n  --source-fixed          Record that the source fix is complete\n  --tests-green           Record that focused tests passed\n  --proof-blocked         Record that final proof is pending on runtime/external conditions\n  --proof-blocker <text>  Human-readable proof blocker reason\n  --evidence <text>       Evidence command, file, receipt, or observation; accepts repeated flags\n  --state-dir <path>      Override the TaskFlow state directory\n  --json                  Emit machine-readable JSON output";
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
 pub(crate) enum RenderMode {
@@ -538,6 +542,12 @@ pub(crate) enum TaskCommand {
         after_help = TASK_BLOCK_AFTER_HELP
     )]
     Block(TaskBlockArgs),
+    #[command(
+        about = TASK_VERIFY_ABOUT,
+        long_about = TASK_VERIFY_LONG_ABOUT,
+        after_help = TASK_VERIFY_AFTER_HELP
+    )]
+    Verify(TaskVerifyArgs),
     #[command(about = "inspect dirty git files against one task's owned paths")]
     OwnedStatus(TaskOwnedStatusArgs),
     #[command(about = "record delegated agent handoff receipts for a task")]
@@ -1287,6 +1297,55 @@ pub(crate) struct TaskBlockArgs {
         help = "Suggested recovery or continuation action. Accepts repeated flags."
     )]
     pub(crate) next_actions: Vec<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskVerifyArgs {
+    #[arg(help = "Task id to record partial verification for")]
+    pub(crate) task_id: String,
+
+    #[arg(long = "source-fixed", help = "Record that the source fix is complete")]
+    pub(crate) source_fixed: bool,
+
+    #[arg(long = "tests-green", help = "Record that focused tests passed")]
+    pub(crate) tests_green: bool,
+
+    #[arg(
+        long = "proof-blocked",
+        help = "Record that final proof is pending on a runtime or external condition"
+    )]
+    pub(crate) proof_blocked: bool,
+
+    #[arg(
+        long = "proof-blocker",
+        help = "Human-readable proof blocker reason when --proof-blocked is set"
+    )]
+    pub(crate) proof_blocker: Option<String>,
+
+    #[arg(
+        long = "evidence",
+        help = "Evidence command, file path, receipt path, or observation. Accepts repeated flags."
+    )]
+    pub(crate) evidence: Vec<String>,
 
     #[arg(
         long = "state-dir",

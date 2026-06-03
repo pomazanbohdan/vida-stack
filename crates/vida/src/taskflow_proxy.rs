@@ -4045,6 +4045,7 @@ fn taskflow_task_subcommand_supported(subcommand: &str) -> bool {
             | "next-display-id"
             | "create"
             | "update"
+            | "verify"
             | "close"
             | "split"
             | "spawn-blocker"
