@@ -1,4 +1,5 @@
-use std::process::ExitCode;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
 
 use serde_json::Value;
 
@@ -14,7 +15,10 @@ use crate::{
 
 const RUNTIME_WEB_RESTART_SURFACE: &str = "vida runtime web restart";
 const RESTART_EXECUTOR_BLOCKER: BlockerCode = BlockerCode::ToolContractMissing;
-const RESTART_EXECUTOR_NEXT_ACTION: &str = "Add ownership-safe process discovery and restart executor support, then rerun `vida runtime web restart --scope current-repo --include-edge-proxy --json`.";
+const RESTART_EXECUTOR_NEXT_ACTION: &str = "Add project-local runtime web restart adapter scripts or rerun with --dry-run to inspect the restart plan.";
+const LOCAL_WEB_ADAPTER: &str = "scripts/windows/Start-WebDevServer.ps1";
+const EDGE_PROXY_ADAPTER: &str = "scripts/windows/Start-WebCloudflareEdgeProxy.ps1";
+const SIMULATE_EXECUTOR_ENV: &str = "VIDA_RUNTIME_WEB_RESTART_SIMULATE_EXECUTOR";
 
 pub(crate) async fn run_runtime(args: RuntimeArgs) -> ExitCode {
     match args.command {
@@ -26,15 +30,13 @@ pub(crate) async fn run_runtime(args: RuntimeArgs) -> ExitCode {
 
 fn run_runtime_web_restart(args: RuntimeWebRestartArgs) -> ExitCode {
     let payload = build_runtime_web_restart_payload(&args);
-    if print_surface_json(
+    let printed_json = print_surface_json(
         &payload,
         args.json,
         "runtime web restart payload should render as json",
-    ) {
-        return ExitCode::from(1);
-    }
+    );
 
-    if !args.json {
+    if !printed_json {
         print_runtime_web_restart_plain(&payload);
     }
 
@@ -46,26 +48,141 @@ fn run_runtime_web_restart(args: RuntimeWebRestartArgs) -> ExitCode {
 }
 
 fn build_runtime_web_restart_payload(args: &RuntimeWebRestartArgs) -> Value {
-    let project_root = crate::resolve_runtime_project_root()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|error| format!("unresolved: {error}"));
+    match crate::resolve_runtime_project_root() {
+        Ok(project_root) => build_runtime_web_restart_payload_for_project_root(args, &project_root),
+        Err(error) => {
+            build_runtime_web_restart_payload_for_unresolved_root(args, &error.to_string())
+        }
+    }
+}
+
+fn build_runtime_web_restart_payload_for_unresolved_root(
+    args: &RuntimeWebRestartArgs,
+    error: &str,
+) -> Value {
+    let project_root = format!("unresolved: {error}");
+    let blocker_codes = vec![blocker_code_str(RESTART_EXECUTOR_BLOCKER).to_string()];
+    let next_actions =
+        vec!["Resolve the VIDA project root before restarting runtime web services.".to_string()];
+    let component_results =
+        unresolved_root_component_results(args.include_edge_proxy, args.dry_run);
+    let actions = runtime_web_restart_actions_from_results(&component_results);
+    let blocked_components =
+        runtime_web_restart_blocked_components_from_results(&component_results);
+    let components = runtime_web_restart_components(
+        args.include_edge_proxy,
+        args.dry_run,
+        &RuntimeWebRestartAdapterPlan::missing(Path::new("")),
+        &component_results,
+    );
+    runtime_web_restart_payload_from_parts(
+        args,
+        project_root,
+        if args.dry_run {
+            "plan_only"
+        } else {
+            "blocked_project_root_unresolved"
+        },
+        blocker_codes,
+        next_actions,
+        actions,
+        blocked_components,
+        components,
+        serde_json::json!([]),
+    )
+}
+
+fn build_runtime_web_restart_payload_for_project_root(
+    args: &RuntimeWebRestartArgs,
+    project_root: &Path,
+) -> Value {
+    let adapter_plan = RuntimeWebRestartAdapterPlan::discover(project_root);
     let dry_run = args.dry_run;
     let mut blocker_codes = Vec::new();
     let mut next_actions = Vec::new();
-    if !dry_run {
-        blocker_codes.push(blocker_code_str(RESTART_EXECUTOR_BLOCKER).to_string());
-        next_actions.push(RESTART_EXECUTOR_NEXT_ACTION.to_string());
+    let mut execution_receipts = Vec::new();
+    let mut component_results = Vec::new();
+    if dry_run {
+        component_results.push(ComponentRestartResult::planned("local_web_upstream"));
+        component_results.push(ComponentRestartResult::planned("local_proxy"));
+        component_results.push(if args.include_edge_proxy {
+            ComponentRestartResult::planned("edge_proxy")
+        } else {
+            ComponentRestartResult::skipped(
+                "edge_proxy",
+                "edge proxy restart requires --include-edge-proxy",
+            )
+        });
+    } else {
+        let local_result = execute_runtime_web_local_adapter(&adapter_plan);
+        execution_receipts.push(local_result.receipt.clone());
+        component_results.push(local_result.for_component("local_web_upstream"));
+        component_results.push(local_result.for_component("local_proxy"));
+        if args.include_edge_proxy {
+            let edge_result = execute_runtime_web_edge_adapter(&adapter_plan);
+            execution_receipts.push(edge_result.receipt.clone());
+            component_results.push(edge_result.for_component("edge_proxy"));
+        } else {
+            component_results.push(ComponentRestartResult::skipped(
+                "edge_proxy",
+                "edge proxy restart requires --include-edge-proxy",
+            ));
+        }
+        if component_results
+            .iter()
+            .any(|result| result.action == "blocked")
+        {
+            blocker_codes.push(blocker_code_str(RESTART_EXECUTOR_BLOCKER).to_string());
+            next_actions.push(RESTART_EXECUTOR_NEXT_ACTION.to_string());
+        }
     }
 
-    let actions = runtime_web_restart_actions(args.include_edge_proxy, dry_run);
+    let actions = runtime_web_restart_actions_from_results(&component_results);
     let blocked_components =
-        runtime_web_restart_blocked_components(args.include_edge_proxy, dry_run);
-    let components = runtime_web_restart_components(args.include_edge_proxy, dry_run);
+        runtime_web_restart_blocked_components_from_results(&component_results);
+    let components = runtime_web_restart_components(
+        args.include_edge_proxy,
+        dry_run,
+        &adapter_plan,
+        &component_results,
+    );
+    let mode = if dry_run {
+        "plan_only"
+    } else if blocker_codes.is_empty() {
+        "executed_project_adapter_restart"
+    } else {
+        "blocked_project_adapter_restart"
+    };
+    runtime_web_restart_payload_from_parts(
+        args,
+        project_root.display().to_string(),
+        mode,
+        blocker_codes,
+        next_actions,
+        actions,
+        blocked_components,
+        components,
+        serde_json::json!(execution_receipts),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn runtime_web_restart_payload_from_parts(
+    args: &RuntimeWebRestartArgs,
+    project_root: String,
+    mode: &str,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    actions: Value,
+    blocked_components: Value,
+    components: Value,
+    execution_receipts: Value,
+) -> Value {
     let artifact_refs = serde_json::json!({
         "surface": RUNTIME_WEB_RESTART_SURFACE,
         "scope": args.scope,
         "include_edge_proxy": args.include_edge_proxy,
-        "dry_run": dry_run,
+        "dry_run": args.dry_run,
         "project_root": project_root,
     });
     let finalized = finalize_release1_operator_truth(blocker_codes, next_actions, artifact_refs)
@@ -84,15 +201,17 @@ fn build_runtime_web_restart_payload(args: &RuntimeWebRestartArgs) -> Value {
         "restart": {
             "scope": args.scope,
             "include_edge_proxy": args.include_edge_proxy,
-            "dry_run": dry_run,
+            "dry_run": args.dry_run,
             "project_root": project_root,
-            "mode": if dry_run { "plan_only" } else { "blocked_until_executor_available" },
+            "mode": mode,
             "actions": actions,
             "blocked_components": blocked_components,
             "components": components,
+            "execution_receipts": execution_receipts,
         },
         "actions": actions,
         "blocked_components": blocked_components,
+        "execution_receipts": execution_receipts,
     });
     for key in ["trace_id", "workflow_class", "risk_tier"] {
         payload["shared_fields"][key] = payload["operator_contracts"][key].clone();
@@ -105,62 +224,393 @@ fn build_runtime_web_restart_payload(args: &RuntimeWebRestartArgs) -> Value {
     payload
 }
 
-fn runtime_web_restart_actions(include_edge_proxy: bool, dry_run: bool) -> Value {
-    let restart_action = if dry_run { "planned" } else { "blocked" };
-    let edge_action = if include_edge_proxy {
-        restart_action
-    } else {
-        "skipped"
+#[derive(Debug, Clone)]
+struct RuntimeWebRestartAdapterPlan {
+    project_root: PathBuf,
+    local_web_script: Option<PathBuf>,
+    edge_proxy_script: Option<PathBuf>,
+}
+
+impl RuntimeWebRestartAdapterPlan {
+    fn discover(project_root: &Path) -> Self {
+        let local_web_script = project_root.join(LOCAL_WEB_ADAPTER);
+        let edge_proxy_script = project_root.join(EDGE_PROXY_ADAPTER);
+        Self {
+            project_root: project_root.to_path_buf(),
+            local_web_script: local_web_script.exists().then_some(local_web_script),
+            edge_proxy_script: edge_proxy_script.exists().then_some(edge_proxy_script),
+        }
+    }
+
+    fn missing(project_root: &Path) -> Self {
+        Self {
+            project_root: project_root.to_path_buf(),
+            local_web_script: Some(project_root.join(LOCAL_WEB_ADAPTER)).filter(|_| false),
+            edge_proxy_script: Some(project_root.join(EDGE_PROXY_ADAPTER)).filter(|_| false),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RuntimeWebRestartExecutionReceipt {
+    component_group: String,
+    status: String,
+    adapter_path: Option<String>,
+    command: Vec<String>,
+    exit_code: Option<i32>,
+    stderr: Option<String>,
+    stdout: Option<String>,
+    simulation: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AdapterExecutionResult {
+    component_group: &'static str,
+    action: &'static str,
+    reason: Option<String>,
+    receipt: RuntimeWebRestartExecutionReceipt,
+}
+
+impl AdapterExecutionResult {
+    fn for_component(&self, component_id: &'static str) -> ComponentRestartResult {
+        ComponentRestartResult {
+            component_id,
+            action: self.action,
+            reason: self.reason.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ComponentRestartResult {
+    component_id: &'static str,
+    action: &'static str,
+    reason: Option<String>,
+}
+
+impl ComponentRestartResult {
+    fn planned(component_id: &'static str) -> Self {
+        Self {
+            component_id,
+            action: "planned",
+            reason: None,
+        }
+    }
+
+    fn skipped(component_id: &'static str, reason: impl Into<String>) -> Self {
+        Self {
+            component_id,
+            action: "skipped",
+            reason: Some(reason.into()),
+        }
+    }
+
+    fn blocked(component_id: &'static str, reason: impl Into<String>) -> Self {
+        Self {
+            component_id,
+            action: "blocked",
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+fn execute_runtime_web_local_adapter(
+    plan: &RuntimeWebRestartAdapterPlan,
+) -> AdapterExecutionResult {
+    let Some(script) = plan.local_web_script.as_ref() else {
+        return missing_adapter_result("local_web", LOCAL_WEB_ADAPTER);
     };
-    serde_json::json!([
-        { "component_id": "local_web_upstream", "action": restart_action },
-        { "component_id": "local_proxy", "action": restart_action },
-        { "component_id": "edge_proxy", "action": edge_action },
-    ])
+    execute_runtime_web_adapter(
+        "local_web",
+        script,
+        &plan.project_root,
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script.display().to_string(),
+            "-Managed".to_string(),
+            "-SingleInstance".to_string(),
+            "-Restart".to_string(),
+        ],
+    )
 }
 
-fn runtime_web_restart_blocked_components(include_edge_proxy: bool, dry_run: bool) -> Value {
+fn execute_runtime_web_edge_adapter(plan: &RuntimeWebRestartAdapterPlan) -> AdapterExecutionResult {
+    let Some(script) = plan.edge_proxy_script.as_ref() else {
+        return missing_adapter_result("edge_proxy", EDGE_PROXY_ADAPTER);
+    };
+    execute_runtime_web_background_adapter("edge_proxy", script, &plan.project_root)
+}
+
+fn missing_adapter_result(
+    component_group: &'static str,
+    expected_adapter: &'static str,
+) -> AdapterExecutionResult {
+    AdapterExecutionResult {
+        component_group,
+        action: "blocked",
+        reason: Some(format!(
+            "missing project-local adapter `{expected_adapter}`"
+        )),
+        receipt: RuntimeWebRestartExecutionReceipt {
+            component_group: component_group.to_string(),
+            status: "blocked".to_string(),
+            adapter_path: None,
+            command: Vec::new(),
+            exit_code: None,
+            stderr: Some(format!(
+                "missing project-local adapter `{expected_adapter}`"
+            )),
+            stdout: None,
+            simulation: false,
+        },
+    }
+}
+
+fn execute_runtime_web_adapter(
+    component_group: &'static str,
+    script: &Path,
+    working_dir: &Path,
+    args: Vec<String>,
+) -> AdapterExecutionResult {
+    if std::env::var(SIMULATE_EXECUTOR_ENV).as_deref() == Ok("pass") {
+        return AdapterExecutionResult {
+            component_group,
+            action: "started",
+            reason: None,
+            receipt: RuntimeWebRestartExecutionReceipt {
+                component_group: component_group.to_string(),
+                status: "pass".to_string(),
+                adapter_path: Some(script.display().to_string()),
+                command: std::iter::once("pwsh".to_string()).chain(args).collect(),
+                exit_code: Some(0),
+                stderr: None,
+                stdout: Some("simulated runtime web restart adapter success".to_string()),
+                simulation: true,
+            },
+        };
+    }
+
+    let output = Command::new("pwsh")
+        .args(&args)
+        .current_dir(working_dir)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => AdapterExecutionResult {
+            component_group,
+            action: "started",
+            reason: None,
+            receipt: RuntimeWebRestartExecutionReceipt {
+                component_group: component_group.to_string(),
+                status: "pass".to_string(),
+                adapter_path: Some(script.display().to_string()),
+                command: std::iter::once("pwsh".to_string()).chain(args).collect(),
+                exit_code: output.status.code(),
+                stderr: render_command_output(&output.stderr),
+                stdout: render_command_output(&output.stdout),
+                simulation: false,
+            },
+        },
+        Ok(output) => AdapterExecutionResult {
+            component_group,
+            action: "blocked",
+            reason: Some("project-local adapter exited unsuccessfully".to_string()),
+            receipt: RuntimeWebRestartExecutionReceipt {
+                component_group: component_group.to_string(),
+                status: "blocked".to_string(),
+                adapter_path: Some(script.display().to_string()),
+                command: std::iter::once("pwsh".to_string()).chain(args).collect(),
+                exit_code: output.status.code(),
+                stderr: render_command_output(&output.stderr),
+                stdout: render_command_output(&output.stdout),
+                simulation: false,
+            },
+        },
+        Err(error) => AdapterExecutionResult {
+            component_group,
+            action: "blocked",
+            reason: Some(format!("failed to launch project-local adapter: {error}")),
+            receipt: RuntimeWebRestartExecutionReceipt {
+                component_group: component_group.to_string(),
+                status: "blocked".to_string(),
+                adapter_path: Some(script.display().to_string()),
+                command: std::iter::once("pwsh".to_string()).chain(args).collect(),
+                exit_code: None,
+                stderr: Some(error.to_string()),
+                stdout: None,
+                simulation: false,
+            },
+        },
+    }
+}
+
+fn execute_runtime_web_background_adapter(
+    component_group: &'static str,
+    script: &Path,
+    working_dir: &Path,
+) -> AdapterExecutionResult {
+    let launch_command = runtime_web_background_launcher_command(script, working_dir);
+    execute_runtime_web_adapter(
+        component_group,
+        script,
+        working_dir,
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-Command".to_string(),
+            launch_command,
+        ],
+    )
+}
+
+fn runtime_web_background_launcher_command(script: &Path, working_dir: &Path) -> String {
+    let script = powershell_single_quoted(&script.display().to_string());
+    let working_dir = powershell_single_quoted(&working_dir.display().to_string());
+    format!(
+        "$script = {script}; \
+         Get-CimInstance Win32_Process | \
+         Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains($script) }} | \
+         ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}; \
+         $process = Start-Process -FilePath 'pwsh' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$script) -WorkingDirectory {working_dir} -WindowStyle Hidden -PassThru; \
+         Write-Output \"started edge proxy pid=$($process.Id)\""
+    )
+}
+
+fn powershell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn render_command_output(bytes: &[u8]) -> Option<String> {
+    let value = String::from_utf8_lossy(bytes).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn unresolved_root_component_results(
+    include_edge_proxy: bool,
+    dry_run: bool,
+) -> Vec<ComponentRestartResult> {
     if dry_run {
-        return serde_json::json!([]);
+        return vec![
+            ComponentRestartResult::planned("local_web_upstream"),
+            ComponentRestartResult::planned("local_proxy"),
+            if include_edge_proxy {
+                ComponentRestartResult::planned("edge_proxy")
+            } else {
+                ComponentRestartResult::skipped(
+                    "edge_proxy",
+                    "edge proxy restart requires --include-edge-proxy",
+                )
+            },
+        ];
     }
-    let mut blocked = vec!["local_web_upstream", "local_proxy"];
-    if include_edge_proxy {
-        blocked.push("edge_proxy");
-    }
-    serde_json::json!(blocked)
+    vec![
+        ComponentRestartResult::blocked("local_web_upstream", "project root unresolved"),
+        ComponentRestartResult::blocked("local_proxy", "project root unresolved"),
+        if include_edge_proxy {
+            ComponentRestartResult::blocked("edge_proxy", "project root unresolved")
+        } else {
+            ComponentRestartResult::skipped(
+                "edge_proxy",
+                "edge proxy restart requires --include-edge-proxy",
+            )
+        },
+    ]
 }
 
-fn runtime_web_restart_components(include_edge_proxy: bool, dry_run: bool) -> Value {
-    let restart_action = if dry_run { "planned" } else { "blocked" };
-    let edge_action = if include_edge_proxy {
-        restart_action
-    } else {
-        "skipped"
+fn runtime_web_restart_actions_from_results(results: &[ComponentRestartResult]) -> Value {
+    serde_json::json!(results
+        .iter()
+        .map(|result| {
+            serde_json::json!({
+                "component_id": result.component_id,
+                "action": result.action,
+            })
+        })
+        .collect::<Vec<_>>())
+}
+
+fn runtime_web_restart_blocked_components_from_results(
+    results: &[ComponentRestartResult],
+) -> Value {
+    serde_json::json!(results
+        .iter()
+        .filter(|result| result.action == "blocked")
+        .map(|result| result.component_id)
+        .collect::<Vec<_>>())
+}
+
+fn runtime_web_restart_components(
+    include_edge_proxy: bool,
+    dry_run: bool,
+    adapter_plan: &RuntimeWebRestartAdapterPlan,
+    results: &[ComponentRestartResult],
+) -> Value {
+    let action_for = |component_id: &str| {
+        results
+            .iter()
+            .find(|result| result.component_id == component_id)
+            .map(|result| result.action)
+            .unwrap_or("blocked")
+    };
+    let reason_for = |component_id: &str| {
+        results
+            .iter()
+            .find(|result| result.component_id == component_id)
+            .and_then(|result| result.reason.clone())
+    };
+    let blocker_for = |component_id: &str| {
+        if action_for(component_id) == "blocked" {
+            Value::String(blocker_code_str(RESTART_EXECUTOR_BLOCKER).to_string())
+        } else {
+            Value::Null
+        }
     };
     serde_json::json!([
         {
             "id": "local_web_upstream",
             "kind": "web_upstream",
-            "action": restart_action,
+            "action": action_for("local_web_upstream"),
             "ownership": "current_repo_required",
+            "adapter_path": adapter_plan
+                .local_web_script
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            "reason": reason_for("local_web_upstream"),
             "ports": [],
-            "blocker_code": if dry_run { Value::Null } else { Value::String(blocker_code_str(RESTART_EXECUTOR_BLOCKER).to_string()) },
+            "blocker_code": blocker_for("local_web_upstream"),
         },
         {
             "id": "local_proxy",
             "kind": "proxy",
-            "action": restart_action,
+            "action": action_for("local_proxy"),
             "ownership": "current_repo_required",
+            "adapter_path": adapter_plan
+                .local_web_script
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            "reason": reason_for("local_proxy"),
             "ports": [],
-            "blocker_code": if dry_run { Value::Null } else { Value::String(blocker_code_str(RESTART_EXECUTOR_BLOCKER).to_string()) },
+            "blocker_code": blocker_for("local_proxy"),
         },
         {
             "id": "edge_proxy",
             "kind": "edge_proxy",
-            "action": edge_action,
+            "action": action_for("edge_proxy"),
             "ownership": "explicit_include_required",
+            "adapter_path": adapter_plan
+                .edge_proxy_script
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            "reason": reason_for("edge_proxy"),
             "ports": [],
-            "blocker_code": if !include_edge_proxy || dry_run { Value::Null } else { Value::String(blocker_code_str(RESTART_EXECUTOR_BLOCKER).to_string()) },
+            "blocker_code": if !include_edge_proxy || dry_run {
+                Value::Null
+            } else {
+                blocker_for("edge_proxy")
+            },
         }
     ])
 }
@@ -197,6 +647,49 @@ mod tests {
 
     use super::*;
     use crate::{Cli, Command};
+    use std::ffi::OsString;
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn temp_runtime_web_project(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-runtime-web-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("scripts/windows")).expect("create script root");
+        root
+    }
+
+    fn write_fake_runtime_web_adapter(root: &Path, relative_path: &str) {
+        let path = root.join(relative_path);
+        std::fs::create_dir_all(path.parent().expect("adapter parent"))
+            .expect("create adapter parent");
+        std::fs::write(&path, "Write-Output 'fake adapter'\n").expect("write fake adapter");
+    }
 
     #[test]
     fn runtime_web_restart_cli_accepts_current_repo_edge_proxy_dry_run_json() {
@@ -246,13 +739,29 @@ mod tests {
     }
 
     #[test]
-    fn runtime_web_restart_dry_run_payload_is_standardized_pass_plan() {
-        let payload = build_runtime_web_restart_payload(&RuntimeWebRestartArgs {
+    fn runtime_web_restart_json_dry_run_returns_success() {
+        let exit = run_runtime_web_restart(RuntimeWebRestartArgs {
             scope: "current-repo".to_string(),
             include_edge_proxy: true,
             dry_run: true,
             json: true,
         });
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn runtime_web_restart_dry_run_payload_is_standardized_pass_plan() {
+        let project_root = temp_runtime_web_project("dry-run");
+        let payload = build_runtime_web_restart_payload_for_project_root(
+            &RuntimeWebRestartArgs {
+                scope: "current-repo".to_string(),
+                include_edge_proxy: true,
+                dry_run: true,
+                json: true,
+            },
+            &project_root,
+        );
 
         assert_eq!(payload["surface"], RUNTIME_WEB_RESTART_SURFACE);
         assert_eq!(payload["status"], "pass");
@@ -267,16 +776,21 @@ mod tests {
         assert_eq!(payload["actions"][0]["action"], "planned");
         assert_eq!(payload["restart"]["components"][2]["action"], "planned");
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+        let _ = std::fs::remove_dir_all(&project_root);
     }
 
     #[test]
-    fn runtime_web_restart_without_executor_fails_closed_for_mutation() {
-        let payload = build_runtime_web_restart_payload(&RuntimeWebRestartArgs {
-            scope: "current-repo".to_string(),
-            include_edge_proxy: false,
-            dry_run: false,
-            json: true,
-        });
+    fn runtime_web_restart_without_project_adapters_fails_closed_for_mutation() {
+        let project_root = temp_runtime_web_project("missing-adapters");
+        let payload = build_runtime_web_restart_payload_for_project_root(
+            &RuntimeWebRestartArgs {
+                scope: "current-repo".to_string(),
+                include_edge_proxy: false,
+                dry_run: false,
+                json: true,
+            },
+            &project_root,
+        );
 
         assert_eq!(payload["status"], "blocked");
         assert_eq!(
@@ -287,5 +801,45 @@ mod tests {
         assert_eq!(payload["restart"]["components"][0]["action"], "blocked");
         assert_eq!(payload["restart"]["components"][2]["action"], "skipped");
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn runtime_web_restart_project_adapters_execute_with_receipt() {
+        let _simulate = EnvGuard::set(SIMULATE_EXECUTOR_ENV, "pass");
+        let project_root = temp_runtime_web_project("adapters-present");
+        write_fake_runtime_web_adapter(&project_root, LOCAL_WEB_ADAPTER);
+        write_fake_runtime_web_adapter(&project_root, EDGE_PROXY_ADAPTER);
+
+        let payload = build_runtime_web_restart_payload_for_project_root(
+            &RuntimeWebRestartArgs {
+                scope: "current-repo".to_string(),
+                include_edge_proxy: true,
+                dry_run: false,
+                json: true,
+            },
+            &project_root,
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(
+            payload["restart"]["mode"],
+            "executed_project_adapter_restart"
+        );
+        assert_eq!(payload["blocked_components"].as_array().unwrap().len(), 0);
+        assert_eq!(payload["actions"][0]["action"], "started");
+        assert_eq!(payload["actions"][1]["action"], "started");
+        assert_eq!(payload["actions"][2]["action"], "started");
+        assert_eq!(
+            payload["restart"]["execution_receipts"][0]["simulation"],
+            true
+        );
+        assert!(payload["restart"]["execution_receipts"][0]["command"]
+            .as_array()
+            .expect("command should render")
+            .iter()
+            .any(|value| value == "-Managed"));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+        let _ = std::fs::remove_dir_all(&project_root);
     }
 }
