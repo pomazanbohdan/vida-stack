@@ -855,6 +855,9 @@ fn active_exception_write_scope(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
     exception_path_metadata: Option<&ExceptionTakeoverMetadata>,
 ) -> Vec<String> {
+    if lane_summary_is_terminal_completed(summary) {
+        return Vec::new();
+    }
     if !crate::release1_contracts::exception_takeover_state(
         summary.exception_path_receipt_id.as_deref(),
         summary.supersedes_receipt_id.as_deref(),
@@ -1045,6 +1048,38 @@ async fn task_owned_write_scope_for_status(
     }
 }
 
+async fn retired_closed_task_status_for_show(
+    store: &StateStore,
+    status: Option<&crate::state_store::RunGraphStatus>,
+) -> Option<crate::state_store::RunGraphStatus> {
+    let status = status?;
+    match store.show_task(&status.task_id).await {
+        Ok(task) if task.status == "closed" => {
+            Some(retired_closed_task_run_graph_status(status.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn retired_closed_task_summary_for_show(
+    mut summary: crate::state_store::RunGraphDispatchReceiptSummary,
+) -> crate::state_store::RunGraphDispatchReceiptSummary {
+    summary.dispatch_status = "executed".to_string();
+    summary.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+    summary.blocker_code = None;
+    summary.exception_path_receipt_id = None;
+    summary.supersedes_receipt_id = None;
+    summary.downstream_dispatch_target = None;
+    summary.downstream_dispatch_command = None;
+    summary.downstream_dispatch_packet_path = None;
+    summary.downstream_dispatch_ready = false;
+    summary.downstream_dispatch_blockers.clear();
+    summary.downstream_dispatch_status = Some("retired_closed_task_run".to_string());
+    summary.downstream_dispatch_active_target = Some("closure".to_string());
+    summary.downstream_dispatch_last_target = Some("closure".to_string());
+    summary
+}
+
 struct LaneShowTruth {
     blocked: bool,
     blocker_codes: Vec<String>,
@@ -1129,6 +1164,18 @@ fn recovery_delegated_cycle_open(
         recovery.delegation_gate.local_exception_takeover_gate == "blocked_open_delegated_cycle"
             || recovery.delegation_gate.delegated_cycle_open
     })
+}
+
+fn lane_summary_is_terminal_completed(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> bool {
+    summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
+        && summary.dispatch_status == "executed"
+        && summary.blocker_code.is_none()
+        && summary
+            .downstream_dispatch_blockers
+            .iter()
+            .all(|value| value.trim().is_empty())
 }
 
 fn lane_summary_raw_blocker_codes(
@@ -1352,6 +1399,14 @@ fn derive_lane_show_truth_with_exception_metadata(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     exception_path_metadata: Option<&ExceptionTakeoverMetadata>,
 ) -> LaneShowTruth {
+    if lane_summary_is_terminal_completed(summary) {
+        return LaneShowTruth {
+            blocked: false,
+            blocker_codes: Vec::new(),
+            next_actions: Vec::new(),
+        };
+    }
+
     if crate::release1_contracts::exception_takeover_state(
         summary.exception_path_receipt_id.as_deref(),
         summary.supersedes_receipt_id.as_deref(),
@@ -2606,27 +2661,42 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 Ok(status) => Some(status),
                 Err(_) => None,
             };
+            let retired_closed_task_status =
+                retired_closed_task_status_for_show(&store, status.as_ref()).await;
+            let closed_task_retired = retired_closed_task_status.is_some();
+            let status = retired_closed_task_status.or(status);
             let recovery = status.as_ref().map(|status| {
                 crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
             });
             let owned_write_scope_hint =
                 task_owned_write_scope_for_status(&store, status.as_ref()).await;
-            let exception_path_metadata_path =
+            let summary = if closed_task_retired {
+                retired_closed_task_summary_for_show(summary)
+            } else {
+                summary
+            };
+            let exception_path_metadata_path = if closed_task_retired {
+                None
+            } else {
                 match exception_takeover_metadata_path(store.root(), &summary.run_id) {
-                    Ok(path) => path,
+                    Ok(path) => path.exists().then(|| path.display().to_string()),
                     Err(error) => {
                         eprintln!("{error}");
                         return ExitCode::from(1);
                     }
-                };
-            let exception_path_metadata =
+                }
+            };
+            let exception_path_metadata = if closed_task_retired {
+                None
+            } else {
                 match read_exception_takeover_metadata(store.root(), &summary.run_id) {
                     Ok(metadata) => metadata,
                     Err(error) => {
                         eprintln!("{error}");
                         return ExitCode::from(1);
                     }
-                };
+                }
+            };
             let truth = derive_lane_show_truth_with_exception_metadata(
                 &summary,
                 recovery.as_ref(),
@@ -2635,9 +2705,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             let envelope = build_lane_envelope_with_owned_scope(
                 summary,
                 status,
-                exception_path_metadata_path
-                    .exists()
-                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata_path,
                 exception_path_metadata,
                 operator_session_projection,
                 truth.blocked,
@@ -2709,27 +2777,42 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             } else {
                 None
             };
+            let retired_closed_task_status =
+                retired_closed_task_status_for_show(&store, status.as_ref()).await;
+            let closed_task_retired = retired_closed_task_status.is_some();
+            let status = retired_closed_task_status.or(status);
             let recovery = status.as_ref().map(|status| {
                 crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
             });
             let owned_write_scope_hint =
                 task_owned_write_scope_for_status(&store, status.as_ref()).await;
-            let exception_path_metadata_path =
+            let summary = if closed_task_retired {
+                retired_closed_task_summary_for_show(summary)
+            } else {
+                summary
+            };
+            let exception_path_metadata_path = if closed_task_retired {
+                None
+            } else {
                 match exception_takeover_metadata_path(store.root(), run_id) {
-                    Ok(path) => path,
+                    Ok(path) => path.exists().then(|| path.display().to_string()),
                     Err(error) => {
                         eprintln!("{error}");
                         return ExitCode::from(1);
                     }
-                };
-            let exception_path_metadata =
+                }
+            };
+            let exception_path_metadata = if closed_task_retired {
+                None
+            } else {
                 match read_exception_takeover_metadata(store.root(), run_id) {
                     Ok(metadata) => metadata,
                     Err(error) => {
                         eprintln!("{error}");
                         return ExitCode::from(1);
                     }
-                };
+                }
+            };
             let truth = derive_lane_show_truth_with_exception_metadata(
                 &summary,
                 recovery.as_ref(),
@@ -2738,9 +2821,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             let envelope = build_lane_envelope_with_owned_scope(
                 summary,
                 status,
-                exception_path_metadata_path
-                    .exists()
-                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata_path,
                 exception_path_metadata,
                 operator_session_projection,
                 truth.blocked,
@@ -4584,6 +4665,80 @@ mod tests {
             active_envelope.artifact_refs["owned_write_scope"],
             serde_json::json!(["crates/vida/src/lane_surface.rs"])
         );
+    }
+
+    #[test]
+    fn closed_lane_exception_state_does_not_keep_stale_takeover_authority() {
+        let metadata = ExceptionTakeoverMetadata {
+            run_id: Some("run-lane-test".to_string()),
+            dispatch_target: Some("spec-pack".to_string()),
+            dispatch_packet_path: None,
+            source_exception_path_receipt_id: Some("exception-1".to_string()),
+            reason_class: "test".to_string(),
+            active_bounded_unit: "closed-lane-exception-state-stale-defect".to_string(),
+            owned_write_scope: vec!["crates/vida/src/lane_surface.rs".to_string()],
+            why_delegated_or_rerouted_path_is_not_currently_lawful: "blocked".to_string(),
+            why_local_write_is_the_smallest_safe_bounded_workaround: "bounded".to_string(),
+            return_to_normal_posture_condition: "closed task is terminal".to_string(),
+            verification_plan: vec!["cargo test -p vida closed_lane_exception".to_string()],
+            recorded_at: "2026-06-03T00:00:00Z".to_string(),
+        };
+        let mut receipt = sample_receipt("executed");
+        receipt.blocker_code = None;
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-lane-test".to_string(),
+            task_id: "run-lane-test".to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            resume_node: None,
+            resume_status: "completed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_blocked".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "delegated_cycle_open".to_string(),
+                continuation_signal: "continue_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "coach_blocked".to_string(),
+            },
+        };
+
+        let truth = derive_lane_show_truth_with_exception_metadata(
+            &summary,
+            Some(&recovery),
+            Some(&metadata),
+        );
+        assert!(active_exception_write_scope(&summary, Some(&metadata)).is_empty());
+        let envelope = build_lane_envelope(
+            summary,
+            None,
+            Some("/tmp/exception.json".to_string()),
+            Some(metadata),
+            serde_json::json!({}),
+            truth.blocked,
+            truth.blocker_codes,
+            truth.next_actions,
+        );
+
+        assert_eq!(envelope.status, "pass");
+        assert!(!envelope.root_local_write_allowed);
+        assert!(envelope.owned_write_scope.is_empty());
+        assert!(envelope
+            .root_local_write_allowed_for_only_these_paths
+            .is_empty());
+        assert!(!envelope
+            .blocker_codes
+            .contains(&"open_delegated_cycle".to_string()));
     }
 
     #[test]
