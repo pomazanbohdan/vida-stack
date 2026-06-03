@@ -346,6 +346,7 @@ fn continuation_next_actions_for_run(
     run_id: &str,
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     terminal_consume_continue_run_id: Option<&str>,
+    continuation_resumable: bool,
 ) -> Vec<String> {
     let mut next_actions = vec![
         "Do not stop on commentary, status output, or intermediate reporting while the delegated cycle is still open."
@@ -367,6 +368,19 @@ fn continuation_next_actions_for_run(
         }
         next_actions.push(format!(
             "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
+        ));
+        return next_actions;
+    }
+    if !continuation_resumable
+        && latest_run_graph_dispatch_receipt.is_some_and(|receipt| {
+            receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some()
+        })
+    {
+        next_actions.push(format!(
+            "Inspect the exception-backed lane with `vida lane show {run_id} --json` and close or settle the run before continuing."
+        ));
+        next_actions.push(format!(
+            "Do not rerun `vida taskflow consume continue --run-id {run_id} --json` until recovery exposes a concrete downstream target."
         ));
         return next_actions;
     }
@@ -421,7 +435,16 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
     let active_run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
     let delegated_cycle_open = latest_run_graph_recovery
         .is_some_and(|recovery| recovery.delegation_gate.delegated_cycle_open);
-    let continuation_required_now = delegated_cycle_open;
+    let exception_takeover_is_resumable =
+        latest_run_graph_status.is_none_or(exception_takeover_continuation_resumable);
+    let active_exception_takeover_not_resumable = latest_run_graph_status
+        .zip(latest_run_graph_dispatch_receipt)
+        .is_some_and(|(status, receipt)| {
+            active_exception_takeover_evidence_matches_status(status, Some(receipt), None)
+                && !exception_takeover_continuation_resumable(status)
+        });
+    let continuation_required_now =
+        delegated_cycle_open && !active_exception_takeover_not_resumable;
     let pause_boundary_gate = if delegated_cycle_open {
         "non_blocking_only"
     } else {
@@ -434,6 +457,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                 run_id,
                 latest_run_graph_dispatch_receipt,
                 terminal_consume_continue_run_id,
+                exception_takeover_is_resumable,
             )
         })
         .unwrap_or_default();
@@ -1745,6 +1769,75 @@ mod tests {
                     .as_str()
                     .is_some_and(|value| !value.contains("vida taskflow continuation bind")
                         && !value.starts_with("Continue the active exception-backed bounded unit with `vida taskflow consume continue")))
+        }));
+    }
+
+    #[test]
+    fn exception_takeover_without_resume_target_does_not_require_continue() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "architecture-refactor-open-pr-wave3-triage",
+            "architecture-refactor-open-pr-wave3-triage",
+            "coach",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "none".to_string();
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: status.run_id.clone(),
+            task_id: status.task_id.clone(),
+            active_node: status.active_node.clone(),
+            lifecycle_stage: status.lifecycle_stage.clone(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: status.resume_target.clone(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: status.active_node.clone(),
+                lifecycle_stage: status.lifecycle_stage.clone(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "handoff_pending".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+            },
+        };
+        let dispatch = exception_takeover_dispatch(&status.run_id);
+
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            Some(&recovery),
+            Some(&dispatch),
+            None,
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(summary["continuation_required_now"], false);
+        assert_eq!(summary["continuation_resumable"], false);
+        assert_eq!(summary["resume_blocker"], "next_action_target_missing");
+        assert!(summary["next_actions"].as_array().is_some_and(|actions| {
+            actions.iter().any(|action| {
+                action
+                    .as_str()
+                    .is_some_and(|value| value.contains("vida taskflow recovery status"))
+            }) && actions.iter().any(|action| {
+                action
+                    .as_str()
+                    .is_some_and(|value| value.contains("closure_complete"))
+            }) && actions.iter().all(|action| {
+                action.as_str().is_some_and(|value| {
+                    !value.starts_with("Continue the active bounded unit")
+                        && !value.starts_with("Continue the active exception-backed bounded unit")
+                        && !value.contains("vida taskflow consume continue")
+                })
+            })
         }));
     }
 
