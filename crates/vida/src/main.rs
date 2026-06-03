@@ -51,6 +51,7 @@ mod project_activator_runtime_surface;
 mod project_activator_surface;
 mod project_bootstrap_defaults;
 mod project_root_paths;
+mod proof_surface;
 mod protocol_surface;
 mod registry_projection_utils;
 mod release1_contracts;

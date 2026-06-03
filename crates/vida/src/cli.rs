@@ -25,6 +25,7 @@ const WIZARD_AFTER_HELP: &str = "Wizard operations:\n  vida wizard inspect --jso
 const JOB_AFTER_HELP: &str = "Job operations:\n  vida job status --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
 
 const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
+const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -115,6 +116,11 @@ pub(crate) enum Command {
     Doctor(DoctorArgs),
     #[command(about = "run canonical runtime diagnostics for completed slices")]
     Diagnostics(DiagnosticsArgs),
+    #[command(
+        about = "collect or diagnose runtime proof evidence",
+        after_help = PROOF_AFTER_HELP
+    )]
+    Proof(ProofArgs),
     #[command(
         about = "service-first CLI surface backed by VidaClient service operations",
         after_help = SERVICE_AFTER_HELP
@@ -247,6 +253,37 @@ pub(crate) struct AgentSelectArgs {
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct ProofArgs {
+    #[command(subcommand)]
+    pub(crate) command: ProofCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum ProofCommand {
+    #[command(
+        about = "collect browser proof artifacts for one route",
+        after_help = "Examples:\n  vida proof browser --route http://127.0.0.1:51235/#/module/project --expect \"My Tasks\" --json\n\nOptions:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output"
+    )]
+    Browser(ProofBrowserArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct ProofBrowserArgs {
+    #[arg(long = "route", help = "Browser route or URL to prove")]
+    pub(crate) route: String,
+
+    #[arg(
+        long = "expect",
+        help = "Text or route marker expected in the collected browser proof"
+    )]
+    pub(crate) expect: Option<String>,
 
     #[arg(long = "json")]
     pub(crate) json: bool,

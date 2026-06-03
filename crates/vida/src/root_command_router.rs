@@ -3,10 +3,10 @@ use std::{ffi::OsString, process::ExitCode};
 use super::{
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
-    orchestrator_session_surface, print_root_help, project_activator_surface, protocol_surface,
-    release_surface, resolve_runtime_project_root, run_taskflow_proxy, service_client_cli,
-    state_store, status_surface, task_surface, AgentArgs, AgentCommand, Cli, Command,
-    ReleaseCommand, TaskArgs, TaskCommand,
+    orchestrator_session_surface, print_root_help, project_activator_surface, proof_surface,
+    protocol_surface, release_surface, resolve_runtime_project_root, run_taskflow_proxy,
+    service_client_cli, state_store, status_surface, task_surface, AgentArgs, AgentCommand, Cli,
+    Command, ReleaseCommand, TaskArgs, TaskCommand,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -48,6 +48,7 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::Status(args)) => status_surface::run_status(args).await,
         Some(Command::Doctor(args)) => doctor_surface::run_doctor(args).await,
         Some(Command::Diagnostics(args)) => diagnostics_surface::run_diagnostics(args).await,
+        Some(Command::Proof(args)) => proof_surface::run_proof(args).await,
         Some(Command::Service(args)) => service_client_cli::run_service(args),
         Some(Command::Project(args)) => service_client_cli::run_project(args),
         Some(Command::Wizard(args)) => service_client_cli::run_wizard(args),
@@ -105,6 +106,7 @@ fn command_label(command: &Option<Command>) -> String {
         Some(Command::Status(_)) => "vida status".to_string(),
         Some(Command::Doctor(_)) => "vida doctor".to_string(),
         Some(Command::Diagnostics(_)) => "vida diagnostics".to_string(),
+        Some(Command::Proof(_)) => "vida proof".to_string(),
         Some(Command::Service(_)) => "vida service".to_string(),
         Some(Command::Project(_)) => "vida project".to_string(),
         Some(Command::Wizard(_)) => "vida wizard".to_string(),
@@ -209,6 +211,7 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
             | Command::Status(_)
             | Command::Doctor(_)
             | Command::Diagnostics(_)
+            | Command::Proof(_)
             | Command::Service(_)
             | Command::Project(_)
             | Command::Wizard(_)
@@ -342,6 +345,7 @@ fn raw_args_need_project_root_state_dir(args: &[OsString]) -> bool {
             | "status"
             | "doctor"
             | "diagnostics"
+            | "proof"
             | "service"
             | "project"
             | "wizard"
@@ -523,6 +527,23 @@ mod tests {
         );
         drop(guard);
         assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
+    }
+
+    #[test]
+    fn proof_browser_surface_is_project_bound_for_runtime_state() {
+        let cli = Cli::try_parse_from([
+            "vida",
+            "proof",
+            "browser",
+            "--route",
+            "http://127.0.0.1:51235",
+            "--expect",
+            "READY",
+            "--json",
+        ])
+        .expect("proof browser cli should parse");
+
+        assert!(command_needs_project_root_state_dir(&cli.command));
     }
 
     #[test]
