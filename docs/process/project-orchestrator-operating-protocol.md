@@ -85,7 +85,8 @@ Project residue:
 3. use `META` for multi-defect or multi-source batch planning before selecting the shared invariant and proof window,
 4. prefer local focused proof and documented script modes before expensive workspace, release, installer, or CI gates,
 5. treat CI after push as diagnostic unless the active bounded unit is release/mainline/installer/CI architecture admission,
-6. keep historical release labels and concrete blocker names as evidence only, not permanent routing law.
+6. keep historical release labels and concrete blocker names as evidence only, not permanent routing law,
+7. when `vida.config.yaml -> autonomous_execution.agent_only_development` is true, the project default is agent orchestration; a current VIDA `agent-init` packet, host-tool bridge request, or sticky user continuation intent is explicit project authorization to use the configured host subagent bridge as a carrier detail.
 
 The orchestrator must not:
 
@@ -151,7 +152,9 @@ Generic delegation, packet, lane, exception, and host-agent bridge law is owned 
 4. keep work local only for shaping, read-only analysis, proof-only checks, or a recorded bounded recovery/exception path,
 5. if runtime delegation is blocked, record the runtime defect and use the defective-runtime overlay only until canonical dispatch/continuation is restored,
 6. do not treat a visible host subagent, explicit process-carrier execution, activation view, known patch location, dirty tree, or advisory draft as receipt-backed execution evidence,
-7. before escalating, verify packet boundaries, write-scope collisions, architecture conflicts, and repeated rework evidence against the mapped owner protocols.
+7. before escalating, verify packet boundaries, write-scope collisions, architecture conflicts, and repeated rework evidence against the mapped owner protocols,
+8. host-tool contracts that require explicit subagent/delegation permission are satisfied by this project policy when the runtime has selected agent-only development and emitted a bounded VIDA dispatch or host bridge request; the host tool remains an executor adapter and does not become a separate approval gate,
+9. if no current VIDA dispatch, host bridge request, sticky user continuation intent, or agent-only runtime policy is visible, fail closed to clarification before spawning host subagents.
 
 ## Packet Readiness Rule
 
@@ -256,5 +259,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: 2026-06-02T07:05:00+03:00
+updated_at: 2026-06-03T15:45:00+03:00
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl

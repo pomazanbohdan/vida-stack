@@ -26,6 +26,9 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists
 - delegated worker dispatch still materializes through `vida agent-init` until the operator-surface promotion slice closes
 - for internal host-agent postures, runtime may emit a host-tool bridge request for the configured parent/app adapter capability; Codex host tools, Claude Code subagents, Pi sub-agent plugins, Vibe Kanban agents, OpenCode subagents, and future adapters are selected by config capability, not by vendor-id hardcoding
+- when `autonomous_execution.agent_only_development=true`, a current VIDA dispatch packet or host-tool bridge request is the project-level explicit request to use the configured host subagent adapter for that bounded lane
+- host-tool API restrictions that require explicit subagent/delegation permission are satisfied by the VIDA dispatch/bridge request plus the project default agent orchestration policy; they do not require a second chat-only permission prompt
+- that permission is path-, run-, role-, and receipt-scoped; it does not weaken `vida agent-init` authority, TaskFlow binding, exception takeover, or receipt-backed closure rules
 - non-interactive process execution such as `codex exec` is a separate process carrier such as `codex_cli_exec`, not the implementation of `internal_subagents`
 - project "agent-first" development therefore means `vida agent-init`-backed delegated lanes first; host-tool-specific subagent APIs are optional carrier mechanics, not the canonical project execution contract
 - host-local shell/edit capability is an executor affordance only and must not be interpreted as lawful root-session write ownership
@@ -46,5 +49,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/agent-system.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-30T22:15:50.7658774Z
+updated_at: 2026-06-03T15:45:00+03:00
 changelog_ref: agent-system.changelog.jsonl
