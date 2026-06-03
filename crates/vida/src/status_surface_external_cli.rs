@@ -167,6 +167,50 @@ fn readiness_command_timeout(readiness: &serde_yaml::Value, section: &str) -> st
     std::time::Duration::from_secs(seconds)
 }
 
+fn readiness_argument_is_config_safe(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':'))
+}
+
+fn readiness_command_line_is_config_safe(section: &str, parts: &[String]) -> bool {
+    let Some((command, args)) = parts.split_first() else {
+        return false;
+    };
+
+    #[cfg(test)]
+    if std::path::Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("fake-jcode"))
+        && std::path::Path::new(command).is_file()
+    {
+        return true;
+    }
+
+    if command != "jcode" {
+        return false;
+    }
+
+    match section {
+        "auth" => args == ["auth", "status", "--json"],
+        "model" => match args {
+            [model, list, provider_flag, provider, no_update]
+                if model == "model"
+                    && list == "list"
+                    && provider_flag == "--provider"
+                    && no_update == "--no-update" =>
+            {
+                readiness_argument_is_config_safe(provider)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 fn readiness_command_output(
     readiness: &serde_yaml::Value,
     section: &str,
@@ -174,6 +218,11 @@ fn readiness_command_output(
     let (_, command_line) = readiness_command(readiness, section)
         .ok_or_else(|| format!("readiness.{section}.command is not configured"))?;
     let parts = split_readiness_command_line(command_line)?;
+    if !readiness_command_line_is_config_safe(section, &parts) {
+        return Err(format!(
+            "External CLI readiness command in readiness.{section}.command is not safe for status probing"
+        ));
+    }
     let (command, args) = parts
         .split_first()
         .ok_or_else(|| "External CLI readiness command is empty".to_string())?;
@@ -1854,7 +1903,7 @@ mod tests {
     use super::{
         adapter_prewrite_guard_capabilities, external_cli_backend_readiness_verdict_for_profile,
         external_cli_preflight_summary, external_cli_preflight_summary_with_probe_override,
-        external_cli_probe_command_is_config_safe,
+        external_cli_probe_command_is_config_safe, readiness_command_line_is_config_safe,
     };
     use std::fs;
 
@@ -1880,6 +1929,41 @@ mod tests {
             "provider --flag"
         ));
         assert!(!external_cli_probe_command_is_config_safe("provider|other"));
+    }
+
+    #[test]
+    fn command_readiness_config_safety_allows_only_bounded_jcode_status_probes() {
+        let auth_parts = vec!["jcode", "auth", "status", "--json"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let model_parts = vec![
+            "jcode",
+            "model",
+            "list",
+            "--provider",
+            "nvidia-nim",
+            "--no-update",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let shell_parts = vec!["/bin/sh", "-c", "printf pwned > /tmp/vida-marker"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let python_parts = vec!["python3", "-c", "print('pwned')"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        assert!(readiness_command_line_is_config_safe("auth", &auth_parts));
+        assert!(readiness_command_line_is_config_safe("model", &model_parts));
+        assert!(!readiness_command_line_is_config_safe("auth", &shell_parts));
+        assert!(!readiness_command_line_is_config_safe(
+            "auth",
+            &python_parts
+        ));
     }
 
     fn current_exe_command() -> String {
