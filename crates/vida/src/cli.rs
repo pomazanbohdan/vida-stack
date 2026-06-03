@@ -358,10 +358,36 @@ pub(crate) struct RuntimeWebArgs {
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum RuntimeWebCommand {
     #[command(
+        about = "inspect current-repo web proof listeners and proxy health",
+        after_help = "Examples:\n  vida runtime web status --scope current-repo --include-edge-proxy --json\n\nOptions:\n  --scope current-repo       Limit diagnostics to the current repository\n  --include-edge-proxy       Include edge proxy listeners in diagnostics\n  --json                     Emit machine-readable JSON output"
+    )]
+    Status(RuntimeWebStatusArgs),
+
+    #[command(
         about = "restart current-repo web proof listeners with fail-closed ownership checks",
         after_help = "Examples:\n  vida runtime web restart --scope current-repo --include-edge-proxy --dry-run --json\n  vida runtime web restart --scope current-repo --include-edge-proxy --json\n\nOptions:\n  --scope current-repo       Limit restart planning to the current repository\n  --include-edge-proxy       Include edge proxy listeners in the restart plan\n  --dry-run                  Preview actions without stopping or starting processes\n  --json                     Emit machine-readable JSON output"
     )]
     Restart(RuntimeWebRestartArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct RuntimeWebStatusArgs {
+    #[arg(
+        long = "scope",
+        default_value = "current-repo",
+        value_parser = ["current-repo"],
+        help = "Status scope; only current-repo is supported"
+    )]
+    pub(crate) scope: String,
+
+    #[arg(
+        long = "include-edge-proxy",
+        help = "Include configured edge proxy listeners in diagnostics"
+    )]
+    pub(crate) include_edge_proxy: bool,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]

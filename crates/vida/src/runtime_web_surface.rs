@@ -5,27 +5,363 @@ use serde_json::Value;
 
 use crate::operator_contracts::{
     finalize_release1_operator_truth, shared_operator_output_contract_parity_error,
+    FinalizedRelease1OperatorTruth,
 };
 use crate::release1_contracts::{blocker_code_str, BlockerCode};
 use crate::surface_render::print_surface_json;
 use crate::{
     print_surface_header, print_surface_line, RuntimeArgs, RuntimeCommand, RuntimeWebCommand,
-    RuntimeWebRestartArgs,
+    RuntimeWebRestartArgs, RuntimeWebStatusArgs,
 };
 
+const RUNTIME_WEB_STATUS_SURFACE: &str = "vida runtime web status";
 const RUNTIME_WEB_RESTART_SURFACE: &str = "vida runtime web restart";
 const RESTART_EXECUTOR_BLOCKER: BlockerCode = BlockerCode::ToolContractMissing;
+const STATUS_STALE_LISTENER_BLOCKER: BlockerCode = BlockerCode::OwnerSurfaceContradiction;
 const RESTART_EXECUTOR_NEXT_ACTION: &str = "Add project-local runtime web restart adapter scripts or rerun with --dry-run to inspect the restart plan.";
+const STATUS_STALE_LISTENER_NEXT_ACTION: &str = "Run `vida runtime web restart --scope current-repo --include-edge-proxy --json` to reconcile current-repo web proof listeners.";
 const LOCAL_WEB_ADAPTER: &str = "scripts/windows/Start-WebDevServer.ps1";
 const EDGE_PROXY_ADAPTER: &str = "scripts/windows/Start-WebCloudflareEdgeProxy.ps1";
 const SIMULATE_EXECUTOR_ENV: &str = "VIDA_RUNTIME_WEB_RESTART_SIMULATE_EXECUTOR";
+const PROCESS_SNAPSHOT_ENV: &str = "VIDA_RUNTIME_WEB_STATUS_PROCESS_SNAPSHOT";
 
 pub(crate) async fn run_runtime(args: RuntimeArgs) -> ExitCode {
     match args.command {
         RuntimeCommand::Web(args) => match args.command {
+            RuntimeWebCommand::Status(args) => run_runtime_web_status(args),
             RuntimeWebCommand::Restart(args) => run_runtime_web_restart(args),
         },
     }
+}
+
+fn run_runtime_web_status(args: RuntimeWebStatusArgs) -> ExitCode {
+    let payload = build_runtime_web_status_payload(&args);
+    let printed_json = print_surface_json(
+        &payload,
+        args.json,
+        "runtime web status payload should render as json",
+    );
+
+    if !printed_json {
+        print_runtime_web_status_plain(&payload);
+    }
+
+    if payload["status"].as_str() == Some("pass") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn build_runtime_web_status_payload(args: &RuntimeWebStatusArgs) -> Value {
+    match crate::resolve_runtime_project_root() {
+        Ok(project_root) => build_runtime_web_status_payload_for_project_root(args, &project_root),
+        Err(error) => {
+            build_runtime_web_status_payload_for_unresolved_root(args, &error.to_string())
+        }
+    }
+}
+
+fn build_runtime_web_status_payload_for_unresolved_root(
+    args: &RuntimeWebStatusArgs,
+    error: &str,
+) -> Value {
+    let project_root = format!("unresolved: {error}");
+    let blocker_codes = vec![blocker_code_str(RESTART_EXECUTOR_BLOCKER).to_string()];
+    let next_actions =
+        vec!["Resolve the VIDA project root before inspecting runtime web services.".to_string()];
+    let artifact_refs = serde_json::json!({
+        "surface": RUNTIME_WEB_STATUS_SURFACE,
+        "scope": args.scope,
+        "include_edge_proxy": args.include_edge_proxy,
+        "project_root": project_root,
+    });
+    let finalized = finalize_release1_operator_truth(blocker_codes, next_actions, artifact_refs)
+        .expect("runtime web status operator truth should finalize");
+    runtime_web_status_payload_from_parts(
+        args,
+        project_root,
+        "blocked_project_root_unresolved",
+        finalized,
+        serde_json::json!([]),
+        serde_json::json!([]),
+        serde_json::json!([]),
+    )
+}
+
+fn build_runtime_web_status_payload_for_project_root(
+    args: &RuntimeWebStatusArgs,
+    project_root: &Path,
+) -> Value {
+    let adapter_plan = RuntimeWebRestartAdapterPlan::discover(project_root);
+    let processes = discover_runtime_web_processes(project_root);
+    let components =
+        runtime_web_status_components(args.include_edge_proxy, &adapter_plan, &processes);
+    let stale_processes = runtime_web_stale_processes(&components);
+    let mut blocker_codes = Vec::new();
+    let mut next_actions = Vec::new();
+    let mode = if stale_processes
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        blocker_codes.push(blocker_code_str(STATUS_STALE_LISTENER_BLOCKER).to_string());
+        next_actions.push(STATUS_STALE_LISTENER_NEXT_ACTION.to_string());
+        "stale_listener_conflict"
+    } else {
+        "inspected"
+    };
+    let artifact_refs = serde_json::json!({
+        "surface": RUNTIME_WEB_STATUS_SURFACE,
+        "scope": args.scope,
+        "include_edge_proxy": args.include_edge_proxy,
+        "project_root": project_root.display().to_string(),
+    });
+    let finalized = finalize_release1_operator_truth(blocker_codes, next_actions, artifact_refs)
+        .expect("runtime web status operator truth should finalize");
+    runtime_web_status_payload_from_parts(
+        args,
+        project_root.display().to_string(),
+        mode,
+        finalized,
+        components,
+        stale_processes,
+        serde_json::json!(processes),
+    )
+}
+
+fn runtime_web_status_payload_from_parts(
+    args: &RuntimeWebStatusArgs,
+    project_root: String,
+    mode: &str,
+    finalized: FinalizedRelease1OperatorTruth,
+    components: Value,
+    stale_processes: Value,
+    process_snapshot: Value,
+) -> Value {
+    let mut payload = serde_json::json!({
+        "surface": RUNTIME_WEB_STATUS_SURFACE,
+        "status": finalized.status,
+        "trace_id": finalized.operator_contracts["trace_id"].clone(),
+        "workflow_class": finalized.operator_contracts["workflow_class"].clone(),
+        "risk_tier": finalized.operator_contracts["risk_tier"].clone(),
+        "blocker_codes": finalized.blocker_codes,
+        "next_actions": finalized.next_actions,
+        "artifact_refs": finalized.artifact_refs,
+        "shared_fields": finalized.shared_fields,
+        "operator_contracts": finalized.operator_contracts,
+        "web_status": {
+            "scope": args.scope,
+            "include_edge_proxy": args.include_edge_proxy,
+            "project_root": project_root,
+            "mode": mode,
+            "components": components,
+            "stale_processes": stale_processes,
+            "process_snapshot": process_snapshot,
+        },
+        "components": components,
+        "stale_processes": stale_processes,
+    });
+    for key in ["trace_id", "workflow_class", "risk_tier"] {
+        payload["shared_fields"][key] = payload["operator_contracts"][key].clone();
+    }
+    assert_eq!(
+        shared_operator_output_contract_parity_error(&payload),
+        None,
+        "runtime web status payload should keep release-1 parity"
+    );
+    payload
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RuntimeWebProcessSnapshot {
+    process_id: u32,
+    command_line: String,
+    component_id: Option<&'static str>,
+    ownership: String,
+}
+
+fn discover_runtime_web_processes(project_root: &Path) -> Vec<RuntimeWebProcessSnapshot> {
+    if let Ok(raw) = std::env::var(PROCESS_SNAPSHOT_ENV) {
+        return parse_runtime_web_process_snapshot(&raw, project_root);
+    }
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    let script = "$pattern = '(-File\\s+.*(Start-WebDevServer|Start-WebOdooProxy|Start-WebCloudflareEdgeProxy)\\.ps1|flutter-wrapper\\.cmd|flutter.*web-server)'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pattern) } | Select-Object @{Name='process_id';Expression={$_.ProcessId}},@{Name='command_line';Expression={$_.CommandLine}} | ConvertTo-Json -Depth 3";
+    let Ok(output) = Command::new("pwsh")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_runtime_web_process_snapshot(&String::from_utf8_lossy(&output.stdout), project_root)
+}
+
+fn parse_runtime_web_process_snapshot(
+    raw: &str,
+    project_root: &Path,
+) -> Vec<RuntimeWebProcessSnapshot> {
+    let Ok(value) = serde_json::from_str::<Value>(raw.trim()) else {
+        return Vec::new();
+    };
+    let values = match value {
+        Value::Array(values) => values,
+        Value::Object(_) => vec![value],
+        _ => Vec::new(),
+    };
+    let project_root = normalize_process_path(&project_root.display().to_string());
+    values
+        .into_iter()
+        .filter_map(|value| {
+            let process_id = value
+                .get("process_id")
+                .or_else(|| value.get("ProcessId"))
+                .and_then(serde_json::Value::as_u64)? as u32;
+            let command_line = value
+                .get("command_line")
+                .or_else(|| value.get("CommandLine"))
+                .and_then(serde_json::Value::as_str)?
+                .to_string();
+            let normalized = normalize_process_path(&command_line);
+            let component_id = runtime_web_component_for_command_line(&normalized);
+            component_id.map(|component_id| RuntimeWebProcessSnapshot {
+                process_id,
+                command_line,
+                component_id: Some(component_id),
+                ownership: if normalized.contains(&project_root) {
+                    "current_repo".to_string()
+                } else {
+                    "stale_foreign_repo".to_string()
+                },
+            })
+        })
+        .collect()
+}
+
+fn normalize_process_path(value: &str) -> String {
+    value.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn runtime_web_component_for_command_line(command_line: &str) -> Option<&'static str> {
+    let command_line = command_line
+        .replace('\'', "")
+        .replace('"', "")
+        .to_ascii_lowercase();
+    if command_line.contains("get-ciminstance win32_process") {
+        return None;
+    }
+    let file_script = command_line.contains("-file ");
+    if file_script && command_line.contains("start-webcloudflareedgeproxy.ps1") {
+        Some("edge_proxy")
+    } else if file_script && command_line.contains("start-webodooproxy.ps1") {
+        Some("local_proxy")
+    } else if (file_script && command_line.contains("start-webdevserver.ps1"))
+        || command_line.contains("flutter-wrapper")
+        || (command_line.contains("flutter") && command_line.contains("web-server"))
+    {
+        Some("local_web_upstream")
+    } else {
+        None
+    }
+}
+
+fn runtime_web_status_components(
+    include_edge_proxy: bool,
+    adapter_plan: &RuntimeWebRestartAdapterPlan,
+    processes: &[RuntimeWebProcessSnapshot],
+) -> Value {
+    serde_json::json!([
+        runtime_web_status_component(
+            "local_web_upstream",
+            "web_upstream",
+            adapter_plan.local_web_script.as_ref(),
+            vec![51235, 51237],
+            processes,
+            true,
+        ),
+        runtime_web_status_component(
+            "local_proxy",
+            "proxy",
+            adapter_plan.local_web_script.as_ref(),
+            vec![51236],
+            processes,
+            true,
+        ),
+        runtime_web_status_component(
+            "edge_proxy",
+            "edge_proxy",
+            adapter_plan.edge_proxy_script.as_ref(),
+            vec![51235],
+            processes,
+            include_edge_proxy,
+        ),
+    ])
+}
+
+fn runtime_web_status_component(
+    component_id: &'static str,
+    kind: &'static str,
+    adapter_path: Option<&PathBuf>,
+    expected_ports: Vec<u16>,
+    processes: &[RuntimeWebProcessSnapshot],
+    included: bool,
+) -> Value {
+    let current_repo_processes = processes
+        .iter()
+        .filter(|process| {
+            process.component_id == Some(component_id) && process.ownership == "current_repo"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let stale_processes = processes
+        .iter()
+        .filter(|process| {
+            process.component_id == Some(component_id) && process.ownership != "current_repo"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let health = if !included {
+        "skipped"
+    } else if !stale_processes.is_empty() {
+        "stale_conflict"
+    } else if !current_repo_processes.is_empty() {
+        "running"
+    } else if adapter_path.is_none() {
+        "not_configured"
+    } else {
+        "stopped"
+    };
+    serde_json::json!({
+        "id": component_id,
+        "kind": kind,
+        "included": included,
+        "health": health,
+        "adapter_path": adapter_path.map(|path| path.display().to_string()),
+        "expected_ports": expected_ports,
+        "current_repo_processes": current_repo_processes,
+        "stale_processes": stale_processes,
+    })
+}
+
+fn runtime_web_stale_processes(components: &Value) -> Value {
+    let mut stale = Vec::new();
+    if let Some(components) = components.as_array() {
+        for component in components {
+            if let Some(processes) = component["stale_processes"].as_array() {
+                stale.extend(processes.iter().cloned());
+            }
+        }
+    }
+    serde_json::json!(stale)
 }
 
 fn run_runtime_web_restart(args: RuntimeWebRestartArgs) -> ExitCode {
@@ -641,6 +977,32 @@ fn print_runtime_web_restart_plain(payload: &Value) {
     }
 }
 
+fn print_runtime_web_status_plain(payload: &Value) {
+    print_surface_header(crate::RenderMode::Plain, "Runtime web status");
+    print_surface_line(
+        crate::RenderMode::Plain,
+        "status",
+        payload["status"].as_str().unwrap_or("blocked"),
+    );
+    print_surface_line(
+        crate::RenderMode::Plain,
+        "scope",
+        payload["web_status"]["scope"].as_str().unwrap_or(""),
+    );
+    print_surface_line(
+        crate::RenderMode::Plain,
+        "mode",
+        payload["web_status"]["mode"].as_str().unwrap_or("unknown"),
+    );
+    if let Some(next_action) = payload["next_actions"]
+        .as_array()
+        .and_then(|values| values.first())
+        .and_then(|value| value.as_str())
+    {
+        print_surface_line(crate::RenderMode::Plain, "next action", next_action);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
@@ -710,11 +1072,39 @@ mod tests {
             panic!("runtime command should parse as root runtime command");
         };
         let RuntimeCommand::Web(web) = args.command;
-        let RuntimeWebCommand::Restart(restart) = web.command;
+        let RuntimeWebCommand::Restart(restart) = web.command else {
+            panic!("runtime web restart command should parse");
+        };
         assert_eq!(restart.scope, "current-repo");
         assert!(restart.include_edge_proxy);
         assert!(restart.dry_run);
         assert!(restart.json);
+    }
+
+    #[test]
+    fn runtime_web_status_cli_accepts_current_repo_edge_proxy_json() {
+        let cli = Cli::try_parse_from([
+            "vida",
+            "runtime",
+            "web",
+            "status",
+            "--scope",
+            "current-repo",
+            "--include-edge-proxy",
+            "--json",
+        ])
+        .expect("runtime web status should parse");
+
+        let Some(Command::Runtime(args)) = cli.command else {
+            panic!("runtime command should parse as root runtime command");
+        };
+        let RuntimeCommand::Web(web) = args.command;
+        let RuntimeWebCommand::Status(status) = web.command else {
+            panic!("runtime web status command should parse");
+        };
+        assert_eq!(status.scope, "current-repo");
+        assert!(status.include_edge_proxy);
+        assert!(status.json);
     }
 
     #[test]
@@ -736,6 +1126,105 @@ mod tests {
                 "runtime web restart help should document `{expected}`:\n{help}"
             );
         }
+    }
+
+    #[test]
+    fn runtime_web_status_help_documents_options() {
+        let help = Cli::try_parse_from(["vida", "runtime", "web", "status", "--help"])
+            .expect_err("help should render clap display error")
+            .to_string();
+
+        for expected in [
+            "inspect current-repo web proof listeners and proxy health",
+            "--scope <SCOPE>",
+            "current-repo",
+            "--include-edge-proxy",
+            "--json",
+        ] {
+            assert!(
+                help.contains(expected),
+                "runtime web status help should document `{expected}`:\n{help}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_web_status_without_processes_reports_pass_not_configured() {
+        let _snapshot = EnvGuard::set(PROCESS_SNAPSHOT_ENV, "[]");
+        let project_root = temp_runtime_web_project("status-clean");
+
+        let payload = build_runtime_web_status_payload_for_project_root(
+            &RuntimeWebStatusArgs {
+                scope: "current-repo".to_string(),
+                include_edge_proxy: true,
+                json: true,
+            },
+            &project_root,
+        );
+
+        assert_eq!(payload["surface"], RUNTIME_WEB_STATUS_SURFACE);
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["web_status"]["mode"], "inspected");
+        assert_eq!(
+            payload["web_status"]["components"][0]["health"],
+            "not_configured"
+        );
+        assert_eq!(payload["stale_processes"].as_array().unwrap().len(), 0);
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn runtime_web_status_reports_stale_foreign_listener_conflict() {
+        let project_root = temp_runtime_web_project("status-stale");
+        write_fake_runtime_web_adapter(&project_root, LOCAL_WEB_ADAPTER);
+        write_fake_runtime_web_adapter(&project_root, EDGE_PROXY_ADAPTER);
+        let snapshot = serde_json::json!([
+            {
+                "process_id": 1001,
+                "command_line": format!(
+                    "pwsh -File {}/scripts/windows/Start-WebDevServer.ps1",
+                    project_root.display()
+                )
+            },
+            {
+                "process_id": 1002,
+                "command_line": "pwsh -File C:/foreign/repo/scripts/windows/Start-WebCloudflareEdgeProxy.ps1"
+            }
+        ])
+        .to_string();
+        let _snapshot = EnvGuard::set(PROCESS_SNAPSHOT_ENV, &snapshot);
+
+        let payload = build_runtime_web_status_payload_for_project_root(
+            &RuntimeWebStatusArgs {
+                scope: "current-repo".to_string(),
+                include_edge_proxy: true,
+                json: true,
+            },
+            &project_root,
+        );
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"][0],
+            blocker_code_str(STATUS_STALE_LISTENER_BLOCKER)
+        );
+        assert_eq!(payload["web_status"]["mode"], "stale_listener_conflict");
+        assert_eq!(payload["web_status"]["components"][0]["health"], "running");
+        assert_eq!(
+            payload["web_status"]["components"][2]["health"],
+            "stale_conflict"
+        );
+        assert_eq!(payload["stale_processes"].as_array().unwrap().len(), 1);
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn runtime_web_status_ignores_own_process_discovery_command() {
+        let command_line = "pwsh -NoProfile -Command \"$pattern = 'flutter.*web-server'; Get-CimInstance Win32_Process\"";
+
+        assert_eq!(runtime_web_component_for_command_line(command_line), None);
     }
 
     #[test]
