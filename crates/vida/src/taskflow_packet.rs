@@ -306,6 +306,27 @@ fn execution_preparation_artifacts_from_packet_body(
         .unwrap_or(serde_json::Value::Null)
 }
 
+fn hydrate_dispatch_packet_owned_paths_from_task(
+    dispatch_packet_body: &mut serde_json::Value,
+    task: &TaskRecord,
+) -> bool {
+    let owned_paths = &task.planner_metadata.owned_paths;
+    if owned_paths.is_empty() {
+        return false;
+    }
+    let mut hydrated = crate::runtime_dispatch_state::apply_owned_paths_if_missing(
+        dispatch_packet_body,
+        owned_paths,
+    );
+    if let Some(delivery_task_packet) = dispatch_packet_body.get_mut("delivery_task_packet") {
+        hydrated |= crate::runtime_dispatch_state::apply_owned_paths_if_missing(
+            delivery_task_packet,
+            owned_paths,
+        );
+    }
+    hydrated
+}
+
 fn preview_value<'a>(body: &'a serde_json::Value, section: &str, key: &str) -> &'a str {
     body.get(section)
         .and_then(|value| value.get(key))
@@ -682,13 +703,16 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let dispatch_packet_body = match read_packet_body(dispatch_packet_path) {
+    let mut dispatch_packet_body = match read_packet_body(dispatch_packet_path) {
         Ok(body) => body,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(1);
         }
     };
+    if let Ok(task) = load_task_for_packet_repair(&store, &effective_run_id).await {
+        hydrate_dispatch_packet_owned_paths_from_task(&mut dispatch_packet_body, &task);
+    }
     let downstream_packet = match receipt.downstream_dispatch_packet_path.as_deref() {
         Some(path) if !path.trim().is_empty() => match read_packet_body(path) {
             Ok(body) => Some(serde_json::json!({
@@ -807,8 +831,8 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_taskflow_packet_render_payload, build_taskflow_packet_repair_payload,
-        latest_dispatch_init_cache_run_id, parse_packet_repair_args,
-        read_dispatch_init_cache_payload, resolve_latest_packet_run_id,
+        hydrate_dispatch_packet_owned_paths_from_task, latest_dispatch_init_cache_run_id,
+        parse_packet_repair_args, read_dispatch_init_cache_payload, resolve_latest_packet_run_id,
         resolve_packet_render_run_id,
     };
     use crate::state_store::{StateStore, TaskPlannerMetadata, TaskRecord};
@@ -1003,6 +1027,32 @@ mod tests {
         assert_eq!(
             payload["task_metadata"]["planner_metadata"]["owned_paths"][0],
             "crates/vida/src/taskflow_packet.rs"
+        );
+    }
+
+    #[test]
+    fn packet_render_hydrates_empty_owned_paths_from_task_metadata() {
+        let task = packet_repair_task_with_metadata();
+        let mut packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": [],
+            "delivery_task_packet": {
+                "handoff_task_class": "implementation",
+                "owned_paths": []
+            }
+        });
+
+        assert!(hydrate_dispatch_packet_owned_paths_from_task(
+            &mut packet,
+            &task
+        ));
+        assert_eq!(
+            packet["owned_paths"],
+            serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+        );
+        assert_eq!(
+            packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
         );
     }
 

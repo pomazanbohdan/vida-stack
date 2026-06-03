@@ -9077,6 +9077,105 @@ host_environment:
     }
 
     #[test]
+    fn packet_render_owned_paths_hydrates_task_planner_metadata() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        let task_id = "architecture-refactor-runtime-storage-auto-repair";
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: task_id.to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "planner_metadata": {
+                            "owned_paths": [
+                                "crates/vida/src/runtime_dispatch_state.rs",
+                                "crates/vida/src/taskflow_consume.rs"
+                            ]
+                        }
+                    }
+                },
+                "development_flow": {
+                    "implementer": {
+                        "executor_backend": "internal_subagents",
+                        "activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: task_id.to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-03T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        let preview = runtime_dispatch_packet_preview(&ctx).expect("preview should render");
+
+        assert_eq!(preview["status"], "pass");
+        assert_eq!(
+            preview["packet"]["delivery_task_packet"]["owned_paths"],
+            serde_json::json!([
+                "crates/vida/src/runtime_dispatch_state.rs",
+                "crates/vida/src/taskflow_consume.rs"
+            ])
+        );
+        assert_eq!(
+            preview["packet_contract_missing_fields"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
     fn route_profile_override_prefers_internal_review_over_runtime_assignment_default() {
         let mut execution_plan = agent_lane_test_execution_plan("internal_subagents");
         execution_plan["development_flow"]["coach"] = json!({
