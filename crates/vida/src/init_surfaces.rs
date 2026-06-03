@@ -5062,6 +5062,19 @@ fn resume_inputs_from_downstream_packet_without_store(
     })
 }
 
+fn resume_inputs_from_agent_init_packet_arg_without_store(
+    args: &AgentInitArgs,
+) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
+    if let Some(packet_path) = args.downstream_packet.as_deref() {
+        return resume_inputs_from_downstream_packet_without_store(packet_path);
+    }
+    let packet_path = args
+        .dispatch_packet
+        .as_deref()
+        .expect("packet_arg_count > 0 should provide a packet path");
+    resume_inputs_from_dispatch_packet_without_store(packet_path)
+}
+
 fn resume_inputs_from_dispatch_packet_without_store(
     packet_path: &str,
 ) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
@@ -5327,12 +5340,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 let resume_inputs = if agent_init_execute_dispatch_worker_active()
                     && packet_arg_count > 0
                 {
-                    let packet_path = args
-                        .dispatch_packet
-                        .as_deref()
-                        .or(args.downstream_packet.as_deref())
-                        .expect("packet_arg_count > 0 should provide a packet path");
-                    match resume_inputs_from_dispatch_packet_without_store(packet_path) {
+                    match resume_inputs_from_agent_init_packet_arg_without_store(&args) {
                         Ok(inputs) => {
                             match merge_persisted_dispatch_receipt_without_resume_gate(
                                 &store, inputs,
@@ -5607,12 +5615,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     let resume_inputs = if agent_init_execute_dispatch_worker_active()
                         && packet_arg_count > 0
                     {
-                        let packet_path = args
-                            .dispatch_packet
-                            .as_deref()
-                            .or(args.downstream_packet.as_deref())
-                            .expect("packet_arg_count > 0 should provide a packet path");
-                        match resume_inputs_from_dispatch_packet_without_store(packet_path) {
+                        match resume_inputs_from_agent_init_packet_arg_without_store(&args) {
                             Ok(inputs) => {
                                 match merge_persisted_dispatch_receipt_without_resume_gate(
                                     &store, inputs,
@@ -5903,6 +5906,18 @@ fn agent_init_packet_selection(
     packet: serde_json::Value,
     downstream: bool,
 ) -> Result<serde_json::Value, String> {
+    let packet_kind = packet
+        .get("packet_kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !downstream && packet_kind == "runtime_downstream_dispatch_packet" {
+        return Err(format!(
+            "Downstream dispatch packet {} requires `--downstream-packet`. Run: vida agent-init --downstream-packet {} --execute-dispatch --json",
+            crate::shell_quote(packet_path),
+            crate::shell_quote(packet_path)
+        ));
+    }
+
     let selected_role = packet
         .get("activation_runtime_role")
         .and_then(serde_json::Value::as_str)
@@ -7268,6 +7283,53 @@ mod agent_init_surface_tests {
                 .downstream_dispatch_last_target
                 .as_deref(),
             Some("implementer")
+        );
+    }
+
+    #[test]
+    fn downstream_packet_dispatch_passed_as_dispatch_packet_fails_closed_with_downstream_command() {
+        let packet_path = "/tmp/downstream-writer-packet.json";
+        let packet = serde_json::json!({
+            "run_id": "run-downstream-writer",
+            "source_dispatch_target": "analysis",
+            "downstream_dispatch_target": "implementer",
+            "downstream_dispatch_ready": true,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_status": "packet_ready",
+            "downstream_lane_status": "packet_ready",
+            "packet_kind": "runtime_downstream_dispatch_packet",
+            "packet_template_kind": "delivery_task_packet",
+            "delivery_task_packet": {
+                "goal": "Write downstream fix",
+                "scope_in": ["writer packet must not reuse analysis receipt"],
+                "definition_of_done": ["writer has its own receipt-backed execution"],
+                "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch --json",
+                "proof_target": "writer dispatch result",
+                "stop_rules": ["stop after writer evidence"],
+                "blocking_question": "Does writer require downstream packet execution?"
+            },
+            "activation_runtime_role": "worker",
+            "activation_agent_type": "middle",
+            "selected_backend": "middle",
+            "role_selection_full": test_role_selection(),
+            "run_graph_bootstrap": {
+                "run_id": "run-downstream-writer"
+            }
+        });
+
+        let error = agent_init_packet_selection(packet_path, packet, false)
+            .expect_err("downstream packet supplied via --dispatch-packet must fail closed");
+
+        assert!(
+            error.contains("requires `--downstream-packet`"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains(&format!(
+                "vida agent-init --downstream-packet {} --execute-dispatch --json",
+                crate::shell_quote(packet_path)
+            )),
+            "unexpected error: {error}"
         );
     }
 
