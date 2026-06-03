@@ -359,8 +359,11 @@ Companion rule:
    Config families: bounded ordered TaskFlow happy-path test catalog, proof-target mapping, parent/child closure consistency gate, and immediate defect-epic repair through agent mode
    Registered path: `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
 54. [pi-primary-environment-and-agent-carrier-design.md](pi-primary-environment-and-agent-carrier-design.md)
-   Config families: Pi primary host environment selection/materialization, `pi_cli` external carrier profiles, `vida-pi-agent` adapter dispatch, Pi internal-agent projections, bounded write-scope guard, template propagation, and release/package proof
-   Registered path: `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+    Config families: Pi primary host environment selection/materialization, `pi_cli` external carrier profiles, `vida-pi-agent` adapter dispatch, Pi internal-agent projections, bounded write-scope guard, template propagation, and release/package proof
+    Registered path: `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+55. [add-runtime-web-restart-current-repo-design.md](add-runtime-web-restart-current-repo-design.md)
+    Config families: current-repo scoped web proof restart command, explicit edge-proxy restart opt-in, stale listener ownership checks, compact JSON restart receipts, and TaskFlow proof consumption for `vida runtime web restart`
+    Registered path: `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
 
 ### Support
 
@@ -416,5 +419,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-06-03T09:39:28.0110711Z
+updated_at: 2026-06-03T22:33:00+03:00
 changelog_ref: current-spec-map.changelog.jsonl

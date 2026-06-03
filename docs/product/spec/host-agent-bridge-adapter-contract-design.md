@@ -145,6 +145,69 @@ If the current environment does not expose the configured adapter capability, VI
 - keep root-local write blocked,
 - recommend a configured adapter or explicit process carrier, never a silent vendor fallback.
 
+### FR-6: Executable parent-host adapter loop
+
+`vida agent-init --dispatch-packet <path> --execute-dispatch --json` may only execute
+`internal_subagents` through a parent-host adapter. The adapter loop is:
+
+1. Read `host_tool_bridge_request.request_path`.
+2. Verify `adapter_kind`, `adapter_capability_id`, `packet_path`, `run_id`, `dispatch_target`, `backend_id`, `carrier_id`, and declared write scope.
+3. Invoke the configured host capability. For `codex_host_tools`, this means `multi_agent_v1.spawn_agent`, then `multi_agent_v1.wait_agent`, then `multi_agent_v1.close_agent`.
+4. Write `host_tool_bridge_result` to `result_path` and `host_tool_bridge_receipt` to `receipt_path`.
+5. Call `vida lane complete <run-id> --receipt-id <id> --host-bridge-request <request_path> --host-agent-id <id> --host-bridge-summary <summary> --json`.
+
+The adapter is parent-session code, not a child process launched by `vida.exe`. VIDA may emit the request and validate completion, but the host adapter owns native host-tool invocation because those tools are not available inside the binary process.
+
+Minimum successful result:
+
+```json
+{
+  "artifact_kind": "host_tool_bridge_result",
+  "schema_version": 1,
+  "request_id": "...",
+  "run_id": "...",
+  "dispatch_target": "implementer",
+  "backend_id": "internal_subagents",
+  "carrier_id": "junior",
+  "execution_state": "executed",
+  "host_agent_id": "...",
+  "summary": "..."
+}
+```
+
+Minimum successful receipt:
+
+```json
+{
+  "artifact_kind": "host_tool_bridge_receipt",
+  "schema_version": 1,
+  "request_id": "...",
+  "run_id": "...",
+  "dispatch_target": "implementer",
+  "receipt_id": "...",
+  "receipt_backed": true,
+  "host_agent_id": "...",
+  "adapter_kind": "codex_host_tools",
+  "adapter_capability_id": "codex.multi_agent_v1"
+}
+```
+
+If the adapter cannot start a host agent, it must write blocked artifacts with:
+
+- `execution_state: "blocked"`
+- `blocker_code: "host_agent_capacity_unavailable" | "host_tool_capability_missing" | "host_agent_execution_failed"`
+- `next_actions` with an exact reclaim, retry, repair, or explicit process-carrier command.
+
+Thread limits and unavailable host capabilities are capacity/readiness blockers, not routing success and not `internal_codex_carrier_unavailable`.
+
+### FR-7: Prelaunch classification consistency
+
+Internal host bridge transport must not be prelaunch-classified as `internal_codex_carrier_unavailable`.
+
+- `dispatch_transport: host_tool_bridge`, or an internal host system with no explicit process transport, must reach the bridge request path and report `host_tool_bridge_adapter_required` / `bridge_request_pending` until receipt-backed completion exists.
+- `internal_codex_carrier_unavailable` is reserved for explicit process-carrier paths such as `dispatch_transport: codex_cli_exec` that cannot provide receipt-backed completion and have no admissible fallback.
+- Resume/recovery surfaces must preserve the underlying blocker but must not obscure the bridge request path or suggest an impossible direct binary launch.
+
 ## Adapter Classes
 
 | Adapter kind | Expected boundary | Notes |
@@ -168,6 +231,7 @@ If the current environment does not expose the configured adapter capability, VI
 ## Validation / Proof
 
 - `cargo test -p vida internal_host_tool_bridge_transport_does_not_require_codex_exec_dispatch -- --nocapture`
+- `cargo test -p vida internal_host_bridge_transport_defers_to_host_tool_bridge_request_path -- --nocapture`
 - `cargo test -p vida internal_host_bridge_receipt_mode_counts_as_receipt_backed_completion_support -- --nocapture`
 - `cargo test -p vida lane_complete_records_host_bridge_result_and_receipt_evidence -- --nocapture --test-threads=1`
 - `vida taskflow route explain --task-class implementation --runtime-role worker --json`

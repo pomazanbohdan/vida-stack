@@ -60,6 +60,7 @@ Active design docs:
 - `docs/product/spec/fix-status-surface-external-cli-readiness-design.md`
 - `docs/product/spec/test-first-runtime-defect-remediation-design.md`
 - `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
+- `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
 
 Current promoted runtime-control specs:
 
@@ -79,7 +80,7 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-05-18T00:00:00Z
+updated_at: 2026-06-03T22:33:00+03:00
 changelog_ref: README.changelog.jsonl
 - `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
 - `docs/product/spec/design-fast-high-signal-pre-commit-design.md`

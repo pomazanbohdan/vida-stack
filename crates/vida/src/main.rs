@@ -73,6 +73,7 @@ mod runtime_dispatch_receipt_helpers;
 mod runtime_dispatch_state;
 mod runtime_dispatch_status;
 mod runtime_lane_summary;
+mod runtime_web_surface;
 mod semantic_route_cache;
 mod semantic_routing_features;
 mod service_client_cli;

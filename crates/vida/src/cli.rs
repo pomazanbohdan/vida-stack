@@ -112,6 +112,8 @@ pub(crate) enum Command {
     Memory(MemoryArgs),
     #[command(about = "inspect backend, state spine, and latest receipts")]
     Status(StatusArgs),
+    #[command(about = "operate runtime-owned local development services")]
+    Runtime(RuntimeArgs),
     #[command(about = "run bounded runtime integrity checks")]
     Doctor(DoctorArgs),
     #[command(about = "run canonical runtime diagnostics for completed slices")]
@@ -284,6 +286,61 @@ pub(crate) struct ProofBrowserArgs {
         help = "Text or route marker expected in the collected browser proof"
     )]
     pub(crate) expect: Option<String>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct RuntimeArgs {
+    #[command(subcommand)]
+    pub(crate) command: RuntimeCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum RuntimeCommand {
+    #[command(about = "inspect or restart local web proof services")]
+    Web(RuntimeWebArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct RuntimeWebArgs {
+    #[command(subcommand)]
+    pub(crate) command: RuntimeWebCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum RuntimeWebCommand {
+    #[command(
+        about = "restart current-repo web proof listeners with fail-closed ownership checks",
+        after_help = "Examples:\n  vida runtime web restart --scope current-repo --include-edge-proxy --dry-run --json\n  vida runtime web restart --scope current-repo --include-edge-proxy --json\n\nOptions:\n  --scope current-repo       Limit restart planning to the current repository\n  --include-edge-proxy       Include edge proxy listeners in the restart plan\n  --dry-run                  Preview actions without stopping or starting processes\n  --json                     Emit machine-readable JSON output"
+    )]
+    Restart(RuntimeWebRestartArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct RuntimeWebRestartArgs {
+    #[arg(
+        long = "scope",
+        default_value = "current-repo",
+        value_parser = ["current-repo"],
+        help = "Restart scope; only current-repo is supported"
+    )]
+    pub(crate) scope: String,
+
+    #[arg(
+        long = "include-edge-proxy",
+        help = "Include configured edge proxy listeners in the restart plan"
+    )]
+    pub(crate) include_edge_proxy: bool,
+
+    #[arg(
+        long = "dry-run",
+        help = "Preview restart actions without stopping or starting processes"
+    )]
+    pub(crate) dry_run: bool,
 
     #[arg(long = "json")]
     pub(crate) json: bool,

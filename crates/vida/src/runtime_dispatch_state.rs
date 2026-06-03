@@ -155,6 +155,31 @@ fn configured_internal_host_receipt_backed_completion_supported(
     None
 }
 
+fn configured_internal_host_dispatch_transport(entry: Option<&serde_yaml::Value>) -> String {
+    if let Some(transport) =
+        entry.and_then(|entry| yaml_string(yaml_lookup(entry, &["dispatch_transport"])))
+    {
+        return transport;
+    }
+    if entry
+        .and_then(|entry| yaml_string(yaml_lookup(entry, &["execution_class"])))
+        .as_deref()
+        == Some("internal")
+    {
+        return "host_tool_bridge".to_string();
+    }
+    if entry
+        .and_then(|entry| yaml_lookup(entry, &["dispatch", "command"]))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        return "codex_cli_exec".to_string();
+    }
+    "host_tool_bridge".to_string()
+}
+
 fn configured_external_backend_handoff_timeout_seconds(
     project_root: &Path,
     backend_id: &str,
@@ -467,6 +492,9 @@ pub(crate) fn internal_host_activation_view_only_blocker_code(
 }
 
 fn internal_host_receipt_backed_completion_is_enabled(entry: Option<&serde_yaml::Value>) -> bool {
+    if configured_internal_host_dispatch_transport(entry) == "host_tool_bridge" {
+        return true;
+    }
     entry.and_then(|entry| {
         yaml_lookup(entry, &["dispatch", "receipt_backed_completion_supported"])
             .and_then(serde_yaml::Value::as_bool)
@@ -18649,6 +18677,7 @@ host_environment:
     configured_host:
       enabled: true
       execution_class: internal
+      dispatch_transport: codex_cli_exec
       dispatch:
         command: configured-host
         static_args:
@@ -18765,6 +18794,132 @@ agent_system:
             ),
             INTERNAL_CODEX_CARRIER_UNAVAILABLE
         );
+    }
+
+    #[test]
+    fn internal_host_bridge_transport_defers_to_host_tool_bridge_request_path() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        std::fs::create_dir_all(harness.path().join(".vida/config")).expect("config dir");
+        std::fs::create_dir_all(harness.path().join(".vida/db")).expect("db dir");
+        std::fs::create_dir_all(harness.path().join(".vida/project")).expect("project dir");
+        std::fs::write(harness.path().join("AGENTS.md"), "test").expect("agents marker");
+        std::fs::write(
+            harness.path().join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: configured_host
+  systems:
+    configured_host:
+      enabled: true
+      execution_class: internal
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
+      host_tool_bridge:
+        adapter_required: true
+        adapter_kind: codex_host_tools
+        adapter_capability_id: codex.multi_agent_v1
+      dispatch:
+        command: configured-host
+        static_args:
+          - run
+          - --json
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config should write");
+        let dispatch_packet_path = harness.path().join("internal-host-bridge-packet.json");
+        std::fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "dispatch_target": "analysis",
+                "delivery_task_packet": {
+                    "goal": "Execute bounded implementation analysis"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement bounded task.".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "analysis": true,
+                            "implementation": true
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "analysis": {
+                                "backend_id": "internal_subagents",
+                                "backend_class": "internal"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-host-bridge-path".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-20T00:00:00Z".to_string(),
+        };
+
+        assert!(!internal_host_dispatch_requires_prelaunch_blocker(
+            harness.path(),
+            &role_selection,
+            &receipt
+        ));
     }
 
     #[test]

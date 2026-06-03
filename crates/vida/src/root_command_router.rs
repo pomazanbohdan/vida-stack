@@ -5,8 +5,8 @@ use super::{
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
     orchestrator_session_surface, print_root_help, project_activator_surface, proof_surface,
     protocol_surface, release_surface, resolve_runtime_project_root, run_taskflow_proxy,
-    service_client_cli, state_store, status_surface, task_surface, AgentArgs, AgentCommand, Cli,
-    Command, ReleaseCommand, TaskArgs, TaskCommand,
+    runtime_web_surface, service_client_cli, state_store, status_surface, task_surface, AgentArgs,
+    AgentCommand, Cli, Command, ReleaseCommand, TaskArgs, TaskCommand,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -46,6 +46,7 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::Task(args)) => task_surface::run_task(args).await,
         Some(Command::Memory(args)) => memory_surface::run_memory(args).await,
         Some(Command::Status(args)) => status_surface::run_status(args).await,
+        Some(Command::Runtime(args)) => runtime_web_surface::run_runtime(args).await,
         Some(Command::Doctor(args)) => doctor_surface::run_doctor(args).await,
         Some(Command::Diagnostics(args)) => diagnostics_surface::run_diagnostics(args).await,
         Some(Command::Proof(args)) => proof_surface::run_proof(args).await,
@@ -104,6 +105,7 @@ fn command_label(command: &Option<Command>) -> String {
         Some(Command::Task(_)) => "vida task".to_string(),
         Some(Command::Memory(_)) => "vida memory".to_string(),
         Some(Command::Status(_)) => "vida status".to_string(),
+        Some(Command::Runtime(_)) => "vida runtime".to_string(),
         Some(Command::Doctor(_)) => "vida doctor".to_string(),
         Some(Command::Diagnostics(_)) => "vida diagnostics".to_string(),
         Some(Command::Proof(_)) => "vida proof".to_string(),
@@ -212,6 +214,7 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
             | Command::AgentFeedback(_)
             | Command::Memory(_)
             | Command::Status(_)
+            | Command::Runtime(_)
             | Command::Diagnostics(_)
             | Command::Proof(_)
             | Command::Service(_)
@@ -296,7 +299,7 @@ fn prepare_runtime_state_dir(
 }
 
 fn command_preserves_explicit_env_state_dir(command: &Option<Command>) -> bool {
-    matches!(command, Some(Command::Taskflow(_)))
+    matches!(command, Some(Command::Status(_) | Command::Taskflow(_)))
 }
 
 fn bind_runtime_state_dir_for_project_bound_command() -> Result<Option<RuntimeStateDirGuard>, String>
@@ -355,6 +358,7 @@ fn raw_args_need_project_root_state_dir(args: &[OsString]) -> bool {
             | "task"
             | "memory"
             | "status"
+            | "runtime"
             | "doctor"
             | "diagnostics"
             | "proof"
@@ -384,7 +388,11 @@ fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
         .filter(|arg| !arg.starts_with('-'));
     matches!(
         positional.next(),
-        Some("task") | Some("taskflow") | Some("project-activator") | Some("doctor")
+        Some("task")
+            | Some("taskflow")
+            | Some("project-activator")
+            | Some("status")
+            | Some("doctor")
     )
 }
 
@@ -539,6 +547,51 @@ mod tests {
         );
         drop(guard);
         assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_preserves_explicit_env_for_status_surface() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        make_project_root(harness.path());
+        let explicit_state_dir = harness.path().join("explicit-state");
+        fs::create_dir_all(&explicit_state_dir).expect("explicit state dir should exist");
+        let _cwd = crate::test_cli_support::guard_current_dir(harness.path());
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &explicit_state_dir);
+        let cli = Cli::try_parse_from(["vida", "status"]).expect("status cli should parse");
+
+        let guard =
+            prepare_runtime_state_dir(&cli.command).expect("state dir preparation should succeed");
+
+        assert!(guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(explicit_state_dir)
+        );
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_for_parse_preserves_explicit_env_for_status_surface() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        make_project_root(harness.path());
+        let explicit_state_dir = harness.path().join("explicit-state");
+        fs::create_dir_all(&explicit_state_dir).expect("explicit state dir should exist");
+        let _cwd = crate::test_cli_support::guard_current_dir(harness.path());
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &explicit_state_dir);
+        let args = [
+            std::ffi::OsString::from("vida"),
+            std::ffi::OsString::from("status"),
+        ];
+
+        let guard = prepare_runtime_state_dir_for_parse(&args)
+            .expect("pre-parse state dir preparation should succeed");
+
+        assert!(guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(explicit_state_dir)
+        );
     }
 
     #[test]
