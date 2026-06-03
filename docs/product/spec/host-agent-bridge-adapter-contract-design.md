@@ -171,6 +171,16 @@ expected result/receipt artifact paths, capacity blocker vocabulary, and the
 canonical `vida lane complete ... --host-bridge-request ...` command. It must not
 write completion artifacts or claim execution by itself.
 
+After the parent host adapter has executed the host agent, it can complete the
+same request through VIDA validation with:
+
+```powershell
+vida agent host-bridge --request <request_path> --complete --host-agent-id <id> --summary <summary> --json
+```
+
+`--complete` delegates the mutation to `vida lane complete`; it is not a second
+state writer.
+
 Minimum successful result:
 
 ```json

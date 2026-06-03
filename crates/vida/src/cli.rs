@@ -273,6 +273,33 @@ pub(crate) struct AgentHostBridgeArgs {
     )]
     pub(crate) request: PathBuf,
 
+    #[arg(
+        long = "complete",
+        help = "After parent-host execution, complete the lane through the validated lane completion surface"
+    )]
+    pub(crate) complete: bool,
+
+    #[arg(
+        long = "host-agent-id",
+        requires = "complete",
+        help = "Host agent id returned by the parent host adapter"
+    )]
+    pub(crate) host_agent_id: Option<String>,
+
+    #[arg(
+        long = "summary",
+        requires = "complete",
+        help = "Receipt summary from the parent host adapter"
+    )]
+    pub(crate) summary: Option<String>,
+
+    #[arg(
+        long = "receipt-id",
+        requires = "complete",
+        help = "Optional completion receipt id; defaults from request run and dispatch target"
+    )]
+    pub(crate) receipt_id: Option<String>,
+
     #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
@@ -2170,6 +2197,10 @@ mod tests {
             .expect_err("help should render clap display error");
         let host_bridge_help = host_bridge_error.to_string();
         assert!(host_bridge_help.contains("--request"));
+        assert!(host_bridge_help.contains("--complete"));
+        assert!(host_bridge_help.contains("--host-agent-id"));
+        assert!(host_bridge_help.contains("--summary"));
+        assert!(host_bridge_help.contains("--receipt-id"));
         assert!(host_bridge_help.contains("--json"));
 
         let parsed_host_bridge = Cli::try_parse_from([
@@ -2178,6 +2209,13 @@ mod tests {
             "host-bridge",
             "--request",
             "/tmp/host-bridge-request.json",
+            "--complete",
+            "--host-agent-id",
+            "agent-1",
+            "--summary",
+            "done",
+            "--receipt-id",
+            "receipt-1",
             "--json",
         ])
         .expect("agent host-bridge should parse");
@@ -2191,6 +2229,10 @@ mod tests {
             host_bridge.request.display().to_string(),
             "/tmp/host-bridge-request.json"
         );
+        assert!(host_bridge.complete);
+        assert_eq!(host_bridge.host_agent_id.as_deref(), Some("agent-1"));
+        assert_eq!(host_bridge.summary.as_deref(), Some("done"));
+        assert_eq!(host_bridge.receipt_id.as_deref(), Some("receipt-1"));
         assert!(host_bridge.json);
     }
 
