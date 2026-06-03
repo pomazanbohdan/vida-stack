@@ -911,6 +911,30 @@ mod tests {
     }
 
     #[test]
+    fn finalize_release1_operator_truth_preserves_host_tool_bridge_adapter_required_blocker() {
+        let finalized = finalize_release1_operator_truth(
+            vec!["host_tool_bridge_adapter_required".to_string()],
+            vec!["materialize the host tool bridge adapter before dispatch".to_string()],
+            json!({"surface": "run_graph_recovery"}),
+        )
+        .expect("finalization should preserve registered host bridge blocker");
+
+        assert_eq!(finalized.status, "blocked");
+        assert_eq!(
+            finalized.blocker_codes,
+            vec!["host_tool_bridge_adapter_required".to_string()]
+        );
+        assert_eq!(
+            finalized.shared_fields["blocker_codes"],
+            json!(["host_tool_bridge_adapter_required"])
+        );
+        assert_eq!(
+            finalized.operator_contracts["blocker_codes"],
+            json!(["host_tool_bridge_adapter_required"])
+        );
+    }
+
+    #[test]
     fn finalize_release1_operator_truth_derives_pass_without_blockers() {
         let finalized = finalize_release1_operator_truth(vec![], vec![], json!({}))
             .expect("finalization should succeed");

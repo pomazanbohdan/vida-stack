@@ -2995,12 +2995,15 @@ mod tests {
                     .expect("latest dispatch receipt should load")
                     .expect("latest dispatch receipt should exist");
                 assert_eq!(recorded_receipt.dispatch_status, "bridge_request_pending");
-                assert_eq!(recorded_receipt.blocker_code.as_deref(), None);
+                assert_eq!(
+                    recorded_receipt.blocker_code.as_deref(),
+                    Some("host_tool_bridge_adapter_required")
+                );
                 let recorded_status = runtime
                     .block_on(store.run_graph_status("run-agent-init-timeout"))
                     .expect("run graph status should load after timeout");
-                assert_eq!(recorded_status.status, "running");
-                assert_eq!(recorded_status.lifecycle_stage, "implementer_active");
+                assert_eq!(recorded_status.status, "blocked");
+                assert_eq!(recorded_status.lifecycle_stage, "implementer_blocked");
                 let dispatch_result_path = recorded_receipt
                     .dispatch_result_path
                     .as_deref()

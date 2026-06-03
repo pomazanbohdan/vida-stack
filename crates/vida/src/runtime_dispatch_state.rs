@@ -23609,7 +23609,10 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     receipt.blocker_code =
         if receipt.dispatch_status == "blocked" && receipt.dispatch_packet_path.is_none() {
             blocker_code_value(BlockerCode::MissingPacket)
-        } else if receipt.dispatch_status == "blocked" {
+        } else if matches!(
+            receipt.dispatch_status.as_str(),
+            "blocked" | "bridge_request_pending"
+        ) {
             json_string(execution_result.get("blocker_code"))
         } else {
             None

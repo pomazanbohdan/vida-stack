@@ -1064,8 +1064,13 @@ fn lane_summary_dispatch_is_blocked(
         .downstream_dispatch_blockers
         .iter()
         .any(|value| !value.trim().is_empty());
+    let has_blocker_code = summary
+        .blocker_code
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
     matches!(dispatch_status.as_str(), "blocked" | "failed")
         || matches!(lane_status.as_str(), "lane_blocked" | "lane_failed")
+        || has_blocker_code
         || has_downstream_blockers
 }
 
@@ -1153,8 +1158,18 @@ fn lane_summary_raw_blocker_codes(
 
 fn canonical_lane_show_blocker_codes(blocker_codes: &[String]) -> Vec<String> {
     let mut canonical_codes = crate::release1_contracts::canonical_blocker_code_list(blocker_codes);
+    if blocker_codes
+        .iter()
+        .any(|value| value.trim() == "host_tool_bridge_adapter_required")
+        && !canonical_codes
+            .iter()
+            .any(|code| code == "host_tool_bridge_adapter_required")
+    {
+        canonical_codes.push("host_tool_bridge_adapter_required".to_string());
+    }
     let has_uncanonical_dispatch_blocker = blocker_codes.iter().any(|value| {
         !value.trim().is_empty()
+            && value.trim() != "host_tool_bridge_adapter_required"
             && crate::release1_contracts::canonical_blocker_code_list([value.as_str()]).is_empty()
     });
     if has_uncanonical_dispatch_blocker

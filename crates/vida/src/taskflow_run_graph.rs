@@ -232,6 +232,12 @@ fn normalize_run_graph_blocker_codes(
     {
         return vec!["missing_owned_write_scope".to_string()];
     }
+    if blocker_codes
+        .iter()
+        .any(|code| code.trim() == "host_tool_bridge_adapter_required")
+    {
+        return vec!["host_tool_bridge_adapter_required".to_string()];
+    }
     let normalized = crate::operator_contracts::normalize_blocker_codes(
         blocker_codes,
         crate::release_contract_adapters::canonical_blocker_codes,

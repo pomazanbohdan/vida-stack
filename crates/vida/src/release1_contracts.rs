@@ -1124,6 +1124,7 @@ pub(crate) enum BlockerCode {
     MigrationRequired,
     ProtocolBindingBlockingIssues,
     ContinuationBindingAmbiguous,
+    HostToolBridgeAdapterRequired,
     MissingRunGraphDispatchReceiptOperatorEvidence,
     ClosedTaskActiveRunProjectionMismatch,
     RunGraphLatestSnapshotInconsistent,
@@ -1272,6 +1273,7 @@ impl BlockerCode {
             Self::MigrationRequired => "migration_required",
             Self::ProtocolBindingBlockingIssues => "protocol_binding_blocking_issues",
             Self::ContinuationBindingAmbiguous => "continuation_binding_ambiguous",
+            Self::HostToolBridgeAdapterRequired => "host_tool_bridge_adapter_required",
             Self::MissingRunGraphDispatchReceiptOperatorEvidence => {
                 "missing_run_graph_dispatch_receipt_operator_evidence"
             }
@@ -1462,6 +1464,7 @@ impl BlockerCode {
             "migration_required" => Some(Self::MigrationRequired),
             "protocol_binding_blocking_issues" => Some(Self::ProtocolBindingBlockingIssues),
             "continuation_binding_ambiguous" => Some(Self::ContinuationBindingAmbiguous),
+            "host_tool_bridge_adapter_required" => Some(Self::HostToolBridgeAdapterRequired),
             "missing_run_graph_dispatch_receipt_operator_evidence" => {
                 Some(Self::MissingRunGraphDispatchReceiptOperatorEvidence)
             }
