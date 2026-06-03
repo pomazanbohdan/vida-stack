@@ -467,6 +467,7 @@ impl StateStore {
     async fn open_existing_read_only_once(root: PathBuf) -> Result<Self, StateStoreError> {
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
+        db.query(state_schema_document()).await?;
         Ok(Self { db, root })
     }
 
@@ -532,6 +533,42 @@ mod tests {
         .expect("read-only open should not wait for authoritative guard");
 
         assert!(read_only_open.is_ok());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn runtime_storage_auto_repair_read_only_open_restores_missing_schema_tables() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-runtime-storage-auto-repair-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create legacy state root without schema");
+
+        let store = StateStore::open_existing_read_only(root.clone())
+            .await
+            .expect("read-only open should apply canonical schema repair");
+        let metadata = store
+            .storage_metadata_summary()
+            .await
+            .expect("storage metadata should be repaired during read-only open");
+        assert_eq!(metadata.engine, "surrealdb");
+        assert_eq!(metadata.backend, "kv-surrealkv");
+        assert_eq!(metadata.namespace, STATE_NAMESPACE);
+        assert_eq!(metadata.database, STATE_DATABASE);
+
+        let activation_snapshot = store.read_launcher_activation_snapshot().await;
+        assert!(
+            matches!(
+                activation_snapshot,
+                Err(StateStoreError::MissingLauncherActivationSnapshot)
+            ),
+            "launcher activation table should exist after repair and report only the missing row"
+        );
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
