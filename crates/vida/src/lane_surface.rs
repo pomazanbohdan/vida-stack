@@ -127,6 +127,7 @@ enum LaneCommand<'a> {
         run_id: &'a str,
         receipt_id: &'a str,
         metadata: ExceptionTakeoverMetadata,
+        activate: bool,
         as_json: bool,
     },
     Supersede {
@@ -313,7 +314,7 @@ impl ExceptionTakeoverMetadata {
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]"
 }
 
 fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
@@ -466,11 +467,16 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
             let mut why_local_write_safe = None;
             let mut return_to_normal_when = None;
             let mut verification_plan = Vec::new();
+            let mut activate = false;
             let mut index = 0;
             while index < rest.len() {
                 match rest[index].as_str() {
                     "--json" => {
                         as_json = true;
+                        index += 1;
+                    }
+                    "--activate" => {
+                        activate = true;
                         index += 1;
                     }
                     "--receipt-id" => {
@@ -563,6 +569,7 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                 run_id,
                 receipt_id,
                 metadata,
+                activate,
                 as_json,
             })
         }
@@ -3431,6 +3438,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             run_id,
             receipt_id,
             metadata,
+            activate,
             as_json,
         } => {
             let Some(mut receipt) = (match store.run_graph_dispatch_receipt(run_id).await {
@@ -3465,6 +3473,9 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            if activate {
+                receipt.supersedes_receipt_id = Some(receipt_id.to_string());
+            }
             receipt.lane_status = explicit_lane_status_for_receipt(&receipt, recovery.as_ref());
             if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
                 eprintln!("Failed to persist exception takeover receipt: {error}");
@@ -3991,6 +4002,24 @@ mod tests {
             LaneCommand::ExceptionTakeover {
                 run_id: "run-1",
                 receipt_id: "receipt-1",
+                activate: false,
+                as_json: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_lane_exception_takeover_supports_atomic_activate() {
+        let mut args = sample_exception_takeover_args("run-1", "receipt-1");
+        args.insert(args.len() - 1, "--activate".to_string());
+        let command = parse_lane_args(&args).expect("lane exception takeover should parse");
+        assert!(matches!(
+            command,
+            LaneCommand::ExceptionTakeover {
+                run_id: "run-1",
+                receipt_id: "receipt-1",
+                activate: true,
                 as_json: true,
                 ..
             }
@@ -4951,6 +4980,75 @@ mod tests {
         );
         assert_eq!(metadata.owned_write_scope.len(), 1);
         assert_eq!(metadata.verification_plan.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_exception_takeover_activate_records_and_activates_local_write() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-activate-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-activate";
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "specification",
+            "scope_discussion",
+        );
+        status.active_node = "spec-pack".to_string();
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "spec_pack_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.context_state = "sealed".to_string();
+        status.resume_target = "none".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "spec-pack".to_string();
+        receipt.blocker_code = Some("missing_execution_preparation_contract".to_string());
+        receipt.lane_status = crate::LaneStatus::LaneBlocked.as_str().to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let mut args = sample_exception_takeover_args(run_id, "receipt-activate-1");
+        args.insert(args.len() - 1, "--activate".to_string());
+        assert_eq!(run_lane(ProxyArgs { args }).await, ExitCode::from(2));
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after lane command");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert_eq!(
+            after.exception_path_receipt_id.as_deref(),
+            Some("receipt-activate-1")
+        );
+        assert_eq!(
+            after.supersedes_receipt_id.as_deref(),
+            Some("receipt-activate-1")
+        );
+        assert_eq!(after.lane_status, "lane_exception_takeover");
 
         let _ = std::fs::remove_dir_all(&root);
     }
