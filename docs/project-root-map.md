@@ -42,6 +42,8 @@ This map does not cover extracted secondary bundles by default.
     - project-owned VIDA runtime application of generic `Error Search / Bug Reasoning`
 14. `docs/process/generic-runtime-protocol-promotion-plan.md`
     - project-owned boundary map for moving reusable project workflow law into generic VIDA runtime owners while retaining local residue
+15. `docs/process/multi-agent-stage-ensemble-protocol.md`
+    - proposed follow-up architecture for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
 
 ## Activation Triggers
 
@@ -84,6 +86,8 @@ Do not use this map as the default route for extracted bundles unless the task e
     - continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`
 13. Generic runtime protocol promotion / project-overlay slimming questions:
     - continue to `docs/process/generic-runtime-protocol-promotion-plan.md`
+14. Multi-agent stage ensemble / independent attempt / consolidation questions:
+    - continue to `docs/process/multi-agent-stage-ensemble-protocol.md`
 
 ## Boundary Rule
 

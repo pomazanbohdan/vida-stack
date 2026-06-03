@@ -77,9 +77,11 @@ Canonical entrypoints:
      - project-owned process overlay for applying generic `Error Search / Bug Reasoning` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
 32. `docs/process/generic-runtime-protocol-promotion-plan.md`
     - project-owned plan for promoting reusable project workflow law into generic runtime protocols while keeping local residue in project overlays
-33. `docs/product/spec/feature-design-and-adr-model.md`
+33. `docs/process/multi-agent-stage-ensemble-protocol.md`
+    - proposed project process architecture for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
+34. `docs/product/spec/feature-design-and-adr-model.md`
      - product-law owner for the split between structured feature/change design documents and linked ADRs
-34. `docs/framework/templates/feature-design-document.template.md`
+35. `docs/framework/templates/feature-design-document.template.md`
      - framework-owned reusable feature/change design template with stable sections and bounded variable fields
 
 -----
