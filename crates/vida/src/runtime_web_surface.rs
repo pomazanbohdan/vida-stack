@@ -86,6 +86,16 @@ fn build_runtime_web_status_payload_for_unresolved_root(
         serde_json::json!([]),
         serde_json::json!([]),
         serde_json::json!([]),
+        serde_json::json!({
+            "status": "unavailable",
+            "stale_process_count": 0,
+            "safe_restart_command": "vida runtime web restart --scope current-repo --include-edge-proxy --json",
+            "runtime_owner_evidence": {
+                "status": "unavailable",
+                "reason": "project_root_unresolved",
+                "persist_current": false,
+            },
+        }),
     )
 }
 
@@ -98,6 +108,8 @@ fn build_runtime_web_status_payload_for_project_root(
     let components =
         runtime_web_status_components(args.include_edge_proxy, &adapter_plan, &processes);
     let stale_processes = runtime_web_stale_processes(&components);
+    let process_conflict_diagnostics =
+        runtime_web_process_conflict_diagnostics(project_root, &stale_processes);
     let mut blocker_codes = Vec::new();
     let mut next_actions = Vec::new();
     let mode = if stale_processes
@@ -126,6 +138,7 @@ fn build_runtime_web_status_payload_for_project_root(
         components,
         stale_processes,
         serde_json::json!(processes),
+        process_conflict_diagnostics,
     )
 }
 
@@ -137,6 +150,7 @@ fn runtime_web_status_payload_from_parts(
     components: Value,
     stale_processes: Value,
     process_snapshot: Value,
+    process_conflict_diagnostics: Value,
 ) -> Value {
     let mut payload = serde_json::json!({
         "surface": RUNTIME_WEB_STATUS_SURFACE,
@@ -157,9 +171,12 @@ fn runtime_web_status_payload_from_parts(
             "components": components,
             "stale_processes": stale_processes,
             "process_snapshot": process_snapshot,
+            "safe_restart_command": "vida runtime web restart --scope current-repo --include-edge-proxy --json",
+            "process_conflict_diagnostics": process_conflict_diagnostics,
         },
         "components": components,
         "stale_processes": stale_processes,
+        "process_conflict_diagnostics": process_conflict_diagnostics,
     });
     for key in ["trace_id", "workflow_class", "risk_tier"] {
         payload["shared_fields"][key] = payload["operator_contracts"][key].clone();
@@ -172,12 +189,44 @@ fn runtime_web_status_payload_from_parts(
     payload
 }
 
+fn runtime_web_process_conflict_diagnostics(project_root: &Path, stale_processes: &Value) -> Value {
+    let stale_process_count = stale_processes
+        .as_array()
+        .map(|items| items.len())
+        .unwrap_or(0);
+    let runtime_owner_evidence = crate::orchestrator_session_surface::build_runtime_owner_evidence(
+        &project_root.join(".vida/data/state"),
+        false,
+    )
+    .map(crate::orchestrator_session_surface::compact_runtime_owner_evidence_for_operator)
+    .unwrap_or_else(|error| {
+        serde_json::json!({
+            "status": "unavailable",
+            "error": error,
+            "persist_current": false,
+        })
+    });
+    serde_json::json!({
+        "status": if stale_process_count == 0 { "pass" } else { "stale_process_conflict" },
+        "stale_process_count": stale_process_count,
+        "safe_restart_command": "vida runtime web restart --scope current-repo --include-edge-proxy --json",
+        "runtime_owner_evidence": runtime_owner_evidence,
+    })
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct RuntimeWebProcessSnapshot {
     process_id: u32,
     command_line: String,
     component_id: Option<&'static str>,
     ownership: String,
+    owner_class: String,
+    owner_root: Option<String>,
+    owner_root_source: String,
+    working_directory: Option<String>,
+    working_directory_source: String,
+    ports: Vec<u16>,
+    safe_restart_command: String,
 }
 
 fn discover_runtime_web_processes(project_root: &Path) -> Vec<RuntimeWebProcessSnapshot> {
@@ -233,18 +282,54 @@ fn parse_runtime_web_process_snapshot(
                 .to_string();
             let normalized = normalize_process_path(&command_line);
             let component_id = runtime_web_component_for_command_line(&normalized);
+            let owner_root = infer_runtime_web_owner_root(&command_line);
+            let normalized_owner_root = owner_root
+                .as_deref()
+                .map(normalize_process_path)
+                .unwrap_or_default();
+            let ownership =
+                if normalized_owner_root == project_root || normalized.contains(&project_root) {
+                    "current_repo"
+                } else {
+                    "stale_foreign_repo"
+                };
+            let owner_class = runtime_web_owner_class(ownership, &normalized_owner_root);
+            let ports = infer_runtime_web_ports(&command_line);
             component_id.map(|component_id| RuntimeWebProcessSnapshot {
                 process_id,
                 command_line,
                 component_id: Some(component_id),
-                ownership: if normalized.contains(&project_root) {
-                    "current_repo".to_string()
+                ownership: ownership.to_string(),
+                owner_class: owner_class.to_string(),
+                owner_root: owner_root.clone(),
+                owner_root_source: if owner_root.is_some() {
+                    "command_line_script_path".to_string()
                 } else {
-                    "stale_foreign_repo".to_string()
+                    "unresolved".to_string()
                 },
+                working_directory: owner_root,
+                working_directory_source: "inferred_from_command_line_script_path".to_string(),
+                ports,
+                safe_restart_command:
+                    "vida runtime web restart --scope current-repo --include-edge-proxy --json"
+                        .to_string(),
             })
         })
         .collect()
+}
+
+fn runtime_web_owner_class(ownership: &str, normalized_owner_root: &str) -> &'static str {
+    if ownership == "current_repo" {
+        "current_repo"
+    } else if normalized_owner_root.is_empty() {
+        "unresolved_owner"
+    } else if normalized_owner_root.contains("/.codex/worktrees/")
+        || normalized_owner_root.contains("/.vida/worktrees/")
+    {
+        "stale_worktree"
+    } else {
+        "foreign_project_root"
+    }
 }
 
 fn normalize_process_path(value: &str) -> String {
@@ -272,6 +357,74 @@ fn runtime_web_component_for_command_line(command_line: &str) -> Option<&'static
     } else {
         None
     }
+}
+
+fn infer_runtime_web_owner_root(command_line: &str) -> Option<String> {
+    let normalized = command_line.replace('\\', "/");
+    for marker in [
+        "/scripts/windows/Start-WebDevServer.ps1",
+        "/scripts/windows/Start-WebOdooProxy.ps1",
+        "/scripts/windows/Start-WebCloudflareEdgeProxy.ps1",
+        "/scripts/windows/flutter-wrapper.cmd",
+    ] {
+        if let Some(index) = normalized
+            .to_ascii_lowercase()
+            .find(&marker.to_ascii_lowercase())
+        {
+            return Some(trim_to_runtime_web_path_start(&normalized[..index]));
+        }
+    }
+    None
+}
+
+fn trim_to_runtime_web_path_start(value: &str) -> String {
+    let trimmed = value.trim_matches('"').trim_matches('\'').trim();
+    let bytes = trimmed.as_bytes();
+    let mut path_start = None;
+    for index in 0..bytes.len().saturating_sub(2) {
+        if bytes[index].is_ascii_alphabetic()
+            && bytes[index + 1] == b':'
+            && bytes[index + 2] == b'/'
+        {
+            path_start = Some(index);
+        }
+    }
+    path_start
+        .map(|index| trimmed[index..].to_string())
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
+fn infer_runtime_web_ports(command_line: &str) -> Vec<u16> {
+    let mut ports = Vec::new();
+    for flag in [
+        "-WebPort",
+        "-ProxyPort",
+        "-Port",
+        "-FlutterPort",
+        "-OdooProxyPort",
+        "--web-port",
+    ] {
+        if let Some(port) = infer_port_after_flag(command_line, flag) {
+            if !ports.contains(&port) {
+                ports.push(port);
+            }
+        }
+    }
+    ports
+}
+
+fn infer_port_after_flag(command_line: &str, flag: &str) -> Option<u16> {
+    let lower = command_line.to_ascii_lowercase();
+    let flag_lower = flag.to_ascii_lowercase();
+    let index = lower.find(&flag_lower)?;
+    let after = &command_line[index + flag.len()..];
+    let digits = after
+        .trim_start_matches([' ', '=', ':'])
+        .chars()
+        .skip_while(|ch| *ch == '"' || *ch == '\'')
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    digits.parse::<u16>().ok()
 }
 
 fn runtime_web_status_components(
@@ -1010,6 +1163,14 @@ mod tests {
     use super::*;
     use crate::{Cli, Command};
     use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn runtime_web_test_env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     struct EnvGuard {
         key: &'static str,
@@ -1150,6 +1311,7 @@ mod tests {
 
     #[test]
     fn runtime_web_status_without_processes_reports_pass_not_configured() {
+        let _lock = runtime_web_test_env_lock();
         let _snapshot = EnvGuard::set(PROCESS_SNAPSHOT_ENV, "[]");
         let project_root = temp_runtime_web_project("status-clean");
 
@@ -1176,6 +1338,7 @@ mod tests {
 
     #[test]
     fn runtime_web_status_reports_stale_foreign_listener_conflict() {
+        let _lock = runtime_web_test_env_lock();
         let project_root = temp_runtime_web_project("status-stale");
         write_fake_runtime_web_adapter(&project_root, LOCAL_WEB_ADAPTER);
         write_fake_runtime_web_adapter(&project_root, EDGE_PROXY_ADAPTER);
@@ -1210,14 +1373,58 @@ mod tests {
             blocker_code_str(STATUS_STALE_LISTENER_BLOCKER)
         );
         assert_eq!(payload["web_status"]["mode"], "stale_listener_conflict");
+        assert_eq!(
+            payload["web_status"]["safe_restart_command"],
+            "vida runtime web restart --scope current-repo --include-edge-proxy --json"
+        );
         assert_eq!(payload["web_status"]["components"][0]["health"], "running");
         assert_eq!(
             payload["web_status"]["components"][2]["health"],
             "stale_conflict"
         );
         assert_eq!(payload["stale_processes"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            payload["stale_processes"][0]["owner_root"],
+            "C:/foreign/repo"
+        );
+        assert_eq!(
+            payload["stale_processes"][0]["working_directory_source"],
+            "inferred_from_command_line_script_path"
+        );
+        assert_eq!(
+            payload["stale_processes"][0]["safe_restart_command"],
+            "vida runtime web restart --scope current-repo --include-edge-proxy --json"
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
         let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn runtime_web_status_extracts_owner_root_and_ports_from_command_line() {
+        let command_line = "pwsh -File C:/project/vida_mobile/scripts/windows/Start-WebDevServer.ps1 -WebPort 51237 -ProxyPort 51236";
+
+        assert_eq!(
+            infer_runtime_web_owner_root(command_line),
+            Some("C:/project/vida_mobile".to_string())
+        );
+        assert_eq!(infer_runtime_web_ports(command_line), vec![51237, 51236]);
+    }
+
+    #[test]
+    fn runtime_web_status_extracts_owner_root_after_powershell_executable_path() {
+        let command_line = "\"C:/Program Files/WindowsApps/Microsoft.PowerShell_7.6.2.0_x64__8wekyb3d8bbwe/pwsh.exe\" -NoProfile -ExecutionPolicy Bypass -File C:/Users/pomaz/.codex/worktrees/88f0/vida_mobile/scripts/windows/Start-WebDevServer.ps1 -WebPort 51237";
+
+        assert_eq!(
+            infer_runtime_web_owner_root(command_line),
+            Some("C:/Users/pomaz/.codex/worktrees/88f0/vida_mobile".to_string())
+        );
+        assert_eq!(
+            runtime_web_owner_class(
+                "stale_foreign_repo",
+                &normalize_process_path("C:/Users/pomaz/.codex/worktrees/88f0/vida_mobile")
+            ),
+            "stale_worktree"
+        );
     }
 
     #[test]
@@ -1295,6 +1502,7 @@ mod tests {
 
     #[test]
     fn runtime_web_restart_project_adapters_execute_with_receipt() {
+        let _lock = runtime_web_test_env_lock();
         let _simulate = EnvGuard::set(SIMULATE_EXECUTOR_ENV, "pass");
         let project_root = temp_runtime_web_project("adapters-present");
         write_fake_runtime_web_adapter(&project_root, LOCAL_WEB_ADAPTER);
