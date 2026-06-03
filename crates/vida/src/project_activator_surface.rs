@@ -229,7 +229,54 @@ fn host_cli_system_registry(config: &serde_yaml::Value) -> HashMap<String, serde
 pub(crate) fn host_cli_system_registry_with_fallback(
     config: Option<&serde_yaml::Value>,
 ) -> HashMap<String, serde_yaml::Value> {
-    config.map(host_cli_system_registry).unwrap_or_default()
+    let mut registry = config.map(host_cli_system_registry).unwrap_or_default();
+    if let Some(config) = config {
+        let explicit_system = yaml_string(yaml_lookup(config, &["host_environment", "cli_system"]))
+            .as_deref()
+            .and_then(normalize_host_cli_system);
+        if explicit_system.as_deref() == Some("codex") && !registry.contains_key("codex") {
+            registry.insert(
+                "codex".to_string(),
+                builtin_codex_host_cli_system_entry(config),
+            );
+        }
+    }
+    registry
+}
+
+fn builtin_codex_host_cli_system_entry(config: &serde_yaml::Value) -> serde_yaml::Value {
+    let mut entry = serde_yaml::from_str::<serde_yaml::Value>(
+        r#"
+enabled: true
+execution_class: internal
+execution_boundary: parent_host_session
+dispatch_transport: host_tool_bridge
+receipt_mode: host_bridge_receipt
+materialization_mode: codex_toml_catalog_render
+template_root: .codex
+runtime_root: .codex
+host_tool_bridge:
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+  dispatch_transport: host_tool_bridge
+  receipt_mode: host_bridge_receipt
+  tool_family: codex_multi_agent
+  spawn_tool: multi_agent_v1.spawn_agent
+  wait_tool: multi_agent_v1.wait_agent
+  close_tool: multi_agent_v1.close_agent
+  adapter_required: true
+  no_adapter_policy: fail_closed_emit_request
+  process_carrier_requires_explicit_backend: true
+"#,
+    )
+    .expect("built-in codex host CLI system entry should parse");
+    if let Some(carriers) = yaml_lookup(config, &["host_environment", "codex", "agents"]).cloned() {
+        if let Some(mapping) = entry.as_mapping_mut() {
+            mapping.insert(serde_yaml::Value::String("carriers".to_string()), carriers);
+        }
+    }
+    entry
 }
 
 fn load_host_cli_system_registry_from_root(root: &Path) -> HashMap<String, serde_yaml::Value> {
@@ -2372,6 +2419,36 @@ mod tests {
                 >= 3,
             "activation interview should require project id, language, and host CLI selection"
         );
+    }
+
+    #[test]
+    fn host_cli_registry_fallback_synthesizes_codex_bridge_for_explicit_legacy_codex_selection() {
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_environment:
+  cli_system: codex
+  codex:
+    agents:
+      junior:
+        tier: junior
+        rate: 1
+        runtime_roles: [developer]
+        task_classes: [implementation]
+"#,
+        )
+        .expect("legacy codex config should parse");
+
+        let registry = super::host_cli_system_registry_with_fallback(Some(&config));
+        let codex = registry
+            .get("codex")
+            .expect("explicit legacy codex selection should synthesize codex system entry");
+
+        assert_eq!(
+            super::yaml_lookup(codex, &["host_tool_bridge", "adapter_capability_id"])
+                .and_then(serde_yaml::Value::as_str),
+            Some("codex.multi_agent_v1")
+        );
+        assert!(super::yaml_lookup(codex, &["carriers", "junior"]).is_some());
     }
 
     #[test]

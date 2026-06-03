@@ -5312,6 +5312,42 @@ dispatch:
     }
 
     #[test]
+    fn explicit_legacy_codex_selection_without_system_entry_uses_builtin_host_bridge_capability() {
+        let overlay = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_environment:
+  cli_system: codex
+  codex:
+    agents:
+      junior:
+        tier: junior
+        rate: 1
+        runtime_roles: [developer]
+        task_classes: [implementation]
+"#,
+        )
+        .expect("legacy codex overlay should parse");
+
+        let (selected, entry) =
+            crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
+        assert_eq!(selected, "codex");
+        let entry = entry.expect("explicit legacy codex selection should synthesize system entry");
+        assert_eq!(
+            configured_host_tool_bridge_string(Some(&entry), "adapter_capability_id"),
+            Some("codex.multi_agent_v1".to_string())
+        );
+        assert_eq!(
+            configured_host_tool_bridge_string(Some(&entry), "spawn_tool"),
+            Some("multi_agent_v1.spawn_agent".to_string())
+        );
+        assert!(
+            crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(Some(&entry))
+                .iter()
+                .any(|row| row["role_id"].as_str() == Some("junior"))
+        );
+    }
+
+    #[test]
     fn explicit_codex_cli_exec_transport_preserves_process_dispatch() {
         let system_entry = serde_yaml::from_str(
             r#"
@@ -5983,6 +6019,14 @@ agent_system:
             result["backend_dispatch"]["host_tool_bridge_request"]["status"],
             "pending"
         );
+        for request in [
+            &result["host_tool_bridge_request"],
+            &result["backend_dispatch"]["host_tool_bridge_request"],
+        ] {
+            assert_eq!(request["adapter_kind"], "codex_host_tools");
+            assert_eq!(request["adapter_capability_id"], "codex.multi_agent_v1");
+            assert_eq!(request["invocation_mode"], "parent_host_tool_api");
+        }
         let adapter_command = result["host_bridge_adapter_command"]
             .as_str()
             .expect("adapter command should render");
