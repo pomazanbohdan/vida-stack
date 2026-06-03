@@ -3463,6 +3463,17 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             receipt,
             role_selection,
         )?;
+        let host_bridge_adapter_command = bridge_request
+            .get("request_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|request_path| {
+                format!(
+                    "vida agent host-bridge --request {} --json",
+                    crate::shell_quote(request_path)
+                )
+            });
         if let Some(result) = ingest_completed_host_bridge_result(
             state_root,
             &bridge_request,
@@ -3518,12 +3529,24 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             "host_tool_bridge_request".to_string(),
             bridge_request.clone(),
         );
+        if let Some(command) = host_bridge_adapter_command.as_ref() {
+            body.insert(
+                "host_bridge_adapter_command".to_string(),
+                serde_json::json!(command),
+            );
+        }
         body.insert(
             "next_actions".to_string(),
-            serde_json::json!([
-                "A configured parent host-agent adapter must read host_tool_bridge_request.request_path, invoke the configured adapter capability, then submit a receipt-backed result through the host-bridge completion surface.",
-                "Do not fall back to a child-process agent command for internal_subagents; use an explicit process carrier only when route policy selects that backend."
-            ]),
+            serde_json::json!(
+                host_bridge_adapter_command
+                    .iter()
+                    .cloned()
+                    .chain([
+                        "A configured parent host-agent adapter must read host_tool_bridge_request.request_path, invoke the configured adapter capability, then submit a receipt-backed result through the host-bridge completion surface.".to_string(),
+                        "Do not fall back to a child-process agent command for internal_subagents; use an explicit process carrier only when route policy selects that backend.".to_string(),
+                    ])
+                    .collect::<Vec<_>>()
+            ),
         );
         if let Some(dispatch) = body
             .get_mut("backend_dispatch")
@@ -3546,6 +3569,12 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 serde_json::json!(false),
             );
             dispatch.insert("host_tool_bridge_request".to_string(), bridge_request);
+            if let Some(command) = host_bridge_adapter_command {
+                dispatch.insert(
+                    "host_bridge_adapter_command".to_string(),
+                    serde_json::json!(command),
+                );
+            }
         }
         refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "missing");
         return Ok(Some(result));
@@ -5817,6 +5846,20 @@ agent_system:
             result["backend_dispatch"]["host_tool_bridge_request"]["status"],
             "pending"
         );
+        let adapter_command = result["host_bridge_adapter_command"]
+            .as_str()
+            .expect("adapter command should render");
+        assert!(adapter_command.starts_with("vida agent host-bridge --request "));
+        assert!(adapter_command.ends_with(" --json"));
+        assert_eq!(
+            result["backend_dispatch"]["host_bridge_adapter_command"],
+            adapter_command
+        );
+        assert!(result["next_actions"]
+            .as_array()
+            .expect("next actions should render")
+            .iter()
+            .any(|action| action.as_str() == Some(adapter_command)));
 
         let _ = std::fs::remove_dir_all(&project_root);
     }
