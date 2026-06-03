@@ -231,6 +231,20 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "zero blocker entries",
             "blocker codes empty",
             "blocker codes are empty",
+            "blocker details",
+            "blocker detail",
+            "blocker fields",
+            "blocker field",
+            "blocker flags",
+            "blocker flag",
+            "blocked flag",
+            "blocked field",
+            "continuation blockers remain separate",
+            "continuation blockers remain",
+            "continuation blocker remains",
+            "continuation blocker",
+            "continuation_blocked flag",
+            "continuation_blocked",
             "failed/tampered parent adapter results",
             "failed/tampered parent-adapter results",
             "failed or tampered parent adapter results",
@@ -351,6 +365,22 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "zero blocker entries",
             "blocker codes empty",
             "blocker codes are empty",
+            "no blocker codes",
+            "zero blocker codes",
+            "blocker details",
+            "blocker detail",
+            "blocker fields",
+            "blocker field",
+            "blocker flags",
+            "blocker flag",
+            "blocked flag",
+            "blocked field",
+            "continuation blockers remain separate",
+            "continuation blockers remain",
+            "continuation blocker remains",
+            "continuation blocker",
+            "continuation_blocked flag",
+            "continuation_blocked",
             "blocker coverage",
             "spawn-blocker ordering",
             "blocked task projections",
@@ -1126,6 +1156,44 @@ mod tests {
         assert_eq!(score, 35);
         assert_eq!(inference["outcome"], "failure");
         assert_eq!(inference["failure_markers"], serde_json::json!(["failed"]));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_post_close_blocker_field_context() {
+        let reason = "Fixed task close contract so successful mutation returns command success while continuation blockers remain separate. JSON now reports continuation_blocked flag, blocker details, and next actions. Proof commands passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "architecture");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 90);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(
+            inference["success_markers"],
+            serde_json::json!(["proof commands passed"])
+        );
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "continuation blockers remain separate"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "continuation_blocked flag"));
+        assert!(ignored.iter().any(|phrase| phrase == "blocker details"));
+    }
+
+    #[test]
+    fn close_feedback_inference_still_scores_direct_blocked_reason_as_failure() {
+        let reason = "Task is still blocked by missing verification proof.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "architecture");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "failure");
+        assert_eq!(score, 35);
+        assert_eq!(inference["failure_markers"], serde_json::json!(["blocked"]));
     }
 
     #[test]
