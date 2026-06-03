@@ -1347,6 +1347,28 @@ fn derive_lane_show_truth(
     }
 }
 
+fn derive_lane_show_truth_with_exception_metadata(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    exception_path_metadata: Option<&ExceptionTakeoverMetadata>,
+) -> LaneShowTruth {
+    if crate::release1_contracts::exception_takeover_state(
+        summary.exception_path_receipt_id.as_deref(),
+        summary.supersedes_receipt_id.as_deref(),
+        recovery_takeover_gate(recovery),
+    )
+    .is_active()
+        && !active_exception_write_scope(summary, exception_path_metadata).is_empty()
+    {
+        return LaneShowTruth {
+            blocked: false,
+            blocker_codes: Vec::new(),
+            next_actions: Vec::new(),
+        };
+    }
+    derive_lane_show_truth(summary, recovery)
+}
+
 fn lane_takeover_state(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
@@ -2605,7 +2627,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
             let envelope = build_lane_envelope_with_owned_scope(
                 summary,
                 status,
@@ -2704,7 +2730,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
             let envelope = build_lane_envelope_with_owned_scope(
                 summary,
                 status,
@@ -2784,7 +2814,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
             let lane_envelope = build_lane_envelope_with_owned_scope(
                 summary,
                 status,
@@ -2852,7 +2886,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
             let envelope = build_lane_envelope(
                 summary,
                 status,
@@ -2901,7 +2939,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
             let envelope = build_lane_envelope(
                 summary,
                 status,
@@ -3228,7 +3270,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
 
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &updated_summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
             let exception_path_metadata_path =
                 match exception_takeover_metadata_path(store.root(), run_id) {
                     Ok(path) => path,
@@ -3411,7 +3457,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let recovery = store.run_graph_recovery_summary(run_id).await.ok();
-            let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &updated_summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
             let exception_path_metadata_path =
                 match exception_takeover_metadata_path(store.root(), run_id) {
                     Ok(path) => path,
@@ -3561,7 +3611,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             }
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &updated_summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
             let envelope = build_lane_envelope(
                 updated_summary,
                 status,
@@ -4642,6 +4696,154 @@ mod tests {
             .next_actions
             .iter()
             .any(|value| value.contains("finish the bounded exception unit")));
+    }
+
+    #[test]
+    fn coach_exception_supersede_active_takeover_with_owned_scope_clears_open_cycle() {
+        let mut receipt = sample_receipt("blocked");
+        receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        receipt.dispatch_target = "coach".to_string();
+        receipt.exception_path_receipt_id = Some("coach-exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("coach-exception-1".to_string());
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt
+            .downstream_dispatch_blockers
+            .push("internal_dispatch_timeout_without_receipt".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-lane-test",
+            "implementation",
+            "coach",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        status.active_node = "coach".to_string();
+        let mut recovery = crate::state_store::RunGraphRecoverySummary::from_status(status);
+        recovery.delegation_gate.local_exception_takeover_gate =
+            "blocked_open_delegated_cycle".to_string();
+        recovery.delegation_gate.delegated_cycle_open = true;
+        let metadata = ExceptionTakeoverMetadata {
+            run_id: Some("run-lane-test".to_string()),
+            dispatch_target: Some("coach".to_string()),
+            dispatch_packet_path: None,
+            source_exception_path_receipt_id: Some("coach-exception-1".to_string()),
+            reason_class: "external_coach_timeout_internal_approval".to_string(),
+            active_bounded_unit: "run-lane-test:coach:exception-takeover".to_string(),
+            owned_write_scope: vec!["crates/vida/src/lane_surface.rs".to_string()],
+            why_delegated_or_rerouted_path_is_not_currently_lawful: "external coach timed out"
+                .to_string(),
+            why_local_write_is_the_smallest_safe_bounded_workaround:
+                "internal coach approval exists".to_string(),
+            return_to_normal_posture_condition: "focused supersede proof passes".to_string(),
+            verification_plan: vec!["cargo test -p vida coach_exception_supersede".to_string()],
+            recorded_at: "2026-06-03T00:00:00Z".to_string(),
+        };
+
+        let truth = derive_lane_show_truth_with_exception_metadata(
+            &summary,
+            Some(&recovery),
+            Some(&metadata),
+        );
+
+        assert!(!truth.blocked);
+        assert!(truth.blocker_codes.is_empty());
+        assert!(truth.next_actions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn coach_exception_supersede_json_cache_clears_followup_lane_show() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-coach-supersede-cache-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-coach-supersede-cache";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "implementation", "coach");
+        status.task_id = run_id.to_string();
+        status.active_node = "coach".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        status.resume_target = "dispatch.coach".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "coach".to_string();
+        receipt.lane_status = crate::LaneStatus::LaneExceptionRecorded
+            .as_str()
+            .to_string();
+        receipt.exception_path_receipt_id = Some("coach-exception-1".to_string());
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt
+            .downstream_dispatch_blockers
+            .push("internal_dispatch_timeout_without_receipt".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        let metadata = ExceptionTakeoverMetadata {
+            run_id: Some(run_id.to_string()),
+            dispatch_target: Some("coach".to_string()),
+            dispatch_packet_path: receipt.dispatch_packet_path.clone(),
+            source_exception_path_receipt_id: Some("coach-exception-1".to_string()),
+            reason_class: "external_coach_timeout_internal_approval".to_string(),
+            active_bounded_unit: format!("{run_id}:coach:exception-takeover"),
+            owned_write_scope: vec!["crates/vida/src/lane_surface.rs".to_string()],
+            why_delegated_or_rerouted_path_is_not_currently_lawful: "external coach timed out"
+                .to_string(),
+            why_local_write_is_the_smallest_safe_bounded_workaround:
+                "internal coach approval exists".to_string(),
+            return_to_normal_posture_condition: "focused supersede proof passes".to_string(),
+            verification_plan: vec!["cargo test -p vida coach_exception_supersede".to_string()],
+            recorded_at: "2026-06-03T00:00:00Z".to_string(),
+        };
+        write_exception_takeover_metadata(store.root(), run_id, &metadata)
+            .expect("persist exception metadata");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let supersede_args = ProxyArgs {
+            args: vec![
+                "supersede".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "coach-exception-1".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(supersede_args).await, ExitCode::SUCCESS);
+
+        let show_args = ProxyArgs {
+            args: vec!["show".to_string(), run_id.to_string(), "--json".to_string()],
+        };
+        assert_eq!(run_lane(show_args).await, ExitCode::SUCCESS);
+
+        let cached = read_cached_lane_show_projection(&root, &lane_show_projection_name(run_id))
+            .expect("lane show projection cache should be written");
+        let cached_json: serde_json::Value =
+            serde_json::from_str(&cached).expect("cached lane show projection should be json");
+        assert_eq!(cached_json["status"], "pass");
+        assert_eq!(cached_json["blocker_codes"], serde_json::json!([]));
+        assert_eq!(
+            cached_json["supersedes_receipt_id"],
+            serde_json::json!("coach-exception-1")
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
