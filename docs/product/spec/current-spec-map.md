@@ -271,6 +271,9 @@ Companion rule:
 32. [launcher-decomposition-and-code-hygiene-design.md](launcher-decomposition-and-code-hygiene-design.md)
    Config families: bounded launcher decomposition seams, large-file concentration reduction, dead-code and duplication validation, and proof-safe extraction planning for `crates/vida/**`
    Registered path: `docs/product/spec/launcher-decomposition-and-code-hygiene-design.md`
+33. [split-oversized-runtime-modules-ownership-execut-design.md](split-oversized-runtime-modules-ownership-execut-design.md)
+   Config families: bounded ownership-based split plan for oversized TaskFlow runtime modules, compatibility-preserving facade seams, execution-preparation requirements, module-map proof targets, and guarded rollout across `crates/vida/src/runtime_dispatch_state.rs`, `taskflow_consume_resume.rs`, `taskflow_run_graph.rs`, `taskflow_proxy.rs`, `task_surface.rs`, and `init_surfaces.rs`
+   Registered path: `docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`
 33. [internal-codex-agent-execution-fail-closed-design.md](internal-codex-agent-execution-fail-closed-design.md)
    Config families: bounded internal-host activation-view fail-closed semantics, truthful agent-lane execution state, root-session anti-bypass guidance, and runtime dispatch bridge hardening for Codex/internal execution
    Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
@@ -410,5 +413,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-06-02T02:35:00+03:00
+updated_at: 2026-06-03T09:39:28.0110711Z
 changelog_ref: current-spec-map.changelog.jsonl
