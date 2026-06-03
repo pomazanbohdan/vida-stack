@@ -1857,13 +1857,20 @@ fn runtime_consumption_resume_receipt_blocker_codes(
     {
         blocker_codes.push(blocker_code.to_string());
     }
+    let downstream_blockers_apply = !dispatch_receipt.downstream_dispatch_blockers.is_empty()
+        || !dispatch_receipt.downstream_dispatch_ready
+        || dispatch_receipt
+            .downstream_dispatch_status
+            .as_deref()
+            .is_some_and(|status| matches!(status, "blocked" | "failed"));
     if matches!(
         dispatch_receipt.dispatch_status.as_str(),
         "blocked" | "failed"
     ) || matches!(
         dispatch_receipt.lane_status.as_str(),
         "lane_blocked" | "lane_failed"
-    ) {
+    ) || downstream_blockers_apply
+    {
         blocker_codes.extend(
             dispatch_receipt
                 .downstream_dispatch_blockers
@@ -1882,6 +1889,13 @@ fn runtime_consumption_resume_receipt_blocker_codes(
             )
             .to_string(),
         );
+    }
+    if blocker_codes.is_empty()
+        && dispatch_receipt.dispatch_kind == "agent_lane"
+        && dispatch_receipt.dispatch_status == "routed"
+        && !dispatch_receipt.downstream_dispatch_ready
+    {
+        blocker_codes.push("open_delegated_cycle".to_string());
     }
     let normalized = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
     if normalized.is_empty() && blocked_evidence_present {
@@ -2163,7 +2177,7 @@ fn emit_deferred_agent_handoff_json(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     emit_output: bool,
     as_json: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let mut normalized_dispatch_receipt = dispatch_receipt.clone();
     normalized_dispatch_receipt.selected_backend =
         super::canonical_selected_backend_for_receipt(role_selection, &normalized_dispatch_receipt);
@@ -2180,9 +2194,20 @@ fn emit_deferred_agent_handoff_json(
             "reason": "consume_continue_returns_after_routed_agent_handoff",
         },
     });
+    let blocker_codes =
+        runtime_consumption_resume_receipt_blocker_codes(&normalized_dispatch_receipt);
+    let next_actions = runtime_consumption_resume_receipt_next_actions(
+        &normalized_dispatch_receipt,
+        &blocker_codes,
+    );
+    let preliminary_status = if blocker_codes.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
     let snapshot = serde_json::json!({
         "surface": surface_name,
-        "status": "pass",
+        "status": preliminary_status,
         "release_admission": {},
         "failure_control_evidence": failure_control_evidence.clone(),
         "payload": payload_json,
@@ -2190,8 +2215,8 @@ fn emit_deferred_agent_handoff_json(
     let snapshot_path =
         super::write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
     let finalized = crate::operator_contracts::finalize_release1_operator_truth(
-        Vec::new(),
-        Vec::new(),
+        blocker_codes,
+        next_actions,
         serde_json::json!({
             "runtime_consumption_latest_snapshot_path": snapshot_path,
             "latest_run_graph_dispatch_receipt_id": dispatch_receipt.run_id,
@@ -2238,7 +2263,7 @@ fn emit_deferred_agent_handoff_json(
         ));
     }
     if !emit_output {
-        return Ok(());
+        return Ok(finalized.status == "pass");
     }
     if as_json {
         let output_payload = serde_json::json!({
@@ -2298,7 +2323,7 @@ fn emit_deferred_agent_handoff_json(
         );
         super::print_surface_line(super::RenderMode::Plain, "snapshot path", &snapshot_path);
     }
-    Ok(())
+    Ok(finalized.status == "pass")
 }
 
 #[cfg(test)]
@@ -5782,7 +5807,8 @@ async fn persist_and_emit_deferred_agent_handoff(
         emit_output,
         as_json,
     ) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::from(1),
         Err(error) => {
             eprintln!("{error}");
             ExitCode::from(1)
@@ -6911,6 +6937,37 @@ mod tests {
             selected_backend: Some("middle".to_string()),
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn resume_receipt_blockers_include_pending_downstream_handoff_for_routed_dispatch() {
+        let mut receipt = taskflow_consume_resume_test_receipt("agent_lane", "routed");
+        receipt.lane_status = "lane_running".to_string();
+        receipt.downstream_dispatch_target = Some("specification".to_string());
+        receipt.downstream_dispatch_note = Some("waiting for specification evidence".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_specification_evidence".to_string()];
+        receipt.downstream_dispatch_active_target = Some("specification".to_string());
+
+        assert_eq!(
+            runtime_consumption_resume_receipt_blocker_codes(&receipt),
+            vec!["pending_specification_evidence".to_string()]
+        );
+
+        receipt.downstream_dispatch_ready = true;
+        assert_eq!(
+            runtime_consumption_resume_receipt_blocker_codes(&receipt),
+            vec!["pending_specification_evidence".to_string()],
+            "explicit downstream blocker evidence must override a stale ready flag"
+        );
+
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers.clear();
+        assert_eq!(
+            runtime_consumption_resume_receipt_blocker_codes(&receipt),
+            vec!["open_delegated_cycle".to_string()],
+            "routed agent handoff without downstream readiness remains an open delegated cycle"
+        );
     }
 
     #[test]

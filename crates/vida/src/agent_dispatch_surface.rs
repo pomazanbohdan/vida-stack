@@ -1857,6 +1857,7 @@ fn resolve_agent_dispatch_next_current_task_ids<'a>(
             .or(explicit_bound_current_task_id)
             .or(taskflow_single_in_progress_task_id),
         scheduler_current_task_id: requested_current_task_id
+            .or(explicit_bound_current_task_id)
             .or(taskflow_single_in_progress_task_id),
     }
 }
@@ -2297,7 +2298,7 @@ mod tests {
             resolve_agent_dispatch_next_current_task_ids(None, Some("explicit-bound"), None);
 
         assert_eq!(resolved.preview_current_task_id, Some("explicit-bound"));
-        assert_eq!(resolved.scheduler_current_task_id, None);
+        assert_eq!(resolved.scheduler_current_task_id, Some("explicit-bound"));
     }
 
     #[test]

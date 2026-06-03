@@ -5236,6 +5236,315 @@ fn recovery_explain_cli_surfaces_actionable_diagnosis() {
 }
 
 #[test]
+fn latest_run_projection_consistency_aligns_explicit_binding_scheduler_next_lawful_and_graph_explain(
+) {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "projection-consistency-parent";
+    let parent = run_command_json(
+        &[
+            "task",
+            "create",
+            parent_id,
+            "Projection consistency parent",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--priority",
+            "1",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent["status"], "pass");
+    let bound_task_id = "projection-consistency-bound-task";
+    let ready_head_task_id = "projection-consistency-ready-head";
+    for (task_id, title, priority) in [
+        (ready_head_task_id, "Projection consistency ready head", "1"),
+        (
+            bound_task_id,
+            "Projection consistency explicitly bound",
+            "2",
+        ),
+    ] {
+        let task = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                title,
+                "--type",
+                "task",
+                "--status",
+                "open",
+                "--priority",
+                priority,
+                "--parent-id",
+                parent_id,
+                "--state-dir",
+                state_dir.as_str(),
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(task["status"], "pass");
+    }
+
+    let bound_run_id = "projection-consistency-bound-run";
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let explicit_binding = serde_json::json!({
+            "run_id": bound_run_id,
+            "task_id": bound_task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "task_graph_task",
+                "task_id": bound_task_id,
+                "run_id": bound_run_id,
+                "task_status": "open"
+            },
+            "binding_source": "explicit_continuation_bind_task",
+            "why_this_unit": "explicit binding must drive every latest-run projection",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only",
+            "recorded_at": "2026-05-20T00:00:02Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", bound_run_id))
+            .bind(("binding", explicit_binding))
+            .await
+            .expect("seed live explicit continuation binding");
+        let dispatch_context = serde_json::json!({
+            "run_id": bound_run_id,
+            "task_id": bound_task_id,
+            "request_text": "projection consistency route",
+            "role_selection": {
+                "ok": true,
+                "activation_source": "test",
+                "selection_mode": "auto",
+                "fallback_role": "orchestrator",
+                "request": "projection consistency route",
+                "selected_role": "pm",
+                "conversational_mode": "development",
+                "single_task_only": true,
+                "tracked_flow_entry": "dev-pack",
+                "allow_freeform_chat": false,
+                "confidence": "high",
+                "matched_terms": ["projection"],
+                "compiled_bundle": null,
+                "execution_plan": {
+                    "backend_admissibility_matrix": [
+                        {
+                            "backend_id": "internal_subagents",
+                            "backend_class": "internal",
+                            "lane_admissibility": {
+                                "implementation": true
+                            }
+                        }
+                    ],
+                    "development_flow": {
+                        "implementation": {
+                            "executor_backend": "internal_subagents",
+                            "fallback_executor_backend": "internal_subagents",
+                            "carrier_runtime_assignment": {
+                                "enabled": true,
+                                "selected_backend_id": "internal_subagents",
+                                "selected_carrier_id": "internal_subagents",
+                                "selected_model_profile_id": "codex_gpt55_low_write",
+                                "selected_model_ref": "gpt-5.5",
+                                "selected_model_provider": "openai-codex",
+                                "selected_reasoning_effort": "low",
+                                "budget_verdict": "within_budget",
+                                "rate": 1,
+                                "estimated_task_price_units": 1
+                            }
+                        },
+                        "dispatch_contract": {
+                            "execution_lane_sequence": ["implementation"],
+                            "lane_catalog": {
+                                "implementation": {
+                                    "executor_backend": "internal_subagents",
+                                    "fallback_executor_backend": "internal_subagents",
+                                    "carrier_runtime_assignment": {
+                                        "enabled": true,
+                                        "selected_backend_id": "internal_subagents",
+                                        "selected_carrier_id": "internal_subagents",
+                                        "selected_model_profile_id": "codex_gpt55_low_write",
+                                        "selected_model_ref": "gpt-5.5",
+                                        "selected_model_provider": "openai-codex",
+                                        "selected_reasoning_effort": "low",
+                                        "budget_verdict": "within_budget",
+                                        "rate": 1,
+                                        "estimated_task_price_units": 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "reason": "test"
+            },
+            "recorded_at": "2026-05-20T00:00:03Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_context', $run) CONTENT $context")
+            .bind(("run", bound_run_id))
+            .bind(("context", dispatch_context))
+            .await
+            .expect("seed route dispatch context");
+        drop(db);
+    });
+
+    let next_lawful = run_command_json(
+        &[
+            "task",
+            "next-lawful",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(next_lawful["status"], "pass");
+    assert_eq!(next_lawful["active_bounded_unit"]["task_id"], bound_task_id);
+    assert_eq!(
+        next_lawful["binding_source"],
+        "explicit_continuation_bind_task"
+    );
+    assert!(next_lawful["ready_task_candidates"]
+        .as_array()
+        .expect("ready candidates should render")
+        .iter()
+        .any(|candidate| candidate["task_id"] == ready_head_task_id));
+
+    let taskflow_next = run_command_json(
+        &[
+            "taskflow",
+            "next",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(taskflow_next["status"], "pass");
+    assert_eq!(taskflow_next["primary_ready_task"]["id"], bound_task_id);
+    assert_eq!(
+        taskflow_next["candidate_task_context"]["ready_head"]["id"],
+        bound_task_id
+    );
+
+    let graph_summary = run_command_json(
+        &[
+            "taskflow",
+            "graph-summary",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(graph_summary["status"], "pass");
+    assert_eq!(graph_summary["current_task_id"], bound_task_id);
+    assert_eq!(
+        graph_summary["primary_ready_task"]["task"]["id"],
+        bound_task_id
+    );
+    assert_eq!(
+        graph_summary["scheduling"]["ready_count"], 2,
+        "graph-summary compact scheduling must keep ready candidates visible by count"
+    );
+
+    let graph_explain = run_command_json(
+        &[
+            "taskflow",
+            "graph",
+            "explain",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(graph_explain["status"], "pass");
+    assert_eq!(graph_explain["task_id"], bound_task_id);
+    assert_eq!(graph_explain["current_task_id"], bound_task_id);
+    assert_eq!(graph_explain["task"]["id"], bound_task_id);
+    assert!(graph_explain["selected_as_current"]
+        .as_bool()
+        .expect("graph explain selected_as_current should render"));
+
+    let scheduler_dispatch = run_command_json(
+        &[
+            "taskflow",
+            "scheduler",
+            "dispatch",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(scheduler_dispatch["status"], "pass");
+    assert_eq!(
+        scheduler_dispatch["selected_current_task_id"],
+        bound_task_id
+    );
+    assert_eq!(scheduler_dispatch["selected_task_ids"][0], bound_task_id);
+    assert!(scheduler_dispatch["rejected_candidates"]
+        .as_array()
+        .expect("scheduler rejected candidates should render")
+        .iter()
+        .any(|candidate| candidate["task_id"] == ready_head_task_id));
+
+    let dispatch_preview = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dispatch_preview["status"], "pass");
+    assert_eq!(
+        dispatch_preview["selected_lanes"][0]["task_id"],
+        bound_task_id
+    );
+
+    let route_explain = run_command_json(
+        &[
+            "taskflow",
+            "route",
+            "explain",
+            "--run-id",
+            bound_run_id,
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(route_explain["status"], "pass");
+    assert_eq!(route_explain["task_id"], bound_task_id);
+    assert_eq!(route_explain["run_id"], bound_run_id);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn latest_run_projection_consistency_aligns_graph_summary_current_task() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

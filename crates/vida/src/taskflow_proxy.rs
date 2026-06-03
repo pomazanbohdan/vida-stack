@@ -1564,6 +1564,14 @@ fn explicit_task_graph_continuation_task_id(
         })
 }
 
+fn ready_task_for_explicit_task_graph_binding<'a>(
+    ready_tasks: &'a [crate::state_store::TaskRecord],
+    binding: Option<&crate::state_store::RunGraphContinuationBinding>,
+) -> Option<&'a crate::state_store::TaskRecord> {
+    let task_id = explicit_task_graph_continuation_task_id(binding)?;
+    ready_tasks.iter().find(|task| task.id == task_id)
+}
+
 async fn build_scheduler_packet_backed_execution_gate(
     store: &crate::state_store::StateStore,
     plan: &TaskflowSchedulerDispatchPlan,
@@ -2628,12 +2636,23 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
         .unwrap_or(1);
     let explicit_binding = if current_task_id.is_none() {
         Some(
-            store
+            match store
                 .latest_explicit_run_graph_continuation_binding_for_current_session()
                 .await
-                .map_err(|error| {
-                    format!("Failed to read latest explicit continuation binding: {error}")
-                })?,
+            {
+                Ok(Some(binding)) => Some(binding),
+                Ok(None) => store
+                    .latest_explicit_run_graph_continuation_binding()
+                    .await
+                    .map_err(|error| {
+                        format!("Failed to read latest explicit continuation binding: {error}")
+                    })?,
+                Err(error) => {
+                    return Err(format!(
+                        "Failed to read latest explicit continuation binding: {error}"
+                    ));
+                }
+            },
         )
     } else {
         None
@@ -4311,24 +4330,49 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         }
     };
     let (global_latest_run_graph, explicit_binding) = match store.as_ref() {
-        Some(store) => match tokio::try_join!(
-            store.latest_run_graph_status_for_current_session(),
-            store.latest_explicit_run_graph_continuation_binding_for_current_session()
-        ) {
-            Ok(summaries) => summaries,
-            Err(error) => {
-                eprintln!("Failed to read taskflow next run-graph summaries: {error}");
-                return ExitCode::from(1);
-            }
-        },
+        Some(store) => {
+            let global_latest_run_graph =
+                match store.latest_run_graph_status_for_current_session().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("Failed to read taskflow next run-graph status: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let explicit_binding = match store
+                .latest_explicit_run_graph_continuation_binding_for_current_session()
+                .await
+            {
+                Ok(Some(binding)) => Some(binding),
+                Ok(None) => match store.latest_explicit_run_graph_continuation_binding().await {
+                    Ok(binding) => binding,
+                    Err(error) => {
+                        eprintln!(
+                            "Failed to read taskflow next explicit continuation binding: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                },
+                Err(error) => {
+                    eprintln!(
+                        "Failed to read taskflow next explicit continuation binding: {error}"
+                    );
+                    return ExitCode::from(1);
+                }
+            };
+            (global_latest_run_graph, explicit_binding)
+        }
         None => (None, None),
     };
+    let decision_ready_task =
+        ready_task_for_explicit_task_graph_binding(&ready_tasks, explicit_binding.as_ref())
+            .or_else(|| ready_tasks.first());
     let latest_run_graph = match store.as_ref() {
         Some(store) => match scoped_latest_run_graph_for_explicit_ready_task(
             store,
             global_latest_run_graph,
             explicit_binding.as_ref(),
-            ready_tasks.first(),
+            decision_ready_task,
             &all_tasks,
         )
         .await
@@ -4420,7 +4464,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         .collect();
 
     let decision = build_taskflow_next_decision(
-        ready_tasks.first(),
+        decision_ready_task,
         recovery_holds_active_bound_run,
         recovery.is_some(),
         runtime_consumption.latest_kind.as_deref(),
@@ -4556,20 +4600,50 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
 }
 
 async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
-    let as_json = match args {
-        [head] if head == "graph-summary" => false,
-        [head, flag] if head == "graph-summary" && flag == "--json" => true,
-        [head, flag] if head == "graph-summary" && matches!(flag.as_str(), "--help" | "-h") => {
-            print_taskflow_proxy_help(Some("graph-summary"));
-            return ExitCode::SUCCESS;
+    let usage = "Usage: vida taskflow graph-summary [--state-dir <path>] [--json]";
+    if !matches!(args.first().map(String::as_str), Some("graph-summary")) {
+        eprintln!("{usage}");
+        return ExitCode::from(2);
+    }
+    if matches!(args.get(1).map(String::as_str), Some("--help" | "-h")) {
+        print_taskflow_proxy_help(Some("graph-summary"));
+        return ExitCode::SUCCESS;
+    }
+    let mut as_json = false;
+    let mut state_dir = None::<PathBuf>;
+    let mut index = 1usize;
+    while let Some(arg) = args.get(index) {
+        match arg.as_str() {
+            "--json" => {
+                as_json = true;
+                index += 1;
+            }
+            "--state-dir" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                state_dir = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--help" | "-h" => {
+                print_taskflow_proxy_help(Some("graph-summary"));
+                return ExitCode::SUCCESS;
+            }
+            _ => {
+                eprintln!("{usage}");
+                return ExitCode::from(2);
+            }
         }
-        _ => {
-            eprintln!("Usage: vida taskflow graph-summary [--json]");
-            return ExitCode::from(2);
+    }
+
+    let proxy_state_root = match resolve_taskflow_proxy_state_dir(state_dir) {
+        Ok(state_dir) => state_dir,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
         }
     };
-
-    let proxy_state_root = proxy_state_dir();
 
     if as_json {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
@@ -4713,11 +4787,14 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let decision_ready_task =
+        ready_task_for_explicit_task_graph_binding(&ready_tasks, explicit_binding.as_ref())
+            .or_else(|| ready_tasks.first());
     let latest_run_graph = match scoped_latest_run_graph_for_explicit_ready_task(
         &store,
         global_latest_run_graph,
         explicit_binding.as_ref(),
-        ready_tasks.first(),
+        decision_ready_task,
         &all_tasks,
     )
     .await
@@ -4833,7 +4910,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
 
     let waves = build_graph_summary_waves(&all_tasks, &ready_tasks, &blocked_tasks);
     let continuation_decision = build_taskflow_next_decision(
-        ready_tasks.first(),
+        decision_ready_task,
         recovery_holds_unresolved_active_bound_run(recovery.as_ref(), dispatch.as_ref()),
         recovery.is_some(),
         runtime_consumption.latest_kind.as_deref(),
@@ -4887,18 +4964,35 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             "blockers": record.blockers,
         })
     });
-    let canonical_current_task_id = primary_ready_task
-        .as_ref()
-        .and_then(|task| task["task"]["id"].as_str())
-        .map(str::to_string)
+    let explicit_bound_current_task_id =
+        explicit_task_graph_continuation_task_id(explicit_binding.as_ref()).map(str::to_string);
+    let canonical_current_task_id = explicit_bound_current_task_id
+        .clone()
+        .or_else(|| {
+            primary_ready_task
+                .as_ref()
+                .and_then(|task| task["task"]["id"].as_str())
+                .map(str::to_string)
+        })
         .or_else(|| scheduling.current_task_id.clone());
     let display_scheduling =
         crate::state_store::StateStore::scheduling_projection_for_current_task_id(
             &scheduling,
             canonical_current_task_id.as_deref(),
         );
-    let primary_ready_task = if continuation_decision.primary_ready_task.is_some() {
-        display_scheduling.ready.first().map(|candidate| {
+    let primary_ready_task = if continuation_decision.primary_ready_task.is_some()
+        || explicit_bound_current_task_id.is_some()
+    {
+        let primary_candidate = canonical_current_task_id
+            .as_deref()
+            .and_then(|task_id| {
+                display_scheduling
+                    .ready
+                    .iter()
+                    .find(|candidate| candidate.task.id == task_id)
+            })
+            .or_else(|| display_scheduling.ready.first());
+        primary_candidate.map(|candidate| {
             serde_json::json!({
                 "task": graph_summary_task_ref(&candidate.task),
                 "ready_now": candidate.ready_now,
@@ -4923,7 +5017,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     extend_graph_summary_next_actions(
         &mut next_actions,
         &continuation_decision,
-        ready_tasks.first().map(|task| task.id.as_str()),
+        decision_ready_task.map(|task| task.id.as_str()),
         blocked_tasks.first().map(|record| record.task.id.as_str()),
         critical_path.length,
     );
@@ -5161,7 +5255,7 @@ fn build_taskflow_graph_explain_payload(
                 )
             }));
         }
-        if candidate.ready_now && !candidate.ready_parallel_safe {
+        if candidate.ready_now && !candidate.ready_parallel_safe && !selected_as_current {
             blocker_codes.extend(candidate.parallel_blockers.iter().cloned());
         }
     } else {
@@ -5230,7 +5324,7 @@ fn build_taskflow_graph_explain_payload(
 }
 
 async fn run_taskflow_graph_surface(args: &[String]) -> ExitCode {
-    let usage = "Usage: vida taskflow graph explain [task-id] [--scope <task-id>] [--current-task-id <task-id>] [--json]";
+    let usage = "Usage: vida taskflow graph explain [task-id] [--scope <task-id>] [--current-task-id <task-id>] [--state-dir <path>] [--json]";
     if matches!(
         args,
         [head, flag] if head == "graph" && matches!(flag.as_str(), "--help" | "-h")
@@ -5254,6 +5348,7 @@ async fn run_taskflow_graph_surface(args: &[String]) -> ExitCode {
     let mut target_task_id = None::<String>;
     let mut scope_task_id = None::<String>;
     let mut current_task_id = None::<String>;
+    let mut state_dir = None::<PathBuf>;
     let mut as_json = false;
     let mut index = 2usize;
     while let Some(arg) = args.get(index) {
@@ -5272,6 +5367,14 @@ async fn run_taskflow_graph_surface(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 };
                 current_task_id = Some(value.clone());
+                index += 2;
+            }
+            "--state-dir" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                state_dir = Some(PathBuf::from(value));
                 index += 2;
             }
             "--json" => {
@@ -5293,13 +5396,41 @@ async fn run_taskflow_graph_surface(args: &[String]) -> ExitCode {
         }
     }
 
-    let store = match crate::state_store::StateStore::open_existing(proxy_state_dir()).await {
+    let state_dir = match resolve_taskflow_proxy_state_dir(state_dir) {
+        Ok(state_dir) => state_dir,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let store = match crate::state_store::StateStore::open_existing(state_dir.clone()).await {
         Ok(store) => store,
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
             return ExitCode::from(1);
         }
     };
+    if current_task_id.is_none() {
+        let explicit_binding = match store
+            .latest_explicit_run_graph_continuation_binding_for_current_session()
+            .await
+        {
+            Ok(Some(binding)) => Some(binding),
+            Ok(None) => match store.latest_explicit_run_graph_continuation_binding().await {
+                Ok(binding) => binding,
+                Err(error) => {
+                    eprintln!("Failed to read latest explicit continuation binding: {error}");
+                    return ExitCode::from(1);
+                }
+            },
+            Err(error) => {
+                eprintln!("Failed to read latest explicit continuation binding: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        current_task_id =
+            explicit_task_graph_continuation_task_id(explicit_binding.as_ref()).map(str::to_string);
+    }
     let projection = match store
         .scheduling_projection_scoped(scope_task_id.as_deref(), current_task_id.as_deref())
         .await
@@ -5890,6 +6021,7 @@ struct TaskflowRouteDiagnosticArgs {
     run_id: Option<String>,
     dispatch_target: Option<String>,
     runtime_role: Option<String>,
+    state_dir: Option<PathBuf>,
     as_json: bool,
     include_pricing: bool,
 }
@@ -5910,7 +6042,7 @@ fn parse_taskflow_route_diagnostic_args(
         }
         _ => {
             return Err(
-                "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--pricing] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--pricing] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+                "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--state-dir <path>] [--pricing] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--state-dir <path>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--state-dir <path>] [--pricing] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--state-dir <path>] [--json]",
             );
         }
     };
@@ -5920,6 +6052,7 @@ fn parse_taskflow_route_diagnostic_args(
         run_id: None,
         dispatch_target: None,
         runtime_role: None,
+        state_dir: None,
         as_json: false,
         include_pricing: false,
     };
@@ -5954,14 +6087,21 @@ fn parse_taskflow_route_diagnostic_args(
                 parsed.runtime_role = Some(value.clone());
                 index += 2;
             }
+            "--state-dir" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("Missing value for --state-dir");
+                };
+                parsed.state_dir = Some(PathBuf::from(value));
+                index += 2;
+            }
             "--help" | "-h" => {
                 return Err(
-                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--pricing] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--pricing] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--state-dir <path>] [--pricing] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--state-dir <path>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--state-dir <path>] [--pricing] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--state-dir <path>] [--json]",
                 );
             }
             _ => {
                 return Err(
-                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--pricing] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--pricing] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--state-dir <path>] [--pricing] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--state-dir <path>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--state-dir <path>] [--pricing] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--state-dir <path>] [--json]",
                 );
             }
         }
@@ -6963,7 +7103,13 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let state_dir = proxy_state_dir();
+    let state_dir = match resolve_taskflow_proxy_state_dir(parsed.state_dir.clone()) {
+        Ok(state_dir) => state_dir,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
     let projection_name = format!(
         "taskflow-route-{}-run-{}-target-{}-role-{}-pricing-{}-latest",
         parsed.mode.projection_component(),
