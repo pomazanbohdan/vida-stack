@@ -10,6 +10,49 @@ use crate::status_surface_host_cli_system::{
     selected_host_cli_system_entry,
 };
 
+fn host_bridge_capacity_summary(
+    subagent_backends: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    let host_bridge_backends = subagent_backends
+        .iter()
+        .filter_map(|(backend_id, backend)| {
+            if backend["dispatch_transport"].as_str() == Some("host_tool_bridge") {
+                Some(serde_json::json!({
+                    "backend_id": backend_id,
+                    "execution_boundary": backend["execution_boundary"],
+                    "receipt_mode": backend["receipt_mode"],
+                    "write_scope": backend["write_scope"],
+                    "default_model_profile": backend["default_model_profile"],
+                }))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let configured_backend_count = host_bridge_backends.len();
+    let ready_to_attempt = configured_backend_count > 0;
+    serde_json::json!({
+        "status": if ready_to_attempt { "ready_to_attempt" } else { "not_configured" },
+        "configured_backend_count": configured_backend_count,
+        "ready_to_attempt": ready_to_attempt,
+        "capacity_observable": false,
+        "capacity_source": "parent_host_tool_runtime",
+        "active_agents_count": serde_json::Value::Null,
+        "active_lanes_count": serde_json::Value::Null,
+        "thread_limit_reached": serde_json::Value::Null,
+        "host_bridge_backends": host_bridge_backends,
+        "blocked_result_code": "host_agent_capacity_unavailable",
+        "next_actions": if ready_to_attempt {
+            vec![
+                "Attempt the host bridge adapter command from agent-init output.".to_string(),
+                "If the parent host tool reports thread or capacity exhaustion, close stale host agents or write a blocked host bridge result with blocker_code host_agent_capacity_unavailable.".to_string(),
+            ]
+        } else {
+            vec!["Configure an enabled host_tool_bridge subagent backend before dispatching internal_subagents.".to_string()]
+        }
+    })
+}
+
 pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Value> {
     let overlay = crate::project_activator_surface::read_yaml_file_checked(
         &project_root.join("vida.config.yaml"),
@@ -268,6 +311,12 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
         "subagent_backends".to_string(),
         serde_json::Value::Object(subagent_backends),
     );
+    if let Some(serde_json::Value::Object(subagent_backends)) = payload.get("subagent_backends") {
+        payload.insert(
+            "host_bridge_capacity".to_string(),
+            host_bridge_capacity_summary(subagent_backends),
+        );
+    }
     let overlay_dispatch_aliases_result =
         host_runtime_dispatch_alias_catalog_for_root(&overlay, project_root, &carrier_catalog);
     let internal_dispatch_alias_load_error = overlay_dispatch_aliases_result
@@ -339,6 +388,22 @@ mod tests {
         assert_eq!(
             summary["subagent_backends"]["internal_subagents"]["dispatch_transport"],
             "host_tool_bridge"
+        );
+        assert_eq!(
+            summary["host_bridge_capacity"]["status"],
+            "ready_to_attempt"
+        );
+        assert_eq!(
+            summary["host_bridge_capacity"]["configured_backend_count"],
+            1
+        );
+        assert_eq!(
+            summary["host_bridge_capacity"]["capacity_observable"],
+            false
+        );
+        assert_eq!(
+            summary["host_bridge_capacity"]["blocked_result_code"],
+            "host_agent_capacity_unavailable"
         );
     }
 

@@ -208,6 +208,23 @@ fn host_bridge_adapter_payload(
     } else {
         serde_json::json!([])
     };
+    let adapter_capacity_status = if status == "pass" {
+        "ready_to_attempt"
+    } else {
+        "not_checked_due_request_blockers"
+    };
+    let adapter_capacity = serde_json::json!({
+        "status": adapter_capacity_status,
+        "capacity_observable": false,
+        "capacity_source": "parent_host_tool_runtime",
+        "active_agents_count": serde_json::Value::Null,
+        "thread_limit_reached": serde_json::Value::Null,
+        "blocked_result_code": "host_agent_capacity_unavailable",
+        "next_actions": [
+            "Invoke multi_agent_v1.spawn_agent from the parent host session when capacity is available.",
+            "If the parent host tool reports thread or capacity exhaustion, close stale host agents or write a blocked host bridge result with blocker_code host_agent_capacity_unavailable."
+        ]
+    });
     serde_json::json!({
         "surface": "vida agent host-bridge",
         "status": status,
@@ -262,6 +279,7 @@ fn host_bridge_adapter_payload(
             "receipt_id": receipt_id,
             "completion_command": completion_command,
             "host_tool_calls": host_tool_calls,
+            "adapter_capacity": adapter_capacity,
             "blocked_result_contract": {
                 "execution_state": "blocked",
                 "allowed_blocker_codes": [
@@ -2686,6 +2704,18 @@ mod tests {
         assert_eq!(calls[2]["tool"], "multi_agent_v1.close_agent");
         assert_eq!(
             payload["host_bridge"]["blocked_result_contract"]["allowed_blocker_codes"][0],
+            "host_agent_capacity_unavailable"
+        );
+        assert_eq!(
+            payload["host_bridge"]["adapter_capacity"]["status"],
+            "ready_to_attempt"
+        );
+        assert_eq!(
+            payload["host_bridge"]["adapter_capacity"]["capacity_observable"],
+            false
+        );
+        assert_eq!(
+            payload["host_bridge"]["adapter_capacity"]["blocked_result_code"],
             "host_agent_capacity_unavailable"
         );
     }
