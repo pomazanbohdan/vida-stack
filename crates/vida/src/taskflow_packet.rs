@@ -60,104 +60,6 @@ fn read_packet_body(path: &str) -> Result<serde_json::Value, String> {
         .map_err(|error| format!("Failed to decode persisted packet `{display_path}`: {error}"))
 }
 
-fn dispatch_init_cache_dir(state_root: &Path) -> std::path::PathBuf {
-    state_root
-        .join("runtime-consumption")
-        .join("dispatch-init-cache")
-}
-
-fn read_dispatch_init_cache_payload(
-    state_root: &Path,
-    run_id: &str,
-) -> Result<serde_json::Value, String> {
-    let path = dispatch_init_cache_dir(state_root).join(format!("{run_id}.json"));
-    let body = std::fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "Failed to read dispatch-init cache `{}`: {error}",
-            path.display()
-        )
-    })?;
-    serde_json::from_str(&body).map_err(|error| {
-        format!(
-            "Failed to decode dispatch-init cache `{}`: {error}",
-            path.display()
-        )
-    })
-}
-
-fn latest_dispatch_init_cache_run_id(state_root: &Path) -> Result<Option<String>, String> {
-    let cache_dir = dispatch_init_cache_dir(state_root);
-    let Ok(entries) = std::fs::read_dir(&cache_dir) else {
-        return Ok(None);
-    };
-    let mut latest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            format!(
-                "Failed to read dispatch-init cache entry from `{}`: {error}",
-                cache_dir.display()
-            )
-        })?;
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let modified = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        if latest
-            .as_ref()
-            .map(|(current, _)| modified > *current)
-            .unwrap_or(true)
-        {
-            latest = Some((modified, path));
-        }
-    }
-    let Some((_, path)) = latest else {
-        return Ok(None);
-    };
-    let body = std::fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "Failed to read latest dispatch-init cache `{}`: {error}",
-            path.display()
-        )
-    })?;
-    let payload: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
-        format!(
-            "Failed to decode latest dispatch-init cache `{}`: {error}",
-            path.display()
-        )
-    })?;
-    Ok(payload["run_id"]
-        .as_str()
-        .or_else(|| payload["dispatch_receipt"]["run_id"].as_str())
-        .map(str::to_string)
-        .or_else(|| {
-            path.file_stem()
-                .and_then(|value| value.to_str())
-                .map(str::to_string)
-        }))
-}
-
-fn cached_dispatch_receipt(
-    cache_payload: &serde_json::Value,
-) -> Result<crate::state_store::RunGraphDispatchReceipt, String> {
-    serde_json::from_value(cache_payload["dispatch_receipt"].clone())
-        .map_err(|error| format!("Failed to decode cached dispatch_receipt: {error}"))
-}
-
-fn cached_dispatch_packet_path<'a>(
-    cache_payload: &'a serde_json::Value,
-    receipt: &'a crate::state_store::RunGraphDispatchReceipt,
-) -> Option<&'a str> {
-    cache_payload["dispatch_packet_path"]
-        .as_str()
-        .or(receipt.dispatch_packet_path.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
 fn canonicalize_packet_path(path: &str) -> Result<std::path::PathBuf, String> {
     let candidate = Path::new(path);
     let resolved_path = candidate
@@ -228,16 +130,12 @@ async fn resolve_packet_render_run_id(
 }
 
 async fn resolve_latest_packet_run_id(store: &StateStore) -> Result<String, String> {
-    let state_root = proxy_state_dir();
     let Some(receipt) = store
         .latest_run_graph_dispatch_receipt()
         .await
         .map_err(|error| format!("Failed to read latest persisted dispatch receipt: {error}"))?
     else {
-        if let Some(run_id) = latest_dispatch_init_cache_run_id(&state_root)? {
-            return Ok(run_id);
-        }
-        return Err("No latest persisted run-graph dispatch receipt or dispatch-init cache exists; run `vida taskflow run-graph dispatch-init <task-id> --json` first.".to_string());
+        return Err("No latest persisted run-graph dispatch receipt exists; run `vida taskflow run-graph dispatch-init <task-id> --json` first.".to_string());
     };
     Ok(receipt.run_id)
 }
@@ -644,36 +542,14 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let cached_packet = if receipt_from_store.is_none() {
-        match read_dispatch_init_cache_payload(&state_root, &effective_run_id) {
-            Ok(payload) => Some(payload),
-            Err(error) => {
-                eprintln!(
-                    "No persisted run-graph dispatch receipt exists for run_id `{effective_run_id}`, and cache recovery failed: {error}. Run `vida taskflow run-graph dispatch-init {run_id} --json` first."
-                );
-                return ExitCode::from(1);
-            }
-        }
-    } else {
-        None
-    };
-    let receipt = if let Some(receipt) = receipt_from_store {
-        receipt
-    } else {
-        match cached_dispatch_receipt(cached_packet.as_ref().expect("cache payload should exist")) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::from(1);
-            }
-        }
+    let Some(receipt) = receipt_from_store else {
+        eprintln!(
+            "No persisted run-graph dispatch receipt exists for run_id `{effective_run_id}`. Run `vida taskflow run-graph dispatch-init {run_id} --json` first."
+        );
+        return ExitCode::from(1);
     };
 
-    let dispatch_packet_path = match cached_packet
-        .as_ref()
-        .and_then(|payload| cached_dispatch_packet_path(payload, &receipt))
-        .or(receipt.dispatch_packet_path.as_deref())
-    {
+    let dispatch_packet_path = match receipt.dispatch_packet_path.as_deref() {
         Some(path) if !path.trim().is_empty() => path,
         _ => {
             eprintln!(
@@ -807,9 +683,7 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_taskflow_packet_render_payload, build_taskflow_packet_repair_payload,
-        latest_dispatch_init_cache_run_id, parse_packet_repair_args,
-        read_dispatch_init_cache_payload, resolve_latest_packet_run_id,
-        resolve_packet_render_run_id,
+        parse_packet_repair_args, resolve_latest_packet_run_id, resolve_packet_render_run_id,
     };
     use crate::state_store::{StateStore, TaskPlannerMetadata, TaskRecord};
     use std::fs;
@@ -1026,39 +900,40 @@ mod tests {
             .contains("vida task update task-with-metadata --owned-path"));
     }
 
-    #[test]
-    fn latest_dispatch_init_cache_run_id_recovers_latest_cached_packet() {
+    #[tokio::test]
+    async fn latest_packet_resolution_fails_closed_without_persisted_dispatch_receipt() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let root = std::env::temp_dir().join(format!(
-            "vida-packet-latest-cache-fallback-{}-{}",
+            "vida-packet-latest-no-cache-fallback-{}-{}",
             std::process::id(),
             nanos
         ));
+        let store = StateStore::open(root.clone())
+            .await
+            .expect("state store should open");
         let cache_dir = root.join("runtime-consumption").join("dispatch-init-cache");
         fs::create_dir_all(&cache_dir).expect("cache dir should exist");
         fs::write(
-            cache_dir.join("run-cached.json"),
+            cache_dir.join("forged-run.json"),
             serde_json::json!({
-                "run_id": "run-cached",
+                "run_id": "forged-run",
                 "dispatch_receipt": {
-                    "run_id": "run-cached"
+                    "run_id": "forged-run",
+                    "dispatch_status": "forged_not_routed"
                 }
             })
             .to_string(),
         )
         .expect("cache file should write");
 
-        let resolved = latest_dispatch_init_cache_run_id(&root)
-            .expect("cache read should succeed")
-            .expect("latest cache should resolve");
-        let cached = read_dispatch_init_cache_payload(&root, "run-cached")
-            .expect("cache payload should read");
+        let error = resolve_latest_packet_run_id(&store)
+            .await
+            .expect_err("cache-only packet latest should fail closed");
 
-        assert_eq!(resolved, "run-cached");
-        assert_eq!(cached["run_id"], "run-cached");
+        assert!(error.contains("No latest persisted run-graph dispatch receipt exists"));
 
         let _ = fs::remove_dir_all(&root);
     }
