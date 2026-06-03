@@ -783,6 +783,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Canonical commands:");
             println!("  vida taskflow recovery status <run-id> [--json]");
+            println!("  vida taskflow recovery explain <run-id> [--json]");
             println!("  vida taskflow recovery latest [--json]");
             println!("  vida taskflow recovery checkpoint <run-id> [--json]");
             println!("  vida taskflow recovery checkpoint-latest [--json]");

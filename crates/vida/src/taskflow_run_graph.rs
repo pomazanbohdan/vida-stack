@@ -322,6 +322,69 @@ fn build_recovery_json_payload(
     )
 }
 
+fn build_recovery_explain_json_payload(
+    surface: &str,
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+    blocker_codes: Vec<String>,
+    why_not_now: Option<RecoveryWhyNotNow>,
+    next_action: Option<RecoveryNextAction>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let why_not_now = why_not_now.map(|mut value| {
+        value.blocking_surface = Some(surface.to_string());
+        value
+    });
+    let diagnosis_summary = next_action
+        .as_ref()
+        .map(|value| value.reason.clone())
+        .or_else(|| why_not_now.as_ref().map(|value| value.summary.clone()))
+        .or_else(|| {
+            recommended_command
+                .as_ref()
+                .map(|command| format!("Run `{command}`."))
+        })
+        .unwrap_or_else(|| "No recovery blocker is currently actionable.".to_string());
+
+    // Classify into one of four primary diagnosis types
+    let diagnosis_type = classify_recovery_diagnosis(&blocker_codes, summary, projection_truth);
+
+    let diagnosis_evidence = serde_json::json!({
+        "recovery_ready": summary.recovery_ready,
+        "resume_target": summary.resume_target,
+        "delegated_cycle_open": summary.delegation_gate.delegated_cycle_open,
+        "projection_reason": projection_truth.projection_reason,
+        "projection_vs_receipt_parity": projection_truth.projection_vs_receipt_parity,
+        "stale_state_suspected": projection_truth.stale_state_suspected,
+    });
+    let next_actions = operator_next_actions_for_operator_surface(
+        &blocker_codes,
+        next_action.as_ref(),
+        why_not_now.as_ref(),
+        recommended_command.as_deref(),
+    );
+    build_run_graph_operator_surface_payload(
+        surface,
+        &summary.run_id,
+        blocker_codes.clone(),
+        next_actions,
+        serde_json::json!({
+            "diagnosis": diagnosis_type,
+            "diagnosis_detail": {
+                "summary": diagnosis_summary,
+                "blocker_codes": blocker_codes,
+                "evidence": diagnosis_evidence,
+            },
+            "next_action": next_action,
+            "recommended_command": recommended_command,
+            "recommended_surface": recommended_surface,
+            "recovery": summary,
+            "projection_truth": projection_truth,
+        }),
+    )
+}
+
 fn build_run_graph_diagnosis_json_payload_for_surface(
     surface: &str,
     diagnosis: &RunGraphDiagnosis,
@@ -1156,6 +1219,70 @@ fn recovery_exception_takeover_next_action(
         command,
         reason: "record bounded exception-path evidence for the dispatch blocker before local recovery work".to_string(),
     })
+}
+
+/// Classify blocker codes into one of four primary diagnosis types.
+/// Returns the diagnosis type as a string: runtime_defect, carrier_unavailable, packet_invalid, or user_action_needed.
+fn classify_recovery_diagnosis(
+    blocker_codes: &[String],
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+) -> String {
+    // Check for carrier unavailable blocker codes
+    for code in blocker_codes {
+        let code_lower = code.to_lowercase();
+        if code_lower.contains("carrier_unavailable")
+            || code_lower.contains("codex_carrier_unavailable")
+            || code_lower == "internal_codex_carrier_unavailable"
+        {
+            return "carrier_unavailable".to_string();
+        }
+    }
+
+    // Check for packet invalid blocker codes
+    for code in blocker_codes {
+        let code_lower = code.to_lowercase();
+        if code_lower.contains("packet") && code_lower.contains("invalid")
+            || code_lower == "packet_invalid"
+            || code_lower.contains("receipt") && code_lower.contains("invalid")
+        {
+            return "packet_invalid".to_string();
+        }
+    }
+
+    // Check for user action needed (delegation gates, open cycles, etc.)
+    if summary.delegation_gate.delegated_cycle_open {
+        return "user_action_needed".to_string();
+    }
+    for code in blocker_codes {
+        let code_lower = code.to_lowercase();
+        if code_lower == "open_delegated_cycle"
+            || code_lower.contains("user_action")
+            || code_lower.contains("delegate")
+            || code_lower == "internal_activation_view_only"
+        {
+            return "user_action_needed".to_string();
+        }
+    }
+
+    // Default to runtime_defect for any other blocker
+    if !blocker_codes.is_empty() {
+        return "runtime_defect".to_string();
+    }
+
+    // If no blocker codes but still blocked (e.g., stale state), it's a runtime defect
+    if projection_truth.stale_state_suspected {
+        return "runtime_defect".to_string();
+    }
+
+    // If recovery is ready and not blocked, no diagnosis needed
+    // But per task requirements, we should still emit one of the four types
+    // Default to user_action_needed for non-blocked but not-terminal states
+    if !summary.recovery_ready {
+        return "runtime_defect".to_string();
+    }
+
+    "user_action_needed".to_string()
 }
 
 fn recovery_surface_contract(
@@ -2587,6 +2714,168 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         {
             render_latest_recovery_json_payload("vida taskflow recovery status").await
         }
+        [head, subcommand, run_id] if head == "recovery" && subcommand == "explain" => {
+            let state_dir = proxy_state_dir();
+            match StateStore::open_existing_read_only(state_dir).await {
+                Ok(store) => match store.run_graph_recovery_summary(run_id).await {
+                    Ok(summary) => {
+                        let projection_truth = match store.run_graph_status(&summary.run_id).await {
+                            Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                                Ok(truth) => truth,
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to build recovery explain projection truth: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            },
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read run-graph status for recovery explain: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        let (
+                            blocker_codes,
+                            why_not_now,
+                            next_action,
+                            recommended_command,
+                            recommended_surface,
+                        ) = recovery_surface_contract_with_owned_scope(
+                            &summary,
+                            &projection_truth,
+                            &recovery_owned_write_scope_for_summary(&store, &summary).await,
+                        );
+                        let diagnosis_type = classify_recovery_diagnosis(
+                            &blocker_codes,
+                            &summary,
+                            &projection_truth,
+                        );
+                        let diagnosis_summary = next_action
+                            .as_ref()
+                            .map(|value| value.reason.as_str())
+                            .or_else(|| why_not_now.as_ref().map(|value| value.summary.as_str()))
+                            .unwrap_or("No recovery blocker is currently actionable.");
+                        print_surface_header(RenderMode::Plain, "vida taskflow recovery explain");
+                        print_surface_line(RenderMode::Plain, "run", &summary.run_id);
+                        print_surface_line(RenderMode::Plain, "diagnosis", &diagnosis_type);
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "diagnosis_summary",
+                            diagnosis_summary,
+                        );
+                        print_surface_line(RenderMode::Plain, "recovery", &summary.as_display());
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "evidence",
+                            &projection_truth.projection_reason,
+                        );
+                        if let Some(next_action) = next_action.as_ref() {
+                            print_surface_line(
+                                RenderMode::Plain,
+                                "next_action",
+                                &next_action.reason,
+                            );
+                        }
+                        if let Some(command) = recommended_command.as_deref() {
+                            print_surface_line(RenderMode::Plain, "recommended_command", command);
+                        }
+                        if let Some(surface) = recommended_surface.as_deref() {
+                            print_surface_line(RenderMode::Plain, "recommended_surface", surface);
+                        }
+                        if !blocker_codes.is_empty() {
+                            print_surface_line(
+                                RenderMode::Plain,
+                                "blocker_codes",
+                                &blocker_codes.join(", "),
+                            );
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to explain recovery status: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        [head, subcommand, run_id, flag]
+            if head == "recovery" && subcommand == "explain" && flag == "--json" =>
+        {
+            let state_dir = proxy_state_dir();
+            match StateStore::open_existing_read_only(state_dir).await {
+                Ok(store) => match store.run_graph_recovery_summary(run_id).await {
+                    Ok(summary) => {
+                        let projection_truth = match store.run_graph_status(&summary.run_id).await {
+                            Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                                Ok(truth) => truth,
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to build recovery explain projection truth: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            },
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read run-graph status for recovery explain: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        let (
+                            blocker_codes,
+                            why_not_now,
+                            next_action,
+                            recommended_command,
+                            recommended_surface,
+                        ) = recovery_surface_contract_with_owned_scope(
+                            &summary,
+                            &projection_truth,
+                            &recovery_owned_write_scope_for_summary(&store, &summary).await,
+                        );
+                        match build_recovery_explain_json_payload(
+                            "vida taskflow recovery explain",
+                            &summary,
+                            &projection_truth,
+                            blocker_codes,
+                            why_not_now,
+                            next_action,
+                            recommended_command,
+                            recommended_surface,
+                        ) {
+                            Ok(payload) => {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&payload)
+                                        .expect("recovery explain should render as json")
+                                );
+                                ExitCode::SUCCESS
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to render normalized recovery explain payload: {error}"
+                                );
+                                ExitCode::from(1)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to explain recovery status: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         [head, subcommand, run_id] if head == "recovery" && subcommand == "status" => {
             let state_dir = proxy_state_dir();
             match StateStore::open_existing_read_only(state_dir).await {
@@ -2764,6 +3053,10 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         }
         [head, subcommand, ..] if head == "recovery" && subcommand == "latest" => {
             eprintln!("Usage: vida taskflow recovery latest [--json]");
+            ExitCode::from(2)
+        }
+        [head, subcommand, ..] if head == "recovery" && subcommand == "explain" => {
+            eprintln!("Usage: vida taskflow recovery explain <run-id> [--json]");
             ExitCode::from(2)
         }
         [head, subcommand, ..] if head == "recovery" && subcommand == "status" => {
@@ -8436,6 +8729,90 @@ mod tests {
             payload["why_not_now"]["blocking_surface"],
             serde_json::json!("vida taskflow recovery status")
         );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn recovery_explain_json_payload_keeps_operator_contract_parity() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-recovery-explain-json".to_string(),
+            task_id: "task-recovery-explain-json".to_string(),
+            active_node: "writer".to_string(),
+            lifecycle_stage: "implementation_writer_active".to_string(),
+            resume_node: Some("verification".to_string()),
+            resume_status: "blocked".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.verifier".to_string(),
+            policy_gate: "writer_result_required".to_string(),
+            handoff_state: "awaiting_writer".to_string(),
+            recovery_ready: true,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "writer".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "handoff_pending".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "implementation_writer_active".to_string(),
+            },
+        };
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida taskflow consume continue --run-id run-recovery-explain-json --json"
+                    .to_string(),
+            ),
+            dispatch_receipt: None,
+            continuation_binding: None,
+        };
+        let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract(&summary, &projection_truth);
+        let payload = build_recovery_explain_json_payload(
+            "vida taskflow recovery explain",
+            &summary,
+            &projection_truth,
+            blocker_codes,
+            why_not_now,
+            next_action,
+            recommended_command,
+            recommended_surface,
+        )
+        .expect("recovery explain payload should render");
+
+        assert_eq!(payload["surface"], "vida taskflow recovery explain");
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload.get("diagnosis").is_some());
+        // diagnosis is now a string with one of four types
+        let diagnosis_value = payload["diagnosis"]
+            .as_str()
+            .expect("diagnosis should be a string");
+        assert!([
+            "runtime_defect",
+            "carrier_unavailable",
+            "packet_invalid",
+            "user_action_needed"
+        ]
+        .contains(&diagnosis_value));
+        // diagnosis_detail contains the old diagnosis object
+        assert!(payload.get("diagnosis_detail").is_some());
+        assert_eq!(
+            payload["diagnosis_detail"]["blocker_codes"],
+            payload["blocker_codes"]
+        );
+        assert_eq!(
+            payload["artifact_refs"]["surface"],
+            serde_json::json!("vida taskflow recovery explain")
+        );
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 

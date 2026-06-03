@@ -5173,6 +5173,69 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
 }
 
 #[test]
+fn recovery_explain_cli_surfaces_actionable_diagnosis() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|_| "0".to_string());
+    let parent_id = format!("recovery-explain-parent-{suffix}");
+    create_epic_parent(&state_dir, &parent_id, "Recovery explain parent", "open");
+    let task_id = format!("recovery-explain-run-{suffix}");
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Recovery explain run",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", &task_id, "implementation"],
+        &state_dir,
+    );
+
+    let plain = run_and_assert_success(&["taskflow", "recovery", "explain", &task_id], &state_dir);
+    assert!(plain.contains("vida taskflow recovery explain"));
+    assert!(plain.contains("diagnosis"));
+    assert!(plain.contains("evidence"));
+    assert!(plain.contains("next_action"));
+    assert!(plain.contains("recommended_command"));
+    assert!(plain.contains("recommended_surface"));
+
+    let json = run_command_json(
+        &["taskflow", "recovery", "explain", &task_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(json["surface"], "vida taskflow recovery explain");
+    assert_eq!(json["run_id"], task_id);
+    assert!(json.get("diagnosis").is_some());
+    assert!(json.get("next_action").is_some());
+    assert!(json.get("recommended_command").is_some());
+    assert!(json.get("recommended_surface").is_some());
+    assert!(json.get("recovery").is_some());
+    assert!(json.get("projection_truth").is_some());
+    assert_shared_fields_consistency(&json, "recovery explain");
+    assert_operator_contracts_consistency(&json, "recovery explain");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn latest_run_projection_consistency_aligns_graph_summary_current_task() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
