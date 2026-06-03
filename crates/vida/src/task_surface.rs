@@ -4015,9 +4015,33 @@ fn task_next_lawful_attach_explanation(
 }
 
 fn task_next_lawful_select_ready_candidate_receipt(
+    tasks: &[state_store::TaskRecord],
     ready_task_candidates: Vec<TaskContinuationCandidate>,
     selected_task_id: &str,
 ) -> TaskNextLawfulReceipt {
+    match crate::continuation_binding_summary::taskflow_leaf_active_tasks(tasks).as_slice() {
+        [active] => {
+            return blocked_task_next_lawful_receipt(
+                task_continuation_active_unit(active),
+                ready_task_candidates,
+                "select_conflicts_with_active_taskflow_task",
+                &format!(
+                    "TaskFlow task `{}` is already in_progress; continue or close it before selecting another continuation item.",
+                    active.id
+                ),
+            );
+        }
+        [] => {}
+        _ => {
+            return blocked_task_next_lawful_receipt(
+                serde_json::Value::Null,
+                ready_task_candidates,
+                "multiple_active_tasks",
+                "Close or reconcile extra in_progress tasks before selecting a continuation item.",
+            );
+        }
+    }
+
     let Some(selected_index) = ready_task_candidates
         .iter()
         .position(|candidate| candidate.task_id == selected_task_id)
@@ -5154,6 +5178,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             )
                         } else {
                             task_next_lawful_select_ready_candidate_receipt(
+                                &tasks,
                                 ready_task_candidates,
                                 selected_task_id,
                             )
@@ -7051,7 +7076,8 @@ mod tests {
             task_continuation_candidate(&second, true),
         ];
 
-        let receipt = task_next_lawful_select_ready_candidate_receipt(ready, "task-b");
+        let receipt =
+            task_next_lawful_select_ready_candidate_receipt(&[first, second], ready, "task-b");
 
         assert_eq!(receipt.status, "pass");
         assert_eq!(receipt.active_bounded_unit["task_id"], "task-b");
@@ -7082,7 +7108,8 @@ mod tests {
         first.status = "open".to_string();
         let ready = vec![task_continuation_candidate(&first, false)];
 
-        let receipt = task_next_lawful_select_ready_candidate_receipt(ready, "task-missing");
+        let receipt =
+            task_next_lawful_select_ready_candidate_receipt(&[first], ready, "task-missing");
 
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["selected_task_not_ready"]);
@@ -7094,6 +7121,50 @@ mod tests {
                 .map(|candidate| candidate.task_id.as_str()),
             Some("task-a")
         );
+    }
+
+    #[test]
+    fn task_next_lawful_select_blocks_when_taskflow_task_is_active() {
+        let active = owned_task_record("task-active", vec![]);
+        let mut ready_task = owned_task_record("task-ready", vec![]);
+        ready_task.status = "open".to_string();
+        let ready = vec![task_continuation_candidate(&ready_task, true)];
+
+        let receipt = task_next_lawful_select_ready_candidate_receipt(
+            &[active, ready_task],
+            ready,
+            "task-ready",
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["select_conflicts_with_active_taskflow_task"]
+        );
+        assert_eq!(receipt.active_bounded_unit["task_id"], "task-active");
+        assert!(receipt
+            .next_action
+            .as_deref()
+            .is_some_and(|action| action.contains("task-active")));
+    }
+
+    #[test]
+    fn task_next_lawful_select_blocks_when_multiple_taskflow_tasks_are_active() {
+        let active_a = owned_task_record("task-active-a", vec![]);
+        let active_b = owned_task_record("task-active-b", vec![]);
+        let mut ready_task = owned_task_record("task-ready", vec![]);
+        ready_task.status = "open".to_string();
+        let ready = vec![task_continuation_candidate(&ready_task, true)];
+
+        let receipt = task_next_lawful_select_ready_candidate_receipt(
+            &[active_a, active_b, ready_task],
+            ready,
+            "task-ready",
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["multiple_active_tasks"]);
+        assert_eq!(receipt.active_bounded_unit, serde_json::Value::Null);
     }
 
     #[test]
