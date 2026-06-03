@@ -128,6 +128,63 @@ fn profile_write_scope_requires_guard(profile: &serde_json::Value) -> bool {
     )
 }
 
+fn split_readiness_command_line(command_line: &str) -> Result<Vec<String>, String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in command_line.trim().chars() {
+        match (quote, ch) {
+            (Some(active), ch) if ch == active => quote = None,
+            (Some(_), ch) => current.push(ch),
+            (None, '\'' | '"') => quote = Some(ch),
+            (None, ch) if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    parts.push(std::mem::take(&mut current));
+                }
+            }
+            (None, ch) => current.push(ch),
+        }
+    }
+    if let Some(active) = quote {
+        return Err(format!(
+            "Unterminated {active} quote in external CLI readiness command"
+        ));
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    if parts.is_empty() {
+        return Err("External CLI readiness command is empty".to_string());
+    }
+    Ok(parts)
+}
+
+fn readiness_command_timeout(readiness: &serde_yaml::Value, section: &str) -> std::time::Duration {
+    let seconds = crate::yaml_lookup(readiness, &[section, "timeout_seconds"])
+        .and_then(serde_yaml::Value::as_u64)
+        .unwrap_or(5)
+        .clamp(1, 30);
+    std::time::Duration::from_secs(seconds)
+}
+
+fn readiness_command_output(
+    readiness: &serde_yaml::Value,
+    section: &str,
+) -> Result<std::process::Output, String> {
+    let (_, command_line) = readiness_command(readiness, section)
+        .ok_or_else(|| format!("readiness.{section}.command is not configured"))?;
+    let parts = split_readiness_command_line(command_line)?;
+    let (command, args) = parts
+        .split_first()
+        .ok_or_else(|| "External CLI readiness command is empty".to_string())?;
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    command_output_with_timeout(
+        command,
+        &args,
+        readiness_command_timeout(readiness, section),
+    )
+}
+
 fn command_output_with_timeout(
     command: &str,
     args: &[&str],
@@ -345,6 +402,90 @@ fn recent_dir_contains_any(path: &str, needle: &str, max_age_seconds: Option<u64
                 .map(|text| text.contains(needle))
                 .unwrap_or(false)
         })
+}
+
+fn json_provider_status_matches(
+    value: &serde_json::Value,
+    provider_id: Option<&str>,
+    expected_status: &str,
+) -> bool {
+    fn status_matches(value: &serde_json::Value, expected_status: &str) -> bool {
+        value
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|status| status.eq_ignore_ascii_case(expected_status))
+    }
+
+    if let Some(provider_id) = provider_id {
+        if status_matches(&value[provider_id]["status"], expected_status)
+            || status_matches(&value["providers"][provider_id]["status"], expected_status)
+        {
+            return true;
+        }
+        if let Some(rows) = value["providers"].as_array().or_else(|| value.as_array()) {
+            return rows.iter().any(|row| {
+                let row_provider = row["provider_id"]
+                    .as_str()
+                    .or_else(|| row["providerID"].as_str())
+                    .or_else(|| row["provider"].as_str())
+                    .map(str::trim);
+                row_provider == Some(provider_id) && status_matches(&row["status"], expected_status)
+            });
+        }
+        return value["provider_id"]
+            .as_str()
+            .or_else(|| value["providerID"].as_str())
+            .or_else(|| value["provider"].as_str())
+            .map(str::trim)
+            == Some(provider_id)
+            && status_matches(&value["status"], expected_status);
+    }
+
+    status_matches(&value["status"], expected_status)
+}
+
+fn command_json_field_auth_ok(readiness: &serde_yaml::Value) -> bool {
+    let expected_status = crate::yaml_lookup(readiness, &["auth", "expected_status"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("available");
+    let provider_id = crate::yaml_lookup(readiness, &["auth", "provider_id"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Ok(output) = readiness_command_output(readiness, "auth") else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<serde_json::Value>(stdout.trim())
+        .ok()
+        .is_some_and(|value| json_provider_status_matches(&value, provider_id, expected_status))
+}
+
+fn command_text_contains_model_ref(
+    readiness: &serde_yaml::Value,
+    expected_model_ref: Option<&str>,
+) -> Option<String> {
+    let expected_substring = crate::yaml_lookup(readiness, &["model", "expected_substring"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let output = readiness_command_output(readiness, "model").ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.contains(expected_substring) {
+        expected_model_ref
+            .map(str::to_string)
+            .or_else(|| Some(expected_substring.to_string()))
+    } else {
+        None
+    }
 }
 
 fn model_ref_from_json_state(mode: &str, path: &str) -> Option<String> {
@@ -921,6 +1062,7 @@ fn external_cli_carrier_readiness(
             .and_then(serde_yaml::Value::as_str)
             .and_then(|name| std::env::var(name.trim()).ok())
             .is_some_and(|value| !value.trim().is_empty()),
+        "command_json_field" => command_json_field_auth_ok(readiness),
         _ => true,
     };
     if !auth_ok {
@@ -1003,6 +1145,9 @@ fn external_cli_carrier_readiness(
                 }
                 _ => None,
             }
+        }
+        "command_text_contains" => {
+            command_text_contains_model_ref(readiness, expected_model_ref.as_deref())
         }
         _ => None,
     };
@@ -1742,6 +1887,119 @@ mod tests {
             .expect("current executable path should be available")
             .display()
             .to_string()
+    }
+
+    fn fake_jcode_command(auth_json: &str, model_output: &str) -> String {
+        let root = std::env::temp_dir().join(format!(
+            "vida-fake-jcode-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should support unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("fake jcode command dir should exist");
+        #[cfg(windows)]
+        {
+            let path = root.join("fake-jcode.cmd");
+            let body = format!(
+                "@echo off\r\nif \"%1 %2 %3\"==\"auth status --json\" (\r\n  echo {auth_json}\r\n  exit /b 0\r\n)\r\nif \"%1 %2 %3 %4 %5\"==\"model list --provider nvidia-nim --no-update\" (\r\n  echo {model_output}\r\n  exit /b 0\r\n)\r\nexit /b 2\r\n"
+            );
+            fs::write(&path, body).expect("fake jcode command should write");
+            path.display().to_string()
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = root.join("fake-jcode.sh");
+            let body = format!(
+                "#!/bin/sh\nif [ \"$1 $2 $3\" = 'auth status --json' ]; then\n  cat <<'JSON'\n{auth_json}\nJSON\n  exit 0\nfi\nif [ \"$1 $2 $3 $4 $5\" = 'model list --provider nvidia-nim --no-update' ]; then\n  cat <<'MODELS'\n{model_output}\nMODELS\n  exit 0\nfi\nexit 2\n"
+            );
+            fs::write(&path, body).expect("fake jcode command should write");
+            let mut permissions = fs::metadata(&path)
+                .expect("fake jcode command metadata should read")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&path, permissions)
+                .expect("fake jcode command should be executable");
+            path.display().to_string()
+        }
+    }
+
+    fn jcode_backend_entry(command_path: &str) -> serde_yaml::Value {
+        serde_yaml::from_str(&format!(
+            r#"
+enabled: true
+subagent_backend_class: external_cli
+detect_command: {command_path}
+default_model: mistralai/mistral-medium-3.5-128b
+default_model_profile: jcode_nim_mistral_medium35_review
+model_profiles:
+  jcode_nim_mistral_medium35_review:
+    provider: nvidia-nim
+    model_ref: mistralai/mistral-medium-3.5-128b
+    reasoning_effort: provider_default
+    normalized_cost_units: 1
+    runtime_roles: [coach]
+    task_classes: [review]
+dispatch:
+  command: {command_path}
+  static_args: [run, --no-update]
+readiness:
+  auth:
+    mode: command_json_field
+    command: {command_path} auth status --json
+    provider_id: nvidia-nim
+    expected_status: available
+  model:
+    mode: command_text_contains
+    command: {command_path} model list --provider nvidia-nim --no-update
+    expected_ref: mistralai/mistral-medium-3.5-128b
+    expected_substring: mistralai/mistral-medium-3.5-128b
+"#
+        ))
+        .expect("jcode backend yaml should parse")
+    }
+
+    #[test]
+    fn external_cli_readiness_runs_command_json_auth_and_command_text_model_probes() {
+        let command = fake_jcode_command(
+            r#"{"providers":[{"provider_id":"nvidia-nim","status":"available"}]}"#,
+            "mistralai/mistral-medium-3.5-128b\n",
+        );
+        let readiness = external_cli_backend_readiness_verdict_for_profile(
+            "jcode_nim_cli",
+            &jcode_backend_entry(&command),
+            None,
+        );
+
+        assert_eq!(readiness["status"], "carrier_ready");
+        assert_eq!(readiness["blocked"], false);
+        assert_eq!(
+            readiness["current_model_ref"],
+            "mistralai/mistral-medium-3.5-128b"
+        );
+        assert_eq!(
+            readiness["expected_model_ref"],
+            "mistralai/mistral-medium-3.5-128b"
+        );
+    }
+
+    #[test]
+    fn external_cli_readiness_blocks_command_json_auth_status_mismatch() {
+        let command = fake_jcode_command(
+            r#"{"provider_id":"nvidia-nim","status":"missing"}"#,
+            "mistralai/mistral-medium-3.5-128b\n",
+        );
+        let readiness = external_cli_backend_readiness_verdict_for_profile(
+            "jcode_nim_cli",
+            &jcode_backend_entry(&command),
+            None,
+        );
+
+        assert_eq!(readiness["status"], "interactive_auth_required");
+        assert_eq!(readiness["blocked"], true);
+        assert_eq!(readiness["blocker_code"], "interactive_auth_required");
     }
 
     fn fake_pi_list_models_command(models: &[&str]) -> String {
