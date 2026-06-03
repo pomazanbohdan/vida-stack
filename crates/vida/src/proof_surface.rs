@@ -36,10 +36,20 @@ fn run_browser_proof(args: crate::ProofBrowserArgs) -> ExitCode {
 fn build_browser_proof_payload(route: &str, expected_text: Option<&str>) -> Value {
     let blocker_codes = vec![blocker_code_str(BROWSER_AUTOMATION_BLOCKER).to_string()];
     let next_actions = vec![BROWSER_AUTOMATION_NEXT_ACTION.to_string()];
+    let observed_request = serde_json::json!({
+        "route": route,
+        "method": "GET",
+        "reachable": false,
+        "http_status": null,
+        "error": "browser_automation_unavailable",
+        "response_body_bytes": null,
+        "matched_expect": false,
+    });
     let artifact_refs = serde_json::json!({
         "surface": BROWSER_PROOF_SURFACE,
         "route": route,
-        "expected_text": expected_text,
+        "expect": expected_text,
+        "observed_request": observed_request,
         "screenshot": null,
         "dom_snapshot": null,
         "console_log": null,
@@ -51,20 +61,25 @@ fn build_browser_proof_payload(route: &str, expected_text: Option<&str>) -> Valu
     let mut payload = serde_json::json!({
         "surface": BROWSER_PROOF_SURFACE,
         "status": finalized.status,
+        "route": route,
+        "expect": expected_text,
+        "proof_blocked": true,
         "trace_id": finalized.operator_contracts["trace_id"].clone(),
         "workflow_class": finalized.operator_contracts["workflow_class"].clone(),
         "risk_tier": finalized.operator_contracts["risk_tier"].clone(),
         "blocker_codes": finalized.blocker_codes,
         "next_actions": finalized.next_actions,
+        "observed_request": observed_request,
         "artifact_refs": finalized.artifact_refs,
         "shared_fields": finalized.shared_fields,
         "operator_contracts": finalized.operator_contracts,
         "proof": {
             "kind": "browser",
             "route": route,
-            "expected_text": expected_text,
+            "expect": expected_text,
             "result": "blocked",
             "collection_state": "browser_automation_unavailable",
+            "observed_request": observed_request,
             "artifacts": {
                 "screenshot": null,
                 "dom_snapshot": null,
@@ -97,7 +112,7 @@ fn print_browser_proof_plain(payload: &Value) {
         "route",
         payload["proof"]["route"].as_str().unwrap_or(""),
     );
-    if let Some(expected_text) = payload["proof"]["expected_text"].as_str() {
+    if let Some(expected_text) = payload["expect"].as_str() {
         print_surface_line(crate::RenderMode::Plain, "expect", expected_text);
     }
     print_surface_line(
@@ -166,9 +181,23 @@ mod tests {
 
         assert_eq!(payload["surface"], BROWSER_PROOF_SURFACE);
         assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["route"], "http://127.0.0.1:51235/#/module/project");
+        assert_eq!(payload["expect"], "My Tasks");
+        assert_eq!(payload["proof_blocked"], true);
         assert_eq!(payload["proof"]["result"], "blocked");
+        assert_eq!(payload["proof"]["expect"], "My Tasks");
         assert_eq!(
             payload["proof"]["collection_state"],
+            "browser_automation_unavailable"
+        );
+        assert_eq!(
+            payload["observed_request"]["route"],
+            "http://127.0.0.1:51235/#/module/project"
+        );
+        assert_eq!(payload["observed_request"]["method"], "GET");
+        assert_eq!(payload["observed_request"]["reachable"], false);
+        assert_eq!(
+            payload["observed_request"]["error"],
             "browser_automation_unavailable"
         );
         assert_eq!(
