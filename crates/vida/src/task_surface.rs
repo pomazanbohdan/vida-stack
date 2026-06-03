@@ -457,9 +457,6 @@ async fn load_task_snapshot_rows_authoritative_first(
     state_dir: &std::path::Path,
 ) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
     let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
-    if let Ok(rows) = StateStore::read_fresh_tasks_from_jsonl_snapshot(state_dir) {
-        return Ok((rows, TaskReadMetadata::fresh_snapshot(&snapshot_path)));
-    }
     match open_read_only_task_store(state_dir.to_path_buf()).await {
         Ok(store) => match store.list_tasks(None, true).await {
             Ok(rows) => Ok((rows, TaskReadMetadata::authoritative_live())),
@@ -5753,13 +5750,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     }
                     match store.close_task(&command.task_id, &command.reason).await {
-                        Ok(task) => {
-                            if let Err(code) =
-                                refresh_task_snapshot_after_mutation(&store, "vida task close")
-                                    .await
-                            {
-                                return code;
-                            }
+                        Ok(_task) => {
                             if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &command.task_id).await {
                             eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
                             return ExitCode::from(1);
@@ -5768,6 +5759,28 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
                             return ExitCode::from(1);
                         }
+                            let task = match store.show_task(&command.task_id).await {
+                                Ok(task) if task.status == "closed" => task,
+                                Ok(task) => {
+                                    eprintln!(
+                                        "Task close drifted after post-close reconciliation: `{}` is `{}` instead of `closed`.",
+                                        command.task_id, task.status
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to re-read closed task after post-close reconciliation: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            };
+                            if let Err(code) =
+                                refresh_task_snapshot_after_mutation(&store, "vida task close")
+                                    .await
+                            {
+                                return code;
+                            }
                             let task_value = serde_json::to_value(&task)
                                 .expect("task close payload should serialize");
                             let telemetry = task_close_host_agent_telemetry(

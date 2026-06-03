@@ -2736,6 +2736,7 @@ impl StateStore {
             .await?;
         self.replace_task_dependency_rows(&task_id, &task.dependencies)
             .await?;
+        Self::touch_task_snapshot_state_marker(self.root());
         Ok(())
     }
 
@@ -2749,6 +2750,7 @@ impl StateStore {
             .await?;
         self.insert_task_dependency_rows(&task_id, &task.dependencies)
             .await?;
+        Self::touch_task_snapshot_state_marker(self.root());
         Ok(())
     }
 
@@ -2800,6 +2802,7 @@ impl StateStore {
                 escape_surql_literal(task_id)
             ))
             .await?;
+        Self::touch_task_snapshot_state_marker(self.root());
         Ok(())
     }
 
@@ -2973,6 +2976,52 @@ mod tests {
                 .find(|path| path.file_name().and_then(|name| name.to_str()) != Some("state"))
                 .unwrap_or(&state_root),
         );
+    }
+
+    #[tokio::test]
+    async fn persist_task_record_invalidates_preexisting_fresh_snapshot() {
+        let root = unique_task_store_temp_root("vida-task-snapshot-persist-invalidates");
+        let state_root = root.join(".vida").join("data").join("state");
+        let store = StateStore::open(state_root.clone())
+            .await
+            .expect("store should open");
+        let mut task = test_task_record("snapshot-active-task", "task", "in_progress");
+        store
+            .persist_task_record(task.clone())
+            .await
+            .expect("initial task should persist");
+        store
+            .refresh_task_snapshot()
+            .await
+            .expect("snapshot should refresh");
+        let rows = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
+            .expect("fresh snapshot should validate before later mutation");
+        assert_eq!(rows[0].status, "in_progress");
+
+        task.status = "closed".to_string();
+        task.updated_at = "2".to_string();
+        task.closed_at = Some("2".to_string());
+        task.close_reason = Some("done".to_string());
+        store
+            .persist_task_record(task)
+            .await
+            .expect("closed task should persist");
+
+        let error = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
+            .expect_err("old snapshot must be invalid after direct store mutation");
+        assert!(error
+            .to_string()
+            .contains("task snapshot metadata is older than latest state mutation marker"));
+
+        store
+            .refresh_task_snapshot()
+            .await
+            .expect("snapshot should refresh after close mutation");
+        let rows = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
+            .expect("refreshed snapshot should validate");
+        assert_eq!(rows[0].status, "closed");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
