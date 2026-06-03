@@ -438,7 +438,7 @@ After bootstrap, development agents must know immediately:
 8. delegated agents are the normal path for write-producing work once a lawful packet exists.
 9. packet interpretation follows the project prompt-stack protocol rather than ad hoc precedence guesses.
 10. no session is write-ready until the project boot-readiness validation protocol passes.
-11. host subagent bridge execution is default-admissible for a bounded VIDA dispatch when agent-only development is enabled; agents must not wait for a second chat-only permission prompt after the runtime emits the bridge request.
+11. host subagent bridge execution is not authorized by agent-only/default project configuration alone; agents must require an explicit user request for agent-first or parallel-agent execution before launching configured host bridge carriers.
 
 ## Routing
 
