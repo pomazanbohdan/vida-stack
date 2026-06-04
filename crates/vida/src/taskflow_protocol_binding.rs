@@ -2,9 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use super::state_store::{
-    ProtocolBindingState, ProtocolBindingSummary, StateStore, StateStoreError,
-};
+use super::state_store::{ProtocolBindingState, ProtocolBindingSummary, StateStore};
 use crate::contract_profile_adapter::{
     blocker_code, canonical_blocker_code_list, evaluate_policy_gate_protocol_binding,
     release_contract_status, BlockerCode,
@@ -132,14 +130,8 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
 ) -> ProtocolBindingCompiledPayloadImportEvidence {
     let mut blockers = Vec::new();
 
-    let activation_snapshot = match store.read_launcher_activation_snapshot().await {
+    let activation_snapshot = match super::read_or_sync_launcher_activation_snapshot(store).await {
         Ok(snapshot) => Some(snapshot),
-        Err(StateStoreError::MissingLauncherActivationSnapshot) => {
-            match super::sync_launcher_activation_snapshot(store).await {
-                Ok(snapshot) => Some(snapshot),
-                Err(_) => None,
-            }
-        }
         Err(_) => None,
     };
     let effective_bundle_receipt = match store.latest_effective_bundle_receipt_summary().await {
