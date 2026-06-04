@@ -1249,6 +1249,22 @@ pub(crate) fn print_task_dependency_bulk_add_result(
     result: &TaskDependencyBulkAddResult,
     as_json: bool,
 ) {
+    print_task_dependency_bulk_add_result_for_surface(
+        render,
+        result,
+        as_json,
+        "vida task dep add-bulk",
+        "task dependency bulk add result should render as json",
+    );
+}
+
+pub(crate) fn print_task_dependency_bulk_add_result_for_surface(
+    render: RenderMode,
+    result: &TaskDependencyBulkAddResult,
+    as_json: bool,
+    surface: &str,
+    json_error_context: &str,
+) {
     let blocker_codes = if result.failed_count == 0 {
         Vec::new()
     } else {
@@ -1260,14 +1276,34 @@ pub(crate) fn print_task_dependency_bulk_add_result(
     };
     let next_actions = if result.failed_count == 0 {
         Vec::new()
+    } else if surface == "vida task dep ensure" {
+        let retry_command = result
+            .failed
+            .iter()
+            .chain(result.unapplied.iter())
+            .next()
+            .map(|edge| {
+                format!(
+                    "{} {} {} {} --json",
+                    surface,
+                    crate::shell_quote(edge.issue_id.trim()),
+                    crate::shell_quote(edge.depends_on_id.trim()),
+                    crate::shell_quote(edge.edge_type.trim())
+                )
+            })
+            .unwrap_or_else(|| format!("{surface} <task-id> <depends-on-id> <edge-type> --json"));
+        vec![format!(
+            "Inspect the failed dependency edge, repair missing tasks or invalid graph edges, then rerun `{retry_command}`."
+        )]
     } else {
         vec![
-            "Inspect failed and unapplied edges, repair missing tasks or invalid graph edges, then rerun `vida task dep add-bulk --json` with only the missing edges."
-                .to_string(),
+            format!(
+                "Inspect failed and unapplied edges, repair missing tasks or invalid graph edges, then rerun `{surface} --json` with only the missing edges."
+            ),
         ]
     };
     let payload = build_operator_surface_payload(
-        "vida task dep add-bulk",
+        surface,
         blocker_codes,
         next_actions,
         serde_json::json!({
@@ -1280,15 +1316,11 @@ pub(crate) fn print_task_dependency_bulk_add_result(
             "unapplied_count": result.unapplied_count,
         }),
     );
-    if crate::surface_render::print_surface_json(
-        &payload,
-        as_json,
-        "task dependency bulk add result should render as json",
-    ) {
+    if crate::surface_render::print_surface_json(&payload, as_json, json_error_context) {
         return;
     }
 
-    print_surface_header(render, "vida task dep add-bulk");
+    print_surface_header(render, surface);
     print_surface_line(
         render,
         "dry_run",
