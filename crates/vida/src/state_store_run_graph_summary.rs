@@ -14,6 +14,11 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         return Ok(status);
     };
     let receipt = StateStore::validate_run_graph_dispatch_receipt_contract(receipt.clone())?;
+    if terminal_closure_status(&status)
+        && status.policy_gate == "historical_closed_task_stale_run_retired"
+    {
+        return Ok(status);
+    }
     if terminal_closure_status_has_explicit_receipt_override(&status, &receipt) {
         if let Some(selected_backend) = receipt
             .selected_backend

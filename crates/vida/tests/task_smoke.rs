@@ -6584,6 +6584,248 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
 }
 
 #[test]
+fn taskflow_settle_retires_closed_task_run_and_converges_runtime_surfaces() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "taskflow-settle-parent";
+    let task_id = "taskflow-settle-closed-run";
+    create_epic_parent(&state_dir, parent_id, "Taskflow settle parent", "open");
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Taskflow settle closed run",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        db.query(
+            "UPDATE type::record('task', $task) SET status = 'closed', closed_at = '2026-06-04T00:00:00Z', close_reason = 'canonical close truth'",
+        )
+        .bind(("task", task_id))
+        .await
+        .expect("close task with canonical close truth");
+        db.query(
+            "UPDATE type::record('task', $task) SET status = 'closed', closed_at = '2026-06-04T00:00:00Z', close_reason = 'all children closed'",
+        )
+        .bind(("task", parent_id))
+        .await
+        .expect("close parent with canonical close truth");
+        drop(db);
+    });
+
+    let (doctor_before, _) = run_command_json_allow_failure(&["doctor", "--json"], &state_dir);
+    let before_blockers =
+        require_json_string_array(&doctor_before["blocker_codes"], "before blockers");
+    assert!(before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
+
+    let settle = run_command_json(
+        &["taskflow", "settle", "--limit", "25", "--json"],
+        &state_dir,
+    );
+    assert_eq!(settle["surface"], "vida taskflow settle");
+    assert_eq!(settle["status"], "pass");
+    assert_eq!(settle["summary"]["reconciled_count"], 1);
+    assert!(settle["remaining_closed_task_active_run"].is_null());
+    assert!(require_json_string_array(&settle["blocker_codes"], "settle blockers").is_empty());
+
+    let run_status = run_command_json(
+        &["taskflow", "run-graph", "status", task_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(run_status["run_graph_status"]["status"], "completed");
+    assert_eq!(
+        run_status["run_graph_status"]["lifecycle_stage"],
+        "closure_complete"
+    );
+
+    for (label, command) in [
+        ("doctor", vec!["doctor", "--json"]),
+        ("status", vec!["status", "--json"]),
+        ("graph-summary", vec!["taskflow", "graph-summary", "--json"]),
+    ] {
+        let (payload, _) = run_command_json_allow_failure(&command, &state_dir);
+        let blockers = require_json_string_array(&payload["blocker_codes"], label);
+        assert!(
+            !blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+            "{label} must converge after taskflow settle: {payload}"
+        );
+    }
+    let (orchestrator, _) = run_command_json_allow_failure(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert_ne!(
+        orchestrator["continuation_binding"]["ambiguity_reason"],
+        "closed_task_active_run_projection_mismatch",
+        "orchestrator-init must converge after taskflow settle: {orchestrator}"
+    );
+
+    let plain = run_command_capture(&["taskflow", "settle", "--limit", "25"], &state_dir);
+    assert!(plain.status.success());
+    let plain_text = String::from_utf8_lossy(&plain.stdout);
+    assert!(plain_text.starts_with("vida taskflow settle\n"));
+    assert!(
+        plain_text.contains("summary"),
+        "plain taskflow settle should render compact TOON summary: {plain_text}"
+    );
+    let help = run_command_capture(&["taskflow", "settle", "--help"], &state_dir);
+    assert!(help.status.success());
+    assert!(
+        String::from_utf8_lossy(&help.stdout).contains("Usage: vida taskflow settle"),
+        "taskflow settle help must document command usage"
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn taskflow_settle_keeps_unsafe_closed_task_run_blocked_with_exact_inspection() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "taskflow-settle-unsafe-parent";
+    let task_id = "taskflow-settle-unsafe-closed-run";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Taskflow settle unsafe parent",
+        "open",
+    );
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Taskflow settle unsafe closed run",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        db.query("UPDATE type::record('task', $task) SET status = 'closed'")
+            .bind(("task", task_id))
+            .await
+            .expect("close task without receipt-backed truth");
+        db.query(
+            "UPDATE type::record('task', $task) SET status = 'closed', closed_at = '2026-06-04T00:00:00Z', close_reason = 'all children closed'",
+        )
+        .bind(("task", parent_id))
+        .await
+        .expect("close parent with canonical close truth");
+        drop(db);
+    });
+
+    let (settle, success) = run_command_json_allow_failure(
+        &["taskflow", "settle", "--limit", "25", "--json"],
+        &state_dir,
+    );
+    assert!(
+        !success,
+        "unsafe taskflow settle must fail closed: {settle}"
+    );
+    assert_eq!(settle["surface"], "vida taskflow settle");
+    assert_eq!(settle["status"], "blocked");
+    assert_eq!(settle["summary"]["reconciled_count"], 0);
+    assert_eq!(
+        settle["remaining_closed_task_active_run"]["task_id"],
+        task_id
+    );
+    let skipped = settle["summary"]["skipped_runs"]
+        .as_array()
+        .expect("settle skipped rows should render")
+        .iter()
+        .find(|row| row["task_id"] == task_id)
+        .expect("unsafe task should be skipped");
+    assert_eq!(skipped["reason"], "missing_receipt_backed_closure_truth");
+    assert!(
+        skipped["inspect_command"]
+            .as_str()
+            .is_some_and(|command| command.contains(
+                "vida taskflow run-graph status taskflow-settle-unsafe-closed-run --json"
+            )),
+        "skipped row must carry exact inspect command: {settle}"
+    );
+    let next_actions = require_json_string_array(&settle["next_actions"], "settle next actions");
+    assert!(next_actions.iter().any(|action| action.contains(
+        "Inspect unresolved closed-task active run with `vida taskflow run-graph status taskflow-settle-unsafe-closed-run --json`"
+    )));
+    let blockers = require_json_string_array(&settle["blocker_codes"], "settle blockers");
+    assert!(blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
+
+    for (label, command) in [
+        ("doctor", vec!["doctor", "--json"]),
+        ("status", vec!["status", "--json"]),
+        ("graph-summary", vec!["taskflow", "graph-summary", "--json"]),
+    ] {
+        let (payload, _) = run_command_json_allow_failure(&command, &state_dir);
+        let blockers = require_json_string_array(&payload["blocker_codes"], label);
+        assert!(
+            blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+            "{label} must remain fail-closed while settle lacks closure truth: {payload}"
+        );
+    }
+    let (orchestrator, _) = run_command_json_allow_failure(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert_eq!(
+        orchestrator["continuation_binding"]["ambiguity_reason"],
+        "closed_task_active_run_projection_mismatch",
+        "orchestrator-init must remain fail-closed while settle lacks closure truth: {orchestrator}"
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth() {
     let (project_root, state_dir) = project_bound_state_dir();
 

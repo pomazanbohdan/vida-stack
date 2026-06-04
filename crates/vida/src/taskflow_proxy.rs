@@ -4246,6 +4246,192 @@ fn cached_operator_projection_exit_code(cached: &str) -> ExitCode {
     }
 }
 
+#[derive(Debug)]
+enum TaskflowSettleArgs {
+    Help,
+    Settle {
+        as_json: bool,
+        limit: usize,
+        state_dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct TaskflowSettleArtifactRefs {
+    surface: &'static str,
+    state_dir: String,
+    limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskflowSettlePayload {
+    surface: &'static str,
+    status: String,
+    summary: serde_json::Value,
+    remaining_closed_task_active_run: Option<crate::state_store::RunGraphStatus>,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: TaskflowSettleArtifactRefs,
+}
+
+fn parse_taskflow_settle_args(args: &[String]) -> Result<TaskflowSettleArgs, &'static str> {
+    let usage = "Usage: vida taskflow settle [--limit <n>] [--state-dir <path>] [--json]";
+    if !matches!(args.first().map(String::as_str), Some("settle")) {
+        return Err(usage);
+    }
+
+    let mut as_json = false;
+    let mut limit = 25usize;
+    let mut state_dir = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--help" | "-h" if index == 1 && args.len() == 2 => {
+                return Ok(TaskflowSettleArgs::Help);
+            }
+            "--json" => {
+                as_json = true;
+                index += 1;
+            }
+            "--limit" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(usage);
+                };
+                limit = value.parse::<usize>().map_err(|_| usage)?.max(1);
+                index += 2;
+            }
+            "--state-dir" => {
+                let Some(path) = args.get(index + 1) else {
+                    return Err(usage);
+                };
+                state_dir = Some(PathBuf::from(path));
+                index += 2;
+            }
+            _ => return Err(usage),
+        }
+    }
+
+    Ok(TaskflowSettleArgs::Settle {
+        as_json,
+        limit,
+        state_dir,
+    })
+}
+
+async fn run_taskflow_settle(args: &[String]) -> ExitCode {
+    let usage = "Usage: vida taskflow settle [--limit <n>] [--state-dir <path>] [--json]";
+    let (as_json, limit, state_dir) = match parse_taskflow_settle_args(args) {
+        Ok(TaskflowSettleArgs::Help) => {
+            println!("{usage}");
+            println!();
+            println!(
+                "Retire safe stale closed-task run projections and report unresolved run evidence."
+            );
+            return ExitCode::SUCCESS;
+        }
+        Ok(TaskflowSettleArgs::Settle {
+            as_json,
+            limit,
+            state_dir,
+        }) => (as_json, limit, state_dir),
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let state_dir = match resolve_taskflow_proxy_state_dir(state_dir) {
+        Ok(state_dir) => state_dir,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let store = match crate::state_store::StateStore::open_existing(state_dir.clone()).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open TaskFlow state for settle: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let summary = match store
+        .reconcile_historical_closed_task_active_runs(limit)
+        .await
+    {
+        Ok(summary) => summary,
+        Err(error) => {
+            eprintln!("Failed to settle stale closed-task run projections: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let remaining_closed_task_active_run =
+        match store.latest_terminal_task_active_run_graph_status().await {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("Failed to inspect post-settle closed-task run projection: {error}");
+                return ExitCode::from(1);
+            }
+        };
+
+    let mut blocker_codes = Vec::new();
+    let mut next_actions = Vec::new();
+    if let Some(run) = remaining_closed_task_active_run.as_ref() {
+        blocker_codes.push("closed_task_active_run_projection_mismatch".to_string());
+        let skipped_reason = summary
+            .skipped_runs
+            .iter()
+            .find(|skipped| skipped.run_id == run.run_id)
+            .map(|skipped| skipped.reason.as_str())
+            .unwrap_or("not_scanned_with_current_limit");
+        next_actions.push(format!(
+            "Inspect unresolved closed-task active run with `vida taskflow run-graph status {} --json`; settle skipped reason={skipped_reason}.",
+            shell_quote_arg(&run.run_id)
+        ));
+        if summary.scanned_count >= limit {
+            next_actions.push(format!(
+                "If the unresolved run was outside the scan window, rerun `vida taskflow settle --limit {} --json`.",
+                limit.saturating_mul(2).max(limit + 1)
+            ));
+        }
+    }
+    let summary = serde_json::to_value(&summary)
+        .expect("taskflow settle reconciliation summary should serialize");
+
+    let payload = TaskflowSettlePayload {
+        surface: "vida taskflow settle",
+        status: if blocker_codes.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        },
+        summary,
+        remaining_closed_task_active_run,
+        blocker_codes,
+        next_actions,
+        artifact_refs: TaskflowSettleArtifactRefs {
+            surface: "vida taskflow settle",
+            state_dir: state_dir.display().to_string(),
+            limit,
+        },
+    };
+
+    if as_json {
+        crate::print_json_pretty(
+            &serde_json::to_value(&payload).expect("taskflow settle payload should serialize"),
+        );
+    } else {
+        println!(
+            "{}",
+            taskflow_format_toon::render_value_section("vida taskflow settle", &payload)
+        );
+    }
+
+    if payload.status == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 fn cached_taskflow_next_open_delegated_cycle_projection(cached: &str) -> bool {
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
         return false;
@@ -12797,6 +12983,10 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
             .to_string();
         println!("taskflow {version}");
         return ExitCode::SUCCESS;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("settle")) {
+        return run_taskflow_settle(&args.args).await;
     }
 
     if let Some(topic) = taskflow_help_topic(&args.args) {
