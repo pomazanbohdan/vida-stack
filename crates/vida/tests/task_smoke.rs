@@ -50,6 +50,7 @@ fn project_bound_state_dir() -> (String, String) {
             "agent_system:\n",
             "  mode: internal\n",
             "  state_owner: taskflow_state_store\n",
+            "  max_parallel_agents: 4\n",
             "agent_extensions:\n",
             "  role_selection:\n",
             "    mode: default\n",
