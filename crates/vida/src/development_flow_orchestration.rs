@@ -59,7 +59,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
     let dev_title = format!("Dev pack: {feature_title}");
     let quoted_request = crate::shell_quote(&canonical_request);
     let work_pool_semantics = crate::launcher_task_commands::TaskExecutionSemanticsCommandArgs {
-        execution_mode: "parallel_safe",
+        execution_mode: "container_only",
         order_bucket: &epic_task_id,
         parallel_group: "work-pool-pack",
         conflict_domain: &work_pool_task_id,
@@ -1023,7 +1023,7 @@ mod tests {
             .as_str()
             .expect("dev task id should render");
 
-        assert!(work_pool_ensure.contains("--execution-mode parallel_safe"));
+        assert!(work_pool_ensure.contains("--execution-mode container_only"));
         assert!(work_pool_ensure.contains("--parallel-group work-pool-pack"));
         assert!(work_pool_ensure.contains(&format!("--conflict-domain {work_pool_task_id}")));
         assert!(dev_ensure.contains("--execution-mode parallel_safe"));

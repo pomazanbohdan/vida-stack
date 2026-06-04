@@ -781,10 +781,10 @@ impl StateStore {
             return Ok(None);
         };
         match mode.as_str() {
-            "sequential" | "parallel_safe" | "exclusive" => Ok(Some(mode)),
+            "sequential" | "parallel_safe" | "exclusive" | "container_only" => Ok(Some(mode)),
             _ => Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
-                    "task `{task_id}` execution_mode must be one of sequential, parallel_safe, exclusive"
+                    "task `{task_id}` execution_mode must be one of sequential, parallel_safe, exclusive, container_only"
                 ),
             }),
         }

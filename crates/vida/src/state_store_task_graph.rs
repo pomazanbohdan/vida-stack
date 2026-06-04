@@ -116,6 +116,11 @@ impl StateStore {
         blockers
     }
 
+    fn task_is_container_only(task: &TaskRecord) -> bool {
+        task.execution_semantics.execution_mode.as_deref() == Some("container_only")
+            || work_item_is_program_container(&task.issue_type)
+    }
+
     fn ready_scope_ids_from_rows(
         rows: &[TaskRecord],
         scope_task_id: &str,
@@ -240,11 +245,13 @@ impl StateStore {
                 scoped_tasks
                     .iter()
                     .find(|task| task.id == task_id)
+                    .filter(|task| !Self::task_is_container_only(task))
                     .map(|task| task.id.clone())
             })
             .or_else(|| {
                 scoped_tasks
                     .iter()
+                    .filter(|task| !Self::task_is_container_only(task))
                     .find(|task| Self::task_blockers(task, &by_id).is_empty())
                     .map(|task| task.id.clone())
             });
@@ -256,7 +263,16 @@ impl StateStore {
         let mut blocked = Vec::new();
         for task in scoped_tasks {
             let active_critical_path = critical_path_ids.contains(&task.id);
-            let blocked_by = Self::task_blockers(&task, &by_id);
+            let mut blocked_by = Self::task_blockers(&task, &by_id);
+            if Self::task_is_container_only(&task) && blocked_by.is_empty() {
+                blocked_by.push(TaskDependencyStatus {
+                    issue_id: task.id.clone(),
+                    depends_on_id: task.id.clone(),
+                    edge_type: "container-only".to_string(),
+                    dependency_status: "container_only_task".to_string(),
+                    dependency_issue_type: Some(task.issue_type.clone()),
+                });
+            }
             let ready_now = blocked_by.is_empty();
             let parallel_blockers = if ready_now {
                 Self::parallel_blockers_against_current(&task, current_task)
@@ -1497,6 +1513,55 @@ mod tests {
             .parallel_blockers
             .iter()
             .any(|value| value == "execution_mode_not_parallel_safe"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn scheduling_projection_blocks_container_only_tasks_from_execution() {
+        let root = temp_root("task-scheduling-container-only");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        create_task_with_semantics(
+            &store,
+            "task-current",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("backend"),
+        )
+        .await;
+        create_task_with_semantics(
+            &store,
+            "task-work-pool",
+            Some("container_only"),
+            Some("wave-1"),
+            Some("work-pool-pack"),
+            Some("task-work-pool"),
+        )
+        .await;
+
+        let projection = store
+            .scheduling_projection_scoped(None, Some("task-current"))
+            .await
+            .expect("projection should render");
+
+        assert_eq!(projection.current_task_id.as_deref(), Some("task-current"));
+        assert!(projection
+            .ready
+            .iter()
+            .all(|candidate| candidate.task.id != "task-work-pool"));
+        let container = projection
+            .blocked
+            .iter()
+            .find(|candidate| candidate.task.id == "task-work-pool")
+            .expect("container-only task should be blocked from executable scheduling");
+        assert!(!container.ready_now);
+        assert!(!container.ready_parallel_safe);
+        assert!(container
+            .blocked_by
+            .iter()
+            .any(|blocker| blocker.dependency_status == "container_only_task"));
 
         let _ = fs::remove_dir_all(root);
     }
