@@ -71,6 +71,7 @@ mod runtime_dispatch_lane_completion;
 mod runtime_dispatch_packet_text;
 mod runtime_dispatch_packets;
 mod runtime_dispatch_receipt_helpers;
+mod runtime_dispatch_result_evidence;
 mod runtime_dispatch_state;
 mod runtime_dispatch_status;
 mod runtime_lane_summary;

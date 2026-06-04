@@ -156,6 +156,7 @@ Execution order:
 | Date | Task | Extracted owner boundary | Files | Size delta | Proof |
 | --- | --- | --- | --- | --- | --- |
 | 2026-06-04 | `architecture-refactor-oversized-module-split-lane-completion-result-writer-todo` | Runtime lane completion result writer: safe result file naming, completion summary blocker classification, and lane completion result artifact writing | `runtime_dispatch_state.rs` facade re-export plus new `runtime_dispatch_lane_completion.rs` | `runtime_dispatch_state.rs` 997.4 KB -> 992.1 KB; new child module 5.5 KB | `cargo test -p vida completion -- --nocapture --test-threads=1`; `cargo check -p vida` |
+| 2026-06-04 | `architecture-refactor-oversized-module-split-result-evidence-helpers-todo` | Runtime dispatch result evidence helpers: activation/execution evidence normalization, terminal execution-state detection, lane execution receipt artifact construction | `runtime_dispatch_state.rs` facade re-export plus new `runtime_dispatch_result_evidence.rs` | `runtime_dispatch_state.rs` 992.1 KB -> 985.1 KB; new child module 7.4 KB | `cargo test -p vida write_runtime_dispatch_result_records_completion_evidence_for_executed_agent_lane -- --nocapture --test-threads=1`; `cargo test -p vida completion -- --nocapture --test-threads=1`; `cargo check -p vida` |
 
 ## Fail-Closed Constraints
 - Do not begin implementation from this lane.
