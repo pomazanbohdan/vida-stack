@@ -911,16 +911,19 @@ fn exception_takeover_metadata_matches_taskflow_active_work(
     let Some(receipt) = latest_receipt else {
         return false;
     };
-    if receipt
+    let Some(exception_path_receipt_id) = receipt
         .exception_path_receipt_id
         .as_deref()
         .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if receipt
+        .supersedes_receipt_id
+        .as_deref()
+        .map(str::trim)
         .is_none_or(str::is_empty)
-        || receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .map(str::trim)
-            .is_none_or(str::is_empty)
     {
         return false;
     }
@@ -935,53 +938,39 @@ fn exception_takeover_metadata_matches_taskflow_active_work(
     else {
         return false;
     };
-    let receipt_run_id = receipt.run_id.trim();
-    let candidate_matches_receipt_run = !receipt_run_id.is_empty()
-        && (candidate_task_id == receipt_run_id
-            || candidate_task_id
-                .strip_prefix(receipt_run_id)
-                .is_some_and(|suffix| suffix.starts_with('-')));
-    let parent_matches_receipt_run = !receipt_run_id.is_empty()
-        && candidate
-            .get("parent_task_ids")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-            .map(str::trim)
-            .any(|parent_id| parent_id == receipt_run_id);
     let metadata_path = state_root
         .join("lane-exception-path-metadata")
         .join(format!("{}.json", receipt.run_id));
     let Some(metadata) = crate::read_json_file_if_present(&metadata_path) else {
         return false;
     };
-    let active_bounded_unit_matches = metadata["active_bounded_unit"]
+    let metadata_is_receipt_bound = metadata["run_id"]
         .as_str()
         .map(str::trim)
-        .is_some_and(|unit| {
-            let base_unit = unit.split(':').next().unwrap_or(unit).trim();
-            unit == candidate_task_id
-                || (!base_unit.is_empty()
-                    && candidate_task_id
-                        .strip_prefix(base_unit)
-                        .is_some_and(|suffix| suffix.starts_with('-')))
-                || unit
-                    .split(':')
-                    .any(|segment| segment.trim() == candidate_task_id)
-        });
-    let owned_scope_matches = metadata["owned_write_scope"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(str::trim)
-        .any(|scope| scope == candidate_task_id);
+        .is_some_and(|run_id| run_id == receipt.run_id.as_str())
+        && metadata["dispatch_target"]
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|target| target == receipt.dispatch_target.as_str())
+        && metadata["source_exception_path_receipt_id"]
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|source_receipt_id| source_receipt_id == exception_path_receipt_id);
+    if !metadata_is_receipt_bound {
+        return false;
+    }
 
-    candidate_matches_receipt_run
-        || parent_matches_receipt_run
-        || active_bounded_unit_matches
-        || owned_scope_matches
+    let receipt_run_id = receipt.run_id.trim();
+    !receipt_run_id.is_empty()
+        && (candidate_task_id == receipt_run_id
+            || candidate
+                .get("parent_task_ids")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .any(|parent_id| parent_id == receipt_run_id))
 }
 
 async fn build_operator_session_projection_for_status(
@@ -1563,7 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn exception_takeover_metadata_accepts_bound_active_taskflow_scope() {
+    fn exception_takeover_metadata_requires_receipt_bound_active_taskflow_lineage() {
         let nanos = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1577,6 +1566,9 @@ mod tests {
         fs::write(
             metadata_dir.join("run-1.json"),
             serde_json::json!({
+                "run_id": "run-1",
+                "dispatch_target": "test_author",
+                "source_exception_path_receipt_id": "exception-1",
                 "active_bounded_unit": "architecture-refactor-lane-supersede-status-root-write-mismatch-defect:test_author",
                 "owned_write_scope": ["crates/vida/src"]
             })
@@ -1618,7 +1610,7 @@ mod tests {
             recorded_at: "2026-06-03T00:00:00Z".to_string(),
         };
         let active_candidate = serde_json::json!({
-            "task_id": "architecture-refactor-lane-supersede-status-root-write-mismatch-defect-test-author-code",
+            "task_id": "run-1",
             "status": "in_progress"
         });
 
@@ -1641,13 +1633,44 @@ mod tests {
                 &[closeout_candidate]
             )
         );
+        let prefix_candidate = serde_json::json!({
+            "task_id": "run-1-prefix-only",
+            "status": "in_progress"
+        });
+        assert!(
+            !super::exception_takeover_metadata_matches_taskflow_active_work(
+                &root,
+                Some(&receipt),
+                &[prefix_candidate]
+            )
+        );
+
+        fs::write(
+            metadata_dir.join("run-1.json"),
+            serde_json::json!({
+                "active_bounded_unit": "run-1:test_author",
+                "owned_write_scope": ["run-1"]
+            })
+            .to_string(),
+        )
+        .expect("metadata should write");
+        let broad_unbound_candidate = serde_json::json!({
+            "task_id": "run-1",
+            "status": "in_progress"
+        });
+        assert!(
+            !super::exception_takeover_metadata_matches_taskflow_active_work(
+                &root,
+                Some(&receipt),
+                &[broad_unbound_candidate]
+            )
+        );
 
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn status_root_session_write_guard_uses_active_exception_takeover_when_current_session_status_skips_superseded_lane(
-    ) {
+    fn status_root_session_write_guard_blocks_unbound_exception_takeover_metadata() {
         let nanos = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1756,13 +1779,9 @@ mod tests {
             latest_run_graph_task_stale,
         );
 
-        assert_eq!(payload["status"], "exception_takeover_active");
-        assert_eq!(payload["root_local_write_allowed"], true);
-        assert_eq!(payload["local_exception_takeover_state"], "active");
-        assert_eq!(
-            payload["root_local_write_allowed_for_only_these_paths"],
-            serde_json::json!(["crates/vida/src/status_surface.rs"])
-        );
+        assert_eq!(payload["status"], "blocked_by_default");
+        assert_eq!(payload["root_local_write_allowed"], false);
+        assert_eq!(payload["reason"], "latest_run_graph_task_stale");
 
         let _ = fs::remove_dir_all(root);
     }
