@@ -5,4 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
 toon-format.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

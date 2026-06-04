@@ -54,19 +54,28 @@ fn task_record_value(task: &TaskRecord) -> serde_json::Value {
 }
 
 fn task_record_list_toon_text(surface: &str, tasks: &[TaskRecord]) -> String {
-    let mut lines = vec![format!("task_count: {}", tasks.len())];
-    if tasks.is_empty() {
-        lines.push("tasks: none".to_string());
-    } else {
-        lines.push("tasks:".to_string());
-        lines.extend(tasks.iter().map(|task| {
-            format!(
-                "- {} | {} | p{} | {}",
-                task.id, task.status, task.priority, task.title
-            )
-        }));
+    #[derive(serde::Serialize)]
+    struct TaskRow<'a> {
+        id: &'a str,
+        status: &'a str,
+        priority: u32,
+        title: &'a str,
     }
-    taskflow_format_toon::render_section(surface, &lines.join("\n  "))
+
+    let rows = tasks
+        .iter()
+        .map(|task| TaskRow {
+            id: &task.id,
+            status: &task.status,
+            priority: task.priority,
+            title: &task.title,
+        })
+        .collect::<Vec<_>>();
+    let value = serde_json::json!({
+        "task_count": tasks.len(),
+        "tasks": rows,
+    });
+    taskflow_format_toon::render_value_section(surface, &value)
 }
 
 fn optional_work_item_kind_value(issue_type: Option<&str>) -> serde_json::Value {
@@ -1034,18 +1043,26 @@ fn task_direct_child_row_value(
 }
 
 fn task_children_toon_text(tree: &TaskDependencyTreeNode) -> String {
-    let mut lines = vec![
-        format!(
-            "root: {} | {} | {}",
-            tree.task.id, tree.task.status, tree.task.title
-        ),
-        format!("child_count: {}", tree.children.len()),
-    ];
-    if tree.children.is_empty() {
-        lines.push("children: none".to_string());
-    } else {
-        lines.push("children:".to_string());
-        lines.extend(tree.children.iter().map(|child| {
+    #[derive(serde::Serialize)]
+    struct RootRow<'a> {
+        id: &'a str,
+        status: &'a str,
+        title: &'a str,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ChildRow<'a> {
+        id: &'a str,
+        state: &'a str,
+        issue_type: &'a str,
+        priority: serde_json::Value,
+        title: &'a str,
+    }
+
+    let children = tree
+        .children
+        .iter()
+        .map(|child| {
             let issue_type = child.child_issue_type.as_deref().unwrap_or("unknown");
             let state = if child.cycle {
                 "cycle"
@@ -1058,16 +1075,28 @@ fn task_children_toon_text(tree: &TaskDependencyTreeNode) -> String {
             };
             let priority = child
                 .child_priority
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+                .map(|value| serde_json::json!(value))
+                .unwrap_or_else(|| serde_json::json!("unknown"));
             let title = child.child_title.as_deref().unwrap_or("");
-            format!(
-                "- {} | {} | {} | p{} | {}",
-                child.child_id, state, issue_type, priority, title
-            )
-        }));
-    }
-    taskflow_format_toon::render_section("vida task children", &lines.join("\n  "))
+            ChildRow {
+                id: &child.child_id,
+                state,
+                issue_type,
+                priority,
+                title,
+            }
+        })
+        .collect::<Vec<_>>();
+    let value = serde_json::json!({
+        "root": RootRow {
+            id: &tree.task.id,
+            status: &tree.task.status,
+            title: &tree.task.title,
+        },
+        "child_count": tree.children.len(),
+        "children": children,
+    });
+    taskflow_format_toon::render_value_section("vida task children", &value)
 }
 
 fn print_task_dependency_tree_edge(edge: &TaskDependencyTreeEdge, depth: usize) {
@@ -1386,13 +1415,13 @@ pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPa
 mod tests {
     use super::{
         build_pass_operator_surface_payload, build_task_graph_issues_payload,
-        task_mutation_payload, task_progress_payload, task_progress_toon_text,
-        task_record_list_toon_text,
+        task_children_toon_text, task_mutation_payload, task_progress_payload,
+        task_progress_toon_text, task_record_list_toon_text,
     };
     use crate::operator_contracts::shared_operator_output_contract_parity_error;
     use crate::state_store::{
-        TaskCriticalPathNode, TaskDependencyTreeChild, TaskExecutionSemantics, TaskGraphIssue,
-        TaskProgressSummary, TaskRecord,
+        TaskCriticalPathNode, TaskDependencyTreeChild, TaskDependencyTreeNode,
+        TaskExecutionSemantics, TaskGraphIssue, TaskProgressSummary, TaskRecord,
     };
     use std::collections::BTreeMap;
 
@@ -1542,10 +1571,43 @@ mod tests {
         let text = task_record_list_toon_text("vida task list", &[task]);
 
         assert!(text.starts_with("vida task list\n  task_count: 1"));
-        assert!(text.contains("\n  tasks:\n  - task-1 | open | p2 | Compact output task"));
+        assert!(text.contains("\n  tasks[1]{id,status,priority,title}:"));
+        assert!(text.contains("\n    \"task-1\",open,2,Compact output task"));
         assert!(!text.contains('\t'));
+        assert!(!text.contains(" | "));
         assert!(!text.contains("description"));
         assert!(!text.contains("planner_metadata"));
+    }
+
+    #[test]
+    fn task_children_toon_text_uses_tabular_headers() {
+        let tree = TaskDependencyTreeNode {
+            task: sample_task("root-task"),
+            dependencies: Vec::new(),
+            children: vec![TaskDependencyTreeChild {
+                child_id: "child-1".to_string(),
+                child_display_id: Some("vida-1".to_string()),
+                child_title: Some("Child task".to_string()),
+                child_status: "open".to_string(),
+                child_priority: Some(2),
+                child_issue_type: Some("task".to_string()),
+                child_labels: vec!["runtime".to_string()],
+                node: None,
+                cycle: false,
+                missing: false,
+                repeated: false,
+            }],
+        };
+
+        let text = task_children_toon_text(&tree);
+
+        assert!(text.starts_with("vida task children\n"));
+        assert!(text.contains("\n  child_count: 1"));
+        assert!(text.contains("\n  children[1]{id,state,issue_type,priority,title}:"));
+        assert!(text.contains("\n    \"child-1\",open,task,2,Child task"));
+        assert!(text.contains("\n  root:"));
+        assert!(!text.contains('\t'));
+        assert!(!text.contains(" | "));
     }
 
     #[test]

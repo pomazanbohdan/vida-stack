@@ -801,6 +801,8 @@ dependencies = [
 name = "common-format-toon"
 version = "0.9.7"
 dependencies = [
+ "serde",
+ "serde_json",
  "toon-format",
 ]
 
@@ -5622,6 +5624,8 @@ name = "taskflow-format-toon"
 version = "0.9.7"
 dependencies = [
  "common-format-toon",
+ "serde",
+ "serde_json",
  "toon-format",
 ]
 
