@@ -588,24 +588,13 @@ async fn task_takeover_status_receipt(
         ),
     };
     let task_matches_lane = status.task_id.trim() == task.id.trim();
-    let planner_paths = task
-        .planner_metadata
-        .owned_paths
-        .iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
     let state_label = exception_takeover_state_label(takeover_state).to_string();
     let metadata_paths = summary
         .as_ref()
         .filter(|_| takeover_state.is_active())
         .map(|summary| task_exception_takeover_owned_write_scope(store.root(), summary))
         .unwrap_or_default();
-    let paths = if takeover_state.is_active() {
-        metadata_paths
-    } else {
-        planner_paths
-    };
+    let paths = metadata_paths;
     let root_local_write_allowed =
         task_matches_lane && takeover_state.is_active() && !paths.is_empty();
     let allowed = root_local_write_allowed;
@@ -7765,8 +7754,9 @@ mod tests {
         task_handoff_receipt_root, task_json_success_status, task_next_lawful_apply_strategy,
         task_next_lawful_receipt, task_next_lawful_select_ready_candidate_receipt,
         task_owned_status_receipt, task_parent_id, task_ready_authoritative_first,
-        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        TaskCloseAutomationReceipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_takeover_status_receipt, task_update_planner_metadata_arg,
+        validate_task_handoff_accept_receipt, TaskCloseAutomationReceipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -7927,6 +7917,92 @@ mod tests {
             task_exception_takeover_owned_write_scope(harness.path(), &summary),
             vec!["crates/vida/src/task_surface.rs".to_string()]
         );
+    }
+
+    #[test]
+    fn task_takeover_status_blocks_active_takeover_without_receipt_bound_scope() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            let task = owned_task_record(
+                "task-takeover-wide-scope",
+                vec!["attacker-controlled/wide-scope"],
+            );
+            let status = state_store::RunGraphStatus {
+                run_id: "task-takeover-no-metadata".to_string(),
+                task_id: task.id.clone(),
+                task_class: "implementation".to_string(),
+                active_node: "implementer".to_string(),
+                next_node: None,
+                status: "blocked".to_string(),
+                route_task_class: "implementation".to_string(),
+                selected_backend: "internal_subagents".to_string(),
+                lane_id: "implementer".to_string(),
+                lifecycle_stage: "implementer_blocked".to_string(),
+                policy_gate: "blocked_open_delegated_cycle".to_string(),
+                handoff_state: "bridge_request_pending".to_string(),
+                context_state: "ready".to_string(),
+                checkpoint_kind: "runtime_dispatch".to_string(),
+                resume_target: "none".to_string(),
+                recovery_ready: false,
+            };
+            store
+                .record_run_graph_status(&status)
+                .await
+                .expect("run graph status should persist");
+            store
+                .record_run_graph_dispatch_receipt(&state_store::RunGraphDispatchReceipt {
+                    run_id: status.run_id.clone(),
+                    dispatch_target: "implementer".to_string(),
+                    dispatch_status: "blocked".to_string(),
+                    lane_status: "lane_exception_takeover".to_string(),
+                    supersedes_receipt_id: Some("takeover-receipt".to_string()),
+                    exception_path_receipt_id: Some("takeover-receipt".to_string()),
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida agent-init".to_string()),
+                    dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                    dispatch_packet_path: None,
+                    dispatch_result_path: None,
+                    blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("junior".to_string()),
+                    activation_runtime_role: Some("implementer".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
+                    recorded_at: "2026-06-04T00:00:00Z".to_string(),
+                })
+                .await
+                .expect("dispatch receipt should persist");
+
+            let receipt =
+                task_takeover_status_receipt(&store, &task, Some(status), Some("run_id")).await;
+
+            assert!(!receipt.allowed);
+            assert!(!receipt.root_local_write_allowed);
+            assert!(receipt.paths.is_empty());
+            assert_eq!(
+                receipt.root_write_guard["root_local_write_allowed_for_only_these_paths"],
+                serde_json::json!([])
+            );
+            assert_eq!(
+                receipt.blocker_codes,
+                vec!["exception_takeover_scope_missing".to_string()]
+            );
+        });
     }
 
     #[test]
