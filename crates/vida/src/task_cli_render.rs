@@ -937,6 +937,7 @@ pub(crate) fn print_task_dependency_tree(
 pub(crate) fn print_task_direct_children(
     render: RenderMode,
     tree: &TaskDependencyTreeNode,
+    include_full: bool,
     as_json: bool,
 ) {
     let child_cycle_count = tree.children.iter().filter(|child| child.cycle).count();
@@ -953,20 +954,8 @@ pub(crate) fn print_task_direct_children(
                 "repeated_count": child_repeated_count,
                 "bounded": true,
             },
-            "children": tree.children.iter().map(|child| serde_json::json!({
-                "child_id": child.child_id,
-                "child_display_id": child.child_display_id,
-                "child_title": child.child_title,
-                "child_status": child.child_status,
-                "child_priority": child.child_priority,
-                "child_issue_type": child.child_issue_type,
-                "child_work_item_kind": optional_work_item_kind_value(child.child_issue_type.as_deref()),
-                "child_labels": child.child_labels,
-                "node": child.node,
-                "cycle": child.cycle,
-                "missing": child.missing,
-                "repeated": child.repeated,
-            })).collect::<Vec<_>>(),
+            "view": if include_full { "full" } else { "brief" },
+            "children": tree.children.iter().map(|child| task_direct_child_row_value(child, include_full)).collect::<Vec<_>>(),
         }),
     );
     if crate::surface_render::print_surface_json(
@@ -974,6 +963,11 @@ pub(crate) fn print_task_direct_children(
         as_json,
         "task direct children should render as json",
     ) {
+        return;
+    }
+
+    if matches!(render, RenderMode::Plain) {
+        println!("{}", task_children_toon_text(tree));
         return;
     }
 
@@ -1013,6 +1007,67 @@ pub(crate) fn print_task_direct_children(
             child.child_id, state, issue_type, priority, title
         );
     }
+}
+
+fn task_direct_child_row_value(
+    child: &TaskDependencyTreeChild,
+    include_full: bool,
+) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "child_id": child.child_id,
+        "child_title": child.child_title,
+        "child_status": child.child_status,
+        "child_priority": child.child_priority,
+        "child_issue_type": child.child_issue_type,
+        "cycle": child.cycle,
+        "missing": child.missing,
+        "repeated": child.repeated,
+    });
+    if include_full {
+        value["child_display_id"] = serde_json::json!(child.child_display_id);
+        value["child_work_item_kind"] =
+            optional_work_item_kind_value(child.child_issue_type.as_deref());
+        value["child_labels"] = serde_json::json!(child.child_labels);
+        value["node"] = serde_json::json!(child.node);
+    }
+    value
+}
+
+fn task_children_toon_text(tree: &TaskDependencyTreeNode) -> String {
+    let mut lines = vec![
+        format!(
+            "root: {} | {} | {}",
+            tree.task.id, tree.task.status, tree.task.title
+        ),
+        format!("child_count: {}", tree.children.len()),
+    ];
+    if tree.children.is_empty() {
+        lines.push("children: none".to_string());
+    } else {
+        lines.push("children:".to_string());
+        lines.extend(tree.children.iter().map(|child| {
+            let issue_type = child.child_issue_type.as_deref().unwrap_or("unknown");
+            let state = if child.cycle {
+                "cycle"
+            } else if child.missing {
+                "missing"
+            } else if child.repeated {
+                "repeated"
+            } else {
+                child.child_status.as_str()
+            };
+            let priority = child
+                .child_priority
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let title = child.child_title.as_deref().unwrap_or("");
+            format!(
+                "- {} | {} | {} | p{} | {}",
+                child.child_id, state, issue_type, priority, title
+            )
+        }));
+    }
+    taskflow_format_toon::render_section("vida task children", &lines.join("\n  "))
 }
 
 fn print_task_dependency_tree_edge(edge: &TaskDependencyTreeEdge, depth: usize) {
@@ -1336,8 +1391,8 @@ mod tests {
     };
     use crate::operator_contracts::shared_operator_output_contract_parity_error;
     use crate::state_store::{
-        TaskCriticalPathNode, TaskExecutionSemantics, TaskGraphIssue, TaskProgressSummary,
-        TaskRecord,
+        TaskCriticalPathNode, TaskDependencyTreeChild, TaskExecutionSemantics, TaskGraphIssue,
+        TaskProgressSummary, TaskRecord,
     };
     use std::collections::BTreeMap;
 
@@ -1491,6 +1546,37 @@ mod tests {
         assert!(!text.contains('\t'));
         assert!(!text.contains("description"));
         assert!(!text.contains("planner_metadata"));
+    }
+
+    #[test]
+    fn task_direct_child_row_value_is_brief_by_default() {
+        let child = TaskDependencyTreeChild {
+            child_id: "child-1".to_string(),
+            child_display_id: Some("vida-1".to_string()),
+            child_title: Some("Child task".to_string()),
+            child_status: "open".to_string(),
+            child_priority: Some(2),
+            child_issue_type: Some("task".to_string()),
+            child_labels: vec!["runtime".to_string()],
+            node: None,
+            cycle: false,
+            missing: false,
+            repeated: false,
+        };
+
+        let brief = super::task_direct_child_row_value(&child, false);
+        let brief_object = brief.as_object().expect("brief child row");
+        assert!(brief_object.contains_key("child_id"));
+        assert!(brief_object.contains_key("child_status"));
+        assert!(!brief_object.contains_key("node"));
+        assert!(!brief_object.contains_key("child_labels"));
+        assert!(!brief_object.contains_key("child_work_item_kind"));
+
+        let full = super::task_direct_child_row_value(&child, true);
+        let full_object = full.as_object().expect("full child row");
+        assert!(full_object.contains_key("node"));
+        assert!(full_object.contains_key("child_labels"));
+        assert!(full_object.contains_key("child_work_item_kind"));
     }
 
     #[test]
