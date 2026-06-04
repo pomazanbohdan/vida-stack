@@ -808,7 +808,6 @@ pub struct RunGraphDispatchReceiptSummary {
     pub recorded_at: String,
 }
 
-#[allow(dead_code)]
 impl RunGraphDispatchReceiptSummary {
     pub(crate) fn from_receipt(receipt: RunGraphDispatchReceipt) -> Self {
         let raw_lane_status = receipt.lane_status.trim();
@@ -991,7 +990,6 @@ pub struct RunGraphApprovalDelegationReceipt {
     pub recorded_at: String,
 }
 
-#[allow(dead_code)]
 impl RunGraphApprovalDelegationReceipt {
     pub(crate) fn from_status(
         status: &RunGraphStatus,
@@ -1793,7 +1791,6 @@ impl StateStore {
         })
     }
 
-    #[allow(dead_code)]
     pub async fn record_run_graph_status(
         &self,
         status: &RunGraphStatus,
@@ -1875,7 +1872,6 @@ impl StateStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn record_run_graph_dispatch_receipt(
         &self,
         receipt: &RunGraphDispatchReceipt,
@@ -2018,7 +2014,6 @@ impl StateStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn run_graph_projection_checkpoint_record(
         &self,
         run_id: &str,
@@ -2312,7 +2307,6 @@ impl StateStore {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn run_graph_status(&self, run_id: &str) -> Result<RunGraphStatus, StateStoreError> {
         self.run_graph_status_from_task_rows(run_id, &[]).await
     }

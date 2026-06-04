@@ -145,4 +145,87 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
     }
+
+    #[tokio::test]
+    async fn launcher_activation_snapshot_survives_state_store_reopen() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-launcher-activation-reopen-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let snapshot = LauncherActivationSnapshot {
+            source: "state_store".to_string(),
+            source_config_path: String::new(),
+            source_config_digest: "digest-123".to_string(),
+            captured_at: "2026-03-08T00:00:00Z".to_string(),
+            compiled_bundle: serde_json::json!({
+                "role_selection": {
+                    "fallback_role": "worker",
+                    "mode": "native"
+                },
+                "agent_system": {}
+            }),
+            pack_router_keywords: serde_json::json!({}),
+        };
+
+        {
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            store
+                .write_launcher_activation_snapshot(&snapshot)
+                .await
+                .expect("write launcher activation snapshot");
+        }
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store");
+        let persisted = store
+            .read_launcher_activation_snapshot()
+            .await
+            .expect("read persisted launcher activation snapshot");
+        assert_eq!(persisted.source_config_digest, "digest-123");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn captured_launcher_activation_snapshot_survives_state_store_reopen() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-launcher-activation-captured-reopen-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let snapshot = crate::launcher_activation_snapshot::capture_launcher_activation_snapshot()
+            .expect("capture snapshot");
+
+        {
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            store
+                .write_launcher_activation_snapshot(&snapshot)
+                .await
+                .expect("write captured launcher activation snapshot");
+        }
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store");
+        let persisted = store
+            .read_launcher_activation_snapshot()
+            .await
+            .expect("read persisted captured launcher activation snapshot");
+        assert_eq!(
+            persisted.source_config_digest,
+            snapshot.source_config_digest
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

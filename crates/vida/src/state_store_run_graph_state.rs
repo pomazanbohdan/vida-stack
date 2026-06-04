@@ -83,7 +83,6 @@ pub(crate) struct ResumabilityCapsuleRow {
     pub(crate) updated_at: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
 pub struct RunGraphDispatchReceipt {
     pub run_id: String,
@@ -516,7 +515,6 @@ impl From<RunGraphDispatchReceipt> for RunGraphDispatchReceiptStored {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RunGraphStatus {
     pub run_id: String,
@@ -609,7 +607,6 @@ impl RunGraphMemoryGovernanceProjection {
     }
 }
 
-#[allow(dead_code)]
 impl RunGraphStatus {
     pub(crate) fn validate_memory_governance(&self) -> Result<(), StateStoreError> {
         if !requires_memory_governance_enforcement(&self.policy_gate) {

@@ -89,7 +89,6 @@ pub(crate) struct InstructionDependencyEdgeContent {
 }
 
 #[derive(Debug, serde::Serialize, SurrealValue, Clone)]
-#[allow(dead_code)]
 pub struct InstructionDiffPatchContent {
     pub patch_id: String,
     pub target_artifact_id: String,
@@ -118,7 +117,6 @@ pub(crate) struct InstructionProjectionReceiptContent {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
-#[allow(dead_code)]
 pub struct InstructionPatchOperation {
     pub op: String,
     pub target_mode: String,
@@ -127,7 +125,6 @@ pub struct InstructionPatchOperation {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct InstructionProjection {
     pub artifact_id: String,
     pub body: String,
@@ -137,7 +134,6 @@ pub struct InstructionProjection {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct EffectiveInstructionBundle {
     pub root_artifact_id: String,
     pub mandatory_chain_order: Vec<String>,
@@ -147,7 +143,6 @@ pub struct EffectiveInstructionBundle {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct EffectiveInstructionArtifact {
     pub artifact_id: String,
     pub version: u32,
