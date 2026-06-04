@@ -174,6 +174,7 @@ impl StateStore {
                     .unwrap_or(true)
             })
             .filter(Self::task_is_open_like)
+            .filter(|task| !Self::task_is_container_only(task))
             .filter(|task| Self::task_blockers(task, &by_id).is_empty())
             .collect::<Vec<_>>();
 
@@ -1270,6 +1271,21 @@ mod tests {
         let critical_path =
             StateStore::critical_path_from_rows(&[epic]).expect("critical path should render");
         assert!(critical_path.nodes.is_empty());
+    }
+
+    #[test]
+    fn ready_tasks_exclude_container_only_execution_mode() {
+        let mut work_pool = task_record("container-only-work-pool", "open");
+        work_pool.issue_type = "task".to_string();
+        work_pool.execution_semantics.execution_mode = Some("container_only".to_string());
+
+        let ready = StateStore::ready_tasks_scoped_from_rows(&[work_pool], None)
+            .expect("ready tasks should render");
+
+        assert!(
+            ready.is_empty(),
+            "container_only execution-mode tasks must not be returned as executable ready work"
+        );
     }
 
     #[test]
