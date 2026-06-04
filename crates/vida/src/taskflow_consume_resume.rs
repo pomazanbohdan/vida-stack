@@ -16400,8 +16400,6 @@ agent_system:
 
     #[tokio::test]
     async fn resolve_default_resume_run_id_rejects_foreign_latest_terminal_run_before_mutation() {
-        let mut session_guard =
-            crate::test_cli_support::EnvVarGuard::set("VIDA_SESSION_ID", "session-foreign-latest");
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -16412,6 +16410,14 @@ agent_system:
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        let current_owner_evidence =
+            crate::orchestrator_session_surface::build_runtime_owner_evidence(store.root(), true)
+                .expect("build current owner evidence");
+        let current_session_id = current_owner_evidence["current_session"]["session_id"]
+            .as_str()
+            .expect("current session id")
+            .to_string();
+        let foreign_session_id = format!("{current_session_id}-foreign");
 
         let mut foreign_status = crate::taskflow_run_graph::default_run_graph_status(
             "run-foreign-terminal",
@@ -16435,7 +16441,7 @@ agent_system:
                 claim_id: "foreign-terminal-run-claim".to_string(),
                 state_root_id: "state-root".to_string(),
                 worktree_environment_id: "worktree-a".to_string(),
-                orchestrator_session_id: "session-foreign-latest".to_string(),
+                orchestrator_session_id: foreign_session_id,
                 process_id: None,
                 task_id: Some("task-foreign-terminal".to_string()),
                 run_id: Some("run-foreign-terminal".to_string()),
@@ -16450,9 +16456,6 @@ agent_system:
             .await
             .expect("acquire foreign run claim");
 
-        drop(session_guard);
-        session_guard =
-            crate::test_cli_support::EnvVarGuard::set("VIDA_SESSION_ID", "session-current-consume");
         let error = match resolve_default_resume_run_id(&store).await {
             Ok(run_id) => panic!("foreign latest run must not be selected by default: {run_id}"),
             Err(error) => error,
@@ -16467,7 +16470,6 @@ agent_system:
         );
 
         let _ = fs::remove_dir_all(&root);
-        drop(session_guard);
     }
 
     #[tokio::test]
