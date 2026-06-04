@@ -1316,6 +1316,55 @@ fn task_close_feedback_treats_successful_evidence_words_as_context() {
 }
 
 #[test]
+fn task_close_feedback_ignores_historical_blocker_words_in_success_reason() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    create_epic_parent(
+        &state_dir,
+        "feedback-blocker-parent",
+        "Feedback blocker parent",
+        "open",
+    );
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-blocker-task",
+            "Feedback blocker task",
+            "--parent-id",
+            "feedback-blocker-parent",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+
+    let closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "feedback-blocker-task",
+            "--reason",
+            "Closed after validating prior blocker edges, blocked prerequisite states, and recovery wording; structured close transition passed.",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(closed["status"], "pass");
+    assert_eq!(closed["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        closed["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        closed["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
