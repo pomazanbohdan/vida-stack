@@ -6287,6 +6287,25 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
     assert_eq!(reconcile["status"], "pass");
     assert_eq!(reconcile["summary"]["reconciled_count"], 0);
     assert_eq!(reconcile["summary"]["skipped_count"], 1);
+    assert_eq!(
+        reconcile["summary"]["skipped_runs"][0]["run_id"], task_id,
+        "skipped run should expose the concrete run id for operator inspection: {reconcile}"
+    );
+    assert_eq!(
+        reconcile["summary"]["skipped_runs"][0]["reason"],
+        "missing_receipt_backed_closure_truth"
+    );
+    assert!(reconcile["summary"]["skipped_runs"][0]["inspect_command"]
+        .as_str()
+        .expect("inspect command should render")
+        .contains("vida taskflow run-graph status task-reconcile-unproven-active --json"));
+    assert!(
+        reconcile["next_actions"][0]
+            .as_str()
+            .expect("next action should render")
+            .contains("vida taskflow run-graph status task-reconcile-unproven-active --json"),
+        "reconcile should return an actionable inspect command when all rows are skipped: {reconcile}"
+    );
 
     let after = run_command_json(&["doctor", "--json"], &state_dir);
     let after_blockers = require_json_string_array(&after["blocker_codes"], "after blockers");
@@ -6624,6 +6643,20 @@ fn task_reconcile_closed_runs_skips_stale_route_and_non_closure_receipt_evidence
     assert_eq!(reconcile["status"], "pass");
     assert_eq!(reconcile["summary"]["reconciled_count"], 0);
     assert_eq!(reconcile["summary"]["skipped_count"], 2);
+    assert_eq!(
+        reconcile["summary"]["skipped_runs"]
+            .as_array()
+            .expect("skipped runs should render")
+            .len(),
+        2
+    );
+    assert!(
+        reconcile["next_actions"][0]
+            .as_str()
+            .expect("next action should render")
+            .contains("vida taskflow run-graph status"),
+        "skipped reconciliation should provide a concrete inspection command: {reconcile}"
+    );
 
     let after = run_command_json(&["doctor", "--json"], &state_dir);
     let after_blockers = require_json_string_array(&after["blocker_codes"], "after blockers");

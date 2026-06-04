@@ -7963,13 +7963,23 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .await
                 {
                     Ok(summary) => {
+                        let next_actions = summary
+                            .skipped_runs
+                            .first()
+                            .map(|skipped| {
+                                vec![format!(
+                                    "Inspect skipped closed-task run `{}` with `{}`; reason={}.",
+                                    skipped.run_id, skipped.inspect_command, skipped.reason
+                                )]
+                            })
+                            .unwrap_or_default();
                         if command.json {
                             crate::print_json_pretty(&serde_json::json!({
                                 "status": "pass",
                                 "surface": "vida task reconcile-closed-runs",
                                 "summary": summary,
                                 "blocker_codes": [],
-                                "next_actions": [],
+                                "next_actions": next_actions,
                             }));
                         } else {
                             print_surface_line(
@@ -7977,6 +7987,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 "reconciled closed-task runs",
                                 &summary.reconciled_count.to_string(),
                             );
+                            if let Some(action) = next_actions.first() {
+                                print_surface_line(command.render, "next", action);
+                            }
                         }
                         ExitCode::SUCCESS
                     }

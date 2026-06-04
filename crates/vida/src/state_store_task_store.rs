@@ -23,11 +23,21 @@ pub(crate) struct ClosedTaskRunReconciliation {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ClosedTaskRunReconciliationSkipped {
+    pub(crate) run_id: String,
+    pub(crate) task_id: String,
+    pub(crate) status: String,
+    pub(crate) reason: String,
+    pub(crate) inspect_command: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct ClosedTaskRunReconciliationSummary {
     pub(crate) scanned_count: usize,
     pub(crate) reconciled_count: usize,
     pub(crate) skipped_count: usize,
     pub(crate) reconciled_runs: Vec<ClosedTaskRunReconciliation>,
+    pub(crate) skipped_runs: Vec<ClosedTaskRunReconciliationSkipped>,
 }
 
 impl StateStore {
@@ -993,23 +1003,54 @@ impl StateStore {
         let rows: Vec<HistoricalRunRow> = query.take(0)?;
         let scanned_count = rows.len();
         let mut reconciled_runs = Vec::new();
+        let mut skipped_runs = Vec::new();
         let mut skipped_count = 0usize;
 
         for row in rows {
             if row.status == "completed" {
                 skipped_count += 1;
+                skipped_runs.push(ClosedTaskRunReconciliationSkipped {
+                    inspect_command: format!(
+                        "vida taskflow run-graph status {} --json",
+                        crate::shell_quote(row.run_id.trim())
+                    ),
+                    run_id: row.run_id,
+                    task_id: row.task_id,
+                    status: row.status,
+                    reason: "already_completed".to_string(),
+                });
                 continue;
             }
             let task = match self.show_task(&row.task_id).await {
                 Ok(task) => task,
                 Err(StateStoreError::MissingTask { .. }) => {
                     skipped_count += 1;
+                    skipped_runs.push(ClosedTaskRunReconciliationSkipped {
+                        inspect_command: format!(
+                            "vida taskflow run-graph status {} --json",
+                            crate::shell_quote(row.run_id.trim())
+                        ),
+                        run_id: row.run_id,
+                        task_id: row.task_id,
+                        status: row.status,
+                        reason: "missing_task".to_string(),
+                    });
                     continue;
                 }
                 Err(error) => return Err(error),
             };
             if !Self::task_status_is_closed_like(&task.status) {
                 skipped_count += 1;
+                skipped_runs.push(ClosedTaskRunReconciliationSkipped {
+                    inspect_command: format!(
+                        "vida taskflow run-graph status {} --json",
+                        crate::shell_quote(row.run_id.trim())
+                    ),
+                    run_id: row.run_id,
+                    task_id: row.task_id,
+                    status: row.status,
+                    reason: format!("task_status_not_closed_like:{}", task.status),
+                });
                 continue;
             }
             if !self
@@ -1017,6 +1058,16 @@ impl StateStore {
                 .await?
             {
                 skipped_count += 1;
+                skipped_runs.push(ClosedTaskRunReconciliationSkipped {
+                    inspect_command: format!(
+                        "vida taskflow run-graph status {} --json",
+                        crate::shell_quote(row.run_id.trim())
+                    ),
+                    run_id: row.run_id,
+                    task_id: row.task_id,
+                    status: row.status,
+                    reason: "missing_receipt_backed_closure_truth".to_string(),
+                });
                 continue;
             }
             let status = self.run_graph_status(&row.run_id).await?;
@@ -1039,6 +1090,7 @@ impl StateStore {
             reconciled_count: reconciled_runs.len(),
             skipped_count,
             reconciled_runs,
+            skipped_runs,
         })
     }
 
