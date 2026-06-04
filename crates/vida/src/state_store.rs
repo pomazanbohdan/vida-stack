@@ -1301,6 +1301,56 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn append_task_notes_preserves_existing_notes() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-append-task-notes-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "vida-root",
+                title: "Root",
+                display_id: None,
+                description: "root",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create root task");
+
+        let first = store
+            .append_task_notes("vida-root", "\n\n", "first")
+            .await
+            .expect("append first note");
+        assert_eq!(first.notes.as_deref(), Some("first"));
+
+        let second = store
+            .append_task_notes("vida-root", "\n\n", "second")
+            .await
+            .expect("append second note");
+        assert_eq!(second.notes.as_deref(), Some("first\n\nsecond"));
+
+        let persisted = store.show_task("vida-root").await.expect("show task");
+        assert_eq!(persisted.notes.as_deref(), Some("first\n\nsecond"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn update_task_rejects_closed_status_when_blocked_child_exists() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
