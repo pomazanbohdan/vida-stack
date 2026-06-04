@@ -1,12 +1,12 @@
 # Split Oversized Runtime Modules By Ownership Design
 
-Status: `proposed`
+Status: `execution-preparation`
 
 ## Summary
 - Feature / change: split oversized runtime modules by runtime ownership while preserving current behavior.
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`, launcher shell `vida`
-- Status: `design gate ready`
+- Status: `execution-preparation baseline ready`
 
 ## Current Context
 - The runtime request targets compatibility-preserving splits for oversized Rust files named in the packet: `runtime_dispatch_state`, `taskflow_consume_resume`, `taskflow_run_graph`, `taskflow_proxy`, `task_surface`, and `init_surfaces`.
@@ -132,6 +132,25 @@ Specification-lane files changed:
 - `.vida/data/state/host-tool-bridge/results/architecture-refactor-oversized-module-split-specification-architecture-refactor-oversized-module-split-2026-06-03T03-55-38.7902773Z-host-tool-bridge.json`
 - `.vida/data/state/host-tool-bridge/receipts/architecture-refactor-oversized-module-split-specification-architecture-refactor-oversized-module-split-2026-06-03T03-55-38.7902773Z-host-tool-bridge.json`
 
+### Pre-Split Module Map
+
+Baseline command: `Get-ChildItem crates/vida/src -Filter *.rs | Sort-Object Length -Descending | Select-Object -First 12 Name,KB`.
+
+| Module | Baseline size | Current mixed ownership | First split boundary | Compatibility plan | Target proof |
+| --- | ---: | --- | --- | --- | --- |
+| `runtime_dispatch_state.rs` | 997.4 KB | dispatch packet paths, dispatch result persistence, receipt reconciliation, host bridge truth, projection helpers | extract path/result/receipt policy behind facade re-exports | keep `runtime_dispatch_state` as the public facade and move private helpers into child modules first | dispatch result and host bridge receipt tests |
+| `taskflow_consume_resume.rs` | 809.4 KB | consume command orchestration, resume input resolution, packet normalization, reconciliation policy, recovery shaping | extract resume input resolution and reconciliation policy from command orchestration | preserve existing public consume/resume functions, migrate callers only after child-module tests pass | consume final/continue/resume tests and packet repair tests |
+| `taskflow_run_graph.rs` | 599.3 KB | run graph status model, recovery summaries, closure projection, stale/terminal run classification | extract recovery classification and terminal-closure predicates | keep existing status builders as facade functions until projections prove identical | run-graph status, reconcile, closure projection tests |
+| `task_surface.rs` | 511.9 KB | task lifecycle mutations, operator envelopes, progress/closure semantics, import/export surfaces | extract task mutation receipts and closure/progress policy from CLI surface routing | preserve command JSON shape and keep render-only code at shell edge | task close/progress/closure-ready/import tests |
+| `taskflow_proxy.rs` | 486.5 KB | service/client proxying, scheduling projection, continuation binding, next-lawful decision policy | extract scheduling/continuation decision policy from transport proxy helpers | keep proxy command entrypoints stable, re-export typed decision builders | graph-summary, next-lawful, scheduler dispatch tests |
+| `init_surfaces.rs` | 359.3 KB | orchestrator init, agent init, project activator bootstrap discovery, template/materialization, init JSON output | extract bootstrap discovery/materialization policy before output rendering | keep `vida orchestrator-init`, `vida agent-init`, and `vida project-activator` payload fields unchanged | init surface smoke tests and project activation tests |
+
+Execution order:
+1. Start with the smallest behavior-preserving facade extraction that has focused tests and low command-surface risk.
+2. Prefer private-helper moves before public API moves.
+3. After each extraction, record a post-split size and owner-boundary delta in this map.
+4. Do not remove transitional facades until all callers and tests prove the new ownership path.
+
 ## Fail-Closed Constraints
 - Do not begin implementation from this lane.
 - Do not widen beyond the six named oversized module areas without a new packet.
@@ -199,10 +218,10 @@ Specification-lane files changed:
 artifact_path: product/spec/split-oversized-runtime-modules-ownership-execut-design
 artifact_type: product_spec
 artifact_version: 1
-artifact_revision: 2026-06-03
+artifact_revision: 2026-06-04
 schema_version: 1
-status: proposed
+status: execution-preparation
 source_path: docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md
 created_at: 2026-06-03T03:55:38.7902773Z
-updated_at: 2026-06-03T03:55:38.7902773Z
+updated_at: 2026-06-04T00:00:00Z
 changelog_ref: split-oversized-runtime-modules-ownership-execut-design.changelog.jsonl

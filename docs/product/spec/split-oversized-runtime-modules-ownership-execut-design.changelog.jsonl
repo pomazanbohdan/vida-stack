@@ -1,0 +1,1 @@
+{"timestamp":"2026-06-04T00:00:00Z","kind":"updated","summary":"Added execution-preparation pre-split module map with baseline sizes, ownership boundaries, compatibility plan, and proof targets for oversized runtime module extraction.","task_id":"architecture-refactor-oversized-module-split-presplit-map-todo"}
