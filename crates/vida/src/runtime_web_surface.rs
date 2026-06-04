@@ -237,7 +237,7 @@ fn discover_runtime_web_processes(project_root: &Path) -> Vec<RuntimeWebProcessS
         return Vec::new();
     }
     let script = "$pattern = '(-File\\s+.*(Start-WebDevServer|Start-WebOdooProxy|Start-WebCloudflareEdgeProxy)\\.ps1|flutter-wrapper\\.cmd|flutter.*web-server)'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pattern) } | Select-Object @{Name='process_id';Expression={$_.ProcessId}},@{Name='command_line';Expression={$_.CommandLine}} | ConvertTo-Json -Depth 3";
-    let Ok(output) = Command::new("pwsh")
+    let Ok(output) = Command::new(trusted_windows_powershell_executable())
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -253,6 +253,27 @@ fn discover_runtime_web_processes(project_root: &Path) -> Vec<RuntimeWebProcessS
         return Vec::new();
     }
     parse_runtime_web_process_snapshot(&String::from_utf8_lossy(&output.stdout), project_root)
+}
+
+fn trusted_windows_powershell_executable() -> PathBuf {
+    PathBuf::from(trusted_windows_powershell_executable_from_system_root(
+        std::env::var("SystemRoot").ok().as_deref(),
+    ))
+}
+
+fn trusted_windows_powershell_executable_from_system_root(system_root: Option<&str>) -> String {
+    let system_root = system_root
+        .filter(|path| is_windows_drive_absolute_path(path))
+        .unwrap_or(r"C:\Windows");
+    format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe")
+}
+
+fn is_windows_drive_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
 }
 
 fn parse_runtime_web_process_snapshot(
@@ -1432,6 +1453,22 @@ mod tests {
         let command_line = "pwsh -NoProfile -Command \"$pattern = 'flutter.*web-server'; Get-CimInstance Win32_Process\"";
 
         assert_eq!(runtime_web_component_for_command_line(command_line), None);
+    }
+
+    #[test]
+    fn runtime_web_status_process_discovery_uses_trusted_powershell_path() {
+        assert_eq!(
+            trusted_windows_powershell_executable_from_system_root(Some(r"D:\Windows")),
+            r"D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        );
+        assert_eq!(
+            trusted_windows_powershell_executable_from_system_root(Some("pwsh")),
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        );
+        assert_eq!(
+            trusted_windows_powershell_executable_from_system_root(Some(r"..\repo")),
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        );
     }
 
     #[test]
