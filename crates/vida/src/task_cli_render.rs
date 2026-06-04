@@ -53,7 +53,7 @@ fn task_record_value(task: &TaskRecord) -> serde_json::Value {
     value
 }
 
-fn task_record_list_toon_text(surface: &str, tasks: &[TaskRecord]) -> String {
+fn default_task_record_list_toon_rows(tasks: &[TaskRecord]) -> serde_json::Value {
     #[derive(serde::Serialize)]
     struct TaskRow<'a> {
         id: &'a str,
@@ -71,6 +71,20 @@ fn task_record_list_toon_text(surface: &str, tasks: &[TaskRecord]) -> String {
             title: &task.title,
         })
         .collect::<Vec<_>>();
+    serde_json::json!(rows)
+}
+
+fn task_record_list_toon_text(surface: &str, tasks: &[TaskRecord], fields: Option<&str>) -> String {
+    let rows = if fields.is_some() {
+        tasks
+            .iter()
+            .map(|task| task_list_row_value(task, false))
+            .map(|value| apply_json_field_selector(value, fields))
+            .collect::<Vec<_>>()
+            .into()
+    } else {
+        default_task_record_list_toon_rows(tasks)
+    };
     let value = serde_json::json!({
         "task_count": tasks.len(),
         "tasks": rows,
@@ -197,14 +211,14 @@ fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {
     }
 }
 
-fn task_list_output_policy(summary_only: bool, explicit_full: bool) -> serde_json::Value {
-    let max_inline_items = if summary_only {
-        serde_json::json!(100)
-    } else {
-        serde_json::Value::Null
+fn task_list_output_policy(view: &str, explicit_full: bool) -> serde_json::Value {
+    let max_inline_items = match view {
+        "compact" => serde_json::json!(25),
+        "summary" => serde_json::json!(100),
+        _ => serde_json::Value::Null,
     };
     serde_json::json!({
-        "mode": if summary_only { "summary" } else { "full" },
+        "mode": view,
         "explicit_full": explicit_full,
         "max_inline_items": max_inline_items,
     })
@@ -264,14 +278,20 @@ pub(crate) fn print_task_list(
     surface: &str,
     render: RenderMode,
     tasks: &[TaskRecord],
-    summary_only: bool,
+    view: &str,
     explicit_full: bool,
     fields: Option<&str>,
     as_json: bool,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) {
-    let output_policy = task_list_output_policy(summary_only, explicit_full);
-    let row_full = explicit_full && !summary_only;
+    let view = match view {
+        "compact" => "compact",
+        "full" => "full",
+        _ => "summary",
+    };
+    let output_policy = task_list_output_policy(view, explicit_full);
+    let summary_only = view != "full";
+    let row_full = explicit_full && view == "full";
     let task_rows = tasks
         .iter()
         .map(|task| task_list_row_value(task, row_full))
@@ -284,7 +304,7 @@ pub(crate) fn print_task_list(
                 "state_access": task_read_metadata_value(read_metadata),
                 "output_policy": output_policy,
                 "fields": fields,
-                "view": "summary",
+                "view": view,
                 "task_count": tasks.len(),
                 "tasks": task_rows,
             }),
@@ -296,7 +316,7 @@ pub(crate) fn print_task_list(
                 "state_access": task_read_metadata_value(read_metadata),
                 "output_policy": output_policy,
                 "fields": fields,
-                "view": "full",
+                "view": view,
                 "task_count": tasks.len(),
                 "tasks": task_rows,
             }),
@@ -311,7 +331,7 @@ pub(crate) fn print_task_list(
     }
 
     if matches!(render, RenderMode::Plain) {
-        println!("{}", task_record_list_toon_text(surface, tasks));
+        println!("{}", task_record_list_toon_text(surface, tasks, fields));
         return;
     }
 
@@ -366,7 +386,10 @@ pub(crate) fn print_task_ready(
     }
 
     if matches!(render, RenderMode::Plain) {
-        println!("{}", task_record_list_toon_text("vida task ready", tasks));
+        println!(
+            "{}",
+            task_record_list_toon_text("vida task ready", tasks, None)
+        );
         return;
     }
 
@@ -1576,7 +1599,7 @@ mod tests {
         let payload = build_pass_operator_surface_payload(
             "vida task list",
             serde_json::json!({
-                "output_policy": super::task_list_output_policy(true, false),
+                "output_policy": super::task_list_output_policy("summary", false),
                 "view": "summary",
                 "task_count": tasks.len(),
                 "tasks": [{
@@ -1609,7 +1632,7 @@ mod tests {
         let mut task = sample_task("task-1");
         task.title = "Compact output task".to_string();
 
-        let text = task_record_list_toon_text("vida task list", &[task]);
+        let text = task_record_list_toon_text("vida task list", &[task], None);
 
         assert!(text.starts_with("vida task list\n  task_count: 1"));
         assert!(text.contains("\n  tasks[1]{id,status,priority,title}:"));
@@ -1938,7 +1961,7 @@ mod tests {
         let payload = build_pass_operator_surface_payload(
             "vida task list",
             serde_json::json!({
-                "output_policy": super::task_list_output_policy(false, true),
+                "output_policy": super::task_list_output_policy("full", true),
                 "view": "full",
                 "task_count": tasks.len(),
                 "tasks": tasks,

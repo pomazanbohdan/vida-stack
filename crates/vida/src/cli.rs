@@ -241,10 +241,14 @@ pub(crate) struct AgentDispatchNextArgs {
     )]
     pub(crate) current_task_id: Option<String>,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory used for readiness and continuation projections"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 
     #[arg(
@@ -256,19 +260,35 @@ pub(crate) struct AgentDispatchNextArgs {
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct AgentSelectArgs {
-    #[arg(long = "runtime-role", default_value = "worker")]
+    #[arg(
+        long = "runtime-role",
+        default_value = "worker",
+        help = "Runtime role to select a carrier for, for example worker, coach, tester, or reviewer"
+    )]
     pub(crate) runtime_role: String,
 
-    #[arg(long = "task-class", default_value = "implementation")]
+    #[arg(
+        long = "task-class",
+        default_value = "implementation",
+        help = "Task class used for carrier/model eligibility, for example analysis, implementation, or verification"
+    )]
     pub(crate) task_class: String,
 
-    #[arg(long = "conversation-role", default_value = "orchestrator")]
+    #[arg(
+        long = "conversation-role",
+        default_value = "orchestrator",
+        help = "Host conversation role requesting the selection"
+    )]
     pub(crate) conversation_role: String,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory used for carrier selection"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "json")]
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 

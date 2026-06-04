@@ -314,7 +314,27 @@ impl ExceptionTakeoverMetadata {
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]\n\nOptions:\n  --receipt-id <id>              Receipt id that proves the lane mutation source\n  --reason <text>                Human-readable retire reason\n  --host-bridge-request <path>   Host bridge request artifact to complete\n  --host-agent-id <id>           Parent host agent id that executed the bridge request\n  --host-bridge-summary <text>   Completion summary from the parent host adapter\n  --reason-class <class>         Exception takeover reason class\n  --active-bounded-unit <unit>   Bounded unit authorized by the exception path\n  --owned-write-scope <path>     Receipt-bound write scope; may be repeated\n  --verification-step <text>     Verification step for exception takeover; may be repeated\n  --activate                     Activate the exception takeover immediately\n  --completed                    Reclaim completed lanes\n  --host-agents                  Include host-agent lane handles during reclaim\n  --json                         Emit machine-readable JSON output\n  -h, --help                     Print help"
+}
+
+fn lane_retire_help() -> &'static str {
+    "Usage: vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n\nPurpose:\n  Retire a stale or blocked lane when runtime recovery has identified the run as safe to remove from active continuation.\n\nOptions:\n  --receipt-id <id>   Receipt id that proves the lane mutation source\n  --reason <text>     Human-readable retire reason\n  --json              Emit machine-readable JSON output\n  -h, --help          Print help"
+}
+
+fn lane_help_text(args: &[String]) -> &'static str {
+    if args
+        .first()
+        .is_some_and(|arg| matches!(arg.as_str(), "retire"))
+    {
+        lane_retire_help()
+    } else {
+        lane_usage()
+    }
+}
+
+fn lane_help_requested(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help" | "help"))
 }
 
 fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
@@ -2627,6 +2647,10 @@ fn decode_lane_completion_packet_context(
 }
 
 pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
+    if lane_help_requested(&args.args) {
+        println!("{}", lane_help_text(&args.args));
+        return ExitCode::SUCCESS;
+    }
     if args.args.is_empty() || args.args.iter().all(|arg| arg.starts_with('-')) {
         return emit_blocked_lane_envelope(args.args.iter().any(|arg| arg == "--json"));
     }

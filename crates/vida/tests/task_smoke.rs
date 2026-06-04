@@ -1254,6 +1254,8 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
             "task",
             "list",
             "--all",
+            "--view",
+            "compact",
             "--fields",
             "id,status,title",
             "--json",
@@ -1263,7 +1265,9 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
     let field_list_json: Value = serde_json::from_str(&field_list_stdout)
         .expect("field-selected task list json should parse");
     assert_eq!(field_list_json["fields"], "id,status,title");
-    assert_eq!(field_list_json["view"], "summary");
+    assert_eq!(field_list_json["view"], "compact");
+    assert_eq!(field_list_json["output_policy"]["mode"], "compact");
+    assert_eq!(field_list_json["output_policy"]["max_inline_items"], 25);
     let field_task_a = task_row_by_id(&field_list_json, "vida-a");
     assert_eq!(field_task_a["id"], "vida-a");
     assert_eq!(field_task_a["status"], "open");
@@ -1274,6 +1278,22 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
     let toon_list_stdout = run_and_assert_success(&["task", "list", "--all"], &state_dir);
     assert!(toon_list_stdout.starts_with("vida task list\n  task_count: 4"));
     assert!(toon_list_stdout.contains("\n  tasks[4]{id,status,priority,title}:"));
+
+    let toon_fields_stdout = run_and_assert_success(
+        &[
+            "task",
+            "list",
+            "--all",
+            "--view",
+            "compact",
+            "--fields",
+            "id,status,title",
+        ],
+        &state_dir,
+    );
+    assert!(toon_fields_stdout.starts_with("vida task list\n  task_count: 4"));
+    assert!(toon_fields_stdout.contains("\n  tasks[4]{id,status,title}:"));
+    assert!(!toon_fields_stdout.contains("\n  tasks[4]{id,status,priority,title}:"));
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -1398,8 +1418,12 @@ fn cli_help_description_inventory_covers_agent_and_task_operator_options() {
                 "Maximum preview lanes to inspect before any manual `vida agent-init` launch",
                 "--scope <SCOPE>",
                 "--current-task-id <CURRENT_TASK_ID>",
+                "Optional current task id for parallel-safety checks",
+                "--state-dir <STATE_DIR>",
+                "Override the TaskFlow state directory used for readiness and continuation projections",
                 "--dev-team",
                 "--json",
+                "Emit machine-readable JSON output",
             ][..],
         ),
         (
@@ -1412,6 +1436,20 @@ fn cli_help_description_inventory_covers_agent_and_task_operator_options() {
                 "--summary <SUMMARY>",
                 "--receipt-id <RECEIPT_ID>",
                 "--json",
+                "Emit machine-readable JSON output",
+            ][..],
+        ),
+        (
+            &["lane", "retire", "--help"][..],
+            &[
+                "Usage: vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]",
+                "Purpose:",
+                "--receipt-id <id>",
+                "Receipt id that proves the lane mutation source",
+                "--reason <text>",
+                "Human-readable retire reason",
+                "--json",
+                "Emit machine-readable JSON output",
             ][..],
         ),
         (

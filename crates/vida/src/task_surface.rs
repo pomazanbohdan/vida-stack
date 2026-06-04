@@ -6125,13 +6125,20 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         command.parent_id.as_deref(),
                         command.limit,
                     );
-                    let summary_only = command.summary || !command.all || command.view != "full";
+                    let view = if command.view == "full" {
+                        "full"
+                    } else if command.view == "compact" {
+                        "compact"
+                    } else {
+                        "summary"
+                    };
+                    let view = if command.summary { "summary" } else { view };
                     print_task_list(
                         "vida task list",
                         command.render,
                         &tasks,
-                        summary_only,
-                        command.all || command.view == "full",
+                        view,
+                        view == "full",
                         command.fields.as_deref(),
                         command.json,
                         Some(&metadata),
@@ -6161,13 +6168,19 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         command.parent_id.as_deref(),
                         Some(command.limit),
                     );
-                    let full = command.view == "full";
+                    let view = if command.view == "full" {
+                        "full"
+                    } else if command.view == "compact" {
+                        "compact"
+                    } else {
+                        "summary"
+                    };
                     print_task_list(
                         "vida task search",
                         command.render,
                         &tasks,
-                        !full,
-                        full,
+                        view,
+                        view == "full",
                         command.fields.as_deref(),
                         command.json,
                         Some(&metadata),
