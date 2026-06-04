@@ -7439,37 +7439,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 };
                 match StateStore::open_existing(state_dir).await {
                     Ok(store) => {
-                        let existing = match store.show_task(&command.task_id).await {
-                            Ok(task) => task,
-                            Err(error) => {
-                                eprintln!("Failed to read task before note append: {error}");
-                                return ExitCode::from(1);
-                            }
-                        };
-                        let appended_notes = match existing.notes.as_deref() {
-                            Some(notes) if !notes.trim().is_empty() => {
-                                format!("{}{}{}", notes, command.separator, message)
-                            }
-                            _ => message,
-                        };
                         match store
-                            .update_task(state_store::UpdateTaskRequest {
-                                task_id: &command.task_id,
-                                title: None,
-                                status: None,
-                                priority: None,
-                                notes: Some(&appended_notes),
-                                description: None,
-                                parent_id: None,
-                                add_labels: &[],
-                                remove_labels: &[],
-                                set_labels: None,
-                                execution_mode: None,
-                                order_bucket: None,
-                                parallel_group: None,
-                                conflict_domain: None,
-                                planner_metadata: None,
-                            })
+                            .append_task_notes(&command.task_id, &command.separator, &message)
                             .await
                         {
                             Ok(task) => {

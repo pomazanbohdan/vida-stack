@@ -2068,6 +2068,66 @@ impl StateStore {
         Ok(task)
     }
 
+    pub async fn append_task_notes(
+        &self,
+        task_id: &str,
+        separator: &str,
+        message: &str,
+    ) -> Result<TaskRecord, StateStoreError> {
+        let trimmed_message = message.trim();
+        if trimmed_message.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!("task `{task_id}` note append message cannot be empty"),
+            });
+        }
+
+        for _ in 0..16 {
+            let current = self.show_task(task_id).await?;
+            let expected_updated_at = current.updated_at.clone();
+            let appended_notes = match current.notes.as_deref() {
+                Some(notes) if !notes.trim().is_empty() => {
+                    format!("{}{}{}", notes, separator, trimmed_message)
+                }
+                _ => trimmed_message.to_string(),
+            };
+            let mut updated_at = unix_timestamp_nanos().to_string();
+            if updated_at <= expected_updated_at {
+                updated_at = expected_updated_at
+                    .parse::<u128>()
+                    .ok()
+                    .and_then(|value| value.checked_add(1))
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| format!("{expected_updated_at}-append"));
+            }
+
+            let mut query = self
+                .db
+                .query(
+                    "UPDATE task
+                     SET notes = $notes, updated_at = $updated_at
+                     WHERE task_id = $task_id AND updated_at = $expected_updated_at
+                     RETURN AFTER;",
+                )
+                .bind(("notes", appended_notes.clone()))
+                .bind(("updated_at", updated_at))
+                .bind(("task_id", task_id.to_string()))
+                .bind(("expected_updated_at", expected_updated_at))
+                .await?;
+            let rows: Vec<TaskStorageRowStored> = query.take(0)?;
+            if let Some(row) = rows.into_iter().next() {
+                let task = TaskRecord::from(Self::normalize_stored_task_row(row));
+                Self::touch_task_snapshot_state_marker(self.root());
+                return Ok(task);
+            }
+        }
+
+        Err(StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "task `{task_id}` note append could not commit after concurrent update retries"
+            ),
+        })
+    }
+
     pub async fn update_task(
         &self,
         request: UpdateTaskRequest<'_>,
