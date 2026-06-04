@@ -7,7 +7,7 @@ _vida/
 **/.vida/data/**
 .hermes/
 .lean-ctx/
-vida/config/docflow-proof.current.jsonl
+vida/config/*.current.jsonl
 target
 **/target/
 _temp
