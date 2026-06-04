@@ -54,19 +54,28 @@ fn task_record_value(task: &TaskRecord) -> serde_json::Value {
 }
 
 fn task_record_list_toon_text(surface: &str, tasks: &[TaskRecord]) -> String {
-    let mut lines = vec![format!("task_count: {}", tasks.len())];
-    if tasks.is_empty() {
-        lines.push("tasks: none".to_string());
-    } else {
-        lines.push("tasks:".to_string());
-        lines.extend(tasks.iter().map(|task| {
-            format!(
-                "- {} | {} | p{} | {}",
-                task.id, task.status, task.priority, task.title
-            )
-        }));
+    #[derive(serde::Serialize)]
+    struct TaskRow<'a> {
+        id: &'a str,
+        status: &'a str,
+        priority: u32,
+        title: &'a str,
     }
-    taskflow_format_toon::render_section(surface, &lines.join("\n  "))
+
+    let rows = tasks
+        .iter()
+        .map(|task| TaskRow {
+            id: &task.id,
+            status: &task.status,
+            priority: task.priority,
+            title: &task.title,
+        })
+        .collect::<Vec<_>>();
+    let value = serde_json::json!({
+        "task_count": tasks.len(),
+        "tasks": rows,
+    });
+    taskflow_format_toon::render_value_section(surface, &value)
 }
 
 fn optional_work_item_kind_value(issue_type: Option<&str>) -> serde_json::Value {
@@ -468,10 +477,11 @@ pub(crate) fn task_progress_payload(summary: &TaskProgressSummary) -> serde_json
 }
 
 pub(crate) fn task_progress_toon_text(surface: &str, summary: &TaskProgressSummary) -> String {
+    let toon_scalar = |value: &str| crate::surface_render::sanitize_terminal_value(value);
     let mut lines = vec![
-        format!("task: {}", summary.root_task.id),
-        format!("kind: {}", summary.root_task.issue_type),
-        format!("basis: {}", summary.progress_basis),
+        format!("task: {}", toon_scalar(&summary.root_task.id)),
+        format!("kind: {}", toon_scalar(&summary.root_task.issue_type)),
+        format!("basis: {}", toon_scalar(&summary.progress_basis)),
         format!(
             "counts: closed={} open={} in_progress={} total={}",
             summary.closed_count,
@@ -481,12 +491,15 @@ pub(crate) fn task_progress_toon_text(surface: &str, summary: &TaskProgressSumma
         ),
         format!("percent_closed: {:.2}", summary.percent_closed),
         format!("ready_for_close: {}", summary.ready_for_close),
-        format!("state: {}", summary.closure_candidate_state),
+        format!("state: {}", toon_scalar(&summary.closure_candidate_state)),
     ];
     if let Some(command) = summary.next_required_command.as_deref() {
-        lines.push(format!("next: {command}"));
+        lines.push(format!("next: {}", toon_scalar(command)));
     } else {
-        lines.push(format!("next: {}", summary.recommended_next_action));
+        lines.push(format!(
+            "next: {}",
+            toon_scalar(&summary.recommended_next_action)
+        ));
     }
     taskflow_format_toon::render_section(surface, &lines.join("\n  "))
 }
@@ -937,6 +950,7 @@ pub(crate) fn print_task_dependency_tree(
 pub(crate) fn print_task_direct_children(
     render: RenderMode,
     tree: &TaskDependencyTreeNode,
+    include_full: bool,
     as_json: bool,
 ) {
     let child_cycle_count = tree.children.iter().filter(|child| child.cycle).count();
@@ -953,20 +967,8 @@ pub(crate) fn print_task_direct_children(
                 "repeated_count": child_repeated_count,
                 "bounded": true,
             },
-            "children": tree.children.iter().map(|child| serde_json::json!({
-                "child_id": child.child_id,
-                "child_display_id": child.child_display_id,
-                "child_title": child.child_title,
-                "child_status": child.child_status,
-                "child_priority": child.child_priority,
-                "child_issue_type": child.child_issue_type,
-                "child_work_item_kind": optional_work_item_kind_value(child.child_issue_type.as_deref()),
-                "child_labels": child.child_labels,
-                "node": child.node,
-                "cycle": child.cycle,
-                "missing": child.missing,
-                "repeated": child.repeated,
-            })).collect::<Vec<_>>(),
+            "view": if include_full { "full" } else { "brief" },
+            "children": tree.children.iter().map(|child| task_direct_child_row_value(child, include_full)).collect::<Vec<_>>(),
         }),
     );
     if crate::surface_render::print_surface_json(
@@ -974,6 +976,11 @@ pub(crate) fn print_task_direct_children(
         as_json,
         "task direct children should render as json",
     ) {
+        return;
+    }
+
+    if matches!(render, RenderMode::Plain) {
+        println!("{}", task_children_toon_text(tree));
         return;
     }
 
@@ -1013,6 +1020,87 @@ pub(crate) fn print_task_direct_children(
             child.child_id, state, issue_type, priority, title
         );
     }
+}
+
+fn task_direct_child_row_value(
+    child: &TaskDependencyTreeChild,
+    include_full: bool,
+) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "child_id": child.child_id,
+        "child_title": child.child_title,
+        "child_status": child.child_status,
+        "child_priority": child.child_priority,
+        "child_issue_type": child.child_issue_type,
+        "cycle": child.cycle,
+        "missing": child.missing,
+        "repeated": child.repeated,
+    });
+    if include_full {
+        value["child_display_id"] = serde_json::json!(child.child_display_id);
+        value["child_work_item_kind"] =
+            optional_work_item_kind_value(child.child_issue_type.as_deref());
+        value["child_labels"] = serde_json::json!(child.child_labels);
+        value["node"] = serde_json::json!(child.node);
+    }
+    value
+}
+
+fn task_children_toon_text(tree: &TaskDependencyTreeNode) -> String {
+    #[derive(serde::Serialize)]
+    struct RootRow<'a> {
+        id: &'a str,
+        status: &'a str,
+        title: &'a str,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ChildRow<'a> {
+        id: &'a str,
+        state: &'a str,
+        issue_type: &'a str,
+        priority: serde_json::Value,
+        title: &'a str,
+    }
+
+    let children = tree
+        .children
+        .iter()
+        .map(|child| {
+            let issue_type = child.child_issue_type.as_deref().unwrap_or("unknown");
+            let state = if child.cycle {
+                "cycle"
+            } else if child.missing {
+                "missing"
+            } else if child.repeated {
+                "repeated"
+            } else {
+                child.child_status.as_str()
+            };
+            let priority = child
+                .child_priority
+                .map(|value| serde_json::json!(value))
+                .unwrap_or_else(|| serde_json::json!("unknown"));
+            let title = child.child_title.as_deref().unwrap_or("");
+            ChildRow {
+                id: &child.child_id,
+                state,
+                issue_type,
+                priority,
+                title,
+            }
+        })
+        .collect::<Vec<_>>();
+    let value = serde_json::json!({
+        "root": RootRow {
+            id: &tree.task.id,
+            status: &tree.task.status,
+            title: &tree.task.title,
+        },
+        "child_count": tree.children.len(),
+        "children": children,
+    });
+    taskflow_format_toon::render_value_section("vida task children", &value)
 }
 
 fn print_task_dependency_tree_edge(edge: &TaskDependencyTreeEdge, depth: usize) {
@@ -1161,6 +1249,22 @@ pub(crate) fn print_task_dependency_bulk_add_result(
     result: &TaskDependencyBulkAddResult,
     as_json: bool,
 ) {
+    print_task_dependency_bulk_add_result_for_surface(
+        render,
+        result,
+        as_json,
+        "vida task dep add-bulk",
+        "task dependency bulk add result should render as json",
+    );
+}
+
+pub(crate) fn print_task_dependency_bulk_add_result_for_surface(
+    render: RenderMode,
+    result: &TaskDependencyBulkAddResult,
+    as_json: bool,
+    surface: &str,
+    json_error_context: &str,
+) {
     let blocker_codes = if result.failed_count == 0 {
         Vec::new()
     } else {
@@ -1172,14 +1276,34 @@ pub(crate) fn print_task_dependency_bulk_add_result(
     };
     let next_actions = if result.failed_count == 0 {
         Vec::new()
+    } else if surface == "vida task dep ensure" {
+        let retry_command = result
+            .failed
+            .iter()
+            .chain(result.unapplied.iter())
+            .next()
+            .map(|edge| {
+                format!(
+                    "{} {} {} {} --json",
+                    surface,
+                    crate::shell_quote(edge.issue_id.trim()),
+                    crate::shell_quote(edge.depends_on_id.trim()),
+                    crate::shell_quote(edge.edge_type.trim())
+                )
+            })
+            .unwrap_or_else(|| format!("{surface} <task-id> <depends-on-id> <edge-type> --json"));
+        vec![format!(
+            "Inspect the failed dependency edge, repair missing tasks or invalid graph edges, then rerun `{retry_command}`."
+        )]
     } else {
         vec![
-            "Inspect failed and unapplied edges, repair missing tasks or invalid graph edges, then rerun `vida task dep add-bulk --json` with only the missing edges."
-                .to_string(),
+            format!(
+                "Inspect failed and unapplied edges, repair missing tasks or invalid graph edges, then rerun `{surface} --json` with only the missing edges."
+            ),
         ]
     };
     let payload = build_operator_surface_payload(
-        "vida task dep add-bulk",
+        surface,
         blocker_codes,
         next_actions,
         serde_json::json!({
@@ -1192,15 +1316,11 @@ pub(crate) fn print_task_dependency_bulk_add_result(
             "unapplied_count": result.unapplied_count,
         }),
     );
-    if crate::surface_render::print_surface_json(
-        &payload,
-        as_json,
-        "task dependency bulk add result should render as json",
-    ) {
+    if crate::surface_render::print_surface_json(&payload, as_json, json_error_context) {
         return;
     }
 
-    print_surface_header(render, "vida task dep add-bulk");
+    print_surface_header(render, surface);
     print_surface_line(
         render,
         "dry_run",
@@ -1331,13 +1451,13 @@ pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPa
 mod tests {
     use super::{
         build_pass_operator_surface_payload, build_task_graph_issues_payload,
-        task_mutation_payload, task_progress_payload, task_progress_toon_text,
-        task_record_list_toon_text,
+        task_children_toon_text, task_mutation_payload, task_progress_payload,
+        task_progress_toon_text, task_record_list_toon_text,
     };
     use crate::operator_contracts::shared_operator_output_contract_parity_error;
     use crate::state_store::{
-        TaskCriticalPathNode, TaskExecutionSemantics, TaskGraphIssue, TaskProgressSummary,
-        TaskRecord,
+        TaskCriticalPathNode, TaskDependencyTreeChild, TaskDependencyTreeNode,
+        TaskExecutionSemantics, TaskGraphIssue, TaskProgressSummary, TaskRecord,
     };
     use std::collections::BTreeMap;
 
@@ -1487,10 +1607,74 @@ mod tests {
         let text = task_record_list_toon_text("vida task list", &[task]);
 
         assert!(text.starts_with("vida task list\n  task_count: 1"));
-        assert!(text.contains("\n  tasks:\n  - task-1 | open | p2 | Compact output task"));
+        assert!(text.contains("\n  tasks[1]{id,status,priority,title}:"));
+        assert!(text.contains("\n    \"task-1\",open,2,Compact output task"));
         assert!(!text.contains('\t'));
+        assert!(!text.contains(" | "));
         assert!(!text.contains("description"));
         assert!(!text.contains("planner_metadata"));
+    }
+
+    #[test]
+    fn task_children_toon_text_uses_tabular_headers() {
+        let tree = TaskDependencyTreeNode {
+            task: sample_task("root-task"),
+            dependencies: Vec::new(),
+            children: vec![TaskDependencyTreeChild {
+                child_id: "child-1".to_string(),
+                child_display_id: Some("vida-1".to_string()),
+                child_title: Some("Child task".to_string()),
+                child_status: "open".to_string(),
+                child_priority: Some(2),
+                child_issue_type: Some("task".to_string()),
+                child_labels: vec!["runtime".to_string()],
+                node: None,
+                cycle: false,
+                missing: false,
+                repeated: false,
+            }],
+        };
+
+        let text = task_children_toon_text(&tree);
+
+        assert!(text.starts_with("vida task children\n"));
+        assert!(text.contains("\n  child_count: 1"));
+        assert!(text.contains("\n  children[1]{id,state,issue_type,priority,title}:"));
+        assert!(text.contains("\n    \"child-1\",open,task,2,Child task"));
+        assert!(text.contains("\n  root:"));
+        assert!(!text.contains('\t'));
+        assert!(!text.contains(" | "));
+    }
+
+    #[test]
+    fn task_direct_child_row_value_is_brief_by_default() {
+        let child = TaskDependencyTreeChild {
+            child_id: "child-1".to_string(),
+            child_display_id: Some("vida-1".to_string()),
+            child_title: Some("Child task".to_string()),
+            child_status: "open".to_string(),
+            child_priority: Some(2),
+            child_issue_type: Some("task".to_string()),
+            child_labels: vec!["runtime".to_string()],
+            node: None,
+            cycle: false,
+            missing: false,
+            repeated: false,
+        };
+
+        let brief = super::task_direct_child_row_value(&child, false);
+        let brief_object = brief.as_object().expect("brief child row");
+        assert!(brief_object.contains_key("child_id"));
+        assert!(brief_object.contains_key("child_status"));
+        assert!(!brief_object.contains_key("node"));
+        assert!(!brief_object.contains_key("child_labels"));
+        assert!(!brief_object.contains_key("child_work_item_kind"));
+
+        let full = super::task_direct_child_row_value(&child, true);
+        let full_object = full.as_object().expect("full child row");
+        assert!(full_object.contains_key("node"));
+        assert!(full_object.contains_key("child_labels"));
+        assert!(full_object.contains_key("child_work_item_kind"));
     }
 
     #[test]
@@ -1587,6 +1771,51 @@ mod tests {
         assert!(text.contains("\n  counts: closed=2 open=0 in_progress=0 total=2"));
         assert!(text.contains("\n  next: vida task close epic-ready"));
         assert!(!text.contains("planner_metadata"));
+    }
+
+    #[test]
+    fn task_progress_toon_text_escapes_control_characters_in_scalars() {
+        let mut root =
+            sample_task("TASK-1\n  ready_for_close: true\n  next: forged-command\x1b[31m");
+        root.issue_type = "epic\n  next: forged-from-kind\x1b[35m".to_string();
+        let mut status_counts = BTreeMap::new();
+        status_counts.insert("open".to_string(), 1);
+        let summary = TaskProgressSummary {
+            root_task: root,
+            progress_basis: "descendants_excluding_root".to_string(),
+            direct_child_count: 0,
+            descendant_count: 0,
+            open_count: 1,
+            in_progress_count: 0,
+            closed_count: 0,
+            epic_count: 0,
+            status_counts,
+            percent_closed: 0.0,
+            closure_candidate: false,
+            closure_candidate_state: "open\n  ready_for_close: true".to_string(),
+            closure_candidate_reason: None,
+            ready_for_close: false,
+            missing_proof: true,
+            proof_blocked_by_runtime: false,
+            blocked_by_runtime: false,
+            next_required_command: Some(
+                "vida task close injected\n  next: forged\x1b[0m".to_string(),
+            ),
+            recommended_next_action: "Inspect task progress".to_string(),
+            canonical_commands: vec![],
+        };
+
+        let text = task_progress_toon_text("vida task progress", &summary);
+
+        assert!(!text.contains('\x1b'));
+        assert!(!text.contains("\n  next: forged-command"));
+        assert!(!text.contains("\n  next: forged-from-kind"));
+        assert!(!text.contains("\n  next: forged"));
+        assert_eq!(text.matches("\n  ready_for_close:").count(), 1);
+        assert!(text
+            .contains(r"task: TASK-1\n  ready_for_close: true\n  next: forged-command\u{1b}[31m"));
+        assert!(text.contains(r"kind: epic\n  next: forged-from-kind\u{1b}[35m"));
+        assert!(text.contains(r"next: vida task close injected\n  next: forged\u{1b}[0m"));
     }
 
     #[test]

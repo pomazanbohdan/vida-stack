@@ -1,9 +1,9 @@
 use super::*;
 use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_defect_batch_rehome_result,
-    print_task_dependency_bulk_add_result, print_task_direct_children,
-    print_task_update_graph_blocked, task_read_metadata_value, task_ready_payload,
-    task_show_payload,
+    print_task_dependency_bulk_add_result, print_task_dependency_bulk_add_result_for_surface,
+    print_task_direct_children, print_task_update_graph_blocked, task_read_metadata_value,
+    task_ready_payload, task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
 
@@ -8140,7 +8140,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .unwrap_or_else(state_store::default_state_dir);
             match task_dependency_tree_read_only(state_dir, &command.task_id).await {
                 Ok(tree) => {
-                    print_task_direct_children(command.render, &tree, command.json);
+                    print_task_direct_children(command.render, &tree, command.full, command.json);
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -8434,10 +8434,12 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             } else {
                                 ExitCode::from(1)
                             };
-                            print_task_dependency_bulk_add_result(
+                            print_task_dependency_bulk_add_result_for_surface(
                                 ensure.render,
                                 &result,
                                 ensure.json,
+                                "vida task dep ensure",
+                                "task dependency ensure result should render as json",
                             );
                             exit_code
                         }

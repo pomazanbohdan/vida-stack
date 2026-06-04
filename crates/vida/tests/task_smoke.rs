@@ -1316,6 +1316,55 @@ fn task_close_feedback_treats_successful_evidence_words_as_context() {
 }
 
 #[test]
+fn task_close_feedback_ignores_historical_blocker_words_in_success_reason() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    create_epic_parent(
+        &state_dir,
+        "feedback-blocker-parent",
+        "Feedback blocker parent",
+        "open",
+    );
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-blocker-task",
+            "Feedback blocker task",
+            "--parent-id",
+            "feedback-blocker-parent",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+
+    let closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "feedback-blocker-task",
+            "--reason",
+            "Closed after validating prior blocker edges, blocked prerequisite states, and recovery wording; structured close transition passed.",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(closed["status"], "pass");
+    assert_eq!(closed["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        closed["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        closed["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -4195,6 +4244,85 @@ fn task_dependency_bulk_add_creates_50_edges_and_reports_existing_without_partia
         run_and_assert_success(&["task", "deps", "bulk-fail-source", "--json"], &state_dir);
     assert!(!fail_deps.contains("\"depends_on_id\": \"bulk-blocker-0\""));
     assert!(!fail_deps.contains("\"depends_on_id\":\"bulk-blocker-0\""));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_dependency_ensure_reports_ensure_surface_in_json_results() {
+    let state_dir = unique_state_dir();
+    let jsonl_path = format!("{state_dir}/ensure-issues.jsonl");
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    sample_jsonl(&jsonl_path);
+    run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+
+    let ensure_output = vida()
+        .args([
+            "task", "dep", "ensure", "vida-c", "vida-a", "blocks", "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("ensure dependency should run");
+    assert!(
+        ensure_output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&ensure_output.stdout),
+        String::from_utf8_lossy(&ensure_output.stderr)
+    );
+    let ensure_json: serde_json::Value =
+        serde_json::from_slice(&ensure_output.stdout).expect("ensure dependency json should parse");
+    assert_release1_shared_envelope_fields(&ensure_json, "ensure dependency pass");
+    assert_eq!(ensure_json["surface"], "vida task dep ensure");
+    assert_eq!(
+        ensure_json["artifact_refs"]["surface"],
+        "vida task dep ensure"
+    );
+    assert_eq!(ensure_json["status"], "pass");
+    assert_eq!(ensure_json["requested_count"], 1);
+    assert_eq!(ensure_json["created_count"], 1);
+    assert_eq!(ensure_json["existing_count"], 0);
+
+    let duplicate_output = vida()
+        .args([
+            "task", "dep", "ensure", "vida-c", "vida-a", "blocks", "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("duplicate ensure dependency should run");
+    assert!(duplicate_output.status.success());
+    let duplicate_json: serde_json::Value = serde_json::from_slice(&duplicate_output.stdout)
+        .expect("duplicate ensure dependency json should parse");
+    assert_eq!(duplicate_json["surface"], "vida task dep ensure");
+    assert_eq!(duplicate_json["created_count"], 0);
+    assert_eq!(duplicate_json["existing_count"], 1);
+
+    let failed_output = vida()
+        .args([
+            "task",
+            "dep",
+            "ensure",
+            "vida-c",
+            "missing-task",
+            "blocks",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("failing ensure dependency should run");
+    assert!(!failed_output.status.success());
+    let failed_json: serde_json::Value = serde_json::from_slice(&failed_output.stdout)
+        .expect("failed ensure dependency json should parse");
+    assert_release1_shared_envelope_fields(&failed_json, "ensure dependency blocked");
+    assert_eq!(failed_json["surface"], "vida task dep ensure");
+    assert_eq!(failed_json["status"], "blocked");
+    assert!(failed_json["next_actions"]
+        .as_array()
+        .expect("next actions should be an array")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .expect("next action should be a string")
+            .contains("vida task dep ensure vida-c missing-task blocks --json")));
 
     let _ = fs::remove_dir_all(&state_dir);
 }

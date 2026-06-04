@@ -21,6 +21,8 @@ const TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
 const TASKFLOW_NEXT_PROJECTION_NAME: &str = "taskflow-next-latest";
 const TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME: &str = "taskflow-graph-summary-latest";
+const TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION: &str =
+    "taskflow-graph-summary-projection-v2";
 
 fn safe_taskflow_projection_component(value: &str) -> String {
     let mut safe = value
@@ -493,6 +495,18 @@ fn compact_cached_taskflow_graph_summary_projection(cached: &str) -> Option<Stri
     Some(render_taskflow_graph_summary_json(&payload))
 }
 
+fn cached_taskflow_graph_summary_projection_admissible(cached: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(cached)
+        .ok()
+        .and_then(|payload| {
+            payload
+                .get("projection_contract_version")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .is_some_and(|version| version == TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION)
+}
+
 fn normalize_scheduler_path(path: &str) -> Option<String> {
     let mut value = path.trim().replace('\\', "/");
     while let Some(stripped) = value.strip_prefix("./") {
@@ -926,6 +940,30 @@ fn graph_summary_runtime_gate_blocker_codes(decision: &TaskflowNextDecision) -> 
     };
 
     blocker_code.into_iter().collect::<Vec<_>>()
+}
+
+fn apply_closed_task_active_run_projection_mismatch_to_graph_summary(
+    blocker_codes: &mut Vec<String>,
+    next_actions: &mut Vec<String>,
+    ready_count: usize,
+) {
+    if ready_count > 0 {
+        if let Some(no_ready_tasks) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::NoReadyTasks,
+        ) {
+            blocker_codes.retain(|code| code != &no_ready_tasks);
+        }
+    }
+    if let Some(code) = crate::release1_contracts::blocker_code_value(
+        crate::release1_contracts::BlockerCode::ClosedTaskActiveRunProjectionMismatch,
+    ) {
+        blocker_codes.push(code);
+    }
+    next_actions.clear();
+    next_actions.push(
+        "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work."
+            .to_string(),
+    );
 }
 
 fn normalize_scheduler_max_parallel_agents(activation_bundle: &serde_json::Value) -> u64 {
@@ -4653,7 +4691,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
             &proxy_state_root,
             TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
-        ) {
+        )
+        .filter(|cached| cached_taskflow_graph_summary_projection_admissible(cached))
+        {
             let rendered =
                 compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
             println!("{rendered}");
@@ -4663,7 +4703,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             &proxy_state_root,
             TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
             TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
-        ) {
+        )
+        .filter(|cached| cached_taskflow_graph_summary_projection_admissible(cached))
+        {
             let rendered =
                 compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
             println!("{rendered}");
@@ -4675,6 +4717,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
                 TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
                 TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
             )
+            .filter(|cached| cached_taskflow_graph_summary_projection_admissible(cached))
         {
             let rendered =
                 compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
@@ -4757,6 +4800,14 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let latest_terminal_task_active_run_graph_status =
+        match store.latest_terminal_task_active_run_graph_status().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest terminal-task run graph status: {error}");
+                return ExitCode::from(1);
+            }
+        };
     let global_recovery = match store
         .latest_run_graph_recovery_summary_for_current_session()
         .await
@@ -4888,6 +4939,8 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             },
             None => (false, false),
         };
+    let closed_task_active_run_projection_mismatch =
+        latest_run_graph_task_closed || latest_terminal_task_active_run_graph_status.is_some();
     let latest_run_graph_legacy_ownerless = match latest_run_graph.as_ref() {
         Some(status) => match store.run_graph_legacy_ownerless(&status.run_id).await {
             Ok(ownerless) => ownerless,
@@ -5025,6 +5078,13 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         blocked_tasks.first().map(|record| record.task.id.as_str()),
         critical_path.length,
     );
+    if closed_task_active_run_projection_mismatch {
+        apply_closed_task_active_run_projection_mismatch_to_graph_summary(
+            &mut blocker_codes,
+            &mut next_actions,
+            ready_tasks.len(),
+        );
+    }
     if ready_tasks.is_empty() {
         if let Some(code) = crate::release1_contracts::blocker_code_value(
             crate::release1_contracts::BlockerCode::NoReadyTasks,
@@ -5067,6 +5127,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         );
     let payload = serde_json::json!({
         "surface": "vida taskflow graph-summary",
+        "projection_contract_version": TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION,
         "status": status,
         "trace_id": serde_json::Value::Null,
         "workflow_class": serde_json::Value::Null,
@@ -11892,6 +11953,42 @@ agent_system:
 
         assert_eq!(recommended_command.as_deref(), Some("vida status --json"));
         assert_eq!(recommended_surface.as_deref(), Some("vida status"));
+    }
+
+    #[test]
+    fn graph_summary_closed_task_active_run_projection_replaces_false_no_ready_blocker() {
+        let mut blocker_codes = vec!["no_ready_tasks".to_string()];
+        let mut next_actions = vec!["inspect stale continuation gate".to_string()];
+
+        super::apply_closed_task_active_run_projection_mismatch_to_graph_summary(
+            &mut blocker_codes,
+            &mut next_actions,
+            26,
+        );
+
+        assert!(!blocker_codes.iter().any(|code| code == "no_ready_tasks"));
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "closed_task_active_run_projection_mismatch"));
+        assert!(next_actions.iter().any(|action| {
+            action.contains("vida task reconcile-closed-runs --limit 25 --json")
+                && action.contains("closed tasks must not remain projected as active runtime work")
+        }));
+        assert_eq!(next_actions.len(), 1);
+    }
+
+    #[test]
+    fn graph_summary_cache_requires_current_projection_contract_version() {
+        assert!(!super::cached_taskflow_graph_summary_projection_admissible(
+            r#"{"surface":"vida taskflow graph-summary"}"#
+        ));
+        assert!(super::cached_taskflow_graph_summary_projection_admissible(
+            &serde_json::json!({
+                "surface": "vida taskflow graph-summary",
+                "projection_contract_version": super::TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION
+            })
+            .to_string()
+        ));
     }
 
     #[test]

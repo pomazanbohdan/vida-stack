@@ -261,6 +261,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                let latest_terminal_task_active_run_graph_status = match store
+                    .latest_terminal_task_active_run_graph_status()
+                    .await
+                {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("Failed to read latest terminal-task run graph status: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
                 let latest_run_graph_run_id = latest_run_graph_status
                     .as_ref()
                     .map(|status| status.run_id.as_str());
@@ -446,6 +456,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                         None => (false, false),
                     };
+                let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
+                    || latest_terminal_task_active_run_graph_status.is_some();
                 let in_progress_tasks = all_tasks
                     .iter()
                     .filter(|task| task.status == "in_progress")
@@ -704,6 +716,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             latest_run_graph_dispatch_receipt_signal_ambiguous,
                             latest_run_graph_dispatch_receipt_summary_inconsistent,
                             latest_run_graph_dispatch_receipt_checkpoint_leakage,
+                            closed_task_active_run_projection_mismatch:
+                                closed_task_active_run_projection_mismatch,
                             continuation_binding_ambiguous,
                             incomplete_release_admission_operator_evidence,
                             activation_truth: activation_truth.as_ref(),

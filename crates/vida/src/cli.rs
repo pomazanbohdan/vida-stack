@@ -1891,6 +1891,12 @@ pub(crate) struct TaskDepsArgs {
     #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
     pub(crate) render: RenderMode,
 
+    #[arg(
+        long = "full",
+        help = "Include nested dependency nodes in children JSON output"
+    )]
+    pub(crate) full: bool,
+
     #[arg(long = "json")]
     pub(crate) json: bool,
 }
