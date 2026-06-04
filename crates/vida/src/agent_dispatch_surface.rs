@@ -293,11 +293,35 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             return blockers;
         }
     };
+    append_host_bridge_dispatch_receipt_blockers(
+        &mut blockers,
+        &store,
+        state_root,
+        request,
+        run_id,
+        canonical_packet_path.as_deref(),
+    )
+    .await;
+    blockers
+}
+
+async fn append_host_bridge_dispatch_receipt_blockers(
+    blockers: &mut Vec<String>,
+    store: &StateStore,
+    state_root: &Path,
+    request: &serde_json::Value,
+    run_id: &str,
+    canonical_packet_path: Option<&Path>,
+) {
     let receipt = match store.run_graph_dispatch_receipt(run_id).await {
         Ok(Some(receipt)) => receipt,
-        _ => {
+        Err(_) => {
             blockers.push("host_bridge_dispatch_receipt_missing".to_string());
-            return blockers;
+            return;
+        }
+        Ok(None) => {
+            blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+            return;
         }
     };
     if !matches!(
@@ -320,7 +344,6 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     {
         blockers.push("host_bridge_dispatch_receipt_mismatch".to_string());
     }
-    blockers
 }
 
 fn host_bridge_operator_fields(
@@ -1846,14 +1869,7 @@ fn build_agent_dispatch_next_preview_dev_team(
     let mut next_actions = Vec::new();
     let mut selected_lanes = Vec::new();
     let mut blocked_candidates = Vec::new();
-    let mut selected_ready_candidates = match projection.current_task_id.as_deref() {
-        Some(current_task_id) => projection
-            .ready
-            .iter()
-            .filter(|candidate| candidate.task.id == current_task_id)
-            .collect::<Vec<_>>(),
-        None => projection.ready.iter().collect::<Vec<_>>(),
-    };
+    let mut selected_ready_candidates = projection.ready.iter().collect::<Vec<_>>();
     if let Some(current_task_id) = projection.current_task_id.as_deref() {
         selected_ready_candidates.sort_by_key(|candidate| {
             if candidate.task.id == current_task_id {
@@ -1959,15 +1975,6 @@ fn build_agent_dispatch_next_preview_dev_team(
         };
     }
 
-    let current_ready_candidate = (selected_ready_candidates.len() == 1)
-        .then(|| projection.current_task_id.as_deref())
-        .flatten()
-        .and_then(|task_id| {
-            selected_ready_candidates
-                .iter()
-                .copied()
-                .find(|candidate| candidate.task.id == task_id && candidate.ready_now)
-        });
     let mut ready_index = 0;
     for (step_index, step) in steps_to_preview.into_iter().enumerate() {
         if !step.requires_task {
@@ -1985,20 +1992,15 @@ fn build_agent_dispatch_next_preview_dev_team(
                 step.role_label.replace('_', "-")
             ));
         }
-        let candidate = if let Some(candidate) = current_ready_candidate {
-            candidate
-        } else {
-            let Some(candidate) = selected_ready_candidates.get(ready_index).copied() else {
-                blocker_codes.push(format!(
-                    "dev_team_step_missing_ready_task:position={}:{}",
-                    step_index + 1,
-                    step.role_label
-                ));
-                break;
-            };
-            ready_index += 1;
-            candidate
+        let Some(candidate) = selected_ready_candidates.get(ready_index).copied() else {
+            blocker_codes.push(format!(
+                "dev_team_step_missing_ready_task:position={}:{}",
+                step_index + 1,
+                step.role_label
+            ));
+            break;
         };
+        ready_index += 1;
         if !candidate.ready_now {
             blocked_candidates.push(blocked_candidate(
                 candidate,
@@ -3184,7 +3186,6 @@ mod tests {
 
     #[test]
     fn host_bridge_provenance_accepts_pending_bridge_receipt() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path();
         let request_path = state_root.join("host_bridge/request.json");
@@ -3198,7 +3199,27 @@ mod tests {
         std::fs::write(&request_path, b"{}").expect("request file should be written");
         std::fs::write(&packet_path, b"{}").expect("packet file should be written");
 
-        runtime.block_on(async {
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-pending",
+            "run_id": "run-pending",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let blockers = runtime.block_on(async {
             let store = crate::StateStore::open(state_root.to_path_buf())
                 .await
                 .expect("state store should open");
@@ -3235,32 +3256,21 @@ mod tests {
                 })
                 .await
                 .expect("pending host bridge receipt should record");
+            let canonical_packet_path =
+                std::fs::canonicalize(&packet_path).expect("packet path should canonicalize");
+            let mut blockers = Vec::new();
+            super::append_host_bridge_dispatch_receipt_blockers(
+                &mut blockers,
+                &store,
+                state_root,
+                &request,
+                "run-pending",
+                Some(canonical_packet_path.as_path()),
+            )
+            .await;
+            store.close().await;
+            blockers
         });
-
-        let request = serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": "req-pending",
-            "run_id": "run-pending",
-            "dispatch_target": "implementer",
-            "packet_path": packet_path.display().to_string(),
-            "backend_id": "internal_subagents",
-            "carrier_id": "junior",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "adapter_kind": "codex_host_tools",
-            "adapter_capability_id": "codex.multi_agent_v1",
-            "invocation_mode": "parent_host_tool_api",
-            "request_path": request_path.display().to_string(),
-            "result_path": result_path.display().to_string(),
-            "receipt_path": receipt_path.display().to_string()
-        });
-
-        let blockers = runtime.block_on(host_bridge_request_provenance_blockers_for_state_root(
-            state_root,
-            &request_path,
-            &request,
-        ));
 
         assert!(!blockers.contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
         assert_eq!(blockers, Vec::<String>::new());
