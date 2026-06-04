@@ -369,6 +369,19 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         super::blocking_lane_selection(&request_text, &error);
                                     let blocked_run_id =
                                         super::runtime_consumption_run_id(&blocking_role_selection);
+                                    let blocked_status = crate::runtime_dispatch_status::blocking_runtime_consumption_run_graph_status(
+                                        &blocking_role_selection,
+                                        &blocked_run_id,
+                                    );
+                                    let blocked_status_json = serde_json::to_value(&blocked_status)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    let run_graph_bootstrap = serde_json::json!({
+                                        "status": "blocked",
+                                        "handoff_ready": false,
+                                        "reason": "unresolved_lane_selection",
+                                        "run_id": blocked_run_id,
+                                        "latest_status": blocked_status_json,
+                                    });
                                     let dispatch_receipt = blocked_dispatch_receipt(
                                         "unresolved_lane_selection",
                                         &bundle_check,
@@ -404,7 +417,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     let generated_at = time::OffsetDateTime::now_utc()
                                         .format(&super::Rfc3339)
                                         .expect("rfc3339 timestamp should render");
-                                    let payload = super::TaskflowDirectConsumptionPayload {
+                                    let mut payload = super::TaskflowDirectConsumptionPayload {
                                         artifact_name: "taskflow_direct_runtime_consumption"
                                             .to_string(),
                                         artifact_type: "runtime_consumption".to_string(),
@@ -444,14 +457,28 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                             "handoff_ready": false,
                                             "reason": "unresolved_lane_selection",
                                         }),
-                                        run_graph_bootstrap: serde_json::json!({
-                                            "status": "blocked",
-                                            "handoff_ready": false,
-                                            "reason": "unresolved_lane_selection",
-                                        }),
+                                        run_graph_bootstrap,
                                         dispatch_receipt,
                                         dispatch_packet_preview: None,
                                     };
+                                    if should_record_blocked_dispatch_receipt(consume_final_mode) {
+                                        if let Err(error) =
+                                            persist_blocked_consume_final_resume_evidence(
+                                                &store,
+                                                &payload.role_selection,
+                                                &blocked_status,
+                                                &request_text,
+                                                &payload.taskflow_handoff_plan,
+                                                &payload.run_graph_bootstrap,
+                                                &mut payload.dispatch_receipt,
+                                            )
+                                            .await
+                                        {
+                                            eprintln!(
+                                                "Failed to record blocked consume-final resume evidence: {error}"
+                                            );
+                                        }
+                                    }
                                     if let Err(snapshot_error) =
                                         super::emit_taskflow_consume_final_json(&store, &payload)
                                     {
@@ -1652,6 +1679,65 @@ fn build_retrieval_policy_decision_gate(
 
 fn should_record_blocked_dispatch_receipt(consume_final_mode: ConsumeFinalMode) -> bool {
     !consume_final_mode.is_read_only()
+}
+
+async fn persist_blocked_consume_final_resume_evidence(
+    store: &super::StateStore,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    status: &crate::state_store::RunGraphStatus,
+    request_text: &str,
+    taskflow_handoff_plan: &serde_json::Value,
+    run_graph_bootstrap: &serde_json::Value,
+    dispatch_receipt: &mut serde_json::Value,
+) -> Result<(), String> {
+    store
+        .record_run_graph_status(status)
+        .await
+        .map_err(|error| format!("Failed to record blocked run-graph status: {error}"))?;
+
+    let recorded_at = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 timestamp should render");
+    store
+        .record_run_graph_dispatch_context(&crate::state_store::RunGraphDispatchContext {
+            run_id: status.run_id.clone(),
+            task_id: status.task_id.clone(),
+            request_text: request_text.to_string(),
+            role_selection: serde_json::to_value(role_selection)
+                .unwrap_or_else(|_| serde_json::Value::Null),
+            recorded_at,
+        })
+        .await
+        .map_err(|error| format!("Failed to record blocked run-graph dispatch context: {error}"))?;
+
+    let mut receipt = serde_json::from_value::<crate::state_store::RunGraphDispatchReceipt>(
+        dispatch_receipt.clone(),
+    )
+    .map_err(|error| format!("Failed to decode blocked dispatch receipt: {error}"))?;
+    let ctx = crate::RuntimeDispatchPacketContext::new(
+        store.root(),
+        role_selection,
+        &receipt,
+        taskflow_handoff_plan,
+        run_graph_bootstrap,
+    );
+    let dispatch_packet_path = super::write_runtime_dispatch_packet(&ctx)?;
+    receipt.dispatch_packet_path = Some(dispatch_packet_path);
+    *dispatch_receipt = serde_json::to_value(&receipt)
+        .map_err(|error| format!("Failed to encode blocked dispatch receipt: {error}"))?;
+
+    store
+        .record_run_graph_dispatch_receipt(&receipt)
+        .await
+        .map_err(|error| format!("Failed to record blocked run-graph dispatch receipt: {error}"))?;
+    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+        store,
+        status,
+        "consume_final_blocked_resume_evidence",
+    )
+    .await
+    .map_err(|error| format!("Failed to sync blocked continuation binding: {error}"))?;
+    Ok(())
 }
 
 fn blocked_dispatch_receipt(

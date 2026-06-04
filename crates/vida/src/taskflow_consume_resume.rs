@@ -2888,7 +2888,8 @@ pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, Stri
         )
         .map_err(|error| format!("Failed to persist normalized dispatch packet: {error}"))?;
     }
-    crate::validate_runtime_dispatch_packet_contract(&packet, "Persisted dispatch packet")?;
+    crate::validate_runtime_dispatch_packet_contract(&packet, "Persisted dispatch packet")
+        .map_err(|error| format!("execution_preparation_gate_blocked: {error}"))?;
     Ok(packet)
 }
 
