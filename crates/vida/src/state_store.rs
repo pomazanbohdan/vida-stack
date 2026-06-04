@@ -875,10 +875,8 @@ hierarchy: framework,contracts
             .expect("blocks dependency should be present");
         assert_eq!(blocks.edge_type, "blocks");
         assert_eq!(blocks.depends_on_id, "vida-a");
-        let a_node = blocks.node.as_ref().expect("task a node");
-        assert_eq!(a_node.task.id, "vida-a");
-        assert!(a_node.dependencies.is_empty());
-        assert!(a_node.children.is_empty());
+        assert!(blocks.repeated);
+        assert!(blocks.node.is_none());
         let parent = tree
             .dependencies
             .iter()

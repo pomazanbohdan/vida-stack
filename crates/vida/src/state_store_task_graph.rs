@@ -1,7 +1,7 @@
 use super::*;
 use crate::launcher_task_commands::shell_quote;
 
-const TASK_TREE_MAX_DEPTH: usize = 128;
+const TASK_TREE_MAX_DEPTH: usize = 64;
 const TASK_TREE_MAX_NODE_VISITS: usize = 10_000;
 
 impl StateStore {
@@ -670,6 +670,7 @@ impl StateStore {
                 node: None,
                 cycle: false,
                 missing: false,
+                repeated: false,
             };
 
             if active.contains(&dependency.depends_on_id) {
@@ -677,15 +678,19 @@ impl StateStore {
             } else if let Some(dependency_task) = by_id.get(&dependency.depends_on_id) {
                 edge.dependency_status = dependency_task.status.clone();
                 edge.dependency_issue_type = Some(dependency_task.issue_type.clone());
-                edge.node = Some(Box::new(Self::build_task_dependency_tree(
-                    by_id,
-                    children_by_parent,
-                    &dependency.depends_on_id,
-                    active,
-                    expanded,
-                    depth + 1,
-                    node_visits,
-                )?));
+                if expanded.contains(&dependency.depends_on_id) {
+                    edge.repeated = true;
+                } else {
+                    edge.node = Some(Box::new(Self::build_task_dependency_tree(
+                        by_id,
+                        children_by_parent,
+                        &dependency.depends_on_id,
+                        active,
+                        expanded,
+                        depth + 1,
+                        node_visits,
+                    )?));
+                }
             } else {
                 edge.missing = true;
             }
@@ -706,6 +711,7 @@ impl StateStore {
                     node: None,
                     cycle: false,
                     missing: false,
+                    repeated: false,
                 };
                 if active.contains(child_id) {
                     child.cycle = true;
@@ -716,15 +722,19 @@ impl StateStore {
                     child.child_priority = Some(child_task.priority);
                     child.child_issue_type = Some(child_task.issue_type.clone());
                     child.child_labels = child_task.labels.clone();
-                    child.node = Some(Box::new(Self::build_task_dependency_tree(
-                        by_id,
-                        children_by_parent,
-                        child_id,
-                        active,
-                        expanded,
-                        depth + 1,
-                        node_visits,
-                    )?));
+                    if expanded.contains(child_id) {
+                        child.repeated = true;
+                    } else {
+                        child.node = Some(Box::new(Self::build_task_dependency_tree(
+                            by_id,
+                            children_by_parent,
+                            child_id,
+                            active,
+                            expanded,
+                            depth + 1,
+                            node_visits,
+                        )?));
+                    }
                 } else {
                     child.missing = true;
                 }
@@ -1479,6 +1489,48 @@ mod tests {
             .expect("shared dependency subtree should not exhaust node visits");
 
         assert_eq!(tree.children.len(), child_count);
+        let repeated_shared_refs = tree
+            .children
+            .iter()
+            .filter_map(|child| child.node.as_ref())
+            .flat_map(|node| node.dependencies.iter())
+            .filter(|edge| edge.depends_on_id == format!("shared-{}", shared_chain_len - 1))
+            .filter(|edge| edge.repeated)
+            .count();
+        assert_eq!(repeated_shared_refs, child_count - 1);
+    }
+
+    #[test]
+    fn task_dependency_tree_marks_cycles_without_recursive_expansion() {
+        let mut root = task_record("root-task", "open");
+        let mut child = task_record("child-task", "open");
+        child
+            .dependencies
+            .push(parent_child_dependency("child-task", "root-task"));
+        root.dependencies.push(TaskDependencyRecord {
+            issue_id: "root-task".to_string(),
+            depends_on_id: "child-task".to_string(),
+            edge_type: "blocks".to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        });
+
+        let tree = StateStore::task_dependency_tree_from_rows(&[root, child], "root-task")
+            .expect("cycle should be represented, not recursively expanded");
+
+        let dependency_node = tree.dependencies[0]
+            .node
+            .as_ref()
+            .expect("child dependency should have one bounded node");
+        let back_edge = dependency_node
+            .dependencies
+            .iter()
+            .find(|edge| edge.depends_on_id == "root-task")
+            .expect("back edge should be present");
+        assert!(back_edge.cycle);
+        assert!(back_edge.node.is_none());
     }
 
     #[tokio::test]

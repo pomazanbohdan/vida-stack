@@ -7420,7 +7420,21 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
-                    eprintln!("Failed to read task direct children: {error}");
+                    if command.json {
+                        crate::print_json_pretty(&serde_json::json!({
+                            "status": "blocked",
+                            "surface": "vida task children",
+                            "blocker_codes": ["task_tree_traversal_failed"],
+                            "task_id": command.task_id,
+                            "reason": error.to_string(),
+                            "next_action": "Run `vida task validate-graph --json` to inspect graph cycles or reduce traversal scope with `vida task children <task-id> --json`.",
+                            "next_actions": [
+                                "Run `vida task validate-graph --json` to inspect graph cycles or reduce traversal scope with `vida task children <task-id> --json`."
+                            ],
+                        }));
+                    } else {
+                        eprintln!("Failed to read task direct children: {error}");
+                    }
                     ExitCode::from(1)
                 }
             }
@@ -7435,7 +7449,21 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
-                    eprintln!("Failed to read task dependency tree: {error}");
+                    if command.json {
+                        crate::print_json_pretty(&serde_json::json!({
+                            "status": "blocked",
+                            "surface": "vida task tree",
+                            "blocker_codes": ["task_tree_traversal_failed"],
+                            "task_id": command.task_id,
+                            "reason": error.to_string(),
+                            "next_action": "Run `vida task validate-graph --json` to inspect graph cycles or reduce traversal scope with `vida task children <task-id> --json`.",
+                            "next_actions": [
+                                "Run `vida task validate-graph --json` to inspect graph cycles or reduce traversal scope with `vida task children <task-id> --json`."
+                            ],
+                        }));
+                    } else {
+                        eprintln!("Failed to read task dependency tree: {error}");
+                    }
                     ExitCode::from(1)
                 }
             }

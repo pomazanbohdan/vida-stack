@@ -690,6 +690,16 @@ pub(crate) fn print_task_dependency_tree(
     tree: &TaskDependencyTreeNode,
     as_json: bool,
 ) {
+    let dependency_cycle_count = tree.dependencies.iter().filter(|edge| edge.cycle).count();
+    let child_cycle_count = tree.children.iter().filter(|child| child.cycle).count();
+    let dependency_missing_count = tree.dependencies.iter().filter(|edge| edge.missing).count();
+    let child_missing_count = tree.children.iter().filter(|child| child.missing).count();
+    let dependency_repeated_count = tree
+        .dependencies
+        .iter()
+        .filter(|edge| edge.repeated)
+        .count();
+    let child_repeated_count = tree.children.iter().filter(|child| child.repeated).count();
     let dependencies = tree
         .dependencies
         .iter()
@@ -702,6 +712,7 @@ pub(crate) fn print_task_dependency_tree(
                 "edge_type": edge.edge_type,
                 "missing": edge.missing,
                 "cycle": edge.cycle,
+                "repeated": edge.repeated,
             })
         })
         .collect::<Vec<_>>();
@@ -720,6 +731,7 @@ pub(crate) fn print_task_dependency_tree(
                 "labels": child.child_labels,
                 "missing": child.missing,
                 "cycle": child.cycle,
+                "repeated": child.repeated,
             })
         })
         .collect::<Vec<_>>();
@@ -740,6 +752,12 @@ pub(crate) fn print_task_dependency_tree(
             "dependencies": dependencies,
             "children": children,
             "tree_depth": "immediate_edges_only",
+            "diagnostics": {
+                "cycle_count": dependency_cycle_count + child_cycle_count,
+                "missing_count": dependency_missing_count + child_missing_count,
+                "repeated_count": dependency_repeated_count + child_repeated_count,
+                "bounded": true,
+            },
             "drill_down": "run vida task tree <task-id> --json on a listed dependency or child for the next bounded slice",
         }),
     );
@@ -784,11 +802,20 @@ pub(crate) fn print_task_direct_children(
     tree: &TaskDependencyTreeNode,
     as_json: bool,
 ) {
+    let child_cycle_count = tree.children.iter().filter(|child| child.cycle).count();
+    let child_missing_count = tree.children.iter().filter(|child| child.missing).count();
+    let child_repeated_count = tree.children.iter().filter(|child| child.repeated).count();
     let payload = build_pass_operator_surface_payload(
         "vida task children",
         serde_json::json!({
             "root_task_id": tree.task.id,
             "child_count": tree.children.len(),
+            "diagnostics": {
+                "cycle_count": child_cycle_count,
+                "missing_count": child_missing_count,
+                "repeated_count": child_repeated_count,
+                "bounded": true,
+            },
             "children": tree.children.iter().map(|child| serde_json::json!({
                 "child_id": child.child_id,
                 "child_display_id": child.child_display_id,
@@ -801,6 +828,7 @@ pub(crate) fn print_task_direct_children(
                 "node": child.node,
                 "cycle": child.cycle,
                 "missing": child.missing,
+                "repeated": child.repeated,
             })).collect::<Vec<_>>(),
         }),
     );
@@ -833,6 +861,8 @@ pub(crate) fn print_task_direct_children(
             "cycle"
         } else if child.missing {
             "missing"
+        } else if child.repeated {
+            "repeated"
         } else {
             child.child_status.as_str()
         };
@@ -855,6 +885,8 @@ fn print_task_dependency_tree_edge(edge: &TaskDependencyTreeEdge, depth: usize) 
         "cycle"
     } else if edge.missing {
         "missing"
+    } else if edge.repeated {
+        "repeated"
     } else {
         edge.dependency_status.as_str()
     };
@@ -880,6 +912,8 @@ fn print_task_dependency_tree_child(child: &TaskDependencyTreeChild, depth: usiz
         "cycle"
     } else if child.missing {
         "missing"
+    } else if child.repeated {
+        "repeated"
     } else {
         child.child_status.as_str()
     };

@@ -819,6 +819,8 @@ pub struct TaskDependencyTreeEdge {
     pub node: Option<Box<TaskDependencyTreeNode>>,
     pub cycle: bool,
     pub missing: bool,
+    #[serde(default)]
+    pub repeated: bool,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
@@ -837,6 +839,8 @@ pub struct TaskDependencyTreeChild {
     pub node: Option<Box<TaskDependencyTreeNode>>,
     pub cycle: bool,
     pub missing: bool,
+    #[serde(default)]
+    pub repeated: bool,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
