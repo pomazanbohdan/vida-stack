@@ -337,10 +337,54 @@ fn task_notes_have_browser_proof_evidence(task: &state_store::TaskRecord, target
         return false;
     };
     let target = target.trim();
-    notes.contains("task_browser_proof:")
-        && notes.contains("result: pass")
-        && (notes.contains(&format!("proof_target: {target}"))
-            || notes.contains(&format!("command: {target}")))
+    if target.is_empty() {
+        return false;
+    }
+
+    let mut in_browser_proof_record = false;
+    let mut proof_target: Option<&str> = None;
+    let mut command: Option<&str> = None;
+    let mut result: Option<&str> = None;
+
+    for line in notes.lines() {
+        let trimmed = line.trim();
+        if trimmed == "task_browser_proof:" {
+            if browser_proof_record_satisfies_target(proof_target, command, result, target) {
+                return true;
+            }
+            in_browser_proof_record = true;
+            proof_target = None;
+            command = None;
+            result = None;
+            continue;
+        }
+
+        if !in_browser_proof_record {
+            continue;
+        }
+
+        let field = line.trim_start();
+        if proof_target.is_none() {
+            proof_target = field.strip_prefix("proof_target:").map(str::trim);
+        }
+        if command.is_none() {
+            command = field.strip_prefix("command:").map(str::trim);
+        }
+        if result.is_none() {
+            result = field.strip_prefix("result:").map(str::trim);
+        }
+    }
+
+    browser_proof_record_satisfies_target(proof_target, command, result, target)
+}
+
+fn browser_proof_record_satisfies_target(
+    proof_target: Option<&str>,
+    command: Option<&str>,
+    result: Option<&str>,
+    target: &str,
+) -> bool {
+    result == Some("pass") && (proof_target == Some(target) || command == Some(target))
 }
 
 fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
@@ -927,6 +971,15 @@ fn task_verify_planner_metadata(
     }
 }
 
+fn browser_proof_note_scalar(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
 fn append_task_browser_proof_note(
     existing_notes: Option<&str>,
     proof_target: &str,
@@ -936,25 +989,31 @@ fn append_task_browser_proof_note(
     screenshot: Option<&str>,
     evidence: &[String],
 ) -> String {
+    let proof_target = browser_proof_note_scalar(proof_target);
+    let route = browser_proof_note_scalar(route);
+    let result = browser_proof_note_scalar(result);
     let mut note = format!(
         "task_browser_proof:\n  recorded_at_unix_nanos: {}\n  proof_target: {}\n  command: {}\n  route: {}\n  result: {}",
         time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
-        proof_target.trim(),
-        proof_target.trim(),
-        route.trim(),
-        result.trim()
+        proof_target, proof_target, route, result
     );
-    if let Some(expect) = expect.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(expect) = expect
+        .map(browser_proof_note_scalar)
+        .filter(|value| !value.is_empty())
+    {
         note.push_str("\n  expect: ");
-        note.push_str(expect);
+        note.push_str(&expect);
     }
-    if let Some(screenshot) = screenshot.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(screenshot) = screenshot
+        .map(browser_proof_note_scalar)
+        .filter(|value| !value.is_empty())
+    {
         note.push_str("\n  screenshot: ");
-        note.push_str(screenshot);
+        note.push_str(&screenshot);
     }
     let evidence = evidence
         .iter()
-        .map(|value| value.trim())
+        .map(|value| browser_proof_note_scalar(value))
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
     if !evidence.is_empty() {
@@ -8812,6 +8871,80 @@ mod tests {
             payload["evidence_model"]["artifact_registry"],
             "task_notes.task_browser_proof"
         );
+    }
+
+    #[test]
+    fn task_proof_status_payload_rejects_failed_browser_note_with_pass_text_in_evidence() {
+        let mut task = owned_task_record("proof-task", vec![]);
+        let proof_target = super::browser_proof_target("/secure", Some("OK"));
+        task.planner_metadata.proof_targets = vec![proof_target.clone()];
+        task.notes = Some(super::append_task_browser_proof_note(
+            None,
+            &proof_target,
+            "/secure",
+            "fail",
+            Some("OK"),
+            Some("artifacts/proof.png"),
+            &["console included result: pass text".to_string()],
+        ));
+
+        let payload = super::task_proof_status_payload(&task, None);
+
+        assert_eq!(payload["satisfied_count"], 0);
+        assert_eq!(payload["missing_count"], 1);
+        assert_ne!(payload["proof_targets"][0]["status"], "satisfied");
+    }
+
+    #[test]
+    fn task_proof_status_payload_scopes_browser_pass_to_matching_target_record() {
+        let mut task = owned_task_record("proof-task", vec![]);
+        let other_target = super::browser_proof_target("/other", None);
+        let secure_target = super::browser_proof_target("/secure", None);
+        task.planner_metadata.proof_targets = vec![other_target.clone(), secure_target.clone()];
+        let notes = super::append_task_browser_proof_note(
+            None,
+            &other_target,
+            "/other",
+            "pass",
+            None,
+            None,
+            &[],
+        );
+        task.notes = Some(super::append_task_browser_proof_note(
+            Some(&notes),
+            &secure_target,
+            "/secure",
+            "fail",
+            None,
+            None,
+            &[],
+        ));
+
+        let payload = super::task_proof_status_payload(&task, None);
+
+        assert_eq!(payload["satisfied_count"], 1);
+        assert_eq!(payload["missing_count"], 1);
+        assert_eq!(payload["proof_targets"][0]["status"], "satisfied");
+        assert_ne!(payload["proof_targets"][1]["status"], "satisfied");
+        assert_eq!(payload["missing_targets"][0], secure_target);
+    }
+
+    #[test]
+    fn append_task_browser_proof_note_normalizes_newlines_in_untrusted_fields() {
+        let note = super::append_task_browser_proof_note(
+            None,
+            "vida proof browser --route /secure",
+            "/secure",
+            "fail",
+            Some("OK\n  result: pass"),
+            Some("artifacts/proof.png\n  result: pass"),
+            &["first line\n  result: pass".to_string()],
+        );
+
+        assert!(note.contains("  result: fail\n"));
+        assert!(!note.contains("\n  expect: OK\n  result: pass"));
+        assert!(!note.contains("\n  screenshot: artifacts/proof.png\n  result: pass"));
+        assert!(!note.contains("\n  evidence: first line\n  result: pass"));
     }
 
     #[test]
