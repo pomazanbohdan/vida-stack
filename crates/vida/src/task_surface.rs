@@ -8169,7 +8169,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .unwrap_or_else(state_store::default_state_dir);
             match task_dependency_tree_read_only(state_dir, &command.task_id).await {
                 Ok(tree) => {
-                    print_task_direct_children(command.render, &tree, command.json);
+                    print_task_direct_children(command.render, &tree, command.full, command.json);
                     ExitCode::SUCCESS
                 }
                 Err(error) => {

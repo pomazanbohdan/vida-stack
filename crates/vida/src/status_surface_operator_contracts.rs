@@ -16,6 +16,7 @@ pub(crate) struct StatusOperatorContractInputs<'a> {
     pub(crate) latest_run_graph_dispatch_receipt_signal_ambiguous: bool,
     pub(crate) latest_run_graph_dispatch_receipt_summary_inconsistent: bool,
     pub(crate) latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
+    pub(crate) closed_task_active_run_projection_mismatch: bool,
     pub(crate) continuation_binding_ambiguous: bool,
     pub(crate) incomplete_release_admission_operator_evidence: bool,
     pub(crate) activation_truth:
@@ -103,6 +104,10 @@ pub(crate) fn build_status_operator_contracts(
             blocker_code_str(BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage)
                 .to_string(),
         );
+    }
+    if inputs.closed_task_active_run_projection_mismatch {
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::ClosedTaskActiveRunProjectionMismatch).to_string());
     }
     if inputs.continuation_binding_ambiguous {
         operator_blocker_codes
@@ -263,6 +268,15 @@ pub(crate) fn build_status_operator_contracts(
     }
     if operator_blocker_codes
         .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::ClosedTaskActiveRunProjectionMismatch))
+    {
+        operator_next_actions.push(
+            "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work."
+                .to_string(),
+        );
+    }
+    if operator_blocker_codes
+        .iter()
         .any(|code| code == blocker_code_str(BlockerCode::ContinuationBindingAmbiguous))
     {
         operator_next_actions.push(
@@ -382,6 +396,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_signal_ambiguous: false,
             latest_run_graph_dispatch_receipt_summary_inconsistent: false,
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
+            closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
@@ -471,6 +486,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_signal_ambiguous: false,
             latest_run_graph_dispatch_receipt_summary_inconsistent: false,
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
+            closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: true,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
@@ -506,6 +522,90 @@ mod tests {
             value
                 .as_str()
                 .is_some_and(|text| text.contains("do not continue by heuristic"))
+        }));
+    }
+
+    #[test]
+    fn closed_task_active_run_projection_mismatch_blocks_status_operator_contracts() {
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 0,
+            bundle_snapshots: 0,
+            bundle_check_snapshots: 0,
+            final_snapshots: 0,
+            latest_kind: None,
+            latest_snapshot_path: Some("snapshot.json".to_string()),
+        };
+        let protocol_binding = crate::state_store::ProtocolBindingSummary {
+            active_bindings: 0,
+            blocking_issue_count: 0,
+            fully_runtime_bound_count: 0,
+            latest_receipt_id: Some("binding-receipt".to_string()),
+            latest_recorded_at: None,
+            latest_scenario: None,
+            primary_state_authority: None,
+            rust_bound_count: 0,
+            script_bound_count: 0,
+            total_bindings: 0,
+            total_receipts: 0,
+            unbound_count: 0,
+        };
+        let truth = crate::project_activator_surface::ProjectActivationStatusTruth {
+            status: "ready_enough_for_normal_work".to_string(),
+            activation_pending: false,
+            next_steps: vec![],
+        };
+
+        let contracts = build_status_operator_contracts(StatusOperatorContractInputs {
+            boot_compatibility: None,
+            migration_state: None,
+            protocol_binding: &protocol_binding,
+            runtime_consumption: &runtime_consumption,
+            latest_final_snapshot_path: Some("snapshot.json"),
+            latest_run_graph_dispatch_receipt_id: Some("run-1"),
+            latest_run_graph_gate_present: false,
+            latest_run_graph_dispatch_receipt_matches_status: true,
+            latest_run_graph_snapshot_inconsistent: false,
+            latest_run_graph_dispatch_receipt_signal_ambiguous: false,
+            latest_run_graph_dispatch_receipt_summary_inconsistent: false,
+            latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
+            closed_task_active_run_projection_mismatch: true,
+            continuation_binding_ambiguous: false,
+            incomplete_release_admission_operator_evidence: false,
+            activation_truth: Some(&truth),
+            project_activation_pending: false,
+            latest_task_reconciliation: None,
+            effective_bundle_receipt: None,
+            root_session_write_guard_status: "blocked_by_default",
+            root_local_write_allowed: false,
+            root_local_write_allowed_for_only_these_paths: &serde_json::json!([]),
+            activation_view_only_dispatch_blocker_active: false,
+            blocking_dispatch_blocker_code: None,
+            operator_session_projection: &serde_json::json!({
+                "schema_version": "operator-session-projection-v1",
+                "current_session": {"session_id": "session-current"},
+                "project_foreign_runs": [],
+                "project_foreign_blockers": [],
+                "global_blockers": [],
+                "claim_conflicts": [],
+            }),
+        })
+        .expect("operator contracts should render");
+
+        let blockers = contracts["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array");
+        assert!(blockers
+            .iter()
+            .any(|value| value == "closed_task_active_run_projection_mismatch"));
+        let next_actions = contracts["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array");
+        assert!(next_actions.iter().any(|value| {
+            value.as_str().is_some_and(|text| {
+                text.contains("vida task reconcile-closed-runs --limit 25 --json")
+                    && text
+                        .contains("closed tasks must not remain projected as active runtime work")
+            })
         }));
     }
 
@@ -570,6 +670,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_signal_ambiguous: false,
             latest_run_graph_dispatch_receipt_summary_inconsistent: false,
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
+            closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),

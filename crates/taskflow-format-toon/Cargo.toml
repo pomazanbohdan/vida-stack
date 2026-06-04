@@ -6,4 +6,8 @@ license.workspace = true
 
 [dependencies]
 common-format-toon = { path = "../common-format-toon" }
+serde.workspace = true
 toon-format.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -101,7 +101,7 @@ fn format_surface_line(render: RenderMode, label: &str, value: &str) -> String {
     }
 }
 
-fn sanitize_terminal_value(value: &str) -> String {
+pub(crate) fn sanitize_terminal_value(value: &str) -> String {
     let mut sanitized = String::with_capacity(value.len());
     for character in value.chars() {
         if character.is_control() {
