@@ -219,6 +219,7 @@ pub(crate) use runtime_consumption_state::{
     RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION,
 };
 pub(crate) use runtime_consumption_state::{
+    latest_final_runtime_consumption_dispatch_receipt_summary,
     latest_final_runtime_consumption_snapshot_path,
     latest_recorded_final_runtime_consumption_snapshot_path, latest_runtime_reflex_loop_record,
     latest_terminal_consume_continue_snapshot_run_id,

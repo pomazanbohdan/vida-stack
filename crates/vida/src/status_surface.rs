@@ -95,6 +95,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
         {
             if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
+                let cached = refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
+                    .await
+                    .unwrap_or(cached);
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
@@ -107,6 +110,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 read_state_fresh_admissible_status_json_projection(&state_dir, summary_only)
             {
                 if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
+                    let cached =
+                        refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
+                            .await
+                            .unwrap_or(cached);
                     println!(
                         "{}",
                         render_cached_status_projection_for_operator(summary_only, &cached)
@@ -123,6 +130,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
             if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
+                let cached = refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
+                    .await
+                    .unwrap_or(cached);
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
@@ -139,6 +149,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
             if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
+                let cached = refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
+                    .await
+                    .unwrap_or(cached);
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
@@ -168,6 +181,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 cached.clone()
             };
             if cached_status_projection_current_runtime_admissible(&state_dir, &rendered).await {
+                let rendered =
+                    refresh_cached_status_projection_runtime_fields(&state_dir, &rendered)
+                        .await
+                        .unwrap_or(rendered);
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &rendered)
@@ -569,11 +586,31 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     } else {
                         latest_run_graph_dispatch_receipt
                     };
+                let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt
+                    .is_none()
+                {
+                    match crate::latest_final_runtime_consumption_dispatch_receipt_summary(
+                        store.root(),
+                    ) {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            eprintln!(
+                                    "Failed to read runtime-consumption dispatch receipt fallback: {error}"
+                                );
+                            return ExitCode::from(1);
+                        }
+                    }
+                } else {
+                    latest_run_graph_dispatch_receipt
+                };
                 let latest_run_graph_recovery = match latest_run_graph_dispatch_receipt.as_ref() {
                     Some(receipt)
                         if latest_run_graph_recovery
                             .as_ref()
-                            .is_none_or(|recovery| recovery.run_id != receipt.run_id) =>
+                            .is_none_or(|recovery| recovery.run_id != receipt.run_id)
+                            && latest_run_graph_status
+                                .as_ref()
+                                .is_some_and(|status| status.run_id == receipt.run_id) =>
                     {
                         match store.run_graph_recovery_summary(&receipt.run_id).await {
                             Ok(summary) => summary.into(),
@@ -1193,6 +1230,52 @@ fn compact_status_projection_for_fast_operator_render(payload: &mut serde_json::
     }
 }
 
+fn remove_string_from_json_array(value: &mut serde_json::Value, target: &str) {
+    if let Some(rows) = value.as_array_mut() {
+        rows.retain(|entry| entry.as_str() != Some(target));
+    }
+}
+
+fn refresh_cached_protocol_binding_projection(
+    payload: &mut serde_json::Value,
+    protocol_binding: &crate::state_store::ProtocolBindingSummary,
+) -> Option<()> {
+    let object = payload.as_object_mut()?;
+    let protocol_binding_json = serde_json::to_value(protocol_binding).ok()?;
+    object.insert("protocol_binding".to_string(), protocol_binding_json);
+
+    for path in [
+        &["artifact_refs"][..],
+        &["shared_fields", "artifact_refs"][..],
+        &["operator_contracts", "artifact_refs"][..],
+    ] {
+        let mut current = &mut *payload;
+        for segment in path {
+            current = current.get_mut(*segment)?;
+        }
+        current.as_object_mut()?.insert(
+            "protocol_binding_latest_receipt_id".to_string(),
+            serde_json::to_value(&protocol_binding.latest_receipt_id).ok()?,
+        );
+    }
+
+    if protocol_binding.blocking_issue_count == 0 {
+        for path in [
+            &["blocker_codes"][..],
+            &["shared_fields", "blocker_codes"][..],
+            &["operator_contracts", "blocker_codes"][..],
+        ] {
+            let mut current = &mut *payload;
+            for segment in path {
+                current = current.get_mut(*segment)?;
+            }
+            remove_string_from_json_array(current, "protocol_binding_blocking_issues");
+        }
+    }
+
+    Some(())
+}
+
 async fn refresh_cached_status_projection_runtime_fields(
     state_dir: &std::path::Path,
     cached: &str,
@@ -1204,6 +1287,8 @@ async fn refresh_cached_status_projection_runtime_fields(
     )
     .await
     .ok()?;
+    let protocol_binding = store.protocol_binding_summary().await.ok()?;
+    refresh_cached_protocol_binding_projection(&mut payload, &protocol_binding)?;
     let latest_run_graph_status = match store.latest_run_graph_status_for_current_session().await {
         Ok(summary) => summary,
         Err(_) => return None,
@@ -1250,6 +1335,11 @@ async fn refresh_cached_status_projection_runtime_fields(
             Err(_) => return None,
         },
         None => None,
+    };
+    let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
+        crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root()).ok()?
+    } else {
+        latest_run_graph_dispatch_receipt
     };
     let latest_run_graph_snapshot_inconsistent = !dispatch_receipt_checkpoint_leakage
         && !state_store::latest_run_graph_evidence_snapshot_is_consistent(

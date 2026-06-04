@@ -729,6 +729,20 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
+                match crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root())
+                {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!(
+                            "latest runtime-consumption dispatch receipt fallback: failed ({error})"
+                        );
+                        return ExitCode::from(1);
+                    }
+                }
+            } else {
+                latest_run_graph_dispatch_receipt
+            };
             let (
                 latest_run_graph_task_missing,
                 latest_run_graph_task_closed,

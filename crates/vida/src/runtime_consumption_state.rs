@@ -508,6 +508,100 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_for_run(
     )
 }
 
+pub(crate) fn latest_final_runtime_consumption_dispatch_receipt_summary(
+    state_root: &Path,
+) -> Result<Option<RunGraphDispatchReceiptSummary>, String> {
+    let Some(snapshot_path) = latest_recorded_final_runtime_consumption_snapshot_path(state_root)?
+    else {
+        return Ok(None);
+    };
+    let raw = std::fs::read_to_string(&snapshot_path).map_err(|error| {
+        format!("Failed to read latest final runtime-consumption snapshot: {error}")
+    })?;
+    let payload = serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
+        format!("Failed to decode latest final runtime-consumption snapshot: {error}")
+    })?;
+    let receipt = &payload["payload"]["dispatch_receipt"];
+    let Some(run_id) = json_non_empty_string(receipt, "run_id") else {
+        return Ok(None);
+    };
+
+    Ok(Some(RunGraphDispatchReceiptSummary {
+        run_id,
+        dispatch_target: json_non_empty_string(receipt, "dispatch_target")
+            .unwrap_or_else(|| "none".to_string()),
+        dispatch_status: json_non_empty_string(receipt, "dispatch_status")
+            .unwrap_or_else(|| "blocked".to_string()),
+        lane_status: json_non_empty_string(receipt, "lane_status")
+            .unwrap_or_else(|| "lane_blocked".to_string()),
+        supersedes_receipt_id: json_optional_string(receipt, "supersedes_receipt_id"),
+        exception_path_receipt_id: json_optional_string(receipt, "exception_path_receipt_id"),
+        dispatch_kind: json_non_empty_string(receipt, "dispatch_kind")
+            .unwrap_or_else(|| "none".to_string()),
+        dispatch_surface: json_optional_string(receipt, "dispatch_surface"),
+        dispatch_command: json_optional_string(receipt, "dispatch_command"),
+        dispatch_packet_path: json_optional_string(receipt, "dispatch_packet_path"),
+        dispatch_result_path: json_optional_string(receipt, "dispatch_result_path"),
+        blocker_code: json_optional_string(receipt, "blocker_code"),
+        downstream_dispatch_target: json_optional_string(receipt, "downstream_dispatch_target"),
+        downstream_dispatch_command: json_optional_string(receipt, "downstream_dispatch_command"),
+        downstream_dispatch_note: json_optional_string(receipt, "downstream_dispatch_note"),
+        downstream_dispatch_ready: receipt["downstream_dispatch_ready"]
+            .as_bool()
+            .unwrap_or(false),
+        downstream_dispatch_blockers: receipt["downstream_dispatch_blockers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+        downstream_dispatch_packet_path: json_optional_string(
+            receipt,
+            "downstream_dispatch_packet_path",
+        ),
+        downstream_dispatch_status: json_optional_string(receipt, "downstream_dispatch_status"),
+        downstream_dispatch_result_path: json_optional_string(
+            receipt,
+            "downstream_dispatch_result_path",
+        ),
+        downstream_dispatch_trace_path: json_optional_string(
+            receipt,
+            "downstream_dispatch_trace_path",
+        ),
+        downstream_dispatch_executed_count: receipt["downstream_dispatch_executed_count"]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0),
+        downstream_dispatch_active_target: json_optional_string(
+            receipt,
+            "downstream_dispatch_active_target",
+        ),
+        downstream_dispatch_last_target: json_optional_string(
+            receipt,
+            "downstream_dispatch_last_target",
+        ),
+        activation_agent_type: json_optional_string(receipt, "activation_agent_type"),
+        activation_runtime_role: json_optional_string(receipt, "activation_runtime_role"),
+        selected_backend: json_optional_string(receipt, "selected_backend"),
+        effective_execution_posture: receipt["effective_execution_posture"].clone(),
+        route_policy: receipt["route_policy"].clone(),
+        activation_evidence: receipt["activation_evidence"].clone(),
+        recorded_at: json_non_empty_string(receipt, "recorded_at").unwrap_or_default(),
+    }))
+}
+
+fn json_non_empty_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value[key]
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn json_optional_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    json_non_empty_string(value, key)
+}
+
 pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
     latest_status_run_id: &str,
     payload_run_id: &str,

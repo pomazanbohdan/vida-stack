@@ -44,7 +44,17 @@ fn project_bound_state_dir() -> (String, String) {
     fs::write(format!("{project_root}/AGENTS.md"), "project").expect("write AGENTS.md");
     fs::write(
         format!("{project_root}/vida.config.yaml"),
-        "project:\n  id: test\n",
+        concat!(
+            "project:\n",
+            "  id: test\n",
+            "agent_system:\n",
+            "  mode: internal\n",
+            "  state_owner: taskflow_state_store\n",
+            "agent_extensions:\n",
+            "  role_selection:\n",
+            "    mode: default\n",
+            "    fallback_role: orchestrator\n",
+        ),
     )
     .expect("write vida.config.yaml");
     for relative in [".vida/config", ".vida/db", ".vida/project"] {
