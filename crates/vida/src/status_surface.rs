@@ -579,7 +579,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                         && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(status),
                                     false,
                                 ),
-                                None => (false, true),
+                                None => (
+                                    false,
+                                    !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                                        status,
+                                    ),
+                                ),
                             }
                         }
                         None => (false, false),

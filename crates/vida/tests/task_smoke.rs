@@ -5011,8 +5011,7 @@ fn run_graph_update_canonicalizes_conflicting_resume_meta() {
 
 #[test]
 fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
-    let state_dir = unique_state_dir();
-    fs::create_dir_all(&state_dir).expect("create state dir");
+    let (project_root, state_dir) = project_bound_state_dir();
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
     let run_id = "h22-missing-task";
@@ -5157,7 +5156,42 @@ fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
         "retired missing-task run must not leak into next action"
     );
 
-    let _ = fs::remove_dir_all(&state_dir);
+    let orchestrator = run_command_json(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert!(
+        !orchestrator.to_string().contains(run_id),
+        "retired missing-task run must not leak into orchestrator-init: {orchestrator}"
+    );
+    assert_ne!(
+        orchestrator["continuation_binding"]["binding_source"], "h22_regression_seed",
+        "orchestrator-init must not preserve stale binding source after retire"
+    );
+    assert!(
+        !orchestrator
+            .to_string()
+            .contains("continuation_binding_ambiguous"),
+        "orchestrator-init must not remain ambiguous on retired stale run: {orchestrator}"
+    );
+
+    let status = run_command_json(&["status", "--state-dir", &state_dir, "--json"], &state_dir);
+    assert_eq!(
+        status["root_session_write_guard"]["latest_run_graph_task_stale"], false,
+        "terminal retired missing-task run must not keep the root write guard stale: {status}"
+    );
+    assert_ne!(
+        status["root_session_write_guard"]["reason"], "latest_run_graph_task_stale",
+        "terminal retired missing-task run must not be the status write-guard blocker: {status}"
+    );
+    assert!(
+        !status
+            .to_string()
+            .contains("continuation_binding_ambiguous"),
+        "status must not remain ambiguous on retired stale run: {status}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
 }
 
 #[test]
