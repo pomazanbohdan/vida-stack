@@ -31,6 +31,7 @@ Status: `implemented`
 - Task read surfaces must return those fields in canonical task JSON.
 - `vida taskflow graph-summary --json` must expose a scheduler projection alongside graph summary data.
 - Wave/order grouping must prefer `order_bucket` over legacy wave labels.
+- `vida taskflow scheduling actualize` must preview and optionally apply conservative execution semantics for open work with missing scheduling metadata.
 
 ### Non-Functional Requirements
 - Legacy tasks must remain readable without migration breakage.
@@ -110,6 +111,8 @@ Will implement / choose:
 - Operator surfaces:
   - `vida task show --json` now includes execution semantics via `TaskRecord`
   - `vida taskflow graph-summary --json` now includes `current_task_id` and `scheduling`
+  - `vida taskflow scheduling actualize --scope open-epics --dry-run --json` previews missing execution-semantics repairs
+  - `vida taskflow scheduling actualize --scope open-epics --apply --json` applies conservative serial semantics to previewed candidates
 
 ### Bounded File Set
 - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
@@ -128,6 +131,7 @@ Will implement / choose:
 - `parallel_safe` without explicit compatible classifiers remains non-admissible.
 - Graph blocking still wins over execution semantics; a blocked task is never promoted by metadata.
 - Legacy snapshots/tasks remain readable, but they default to non-parallel-safe until explicitly updated.
+- Scheduling actualization must never infer `parallel_safe`; generated metadata uses explicit `sequential` execution unless a task already has a valid execution mode.
 
 ## Implementation Plan
 
@@ -144,6 +148,18 @@ Will implement / choose:
 - Update maps and canonical references
 - Proof target: docflow and cargo verification
 
+### Phase 4
+- Add `vida taskflow scheduling actualize` as a preview-first operator surface
+- Default scope: `open-epics`
+- Default mode: `--dry-run`
+- Apply mode: `--apply`
+- Generated defaults:
+  - `execution_mode=sequential`
+  - `order_bucket=<parent epic id>` when available
+  - `parallel_group=default`
+  - `conflict_domain=<task id>`
+- Proof target: focused CLI smoke for dry-run, apply, idempotent no-candidate rerun, and command help
+
 ## Validation / Proof
 - Unit tests:
   - `state_store::state_store_task_graph::tests::scheduling_projection_fail_closes_when_semantics_are_missing`
@@ -151,6 +167,7 @@ Will implement / choose:
   - `taskflow_proxy::tests::graph_summary_waves_prefer_order_bucket_over_labels`
 - Integration tests:
   - bounded compile/test coverage through `cargo test -p vida --no-run`
+  - `task_smoke::taskflow_scheduling_actualize_cli_contract`
 - Runtime checks:
   - inspect `vida task show --json`
   - inspect `vida taskflow graph-summary --json`
@@ -167,12 +184,13 @@ Will implement / choose:
 ## Rollout Strategy
 - Backward-compatible rollout because legacy tasks deserialize with empty execution semantics.
 - Operators can start annotating tasks incrementally without snapshot migration.
+- Operators can use `vida taskflow scheduling actualize --dry-run --json` to see the exact metadata changes before applying them.
 - No restart/migration gate is required beyond rebuilding the `vida` binary.
 
 ## Future Considerations
 - Feed scheduler projection directly into dispatch/routing decisions, not only graph-summary output.
 - Add richer conflict-domain taxonomy or typed enums if usage stabilizes.
-- Consider a dedicated `vida task scheduling` surface once the projection grows beyond graph-summary.
+- Consider a root-level `vida task scheduling` alias only if operators need parity with the TaskFlow family command.
 
 ## References
 - Local references:

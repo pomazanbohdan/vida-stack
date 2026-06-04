@@ -147,7 +147,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             return;
         }
-        Some("parallelism") | Some("scheduling") => {
+        Some("parallelism") => {
             println!("VIDA TaskFlow help: parallelism");
             println!();
             println!("Purpose:");
@@ -308,6 +308,44 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Missing or unreadable authoritative state fails closed.");
             println!(
                 "  A task outside the scoped scheduling projection returns a blocked explanation instead of guessing."
+            );
+            return;
+        }
+        Some("scheduling") => {
+            println!("VIDA TaskFlow help: scheduling");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Inspect and actualize explicit scheduling metadata for open TaskFlow work."
+            );
+            println!(
+                "  Actualization is conservative: it makes implicit serial work explicit and never infers parallel-safe execution."
+            );
+            println!();
+            println!("Canonical command:");
+            println!(
+                "  vida taskflow scheduling actualize [--scope open-epics|<task-id>] [--dry-run|--apply] [--json]"
+            );
+            println!();
+            println!("Options:");
+            println!("  --scope: open-epics or one scoped task id; defaults to open-epics");
+            println!("  --dry-run: preview candidate changes without mutating state; default mode");
+            println!("  --apply: apply proposed execution semantics to candidate tasks");
+            println!("  --state-dir: override authoritative TaskFlow state directory");
+            println!("  --json: emit machine-readable output");
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  status, scope, dry_run, apply, candidate_count, applied_count, blocked_count, candidates[*].current, candidates[*].proposed, blocker_codes, next_actions"
+            );
+            println!();
+            println!("Failure modes:");
+            println!("  Missing or unreadable authoritative state fails closed.");
+            println!(
+                "  Passing both --dry-run and --apply fails closed instead of guessing mutation intent."
+            );
+            println!(
+                "  Actualization does not dispatch agents and does not override graph dependency truth."
             );
             return;
         }
@@ -916,7 +954,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|route|validate-routing|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|pricing|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|scheduling|config-actuation|route|validate-routing|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|pricing|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -954,6 +992,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  plan       deterministic PlanGraph draft generation and materialization");
     println!("  replan     preview-first adaptive split/spawn-blocker mutation planning");
     println!("  scheduler  preview-first task selection under max_parallel_agents");
+    println!("  scheduling conservative scheduling metadata actualization");
     println!("  parallelism explicit sequencing and parallel-safe scheduling contract");
     println!("  route      route diagnostics and model/carrier selection explanation");
     println!("  validate-routing  route/config validation before dispatch");

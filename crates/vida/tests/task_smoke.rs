@@ -2782,6 +2782,179 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
 }
 
 #[test]
+fn taskflow_scheduling_actualize_cli_contract() {
+    let state_dir = unique_state_dir();
+    create_epic_parent(
+        &state_dir,
+        "scheduling-actualize-root",
+        "Scheduling actualize root",
+        "open",
+    );
+    let legacy = run_command_json(
+        &[
+            "task",
+            "create",
+            "scheduling-actualize-legacy",
+            "Scheduling actualize legacy task",
+            "--parent-id",
+            "scheduling-actualize-root",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(legacy["status"], "pass");
+    let explicit = run_command_json(
+        &[
+            "task",
+            "create",
+            "scheduling-actualize-explicit",
+            "Scheduling actualize explicit task",
+            "--parent-id",
+            "scheduling-actualize-root",
+            "--execution-mode",
+            "parallel_safe",
+            "--order-bucket",
+            "scheduling-actualize-root",
+            "--parallel-group",
+            "explicit",
+            "--conflict-domain",
+            "explicit-domain",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(explicit["status"], "pass");
+
+    let dry_run = run_command_json(
+        &[
+            "taskflow",
+            "scheduling",
+            "actualize",
+            "--scope",
+            "scheduling-actualize-root",
+            "--state-dir",
+            state_dir.as_str(),
+            "--dry-run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dry_run["surface"], "vida taskflow scheduling actualize");
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["apply"], false);
+    assert_eq!(dry_run["candidate_count"], 1);
+    assert_eq!(
+        dry_run["candidates"][0]["task_id"],
+        "scheduling-actualize-legacy"
+    );
+    assert_eq!(
+        dry_run["candidates"][0]["proposed"]["execution_mode"],
+        "sequential"
+    );
+    assert_eq!(
+        dry_run["candidates"][0]["proposed"]["order_bucket"],
+        "scheduling-actualize-root"
+    );
+    assert_eq!(
+        dry_run["candidates"][0]["proposed"]["conflict_domain"],
+        "scheduling-actualize-legacy"
+    );
+
+    let applied = run_command_json(
+        &[
+            "taskflow",
+            "scheduling",
+            "actualize",
+            "--scope",
+            "scheduling-actualize-root",
+            "--state-dir",
+            state_dir.as_str(),
+            "--apply",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(applied["status"], "pass");
+    assert_eq!(applied["candidate_count"], 1);
+    assert_eq!(applied["applied_count"], 1);
+    assert_eq!(applied["candidates"][0]["applied"], true);
+
+    let updated = run_command_json(
+        &["task", "show", "scheduling-actualize-legacy", "--json"],
+        &state_dir,
+    );
+    assert_eq!(
+        updated["task"]["execution_semantics"]["execution_mode"],
+        "sequential"
+    );
+    assert_eq!(
+        updated["task"]["execution_semantics"]["order_bucket"],
+        "scheduling-actualize-root"
+    );
+    assert_eq!(
+        updated["task"]["execution_semantics"]["parallel_group"],
+        "default"
+    );
+    assert_eq!(
+        updated["task"]["execution_semantics"]["conflict_domain"],
+        "scheduling-actualize-legacy"
+    );
+
+    let no_candidates = run_command_json(
+        &[
+            "taskflow",
+            "scheduling",
+            "actualize",
+            "--scope",
+            "scheduling-actualize-root",
+            "--state-dir",
+            state_dir.as_str(),
+            "--dry-run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(no_candidates["candidate_count"], 0);
+
+    let help = run_command_capture(
+        &["taskflow", "scheduling", "actualize", "--help"],
+        &state_dir,
+    );
+    assert!(
+        help.status.success(),
+        "{}",
+        String::from_utf8_lossy(&help.stderr)
+    );
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(help_text.contains("vida taskflow scheduling actualize"));
+    assert!(help_text.contains("--scope"));
+    assert!(help_text.contains("--dry-run"));
+    assert!(help_text.contains("--apply"));
+
+    let missing_scope = run_command_capture(
+        &[
+            "taskflow",
+            "scheduling",
+            "actualize",
+            "--scope",
+            "missing-scope-task",
+            "--state-dir",
+            state_dir.as_str(),
+            "--dry-run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!missing_scope.status.success());
+    let missing_payload: serde_json::Value =
+        serde_json::from_slice(&missing_scope.stdout).expect("missing scope json should parse");
+    assert_eq!(missing_payload["status"], "blocked");
+    assert_eq!(missing_payload["blocker_codes"][0], "scope_task_missing");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn taskflow_factual_sandbox_h12_h16_invariant_matrix() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

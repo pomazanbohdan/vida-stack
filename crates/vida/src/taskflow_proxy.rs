@@ -207,6 +207,34 @@ pub(crate) struct TaskflowSchedulerDispatchPlan {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct TaskflowSchedulingActualizePlan {
+    status: String,
+    surface: String,
+    scope: String,
+    dry_run: bool,
+    apply: bool,
+    candidate_count: usize,
+    applied_count: usize,
+    blocked_count: usize,
+    candidates: Vec<TaskflowSchedulingActualizeCandidate>,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct TaskflowSchedulingActualizeCandidate {
+    task_id: String,
+    title: String,
+    issue_type: String,
+    parent_id: Option<String>,
+    current: crate::state_store::TaskExecutionSemantics,
+    proposed: crate::state_store::TaskExecutionSemantics,
+    missing_fields: Vec<String>,
+    status: String,
+    applied: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct TaskflowContinuationDispatchGate {
     pub(crate) admissible: bool,
     pub(crate) admissibility_gate: String,
@@ -5404,6 +5432,357 @@ fn build_taskflow_graph_explain_payload(
         "projection_source": "StateStore::scheduling_projection_scoped",
         "truth_source": "canonical_task_graph_scheduler_projection",
     })
+}
+
+fn scheduling_actualize_parent_id(task: &crate::state_store::TaskRecord) -> Option<String> {
+    task.dependencies
+        .iter()
+        .find(|dependency| dependency.edge_type == "parent-child")
+        .map(|dependency| dependency.depends_on_id.clone())
+}
+
+fn scheduling_actualize_task_in_scope(
+    task: &crate::state_store::TaskRecord,
+    tasks_by_id: &BTreeMap<String, crate::state_store::TaskRecord>,
+    scope: &str,
+) -> bool {
+    if scope == "open-epics" {
+        return scheduling_actualize_parent_id(task)
+            .and_then(|parent_id| tasks_by_id.get(&parent_id).cloned())
+            .is_some_and(|parent| {
+                matches!(parent.status.as_str(), "open" | "in_progress")
+                    && crate::state_store::work_item_is_program_container(&parent.issue_type)
+            });
+    }
+
+    if task.id == scope {
+        return true;
+    }
+
+    let mut parent_id = scheduling_actualize_parent_id(task);
+    let mut visited = BTreeSet::<String>::new();
+    while let Some(candidate_parent_id) = parent_id {
+        if candidate_parent_id == scope {
+            return true;
+        }
+        if !visited.insert(candidate_parent_id.clone()) {
+            return false;
+        }
+        parent_id = tasks_by_id
+            .get(&candidate_parent_id)
+            .and_then(scheduling_actualize_parent_id);
+    }
+    false
+}
+
+fn scheduling_actualize_candidate(
+    task: &crate::state_store::TaskRecord,
+    parent_id: Option<String>,
+) -> Option<TaskflowSchedulingActualizeCandidate> {
+    if !matches!(task.status.as_str(), "open" | "in_progress")
+        || crate::state_store::work_item_is_program_container(&task.issue_type)
+    {
+        return None;
+    }
+
+    let mut missing_fields = Vec::new();
+    if task.execution_semantics.execution_mode.is_none() {
+        missing_fields.push("execution_mode".to_string());
+    }
+    if task.execution_semantics.order_bucket.is_none() {
+        missing_fields.push("order_bucket".to_string());
+    }
+    if task.execution_semantics.parallel_group.is_none() {
+        missing_fields.push("parallel_group".to_string());
+    }
+    if task.execution_semantics.conflict_domain.is_none() {
+        missing_fields.push("conflict_domain".to_string());
+    }
+    if missing_fields.is_empty() {
+        return None;
+    }
+
+    let order_bucket = parent_id
+        .clone()
+        .unwrap_or_else(|| "unscoped-open-work".to_string());
+    let proposed = crate::state_store::TaskExecutionSemantics {
+        execution_mode: Some(
+            task.execution_semantics
+                .execution_mode
+                .clone()
+                .unwrap_or_else(|| "sequential".to_string()),
+        ),
+        order_bucket: Some(
+            task.execution_semantics
+                .order_bucket
+                .clone()
+                .unwrap_or(order_bucket),
+        ),
+        parallel_group: Some(
+            task.execution_semantics
+                .parallel_group
+                .clone()
+                .unwrap_or_else(|| "default".to_string()),
+        ),
+        conflict_domain: Some(
+            task.execution_semantics
+                .conflict_domain
+                .clone()
+                .unwrap_or_else(|| task.id.clone()),
+        ),
+    };
+
+    Some(TaskflowSchedulingActualizeCandidate {
+        task_id: task.id.clone(),
+        title: task.title.clone(),
+        issue_type: task.issue_type.clone(),
+        parent_id,
+        current: task.execution_semantics.clone(),
+        proposed,
+        missing_fields,
+        status: "pending".to_string(),
+        applied: false,
+    })
+}
+
+async fn build_taskflow_scheduling_actualize_plan(
+    store: &crate::state_store::StateStore,
+    scope: &str,
+    dry_run: bool,
+    apply: bool,
+) -> Result<TaskflowSchedulingActualizePlan, crate::state_store::StateStoreError> {
+    let mut tasks = store.list_tasks(None, true).await?;
+    tasks.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let tasks_by_id = tasks
+        .iter()
+        .cloned()
+        .map(|task| (task.id.clone(), task))
+        .collect::<BTreeMap<_, _>>();
+    if scope != "open-epics" && !tasks_by_id.contains_key(scope) {
+        return Ok(TaskflowSchedulingActualizePlan {
+            status: "blocked".to_string(),
+            surface: "vida taskflow scheduling actualize".to_string(),
+            scope: scope.to_string(),
+            dry_run,
+            apply,
+            candidate_count: 0,
+            applied_count: 0,
+            blocked_count: 1,
+            candidates: Vec::new(),
+            blocker_codes: vec!["scope_task_missing".to_string()],
+            next_actions: vec![format!(
+                "Inspect available tasks with `vida task list --all --json` and retry scheduling actualize with an existing scope task id instead of {}.",
+                shell_quote_arg(scope)
+            )],
+        });
+    }
+    let mut candidates = tasks
+        .iter()
+        .filter(|task| scheduling_actualize_task_in_scope(task, &tasks_by_id, scope))
+        .filter_map(|task| {
+            scheduling_actualize_candidate(task, scheduling_actualize_parent_id(task))
+        })
+        .collect::<Vec<_>>();
+
+    let mut applied_count = 0usize;
+    if apply {
+        let no_labels = Vec::<String>::new();
+        for candidate in &mut candidates {
+            let execution_mode = candidate.proposed.execution_mode.as_deref();
+            let order_bucket = candidate.proposed.order_bucket.as_deref();
+            let parallel_group = candidate.proposed.parallel_group.as_deref();
+            let conflict_domain = candidate.proposed.conflict_domain.as_deref();
+            store
+                .update_task(crate::state_store::UpdateTaskRequest {
+                    task_id: &candidate.task_id,
+                    title: None,
+                    status: None,
+                    priority: None,
+                    notes: None,
+                    description: None,
+                    parent_id: None,
+                    add_labels: &no_labels,
+                    remove_labels: &no_labels,
+                    set_labels: None,
+                    execution_mode: Some(execution_mode),
+                    order_bucket: Some(order_bucket),
+                    parallel_group: Some(parallel_group),
+                    conflict_domain: Some(conflict_domain),
+                    planner_metadata: None,
+                })
+                .await?;
+            candidate.status = "applied".to_string();
+            candidate.applied = true;
+            applied_count += 1;
+        }
+    }
+
+    let status = "pass".to_string();
+    let next_actions = if candidates.is_empty() {
+        vec!["No scheduling semantics actualization candidates were found.".to_string()]
+    } else if apply {
+        vec!["Re-run `vida taskflow graph-summary --json` to inspect refreshed scheduling projection.".to_string()]
+    } else {
+        vec![format!(
+            "Apply with `vida taskflow scheduling actualize --scope {} --apply --json`.",
+            shell_quote_arg(scope)
+        )]
+    };
+    Ok(TaskflowSchedulingActualizePlan {
+        status,
+        surface: "vida taskflow scheduling actualize".to_string(),
+        scope: scope.to_string(),
+        dry_run,
+        apply,
+        candidate_count: candidates.len(),
+        applied_count,
+        blocked_count: 0,
+        candidates,
+        blocker_codes: Vec::new(),
+        next_actions,
+    })
+}
+
+async fn run_taskflow_scheduling_surface(args: &[String]) -> ExitCode {
+    let usage = "Usage: vida taskflow scheduling actualize [--scope open-epics|<task-id>] [--dry-run|--apply] [--state-dir <path>] [--json]";
+    if matches!(
+        args,
+        [head, flag] if head == "scheduling" && matches!(flag.as_str(), "--help" | "-h")
+    ) || matches!(
+        args,
+        [head, subcommand, flag]
+            if head == "scheduling"
+                && subcommand == "actualize"
+                && matches!(flag.as_str(), "--help" | "-h")
+    ) {
+        print_taskflow_proxy_help(Some("scheduling"));
+        return ExitCode::SUCCESS;
+    }
+    if !matches!(args.first().map(String::as_str), Some("scheduling"))
+        || !matches!(args.get(1).map(String::as_str), Some("actualize"))
+    {
+        eprintln!("{usage}");
+        return ExitCode::from(2);
+    }
+
+    let mut scope = "open-epics".to_string();
+    let mut state_dir = None::<PathBuf>;
+    let mut dry_run = false;
+    let mut apply = false;
+    let mut as_json = false;
+    let mut index = 2usize;
+    while let Some(arg) = args.get(index) {
+        match arg.as_str() {
+            "--scope" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                scope = value.clone();
+                index += 2;
+            }
+            "--state-dir" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                state_dir = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--dry-run" => {
+                dry_run = true;
+                index += 1;
+            }
+            "--apply" => {
+                apply = true;
+                index += 1;
+            }
+            "--json" => {
+                as_json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                print_taskflow_proxy_help(Some("scheduling"));
+                return ExitCode::SUCCESS;
+            }
+            _ => {
+                eprintln!("{usage}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if dry_run && apply {
+        eprintln!("{usage}");
+        return ExitCode::from(2);
+    }
+    if !dry_run && !apply {
+        dry_run = true;
+    }
+
+    let state_dir = match resolve_taskflow_proxy_state_dir(state_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let store = if apply {
+        crate::state_store::StateStore::open_existing(state_dir).await
+    } else {
+        crate::state_store::StateStore::open_existing_read_only_with_timeout(
+            state_dir,
+            TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
+        )
+        .await
+    };
+    let store = match store {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let plan = match build_taskflow_scheduling_actualize_plan(&store, &scope, dry_run, apply).await
+    {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("Failed to actualize scheduling semantics: {error}");
+            return ExitCode::from(1);
+        }
+    };
+
+    if as_json {
+        crate::print_json_pretty(
+            &serde_json::to_value(&plan).expect("scheduling actualize plan should serialize"),
+        );
+    } else {
+        print_surface_header(RenderMode::Plain, "vida taskflow scheduling actualize");
+        print_surface_line(RenderMode::Plain, "status", &plan.status);
+        print_surface_line(RenderMode::Plain, "scope", &plan.scope);
+        print_surface_line(
+            RenderMode::Plain,
+            "candidate_count",
+            &plan.candidate_count.to_string(),
+        );
+        print_surface_line(
+            RenderMode::Plain,
+            "applied_count",
+            &plan.applied_count.to_string(),
+        );
+        if let Some(next_action) = plan.next_actions.first() {
+            print_surface_line(RenderMode::Plain, "next_action", next_action);
+        }
+    }
+
+    if plan.status == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 async fn run_taskflow_graph_surface(args: &[String]) -> ExitCode {
@@ -12455,6 +12834,10 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
 
     if matches!(args.args.first().map(String::as_str), Some("scheduler")) {
         return run_taskflow_scheduler_surface(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("scheduling")) {
+        return run_taskflow_scheduling_surface(&args.args).await;
     }
 
     if matches!(args.args.first().map(String::as_str), Some("pricing")) {
