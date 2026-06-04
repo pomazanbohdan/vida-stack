@@ -5832,23 +5832,13 @@ agent_system:
                 "selected_model_profile_id": "internal_fast"
             }
         }));
-        let selected_cli_entry = serde_yaml::from_str::<serde_yaml::Value>(
-            r#"
-execution_class: internal
-dispatch_transport: host_tool_bridge
-receipt_mode: host_bridge_receipt
-host_tool_bridge:
-  adapter_kind: codex_host_tools
-  adapter_capability_id: codex.multi_agent_v1
-  invocation_mode: parent_host_tool_api
-carriers:
-  middle:
-    model: gpt-5.5
-    model_reasoning_effort: medium
-    sandbox_mode: read-only
-"#,
-        )
-        .expect("selected cli entry should parse");
+        let overlay =
+            crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
+                .expect("project overlay should load");
+        let (selected_cli_system, selected_cli_entry) =
+            crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
+        assert_eq!(selected_cli_system, "codex");
+        let selected_cli_entry = selected_cli_entry.expect("codex cli entry should be selected");
         let receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()
@@ -6225,23 +6215,13 @@ agent_system:
                 "selected_tier": "middle",
                 "selected_model_profile_id": "internal_fast"
             }}));
-        let selected_cli_entry = serde_yaml::from_str::<serde_yaml::Value>(
-            r#"
-execution_class: internal
-dispatch_transport: host_tool_bridge
-receipt_mode: host_bridge_receipt
-host_tool_bridge:
-  adapter_kind: codex_host_tools
-  adapter_capability_id: codex.multi_agent_v1
-  invocation_mode: parent_host_tool_api
-carriers:
-  middle:
-    model: gpt-5.5
-    model_reasoning_effort: medium
-    sandbox_mode: read-only
-"#,
-        )
-        .expect("selected cli entry should parse");
+        let overlay =
+            crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
+                .expect("project overlay should load");
+        let (selected_cli_system, selected_cli_entry) =
+            crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
+        assert_eq!(selected_cli_system, "codex");
+        let selected_cli_entry = selected_cli_entry.expect("codex cli entry should be selected");
         let receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()

@@ -104,6 +104,18 @@ fn host_bridge_required_string<'a>(
 }
 
 fn read_host_bridge_request(path: &Path) -> Result<serde_json::Value, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Failed to inspect host bridge request `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Host bridge request `{}` is a symlink; refusing to follow it.",
+            path.display()
+        ));
+    }
     let raw = std::fs::read_to_string(path).map_err(|error| {
         format!(
             "Failed to read host bridge request `{}`: {error}",
@@ -116,6 +128,196 @@ fn read_host_bridge_request(path: &Path) -> Result<serde_json::Value, String> {
             path.display()
         )
     })
+}
+
+fn path_contains_dot_segment(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    })
+}
+
+fn canonical_state_artifact_path(
+    state_root: &Path,
+    raw_path: &str,
+    require_existing_file: bool,
+) -> Result<std::path::PathBuf, String> {
+    let path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(raw_path);
+    if path_contains_dot_segment(&path) {
+        return Err(format!(
+            "Host bridge artifact path `{}` contains inadmissible dot-segment traversal.",
+            path.display()
+        ));
+    }
+    let canonical_state_root = std::fs::canonicalize(state_root).map_err(|error| {
+        format!(
+            "Failed to canonicalize VIDA state root `{}`: {error}",
+            state_root.display()
+        )
+    })?;
+    if require_existing_file {
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "Failed to inspect host bridge artifact `{}`: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Host bridge artifact `{}` is a symlink; refusing to follow it.",
+                path.display()
+            ));
+        }
+        let canonical_path = std::fs::canonicalize(&path).map_err(|error| {
+            format!(
+                "Failed to canonicalize host bridge artifact `{}`: {error}",
+                path.display()
+            )
+        })?;
+        if !canonical_path.starts_with(&canonical_state_root) {
+            return Err(format!(
+                "Host bridge artifact `{}` escapes VIDA state root `{}`.",
+                canonical_path.display(),
+                canonical_state_root.display()
+            ));
+        }
+        Ok(canonical_path)
+    } else {
+        let parent = path.parent().ok_or_else(|| {
+            format!(
+                "Host bridge artifact path `{}` has no parent directory.",
+                path.display()
+            )
+        })?;
+        let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+            format!(
+                "Failed to canonicalize host bridge artifact directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+        if !canonical_parent.starts_with(&canonical_state_root) {
+            return Err(format!(
+                "Host bridge artifact path `{}` escapes VIDA state root `{}`.",
+                path.display(),
+                canonical_state_root.display()
+            ));
+        }
+        Ok(path)
+    }
+}
+
+fn host_bridge_request_string<'a>(request: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    request
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+async fn host_bridge_request_provenance_blockers(
+    request_path: &Path,
+    request: &serde_json::Value,
+) -> Vec<String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    host_bridge_request_provenance_blockers_for_state_root(
+        &cwd.join(".vida/data/state"),
+        request_path,
+        request,
+    )
+    .await
+}
+
+async fn host_bridge_request_provenance_blockers_for_state_root(
+    state_root: &Path,
+    request_path: &Path,
+    request: &serde_json::Value,
+) -> Vec<String> {
+    let mut blockers = Vec::new();
+    let canonical_state_root = match std::fs::canonicalize(&state_root) {
+        Ok(path) => path,
+        Err(_) => {
+            blockers.push("host_bridge_state_root_missing".to_string());
+            return blockers;
+        }
+    };
+    let canonical_request_path =
+        match canonical_state_artifact_path(&state_root, &request_path.display().to_string(), true)
+        {
+            Ok(path) => path,
+            Err(_) => {
+                blockers.push("host_bridge_request_untrusted_path".to_string());
+                return blockers;
+            }
+        };
+    let declared_request_path = match host_bridge_request_string(request, "request_path") {
+        Some(path) => path,
+        None => {
+            blockers.push("host_bridge_request_path_missing".to_string());
+            return blockers;
+        }
+    };
+    match canonical_state_artifact_path(&state_root, declared_request_path, true) {
+        Ok(path) if path == canonical_request_path => {}
+        _ => blockers.push("host_bridge_request_path_mismatch".to_string()),
+    }
+    let packet_path = host_bridge_request_string(request, "packet_path");
+    let canonical_packet_path =
+        packet_path.and_then(
+            |path| match canonical_state_artifact_path(&state_root, path, true) {
+                Ok(path) => Some(path),
+                Err(_) => {
+                    blockers.push("host_bridge_packet_path_unbounded".to_string());
+                    None
+                }
+            },
+        );
+    for (field, code) in [
+        ("result_path", "host_bridge_result_path_unbounded"),
+        ("receipt_path", "host_bridge_receipt_path_unbounded"),
+    ] {
+        if let Some(path) = host_bridge_request_string(request, field) {
+            if canonical_state_artifact_path(&state_root, path, false).is_err() {
+                blockers.push(code.to_string());
+            }
+        }
+    }
+    let Some(run_id) = host_bridge_request_string(request, "run_id") else {
+        return blockers;
+    };
+    let store = match StateStore::open_existing_read_only(canonical_state_root).await {
+        Ok(store) => store,
+        Err(_) => {
+            blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+            return blockers;
+        }
+    };
+    let receipt = match store.run_graph_dispatch_receipt(run_id).await {
+        Ok(Some(receipt)) => receipt,
+        _ => {
+            blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+            return blockers;
+        }
+    };
+    if !matches!(receipt.dispatch_status.as_str(), "routed" | "executing") {
+        blockers.push("host_bridge_dispatch_receipt_inactive".to_string());
+    }
+    if host_bridge_request_string(request, "dispatch_target")
+        != Some(receipt.dispatch_target.as_str())
+        || host_bridge_request_string(request, "backend_id") != receipt.selected_backend.as_deref()
+        || canonical_packet_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            != receipt.dispatch_packet_path.as_ref().and_then(|path| {
+                canonical_state_artifact_path(&state_root, path, true)
+                    .ok()
+                    .map(|path| path.display().to_string())
+            })
+    {
+        blockers.push("host_bridge_dispatch_receipt_mismatch".to_string());
+    }
+    blockers
 }
 
 fn legacy_internal_subagents_host_bridge_request(request: &serde_json::Value) -> bool {
@@ -199,6 +401,7 @@ fn effective_host_bridge_request(request: &serde_json::Value) -> serde_json::Val
 fn host_bridge_adapter_payload(
     request_path: &Path,
     request: &serde_json::Value,
+    provenance_blockers: Vec<String>,
 ) -> serde_json::Value {
     let effective_request = effective_host_bridge_request(request);
     let request = &effective_request;
@@ -233,7 +436,7 @@ fn host_bridge_adapter_payload(
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .unwrap_or("request");
-    let mut blocker_codes = Vec::new();
+    let mut blocker_codes = provenance_blockers;
     if !missing.is_empty() {
         blocker_codes.push("host_bridge_request_missing_fields".to_string());
     }
@@ -2278,7 +2481,11 @@ pub(crate) async fn run_agent(args: AgentArgs) -> ExitCode {
 async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
     match read_host_bridge_request(&command.request) {
         Ok(request) => {
-            let payload = host_bridge_adapter_payload(&command.request, &request);
+            let payload = host_bridge_adapter_payload(
+                &command.request,
+                &request,
+                host_bridge_request_provenance_blockers(&command.request, &request).await,
+            );
             if command.complete {
                 if payload["status"].as_str() != Some("pass") {
                     return emit_host_bridge_payload(&payload, command.json);
@@ -2736,6 +2943,7 @@ mod tests {
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
         dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
         host_bridge_adapter_payload, host_bridge_completion_lane_args,
+        host_bridge_request_provenance_blockers_for_state_root,
         resolve_agent_dispatch_next_current_task_ids, single_in_progress_task_id_from_rows,
         state_store,
     };
@@ -2770,7 +2978,8 @@ mod tests {
             "result_path": "result.json",
             "receipt_path": "receipt.json"
         });
-        let payload = host_bridge_adapter_payload(std::path::Path::new("request.json"), &request);
+        let payload =
+            host_bridge_adapter_payload(std::path::Path::new("request.json"), &request, Vec::new());
 
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
@@ -2828,7 +3037,8 @@ mod tests {
             "result_path": "result.json",
             "receipt_path": "receipt.json"
         });
-        let payload = host_bridge_adapter_payload(std::path::Path::new("request.json"), &request);
+        let payload =
+            host_bridge_adapter_payload(std::path::Path::new("request.json"), &request, Vec::new());
 
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
@@ -2864,7 +3074,8 @@ mod tests {
             "result_path": "result.json",
             "receipt_path": "receipt.json"
         });
-        let payload = host_bridge_adapter_payload(std::path::Path::new("request.json"), &request);
+        let payload =
+            host_bridge_adapter_payload(std::path::Path::new("request.json"), &request, Vec::new());
 
         assert_eq!(payload["status"], "blocked");
         let blockers = payload["blocker_codes"]
@@ -2885,6 +3096,70 @@ mod tests {
     }
 
     #[test]
+    fn host_bridge_adapter_payload_blocks_untrusted_provenance() {
+        let request = serde_json::json!({
+            "status": "pending",
+            "run_id": "run-1",
+            "dispatch_target": "implementer",
+            "packet_path": "/tmp/attacker-packet.json",
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "result_path": "result.json",
+            "receipt_path": "receipt.json"
+        });
+        let payload = host_bridge_adapter_payload(
+            std::path::Path::new("/tmp/forged-request.json"),
+            &request,
+            vec!["host_bridge_request_untrusted_path".to_string()],
+        );
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_untrusted_path"));
+        assert!(payload["host_bridge"]["host_tool_calls"]
+            .as_array()
+            .expect("calls")
+            .is_empty());
+    }
+
+    #[test]
+    fn host_bridge_provenance_blocks_request_outside_state_root() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-forged-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("state root");
+        let request_path = root.join("forged-request.json");
+        std::fs::write(&request_path, b"{}").expect("request file");
+        let request = serde_json::json!({
+            "request_path": request_path.display().to_string(),
+            "run_id": "run-1",
+            "packet_path": "/tmp/attacker-packet.json"
+        });
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+        let blockers = runtime.block_on(host_bridge_request_provenance_blockers_for_state_root(
+            &state_root,
+            &request_path,
+            &request,
+        ));
+
+        assert!(blockers.contains(&"host_bridge_request_untrusted_path".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn host_bridge_completion_lane_args_routes_through_lane_complete() {
         let request = serde_json::json!({
             "schema_version": 1,
@@ -2901,7 +3176,8 @@ mod tests {
             "result_path": "result.json",
             "receipt_path": "receipt.json"
         });
-        let payload = host_bridge_adapter_payload(std::path::Path::new("request.json"), &request);
+        let payload =
+            host_bridge_adapter_payload(std::path::Path::new("request.json"), &request, Vec::new());
         let args = host_bridge_completion_lane_args(
             std::path::Path::new("request.json"),
             &payload,
