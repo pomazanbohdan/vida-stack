@@ -323,6 +323,30 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     blockers
 }
 
+fn host_bridge_operator_fields(
+    status: &str,
+    blocker_codes: Vec<String>,
+    shared_next_actions: Vec<String>,
+    operator_next_actions: Vec<String>,
+    artifact_refs: serde_json::Value,
+) -> (serde_json::Value, serde_json::Value) {
+    let shared_fields = serde_json::json!({
+        "status": status,
+        "blocker_codes": blocker_codes.clone(),
+        "next_actions": shared_next_actions,
+        "artifact_refs": artifact_refs.clone(),
+    });
+    let operator_contracts = serde_json::json!({
+        "contract_id": "host-agent-bridge-adapter-v1",
+        "schema_version": "1",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": operator_next_actions,
+        "artifact_refs": artifact_refs,
+    });
+    (shared_fields, operator_contracts)
+}
+
 fn legacy_internal_subagents_host_bridge_request(request: &serde_json::Value) -> bool {
     request
         .get("backend_id")
@@ -516,42 +540,33 @@ fn host_bridge_adapter_payload(
             "If the parent host tool reports thread or capacity exhaustion, close stale host agents or write a blocked host bridge result with blocker_code host_agent_capacity_unavailable."
         ]
     });
+    let next_actions = if status == "pass" {
+        vec![completion_command.clone()]
+    } else {
+        vec![
+            "repair the host bridge request or selected host adapter capability before invoking parent host tools"
+                .to_string(),
+        ]
+    };
+    let artifact_refs = serde_json::json!({
+        "request_path": request_path.display().to_string(),
+        "packet_path": packet_path,
+        "result_path": result_path,
+        "receipt_path": receipt_path
+    });
+    let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+        status,
+        blocker_codes.clone(),
+        next_actions.clone(),
+        next_actions,
+        artifact_refs,
+    );
     serde_json::json!({
         "surface": "vida agent host-bridge",
         "status": status,
         "blocker_codes": blocker_codes,
-        "shared_fields": {
-            "status": status,
-            "blocker_codes": blocker_codes,
-            "next_actions": if status == "pass" {
-                vec![completion_command.clone()]
-            } else {
-                vec!["repair the host bridge request or selected host adapter capability before invoking parent host tools".to_string()]
-            },
-            "artifact_refs": {
-                "request_path": request_path.display().to_string(),
-                "packet_path": packet_path,
-                "result_path": result_path,
-                "receipt_path": receipt_path
-            }
-        },
-        "operator_contracts": {
-            "contract_id": "host-agent-bridge-adapter-v1",
-            "schema_version": "1",
-            "status": status,
-            "blocker_codes": blocker_codes,
-            "next_actions": if status == "pass" {
-                vec![completion_command.clone()]
-            } else {
-                vec!["repair the host bridge request or selected host adapter capability before invoking parent host tools".to_string()]
-            },
-            "artifact_refs": {
-                "request_path": request_path.display().to_string(),
-                "packet_path": packet_path,
-                "result_path": result_path,
-                "receipt_path": receipt_path
-            }
-        },
+        "shared_fields": shared_fields,
+        "operator_contracts": operator_contracts,
         "host_bridge": {
             "request_path": request_path.display().to_string(),
             "request_status": request_status,
@@ -2518,28 +2533,23 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                 ) {
                     Ok(args) => args,
                     Err(error) => {
+                        let blocker_codes = vec!["host_bridge_completion_args_invalid".to_string()];
+                        let artifact_refs = serde_json::json!({
+                            "request_path": command.request.display().to_string()
+                        });
+                        let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+                            "blocked",
+                            blocker_codes.clone(),
+                            vec![error.clone()],
+                            vec!["repair the host bridge request before completion".to_string()],
+                            artifact_refs,
+                        );
                         let blocked = serde_json::json!({
                             "surface": "vida agent host-bridge",
                             "status": "blocked",
-                            "blocker_codes": ["host_bridge_completion_args_invalid"],
-                            "shared_fields": {
-                                "status": "blocked",
-                                "blocker_codes": ["host_bridge_completion_args_invalid"],
-                                "next_actions": [error],
-                                "artifact_refs": {
-                                    "request_path": command.request.display().to_string()
-                                }
-                            },
-                            "operator_contracts": {
-                                "contract_id": "host-agent-bridge-adapter-v1",
-                                "schema_version": "1",
-                                "status": "blocked",
-                                "blocker_codes": ["host_bridge_completion_args_invalid"],
-                                "next_actions": ["repair the host bridge request before completion"],
-                                "artifact_refs": {
-                                    "request_path": command.request.display().to_string()
-                                }
-                            }
+                            "blocker_codes": blocker_codes,
+                            "shared_fields": shared_fields,
+                            "operator_contracts": operator_contracts
                         });
                         return emit_host_bridge_payload(&blocked, command.json);
                     }
@@ -2549,28 +2559,25 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
             emit_host_bridge_payload(&payload, command.json)
         }
         Err(error) => {
+            let blocker_codes = vec!["host_bridge_request_unreadable".to_string()];
+            let next_actions =
+                vec!["provide a readable host_tool_bridge_request JSON artifact".to_string()];
+            let artifact_refs = serde_json::json!({
+                "request_path": command.request.display().to_string()
+            });
+            let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+                "blocked",
+                blocker_codes.clone(),
+                next_actions.clone(),
+                next_actions,
+                artifact_refs,
+            );
             let payload = serde_json::json!({
                 "surface": "vida agent host-bridge",
                 "status": "blocked",
-                "blocker_codes": ["host_bridge_request_unreadable"],
-                "shared_fields": {
-                    "status": "blocked",
-                    "blocker_codes": ["host_bridge_request_unreadable"],
-                    "next_actions": ["provide a readable host_tool_bridge_request JSON artifact"],
-                    "artifact_refs": {
-                        "request_path": command.request.display().to_string()
-                    }
-                },
-                "operator_contracts": {
-                    "contract_id": "host-agent-bridge-adapter-v1",
-                    "schema_version": "1",
-                    "status": "blocked",
-                    "blocker_codes": ["host_bridge_request_unreadable"],
-                    "next_actions": ["provide a readable host_tool_bridge_request JSON artifact"],
-                    "artifact_refs": {
-                        "request_path": command.request.display().to_string()
-                    }
-                },
+                "blocker_codes": blocker_codes,
+                "shared_fields": shared_fields,
+                "operator_contracts": operator_contracts,
                 "error": error
             });
             emit_host_bridge_payload(&payload, command.json)
@@ -2986,6 +2993,19 @@ mod tests {
 
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
+        assert_eq!(payload["shared_fields"]["status"], payload["status"]);
+        assert_eq!(
+            payload["shared_fields"]["next_actions"],
+            payload["operator_contracts"]["next_actions"]
+        );
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"],
+            payload["operator_contracts"]["artifact_refs"]
+        );
+        assert_eq!(
+            payload["operator_contracts"]["contract_id"],
+            "host-agent-bridge-adapter-v1"
+        );
         assert!(payload["host_bridge"]["completion_command"]
             .as_str()
             .unwrap()
