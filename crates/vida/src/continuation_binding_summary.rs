@@ -1174,6 +1174,50 @@ pub(crate) fn add_taskflow_active_work_truth(
     summary
 }
 
+pub(crate) fn apply_closed_task_active_run_projection_mismatch_gate(
+    mut summary: serde_json::Value,
+) -> serde_json::Value {
+    if let serde_json::Value::Object(object) = &mut summary {
+        object.insert(
+            "status".to_string(),
+            serde_json::Value::String("ambiguous".to_string()),
+        );
+        object.insert(
+            "continuation_allowed".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert(
+            "continuation_required_now".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert("active_bounded_unit".to_string(), serde_json::Value::Null);
+        object.insert("why_this_unit".to_string(), serde_json::Value::Null);
+        object.insert(
+            "primary_path".to_string(),
+            serde_json::Value::String("diagnosis_path".to_string()),
+        );
+        object.insert(
+            "sequential_vs_parallel_posture".to_string(),
+            serde_json::Value::String("unknown_until_run_graph_blocker_resolved".to_string()),
+        );
+        object.insert(
+            "pause_boundary_gate".to_string(),
+            serde_json::Value::String("forbidden_while_runtime_projection_mismatch".to_string()),
+        );
+        object.insert(
+            "ambiguity_reason".to_string(),
+            serde_json::Value::String("closed_task_active_run_projection_mismatch".to_string()),
+        );
+        object.insert(
+            "next_actions".to_string(),
+            serde_json::json!([
+                "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work."
+            ]),
+        );
+    }
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

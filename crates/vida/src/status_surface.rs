@@ -94,21 +94,25 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     if as_json {
         if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
         {
-            println!(
-                "{}",
-                render_cached_status_projection_for_operator(summary_only, &cached)
-            );
-            return ExitCode::SUCCESS;
-        }
-        if summary_only {
-            if let Some(cached) =
-                read_state_fresh_admissible_status_json_projection(&state_dir, summary_only)
-            {
+            if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
                 );
                 return ExitCode::SUCCESS;
+            }
+        }
+        if summary_only {
+            if let Some(cached) =
+                read_state_fresh_admissible_status_json_projection(&state_dir, summary_only)
+            {
+                if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
+                    println!(
+                        "{}",
+                        render_cached_status_projection_for_operator(summary_only, &cached)
+                    );
+                    return ExitCode::SUCCESS;
+                }
             }
         }
         if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
@@ -118,11 +122,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         )
         .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
-            println!(
-                "{}",
-                render_cached_status_projection_for_operator(summary_only, &cached)
-            );
-            return ExitCode::SUCCESS;
+            if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
+                println!(
+                    "{}",
+                    render_cached_status_projection_for_operator(summary_only, &cached)
+                );
+                return ExitCode::SUCCESS;
+            }
         }
         if let Some(cached) =
             crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
@@ -132,11 +138,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             )
             .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
-            println!(
-                "{}",
-                render_cached_status_projection_for_operator(summary_only, &cached)
-            );
-            return ExitCode::SUCCESS;
+            if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
+                println!(
+                    "{}",
+                    render_cached_status_projection_for_operator(summary_only, &cached)
+                );
+                return ExitCode::SUCCESS;
+            }
         }
         if let Some(cached) =
             crate::operator_projection_cache::read_state_stale_recent_json_projection(
@@ -159,11 +167,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             } else {
                 cached.clone()
             };
-            println!(
-                "{}",
-                render_cached_status_projection_for_operator(summary_only, &rendered)
-            );
-            return ExitCode::SUCCESS;
+            if cached_status_projection_current_runtime_admissible(&state_dir, &rendered).await {
+                println!(
+                    "{}",
+                    render_cached_status_projection_for_operator(summary_only, &rendered)
+                );
+                return ExitCode::SUCCESS;
+            }
         }
     }
 
@@ -261,6 +271,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                let latest_global_run_graph_status = match store.latest_run_graph_status().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("Failed to read global latest run graph status: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
                 let latest_terminal_task_active_run_graph_status = match store
                     .latest_terminal_task_active_run_graph_status()
                     .await
@@ -460,7 +477,18 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                         None => (false, false),
                     };
+                let latest_global_run_graph_task_closed =
+                    latest_global_run_graph_status.as_ref().is_some_and(|status| {
+                        all_tasks.iter().any(|task| {
+                            task.id == status.task_id
+                                && task.status == "closed"
+                                && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                                    status,
+                                )
+                        })
+                    });
                 let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
+                    || latest_global_run_graph_task_closed
                     || latest_terminal_task_active_run_graph_status.is_some();
                 let in_progress_tasks = all_tasks
                     .iter()
@@ -604,6 +632,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         continuation_binding,
                         taskflow_active_candidates,
                     );
+                let continuation_binding = if closed_task_active_run_projection_mismatch {
+                    crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
+                        continuation_binding,
+                    )
+                } else {
+                    continuation_binding
+                };
                 let continuation_binding_ambiguous = continuation_binding["status"].as_str()
                     == Some("ambiguous")
                     && (has_taskflow_active_candidates
@@ -804,6 +839,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         operator_session_projection: &operator_session_projection,
                         continuation_binding: &continuation_binding,
                         latest_run_graph_status: latest_run_graph_status.as_ref(),
+                        latest_terminal_task_active_run_graph_status:
+                            latest_terminal_task_active_run_graph_status.as_ref(),
                         latest_run_graph_recovery: latest_run_graph_recovery.as_ref(),
                         latest_run_graph_checkpoint: latest_run_graph_checkpoint.as_ref(),
                         latest_run_graph_gate: latest_run_graph_gate.as_ref(),
@@ -1043,6 +1080,70 @@ fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| cached.to_string())
 }
 
+async fn cached_status_projection_current_runtime_admissible(
+    state_dir: &std::path::Path,
+    cached: &str,
+) -> bool {
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
+        return false;
+    };
+    if payload_has_closed_task_active_run_projection_mismatch(&payload) {
+        return false;
+    }
+    if payload
+        .get("active_bounded_unit")
+        .unwrap_or(&serde_json::Value::Null)
+        .is_null()
+    {
+        return true;
+    }
+
+    let Ok(store) = StateStore::open_existing_read_only_with_timeout(
+        state_dir.to_path_buf(),
+        std::time::Duration::from_secs(2),
+    )
+    .await
+    else {
+        return false;
+    };
+    let latest_terminal_task_active_run_graph_status =
+        match store.latest_terminal_task_active_run_graph_status().await {
+            Ok(summary) => summary,
+            Err(_) => return false,
+        };
+    if latest_terminal_task_active_run_graph_status.is_some() {
+        return false;
+    }
+    let latest_run_graph_status = match store.latest_run_graph_status().await {
+        Ok(summary) => summary,
+        Err(_) => return false,
+    };
+    let Some(latest_run_graph_status) = latest_run_graph_status else {
+        return true;
+    };
+    let all_tasks = match store.list_tasks(None, true).await {
+        Ok(tasks) => tasks,
+        Err(_) => return false,
+    };
+    !all_tasks.iter().any(|task| {
+        task.id == latest_run_graph_status.task_id
+            && task.status == "closed"
+            && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                &latest_run_graph_status,
+            )
+    })
+}
+
+fn payload_has_closed_task_active_run_projection_mismatch(payload: &serde_json::Value) -> bool {
+    payload["continuation_binding"]["ambiguity_reason"].as_str()
+        == Some("closed_task_active_run_projection_mismatch")
+        || payload["blocker_codes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|code| code.as_str() == Some("closed_task_active_run_projection_mismatch"))
+}
+
 fn compact_status_projection_for_fast_operator_render(payload: &mut serde_json::Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
@@ -1107,6 +1208,15 @@ async fn refresh_cached_status_projection_runtime_fields(
         Ok(summary) => summary,
         Err(_) => return None,
     };
+    let latest_global_run_graph_status = match store.latest_run_graph_status().await {
+        Ok(summary) => summary,
+        Err(_) => return None,
+    };
+    let latest_terminal_task_active_run_graph_status =
+        match store.latest_terminal_task_active_run_graph_status().await {
+            Ok(summary) => summary,
+            Err(_) => return None,
+        };
     let latest_run_graph_run_id = latest_run_graph_status
         .as_ref()
         .map(|status| status.run_id.as_str());
@@ -1200,6 +1310,18 @@ async fn refresh_cached_status_projection_runtime_fields(
             },
             None => (false, false),
         };
+    let latest_global_run_graph_task_closed =
+        latest_global_run_graph_status
+            .as_ref()
+            .is_some_and(|status| {
+                all_tasks.iter().any(|task| {
+                    task.id == status.task_id
+                        && task.status == "closed"
+                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                            status,
+                        )
+                })
+            });
     let terminal_consume_continue_run_id = if latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
@@ -1261,6 +1383,16 @@ async fn refresh_cached_status_projection_runtime_fields(
         continuation_binding,
         taskflow_active_candidates,
     );
+    let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
+        || latest_global_run_graph_task_closed
+        || latest_terminal_task_active_run_graph_status.is_some();
+    let continuation_binding = if closed_task_active_run_projection_mismatch {
+        crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
+            continuation_binding,
+        )
+    } else {
+        continuation_binding
+    };
     let mut root_session_write_guard = payload["root_session_write_guard"].clone();
     root_session_write_guard =
         crate::status_surface_write_guard::merge_live_exception_takeover_write_guard_with_task_authority(
@@ -1362,6 +1494,10 @@ async fn refresh_cached_status_projection_runtime_fields(
     object.insert(
         "latest_run_graph_status".to_string(),
         latest_run_graph_status_json,
+    );
+    object.insert(
+        "latest_terminal_task_active_run_graph_status".to_string(),
+        serde_json::to_value(&latest_terminal_task_active_run_graph_status).ok()?,
     );
     object.insert(
         "latest_run_graph_delegation_gate".to_string(),

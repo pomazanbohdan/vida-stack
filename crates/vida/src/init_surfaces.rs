@@ -1436,19 +1436,79 @@ fn cached_orchestrator_init_payload_has_top_level_continuation_fields(cached: &s
     serde_json::from_str::<serde_json::Value>(cached)
         .ok()
         .is_some_and(|payload| {
-            !payload
-                .get("active_bounded_unit")
-                .unwrap_or(&serde_json::Value::Null)
-                .is_null()
-                && !payload
-                    .get("why_this_unit")
-                    .unwrap_or(&serde_json::Value::Null)
-                    .is_null()
+            payload.get("active_bounded_unit").is_some()
+                && payload.get("why_this_unit").is_some()
                 && payload
                     .get("sequential_vs_parallel_posture")
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(|value| !value.trim().is_empty())
         })
+}
+
+async fn cached_orchestrator_init_payload_is_currently_admissible(
+    state_dir: &Path,
+    cached: &str,
+) -> bool {
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
+        return false;
+    };
+    if !cached_orchestrator_init_payload_has_top_level_continuation_fields(cached) {
+        return false;
+    }
+    if cached_orchestrator_init_payload_has_closed_task_active_run_projection_mismatch(&payload) {
+        return false;
+    }
+    if payload
+        .get("active_bounded_unit")
+        .unwrap_or(&serde_json::Value::Null)
+        .is_null()
+    {
+        return true;
+    }
+
+    let Ok(store) = StateStore::open_existing_read_only_with_timeout(
+        state_dir.to_path_buf(),
+        std::time::Duration::from_secs(2),
+    )
+    .await
+    else {
+        return false;
+    };
+    let latest_terminal_task_active_run_graph_status =
+        match store.latest_terminal_task_active_run_graph_status().await {
+            Ok(summary) => summary,
+            Err(_) => return false,
+        };
+    if latest_terminal_task_active_run_graph_status.is_some() {
+        return false;
+    }
+    let latest_run_graph_status = match store.latest_run_graph_status().await {
+        Ok(summary) => summary,
+        Err(_) => return false,
+    };
+    let Some(latest_run_graph_status) = latest_run_graph_status else {
+        return true;
+    };
+    let all_tasks = match store.list_tasks(None, true).await {
+        Ok(tasks) => tasks,
+        Err(_) => return false,
+    };
+    !all_tasks.iter().any(|task| {
+        task.id == latest_run_graph_status.task_id
+            && task.status == "closed"
+            && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                &latest_run_graph_status,
+            )
+    })
+}
+
+fn cached_orchestrator_init_payload_has_closed_task_active_run_projection_mismatch(
+    payload: &serde_json::Value,
+) -> bool {
+    payload["continuation_binding"]["ambiguity_reason"].as_str()
+        == Some("closed_task_active_run_projection_mismatch")
+        || payload["init"]["continuation_binding"]["ambiguity_reason"].as_str()
+            == Some("closed_task_active_run_projection_mismatch")
 }
 
 fn build_orchestrator_runtime_contract(
@@ -4369,7 +4429,8 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
             } else {
                 cached.clone()
             };
-            if cached_orchestrator_init_payload_has_top_level_continuation_fields(&rendered) {
+            if cached_orchestrator_init_payload_is_currently_admissible(&state_dir, &rendered).await
+            {
                 println!("{rendered}");
                 return ExitCode::SUCCESS;
             }
@@ -4393,8 +4454,15 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                         &overlay,
                     )
                 {
-                    println!("{rendered}");
-                    return ExitCode::SUCCESS;
+                    if cached_orchestrator_init_payload_is_currently_admissible(
+                        &state_dir,
+                        &rendered,
+                    )
+                    .await
+                    {
+                        println!("{rendered}");
+                        return ExitCode::SUCCESS;
+                    }
                 }
             }
         }

@@ -112,10 +112,20 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .latest_run_graph_status_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run graph status: {error}"))?;
+    let latest_global_run_graph_status = store
+        .latest_run_graph_status()
+        .await
+        .map_err(|error| format!("Failed to read global latest run graph status: {error}"))?;
     let latest_run_graph_recovery = store
         .latest_run_graph_recovery_summary_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?;
+    let latest_terminal_task_active_run_graph_status = store
+        .latest_terminal_task_active_run_graph_status()
+        .await
+        .map_err(|error| {
+            format!("Failed to read latest terminal-task run graph status: {error}")
+        })?;
     let explicit_continuation_binding = store
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
@@ -155,6 +165,18 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             },
             None => (false, false),
         };
+    let latest_global_run_graph_task_closed =
+        latest_global_run_graph_status
+            .as_ref()
+            .is_some_and(|status| {
+                all_tasks.iter().any(|task| {
+                    task.id == status.task_id
+                        && task.status == "closed"
+                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                            status,
+                        )
+                })
+            });
     let continuation_binding =
         crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
             explicit_continuation_binding.as_ref(),
@@ -185,6 +207,16 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         continuation_binding,
         taskflow_active_candidates,
     );
+    let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
+        || latest_global_run_graph_task_closed
+        || latest_terminal_task_active_run_graph_status.is_some();
+    let continuation_binding = if closed_task_active_run_projection_mismatch {
+        crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
+            continuation_binding,
+        )
+    } else {
+        continuation_binding
+    };
     let runtime_consumption = crate::runtime_consumption_summary(store.root())?;
     let latest_final_snapshot_path = latest_final_runtime_consumption_snapshot_path(store.root())?;
     let latest_recorded_final_snapshot_path =

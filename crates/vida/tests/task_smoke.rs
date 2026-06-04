@@ -1898,7 +1898,10 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     let (project_root, state_dir) = project_bound_state_dir();
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
-    let orchestrator = run_command_json(&["orchestrator-init", "--json"], &state_dir);
+    let orchestrator = run_command_json(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
     assert_eq!(orchestrator["surface"], "vida orchestrator-init");
     assert!(matches!(
         orchestrator["init"]["status"].as_str(),
@@ -6281,8 +6284,7 @@ fn task_close_preserves_unevidenced_closed_task_active_run_projection() {
 
 #[test]
 fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
-    let state_dir = unique_state_dir();
-    fs::create_dir_all(&state_dir).expect("create state dir");
+    let (project_root, state_dir) = project_bound_state_dir();
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
     let parent_id = "task-reconcile-closed-runs-parent";
@@ -6410,6 +6412,19 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
         status_before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
         "status must share the closed-run blocker before reconcile: {status_before}"
     );
+    assert_eq!(
+        status_before["latest_terminal_task_active_run_graph_status"]["task_id"],
+        before["latest_terminal_task_active_run_graph_status"]["task_id"],
+        "status must expose the same terminal-task active run evidence that drives the closed-run blocker: {status_before}"
+    );
+    assert!(
+        status_before["active_bounded_unit"].is_null(),
+        "status must not promote single in-progress TaskFlow work while closed-run mismatch is active: {status_before}"
+    );
+    assert_ne!(
+        status_before["continuation_binding"]["status"], "bound",
+        "status continuation binding must fail closed while closed-run mismatch is active: {status_before}"
+    );
     let (graph_before, _) =
         run_command_json_allow_failure(&["taskflow", "graph-summary", "--json"], &state_dir);
     let graph_before_blockers =
@@ -6427,6 +6442,29 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
                 |value| value.contains("vida task reconcile-closed-runs --limit 25 --json")
             )),
         "graph-summary must publish the canonical reconcile command: {graph_before}"
+    );
+    let (orchestrator_before, _) = run_command_json_allow_failure(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert!(
+        orchestrator_before["active_bounded_unit"].is_null(),
+        "orchestrator-init must not promote single in-progress TaskFlow work while closed-run mismatch is active: {orchestrator_before}"
+    );
+    assert_eq!(
+        orchestrator_before["continuation_binding"]["ambiguity_reason"],
+        "closed_task_active_run_projection_mismatch",
+        "orchestrator-init must publish the closed-run mismatch continuation reason: {orchestrator_before}"
+    );
+    assert!(
+        orchestrator_before["continuation_binding"]["next_actions"]
+            .as_array()
+            .expect("orchestrator-init continuation next actions should render")
+            .iter()
+            .any(|action| action.as_str().is_some_and(
+                |value| value.contains("vida task reconcile-closed-runs --limit 25 --json")
+            )),
+        "orchestrator-init must publish the canonical reconcile command: {orchestrator_before}"
     );
     let (diagnostics_before, diagnostics_before_success) = run_command_json_allow_failure(
         &[
@@ -6481,14 +6519,73 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
         after["latest_terminal_task_active_run_graph_status"]["task_id"],
         "task-reconcile-closed-runs-b"
     );
+    let (status_after, _) = run_command_json_allow_failure(&["status", "--json"], &state_dir);
+    let status_after_blockers =
+        require_json_string_array(&status_after["blocker_codes"], "status after blockers");
+    assert!(
+        status_after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "status must remain aligned with doctor after skipped closed-run reconcile: {status_after}"
+    );
+    assert!(
+        status_after["active_bounded_unit"].is_null(),
+        "status must still fail closed after skipped closed-run reconcile: {status_after}"
+    );
+    assert_eq!(
+        status_after["continuation_binding"]["ambiguity_reason"],
+        "closed_task_active_run_projection_mismatch",
+        "status continuation must preserve the closed-run mismatch reason after skipped reconcile: {status_after}"
+    );
+    let (graph_after, _) =
+        run_command_json_allow_failure(&["taskflow", "graph-summary", "--json"], &state_dir);
+    let graph_after_blockers =
+        require_json_string_array(&graph_after["blocker_codes"], "graph after blockers");
+    assert!(
+        graph_after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "graph-summary must remain aligned with doctor after skipped closed-run reconcile: {graph_after}"
+    );
+    let (orchestrator_after, _) = run_command_json_allow_failure(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert!(
+        orchestrator_after["active_bounded_unit"].is_null(),
+        "orchestrator-init must still fail closed after skipped closed-run reconcile: {orchestrator_after}"
+    );
+    assert_eq!(
+        orchestrator_after["continuation_binding"]["ambiguity_reason"],
+        "closed_task_active_run_projection_mismatch",
+        "orchestrator-init must preserve the closed-run mismatch reason after skipped reconcile: {orchestrator_after}"
+    );
+    let (diagnostics_after, diagnostics_after_success) = run_command_json_allow_failure(
+        &[
+            "diagnostics",
+            "post-commit",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !diagnostics_after_success,
+        "diagnostics post-commit must still fail closed after skipped closed-run reconcile: {diagnostics_after}"
+    );
+    let diagnostics_after_blockers = require_json_string_array(
+        &diagnostics_after["blocker_codes"],
+        "diagnostics after blockers",
+    );
+    assert!(
+        diagnostics_after_blockers
+            .contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "diagnostics post-commit must remain aligned with doctor after skipped reconcile: {diagnostics_after}"
+    );
 
-    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(project_root);
 }
 
 #[test]
 fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth() {
-    let state_dir = unique_state_dir();
-    fs::create_dir_all(&state_dir).expect("create state dir");
+    let (project_root, state_dir) = project_bound_state_dir();
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
     let parent_id = "task-reconcile-unproven-parent";
@@ -6522,6 +6619,22 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
         &["taskflow", "run-graph", "init", task_id, "implementation"],
         &state_dir,
     );
+    let cached_orchestrator_before_close = run_command_json(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert_eq!(
+        cached_orchestrator_before_close["active_bounded_unit"]["task_id"],
+        task_id,
+        "pre-close orchestrator-init should cache the single active bounded unit for the regression setup: {cached_orchestrator_before_close}"
+    );
+    let cached_status_before_close =
+        run_command_json(&["status", "--state-dir", &state_dir, "--json"], &state_dir);
+    assert_eq!(
+        cached_status_before_close["active_bounded_unit"]["task_id"],
+        task_id,
+        "pre-close status should cache the single active bounded unit for the regression setup: {cached_status_before_close}"
+    );
 
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
@@ -6544,6 +6657,32 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
     let before = run_command_json(&["doctor", "--json"], &state_dir);
     let before_blockers = require_json_string_array(&before["blocker_codes"], "before blockers");
     assert!(before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
+    let (status_before, _) = run_command_json_allow_failure(
+        &["status", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert!(
+        status_before["active_bounded_unit"].is_null(),
+        "status must invalidate cached active bounded unit when current state has a closed-task active run mismatch: {status_before}"
+    );
+    assert_eq!(
+        status_before["continuation_binding"]["ambiguity_reason"],
+        "closed_task_active_run_projection_mismatch",
+        "status must publish the closed-run mismatch reason after cache invalidation: {status_before}"
+    );
+    let (orchestrator_before, _) = run_command_json_allow_failure(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert!(
+        orchestrator_before["active_bounded_unit"].is_null(),
+        "orchestrator-init must invalidate cached active bounded unit when current state has a closed-task active run mismatch: {orchestrator_before}"
+    );
+    assert_eq!(
+        orchestrator_before["continuation_binding"]["ambiguity_reason"],
+        "closed_task_active_run_projection_mismatch",
+        "orchestrator-init must publish the closed-run mismatch reason after cache invalidation: {orchestrator_before}"
+    );
 
     let reconcile = run_command_json(
         &["task", "reconcile-closed-runs", "--limit", "25", "--json"],
@@ -6606,7 +6745,7 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
         true
     );
 
-    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(project_root);
 }
 
 #[test]
@@ -12434,7 +12573,10 @@ fn multi_session_observe_mode_non_blocking() {
     );
     assert_eq!(task["status"], "pass");
 
-    let orchestrator = run_command_json(&["orchestrator-init", "--json"], &state_dir);
+    let orchestrator = run_command_json(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
     assert_eq!(orchestrator["surface"], "vida orchestrator-init");
 
     let status = run_command_json(&["status", "--json"], &state_dir);

@@ -2047,7 +2047,17 @@ pub(crate) fn merge_project_activation_into_init_view(
                 serde_json::Value::String("blocked_during_pending_activation".to_string());
         }
     }
-    init_view["status"] = serde_json::Value::String(canonical_status.to_string());
+    let continuation_blocks_normal_work = !activation_pending
+        && init_view["continuation_binding"]["ambiguity_reason"].as_str()
+            == Some("closed_task_active_run_projection_mismatch");
+    init_view["status"] = serde_json::Value::String(
+        if continuation_blocks_normal_work {
+            "blocked"
+        } else {
+            canonical_status
+        }
+        .to_string(),
+    );
 
     init_view["project_activation"] = serde_json::json!({
         "status": project_activation_view["status"],
