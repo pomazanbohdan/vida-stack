@@ -365,10 +365,15 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             Ok(selection) => selection,
                             Err(error) => {
                                 if as_json {
+                                    let blocking_role_selection =
+                                        super::blocking_lane_selection(&request_text, &error);
+                                    let blocked_run_id =
+                                        super::runtime_consumption_run_id(&blocking_role_selection);
                                     let dispatch_receipt = blocked_dispatch_receipt(
                                         "unresolved_lane_selection",
                                         &bundle_check,
                                         &runtime_bundle,
+                                        Some(blocked_run_id.as_str()),
                                     );
                                     let mut closure_admission =
                                         super::RuntimeConsumptionClosureAdmission {
@@ -406,10 +411,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         generated_at: generated_at.clone(),
                                         closure_authority: "taskflow".to_string(),
                                         consume_final_mode: consume_final_mode.as_str().to_string(),
-                                        role_selection: super::blocking_lane_selection(
-                                            &request_text,
-                                            &error,
-                                        ),
+                                        role_selection: blocking_role_selection,
                                         request_text: request_text.clone(),
                                         direct_consumption_ready: false,
                                         runtime_bundle,
@@ -1106,6 +1108,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             };
                             let role_selection =
                                 super::blocking_lane_selection(&request_text, &error);
+                            let run_graph_bootstrap =
+                                crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
+                                    &store,
+                                    &role_selection,
+                                )
+                                .await;
                             let mut closure_admission = super::build_runtime_closure_admission(
                                 &bundle_check,
                                 &docflow_verdict,
@@ -1142,11 +1150,30 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 crate::runtime_consumption_surface::build_docflow_receipt_evidence(
                                     &readiness, &proof,
                                 );
+                            let blocked_run_id =
+                                super::json_string(run_graph_bootstrap.get("run_id"))
+                                    .unwrap_or_else(|| {
+                                        super::runtime_consumption_run_id(&role_selection)
+                                    });
                             let dispatch_receipt = blocked_dispatch_receipt(
                                 "docflow_activation_failed",
                                 &bundle_check,
                                 &runtime_bundle,
+                                Some(blocked_run_id.as_str()),
                             );
+                            if let Ok(receipt) = serde_json::from_value::<
+                                crate::state_store::RunGraphDispatchReceipt,
+                            >(
+                                dispatch_receipt.clone()
+                            ) {
+                                if let Err(error) =
+                                    store.record_run_graph_dispatch_receipt(&receipt).await
+                                {
+                                    eprintln!(
+                                        "Failed to record blocked run-graph dispatch receipt: {error}"
+                                    );
+                                }
+                            }
                             let mut docflow_activation = super::blocking_docflow_activation(&error);
                             if let Some(evidence) = docflow_activation.evidence.as_object_mut() {
                                 evidence.insert(
@@ -1182,11 +1209,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     "handoff_ready": false,
                                     "reason": "docflow_activation_failed",
                                 }),
-                                run_graph_bootstrap: serde_json::json!({
-                                    "status": "blocked",
-                                    "handoff_ready": false,
-                                    "reason": "docflow_activation_failed",
-                                }),
+                                run_graph_bootstrap,
                                 dispatch_receipt,
                                 dispatch_packet_preview: None,
                                 direct_consumption_ready: false,
@@ -1629,20 +1652,45 @@ fn blocked_dispatch_receipt(
     reason: &str,
     bundle_check: &super::TaskflowConsumeBundleCheck,
     runtime_bundle: &super::TaskflowConsumeBundlePayload,
+    run_id: Option<&str>,
 ) -> serde_json::Value {
     let mut downstream_dispatch_blockers = bundle_check.blockers.clone();
     if !downstream_dispatch_blockers.iter().any(|row| row == reason) {
         downstream_dispatch_blockers.insert(0, reason.to_string());
     }
+    let run_id = run_id.map(str::trim).filter(|value| !value.is_empty());
 
-    serde_json::json!({
+    let mut receipt = serde_json::json!({
         "status": "blocked",
         "dispatch_status": "blocked",
+        "lane_status": super::LaneStatus::LaneBlocked.as_str(),
         "dispatch_kind": "none",
         "dispatch_target": "none",
         "dispatch_surface": "vida taskflow consume final",
+        "dispatch_command": null,
+        "dispatch_packet_path": null,
+        "dispatch_result_path": null,
         "blocker_code": reason,
+        "supersedes_receipt_id": null,
+        "exception_path_receipt_id": null,
+        "downstream_dispatch_target": null,
+        "downstream_dispatch_command": null,
+        "downstream_dispatch_note": null,
+        "downstream_dispatch_ready": false,
         "downstream_dispatch_blockers": downstream_dispatch_blockers,
+        "downstream_dispatch_packet_path": null,
+        "downstream_dispatch_status": null,
+        "downstream_dispatch_result_path": null,
+        "downstream_dispatch_trace_path": null,
+        "downstream_dispatch_executed_count": 0,
+        "downstream_dispatch_active_target": null,
+        "downstream_dispatch_last_target": null,
+        "activation_agent_type": null,
+        "activation_runtime_role": null,
+        "selected_backend": null,
+        "recorded_at": time::OffsetDateTime::now_utc()
+            .format(&super::Rfc3339)
+            .expect("rfc3339 timestamp should render"),
         "artifact_refs": {
             "root_artifact_id": bundle_check.root_artifact_id,
             "bundle_artifact_name": runtime_bundle.artifact_name,
@@ -1651,7 +1699,11 @@ fn blocked_dispatch_receipt(
                 "invalidation_tuple_present": runtime_bundle.cache_delivery_contract["invalidation_tuple"].is_object(),
             },
         },
-    })
+    });
+    if let Some(run_id) = run_id {
+        receipt["run_id"] = serde_json::Value::String(run_id.to_string());
+    }
+    receipt
 }
 
 fn normalize_runtime_consumption_statuses(
