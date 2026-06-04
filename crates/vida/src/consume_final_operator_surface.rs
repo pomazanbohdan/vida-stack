@@ -2,7 +2,9 @@ use crate::contract_profile_adapter::{
     blocker_code, canonical_blocker_code_list, operator_contract_status_is_blocked,
     render_operator_contract_envelope, BlockerCode,
 };
-use crate::operator_contracts::render_vida_gate_result_from_operator_contracts;
+use crate::operator_contracts::{
+    finalize_release1_operator_truth, render_vida_gate_result_from_operator_contracts,
+};
 
 pub(crate) fn emit_taskflow_consume_final_json(
     store: &crate::StateStore,
@@ -37,11 +39,6 @@ pub(crate) fn emit_taskflow_consume_final_json(
     }
     consume_final_blocker_codes =
         canonical_blocker_code_list(consume_final_blocker_codes.iter().map(String::as_str));
-    let consume_final_status = if consume_final_blocker_codes.is_empty() {
-        "pass"
-    } else {
-        "blocked"
-    };
     let failure_control_evidence = payload_json["dispatch_receipt"]["run_id"]
         .as_str()
         .zip(
@@ -66,8 +63,7 @@ pub(crate) fn emit_taskflow_consume_final_json(
     });
     let snapshot_path =
         crate::write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
-    let mut operator_contracts = build_operator_contracts_envelope(
-        consume_final_status,
+    let finalized = finalize_release1_operator_truth(
         consume_final_blocker_codes.clone(),
         consume_final_next_actions.clone(),
         serde_json::json!({
@@ -77,16 +73,12 @@ pub(crate) fn emit_taskflow_consume_final_json(
             "retrieval_trust_signal": serde_json::json!({}),
             "consume_final_surface": "vida taskflow consume final",
         }),
-    );
-    let mut shared_fields = serde_json::json!({
-        "trace_id": operator_contracts["trace_id"].clone(),
-        "workflow_class": operator_contracts["workflow_class"].clone(),
-        "risk_tier": operator_contracts["risk_tier"].clone(),
-        "status": operator_contracts["status"].clone(),
-        "blocker_codes": operator_contracts["blocker_codes"].clone(),
-        "next_actions": operator_contracts["next_actions"].clone(),
-        "artifact_refs": operator_contracts["artifact_refs"].clone(),
-    });
+    )?;
+    let consume_final_status = finalized.status;
+    let consume_final_blocker_codes = finalized.blocker_codes.clone();
+    let consume_final_next_actions = finalized.next_actions.clone();
+    let mut operator_contracts = finalized.operator_contracts;
+    let mut shared_fields = finalized.shared_fields;
     let mut snapshot_with_operator_contracts = serde_json::json!({
         "surface": "vida taskflow consume final",
         "trace_id": operator_contracts["trace_id"].clone(),

@@ -290,6 +290,9 @@ pub(crate) fn finalize_release1_operator_truth(
         return Err(error);
     }
     let shared_fields = serde_json::json!({
+        "trace_id": operator_contracts["trace_id"].clone(),
+        "workflow_class": operator_contracts["workflow_class"].clone(),
+        "risk_tier": operator_contracts["risk_tier"].clone(),
         "status": operator_contracts["status"].clone(),
         "blocker_codes": operator_contracts["blocker_codes"].clone(),
         "next_actions": operator_contracts["next_actions"].clone(),
