@@ -300,7 +300,10 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             return blockers;
         }
     };
-    if !matches!(receipt.dispatch_status.as_str(), "routed" | "executing") {
+    if !matches!(
+        receipt.dispatch_status.as_str(),
+        "routed" | "executing" | "bridge_request_pending"
+    ) {
         blockers.push("host_bridge_dispatch_receipt_inactive".to_string());
     }
     if host_bridge_request_string(request, "dispatch_target")
@@ -2948,8 +2951,8 @@ mod tests {
         state_store,
     };
     use crate::state_store::{
-        CreateTaskRequest, TaskExecutionSemantics, TaskRecord, TaskSchedulingCandidate,
-        TaskSchedulingProjection,
+        CreateTaskRequest, RunGraphDispatchReceipt, TaskExecutionSemantics, TaskRecord,
+        TaskSchedulingCandidate, TaskSchedulingProjection,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, EnvVarGuard};
@@ -3157,6 +3160,90 @@ mod tests {
 
         assert!(blockers.contains(&"host_bridge_request_untrusted_path".to_string()));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_provenance_accepts_pending_bridge_receipt() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path();
+        let request_path = state_root.join("host_bridge/request.json");
+        let packet_path = state_root.join("packets/run-pending.json");
+        let result_path = state_root.join("host_bridge/result.json");
+        let receipt_path = state_root.join("host_bridge/receipt.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should be created");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("packet parent should be created");
+        std::fs::write(&request_path, b"{}").expect("request file should be written");
+        std::fs::write(&packet_path, b"{}").expect("packet file should be written");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.to_path_buf())
+                .await
+                .expect("state store should open");
+            store
+                .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                    run_id: "run-pending".to_string(),
+                    dispatch_target: "implementer".to_string(),
+                    dispatch_status: "bridge_request_pending".to_string(),
+                    lane_status: "lane_running".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "implementation".to_string(),
+                    dispatch_surface: Some("vida agent-init".to_string()),
+                    dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                    dispatch_packet_path: Some(packet_path.display().to_string()),
+                    dispatch_result_path: None,
+                    blocker_code: None,
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("internal_subagents".to_string()),
+                    activation_runtime_role: Some("worker".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
+                    recorded_at: "2026-06-04T00:00:00Z".to_string(),
+                })
+                .await
+                .expect("pending host bridge receipt should record");
+        });
+
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-pending",
+            "run_id": "run-pending",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+
+        let blockers = runtime.block_on(host_bridge_request_provenance_blockers_for_state_root(
+            state_root,
+            &request_path,
+            &request,
+        ));
+
+        assert!(!blockers.contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
+        assert_eq!(blockers, Vec::<String>::new());
     }
 
     #[test]
