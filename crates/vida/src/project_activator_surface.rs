@@ -234,14 +234,35 @@ pub(crate) fn host_cli_system_registry_with_fallback(
         let explicit_system = yaml_string(yaml_lookup(config, &["host_environment", "cli_system"]))
             .as_deref()
             .and_then(normalize_host_cli_system);
-        if explicit_system.as_deref() == Some("codex") && !registry.contains_key("codex") {
-            registry.insert(
-                "codex".to_string(),
-                builtin_codex_host_cli_system_entry(config),
-            );
+        if explicit_system.as_deref() == Some("codex") {
+            let builtin = builtin_codex_host_cli_system_entry(config);
+            if let Some(existing) = registry.get_mut("codex") {
+                merge_yaml_defaults(existing, &builtin);
+            } else {
+                registry.insert("codex".to_string(), builtin);
+            }
         }
     }
     registry
+}
+
+fn merge_yaml_defaults(target: &mut serde_yaml::Value, defaults: &serde_yaml::Value) {
+    let (Some(target_mapping), Some(default_mapping)) =
+        (target.as_mapping_mut(), defaults.as_mapping())
+    else {
+        return;
+    };
+    for (key, default_value) in default_mapping {
+        match target_mapping.get_mut(key) {
+            Some(existing_value) if existing_value.is_mapping() && default_value.is_mapping() => {
+                merge_yaml_defaults(existing_value, default_value);
+            }
+            Some(_) => {}
+            None => {
+                target_mapping.insert(key.clone(), default_value.clone());
+            }
+        }
+    }
 }
 
 fn builtin_codex_host_cli_system_entry(config: &serde_yaml::Value) -> serde_yaml::Value {
@@ -2449,6 +2470,87 @@ host_environment:
             Some("codex.multi_agent_v1")
         );
         assert!(super::yaml_lookup(codex, &["carriers", "junior"]).is_some());
+    }
+
+    #[test]
+    fn host_cli_registry_fallback_merges_codex_bridge_defaults_into_sparse_system_entry() {
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch:
+        command: codex
+        static_args: [exec]
+      carriers:
+        junior:
+          tier: junior
+          rate: 1
+          runtime_roles: [developer]
+          task_classes: [implementation]
+"#,
+        )
+        .expect("sparse codex config should parse");
+
+        let registry = super::host_cli_system_registry_with_fallback(Some(&config));
+        let codex = registry
+            .get("codex")
+            .expect("selected sparse codex system should remain present");
+
+        assert_eq!(
+            super::yaml_lookup(codex, &["dispatch_transport"]).and_then(serde_yaml::Value::as_str),
+            Some("host_tool_bridge")
+        );
+        assert_eq!(
+            super::yaml_lookup(codex, &["receipt_mode"]).and_then(serde_yaml::Value::as_str),
+            Some("host_bridge_receipt")
+        );
+        assert_eq!(
+            super::yaml_lookup(codex, &["host_tool_bridge", "adapter_capability_id"])
+                .and_then(serde_yaml::Value::as_str),
+            Some("codex.multi_agent_v1")
+        );
+        assert_eq!(
+            super::yaml_lookup(codex, &["host_tool_bridge", "spawn_tool"])
+                .and_then(serde_yaml::Value::as_str),
+            Some("multi_agent_v1.spawn_agent")
+        );
+        assert_eq!(
+            super::yaml_lookup(codex, &["dispatch", "command"]).and_then(serde_yaml::Value::as_str),
+            Some("codex")
+        );
+        assert!(super::yaml_lookup(codex, &["carriers", "junior"]).is_some());
+    }
+
+    #[test]
+    fn host_cli_registry_fallback_preserves_explicit_codex_process_transport() {
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch_transport: codex_cli_exec
+      dispatch:
+        command: codex
+"#,
+        )
+        .expect("explicit process codex config should parse");
+
+        let registry = super::host_cli_system_registry_with_fallback(Some(&config));
+        let codex = registry
+            .get("codex")
+            .expect("selected explicit codex system should remain present");
+
+        assert_eq!(
+            super::yaml_lookup(codex, &["dispatch_transport"]).and_then(serde_yaml::Value::as_str),
+            Some("codex_cli_exec")
+        );
     }
 
     #[test]

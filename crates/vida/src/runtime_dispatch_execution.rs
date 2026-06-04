@@ -5348,6 +5348,105 @@ host_environment:
     }
 
     #[test]
+    fn partial_codex_system_selection_materializes_host_tool_bridge_capability() {
+        let overlay = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_environment:
+  cli_system: codex
+  codex:
+    agents:
+      junior:
+        tier: junior
+        rate: 1
+        runtime_roles: [developer]
+        task_classes: [implementation]
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      materialization_mode: codex_toml_catalog_render
+      runtime_root: .codex
+      template_root: .codex
+      dispatch:
+        command: codex
+        static_args: [exec]
+      carriers:
+        junior:
+          tier: junior
+          rate: 1
+          runtime_roles: [developer]
+          task_classes: [implementation]
+"#,
+        )
+        .expect("partial codex overlay should parse");
+        let (selected, entry) =
+            crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
+        assert_eq!(selected, "codex");
+        let entry = entry.expect("partial codex system should remain selected");
+        let project_root = std::env::temp_dir().join("vida-partial-codex-host-bridge");
+        let _ = std::fs::remove_dir_all(&project_root);
+        std::fs::create_dir_all(project_root.join(".vida"))
+            .expect("temp project root should be creatable");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "partial-codex-host-bridge".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(
+                project_root
+                    .join(".vida/dispatch.json")
+                    .display()
+                    .to_string(),
+            ),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-01T00:00:00Z".to_string(),
+        };
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            Some(&entry),
+            &project_root
+                .join(".vida/dispatch.json")
+                .display()
+                .to_string(),
+            "internal_subagents",
+            "junior",
+            &receipt,
+            &internal_codex_fallback_role_selection(serde_json::json!({})),
+        )
+        .expect("partial codex host bridge request should materialize");
+
+        assert_eq!(request["adapter_kind"], "codex_host_tools");
+        assert_eq!(request["adapter_capability_id"], "codex.multi_agent_v1");
+        assert_eq!(request["invocation_mode"], "parent_host_tool_api");
+        assert_eq!(
+            request["adapter_params"]["spawn_tool"],
+            "multi_agent_v1.spawn_agent"
+        );
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
     fn explicit_codex_cli_exec_transport_preserves_process_dispatch() {
         let system_entry = serde_yaml::from_str(
             r#"
