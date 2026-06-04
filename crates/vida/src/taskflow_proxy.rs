@@ -3281,7 +3281,6 @@ fn build_taskflow_next_decision(
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
             && !explicit_next_task_binding
-            && ready_head.is_none()
             && !closed_task_terminal_continue_ready_head;
 
     // Check for foreign claim conflicts (multi-session admission rule #3)
