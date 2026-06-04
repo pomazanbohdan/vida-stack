@@ -45,6 +45,32 @@ impl StateStore {
         matches!(status, "closed" | "completed")
     }
 
+    pub(crate) fn run_graph_status_is_terminal_closure(status: &RunGraphStatus) -> bool {
+        status.status == "completed"
+            && status.lifecycle_stage == "closure_complete"
+            && status
+                .next_node
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && status.resume_target == "none"
+    }
+
+    fn task_has_canonical_close_truth(task: &TaskRecord) -> bool {
+        Self::task_status_is_closed_like(&task.status)
+            && task
+                .closed_at
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+            && task
+                .close_reason
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+    }
+
     fn parent_id_for_task(task: &TaskRecord) -> Option<String> {
         task.dependencies
             .iter()
@@ -1056,6 +1082,7 @@ impl StateStore {
             if !self
                 .task_close_reconcile_has_persisted_closure_receipt_truth(&row.run_id, &row.task_id)
                 .await?
+                && !Self::task_has_canonical_close_truth(&task)
             {
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {

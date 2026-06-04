@@ -736,7 +736,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             ) = match latest_run_graph_status.as_ref() {
                 Some(status) => match store.show_task(&status.task_id).await {
                     Ok(task) => {
-                        let closed = task.status == "closed";
+                        let closed = task.status == "closed"
+                            && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                                status,
+                            );
                         (false, closed, closed)
                     }
                     Err(crate::state_store::StateStoreError::MissingTask { .. }) => {

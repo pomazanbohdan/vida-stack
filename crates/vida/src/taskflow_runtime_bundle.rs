@@ -144,7 +144,13 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph_status.as_ref() {
             Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
-                Some(task) => (task.status == "closed", false),
+                Some(task) => (
+                    task.status == "closed"
+                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                            status,
+                        ),
+                    false,
+                ),
                 None => (false, true),
             },
             None => (false, false),

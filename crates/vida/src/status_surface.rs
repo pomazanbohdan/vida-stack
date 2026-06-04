@@ -450,7 +450,11 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     match latest_run_graph_status.as_ref() {
                         Some(status) => {
                             match all_tasks.iter().find(|task| task.id == status.task_id) {
-                                Some(task) => (task.status == "closed", false),
+                                Some(task) => (
+                                    task.status == "closed"
+                                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(status),
+                                    false,
+                                ),
                                 None => (false, true),
                             }
                         }
@@ -1185,7 +1189,13 @@ async fn refresh_cached_status_projection_runtime_fields(
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph_status.as_ref() {
             Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
-                Some(task) => (task.status == "closed", false),
+                Some(task) => (
+                    task.status == "closed"
+                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                            status,
+                        ),
+                    false,
+                ),
                 None => (false, true),
             },
             None => (false, false),

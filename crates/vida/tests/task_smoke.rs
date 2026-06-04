@@ -6322,6 +6322,96 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
 }
 
 #[test]
+fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "task-reconcile-canonical-close-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Task reconcile canonical close parent",
+        "open",
+    );
+    let task_id = "task-reconcile-canonical-close-active";
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Task reconcile canonical close active run",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+    let close = run_command_json(
+        &[
+            "task",
+            "close",
+            task_id,
+            "--reason",
+            "canonical task close proof passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(close["status"], "pass");
+
+    let before = run_command_json(&["doctor", "--json"], &state_dir);
+    let before_blockers = require_json_string_array(&before["blocker_codes"], "before blockers");
+    assert!(
+        before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "canonical task close should expose the stale active run before reconcile: {before}"
+    );
+
+    let reconcile = run_command_json(
+        &["task", "reconcile-closed-runs", "--limit", "25", "--json"],
+        &state_dir,
+    );
+    assert_eq!(reconcile["status"], "pass");
+    assert_eq!(reconcile["summary"]["reconciled_count"], 1);
+    assert_eq!(reconcile["summary"]["skipped_count"], 0);
+    assert_eq!(
+        reconcile["summary"]["reconciled_runs"][0]["run_id"], task_id,
+        "canonical task close should retire the stale active run: {reconcile}"
+    );
+
+    let after = run_command_json(&["doctor", "--json"], &state_dir);
+    let after_blockers = require_json_string_array(&after["blocker_codes"], "after blockers");
+    assert!(
+        !after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "canonical task close stale run should be cleared after reconcile: {after}"
+    );
+    assert!(
+        after["latest_terminal_task_active_run_graph_status"].is_null(),
+        "canonical task close active run graph should be retired by reconcile: {after}"
+    );
+    let status_after = run_command_json(&["status", "--json"], &state_dir);
+    let status_after_blockers =
+        require_json_string_array(&status_after["blocker_codes"], "status after blockers");
+    assert!(
+        !status_after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "status should also ignore reconciled terminal closure runs: {status_after}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

@@ -3032,7 +3032,13 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph.as_ref() {
             Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
-                Some(task) => (task.status == "closed", false),
+                Some(task) => (
+                    task.status == "closed"
+                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                            status,
+                        ),
+                    false,
+                ),
                 None => (false, true),
             },
             None => (false, false),
@@ -4450,12 +4456,17 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         recovery_holds_unresolved_active_bound_run(recovery.as_ref(), dispatch.as_ref());
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match (store.as_ref(), latest_run_graph.as_ref()) {
-            (Some(_), Some(status)) => {
-                match all_tasks.iter().find(|task| task.id == status.task_id) {
-                    Some(task) => (task.status == "closed", false),
-                    None => (false, true),
-                }
-            }
+            (Some(_), Some(status)) => match all_tasks.iter().find(|task| task.id == status.task_id)
+            {
+                Some(task) => (
+                    task.status == "closed"
+                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                            status,
+                        ),
+                    false,
+                ),
+                None => (false, true),
+            },
             _ => (false, false),
         };
     let latest_run_graph_legacy_ownerless = match (store.as_ref(), latest_run_graph.as_ref()) {
@@ -4934,7 +4945,13 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph.as_ref() {
             Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
-                Some(task) => (task.status == "closed", false),
+                Some(task) => (
+                    task.status == "closed"
+                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                            status,
+                        ),
+                    false,
+                ),
                 None => (false, true),
             },
             None => (false, false),
