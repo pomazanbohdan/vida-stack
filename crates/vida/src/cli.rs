@@ -609,6 +609,8 @@ pub(crate) struct TaskDepArgs {
 pub(crate) enum TaskDependencyCommand {
     #[command(about = "add one dependency edge between two tracked tasks")]
     Add(TaskDependencyMutationCommandArgs),
+    #[command(about = "ensure one dependency edge exists without duplicating it")]
+    Ensure(TaskDependencyMutationCommandArgs),
     #[command(about = "add multiple dependency edges from flags or an edge file")]
     AddBulk(TaskDependencyBulkAddCommandArgs),
     #[command(about = "remove one dependency edge between two tracked tasks")]
@@ -2300,6 +2302,23 @@ mod tests {
         assert!(help.contains("--message-file"));
         assert!(help.contains("--separator"));
         assert!(help.contains("append"));
+    }
+
+    #[test]
+    fn task_dep_ensure_help_lists_idempotent_dependency_options() {
+        let dep_error = Cli::try_parse_from(["vida", "task", "dep", "--help"])
+            .expect_err("help should render clap display error");
+        assert!(dep_error.to_string().contains("ensure"));
+
+        let error = Cli::try_parse_from(["vida", "task", "dep", "ensure", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+
+        assert!(help.contains("<TASK_ID>"));
+        assert!(help.contains("<DEPENDS_ON_ID>"));
+        assert!(help.contains("<EDGE_TYPE>"));
+        assert!(help.contains("--created-by"));
+        assert!(help.contains("dependency edge"));
     }
 
     #[test]

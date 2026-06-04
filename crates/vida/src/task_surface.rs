@@ -8030,6 +8030,55 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                 }
             }
+            TaskDependencyCommand::Ensure(ensure) => {
+                let state_dir = ensure
+                    .state_dir
+                    .clone()
+                    .unwrap_or_else(state_store::default_state_dir);
+                let edges = vec![state_store::TaskDependencyBulkAddInput {
+                    issue_id: ensure.task_id.clone(),
+                    depends_on_id: ensure.depends_on_id.clone(),
+                    edge_type: ensure.edge_type.clone(),
+                }];
+                match StateStore::open_existing(state_dir).await {
+                    Ok(store) => match store
+                        .add_task_dependencies_bulk(&edges, &ensure.created_by, false)
+                        .await
+                    {
+                        Ok(result) => {
+                            if result.failed_count == 0 && result.created_count > 0 {
+                                if let Err(code) = refresh_task_snapshot_after_mutation(
+                                    &store,
+                                    "vida task dep ensure",
+                                )
+                                .await
+                                {
+                                    return code;
+                                }
+                            }
+                            let exit_code = if result.failed_count == 0 {
+                                ExitCode::SUCCESS
+                            } else {
+                                ExitCode::from(1)
+                            };
+                            print_task_dependency_bulk_add_result(
+                                ensure.render,
+                                &result,
+                                ensure.json,
+                            );
+                            exit_code
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to ensure task dependency: {error}");
+                            ExitCode::from(1)
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!("Failed to open authoritative state store: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
             TaskDependencyCommand::Remove(remove) => {
                 let state_dir = remove
                     .state_dir
