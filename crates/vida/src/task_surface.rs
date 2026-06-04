@@ -7017,6 +7017,92 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Note(command) => match command.command {
+            TaskNoteCommand::Append(command) => {
+                let state_dir = command
+                    .state_dir
+                    .clone()
+                    .unwrap_or_else(state_store::default_state_dir);
+                let message = match resolve_optional_text_arg(
+                    "message",
+                    command.message.as_deref(),
+                    command.message_file.as_deref(),
+                ) {
+                    Ok(Some(message)) if !message.trim().is_empty() => message.trim().to_string(),
+                    Ok(_) => {
+                        eprintln!("A non-empty --message or --message-file value is required");
+                        return ExitCode::from(2);
+                    }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
+                };
+                match StateStore::open_existing(state_dir).await {
+                    Ok(store) => {
+                        let existing = match store.show_task(&command.task_id).await {
+                            Ok(task) => task,
+                            Err(error) => {
+                                eprintln!("Failed to read task before note append: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
+                        let appended_notes = match existing.notes.as_deref() {
+                            Some(notes) if !notes.trim().is_empty() => {
+                                format!("{}{}{}", notes, command.separator, message)
+                            }
+                            _ => message,
+                        };
+                        match store
+                            .update_task(state_store::UpdateTaskRequest {
+                                task_id: &command.task_id,
+                                title: None,
+                                status: None,
+                                priority: None,
+                                notes: Some(&appended_notes),
+                                description: None,
+                                parent_id: None,
+                                add_labels: &[],
+                                remove_labels: &[],
+                                set_labels: None,
+                                execution_mode: None,
+                                order_bucket: None,
+                                parallel_group: None,
+                                conflict_domain: None,
+                                planner_metadata: None,
+                            })
+                            .await
+                        {
+                            Ok(task) => {
+                                if let Err(code) = refresh_task_snapshot_after_mutation(
+                                    &store,
+                                    "vida task note append",
+                                )
+                                .await
+                                {
+                                    return code;
+                                }
+                                print_task_mutation(
+                                    command.render,
+                                    "vida task note append",
+                                    &task,
+                                    command.json,
+                                );
+                                ExitCode::SUCCESS
+                            }
+                            Err(error) => {
+                                eprintln!("Failed to append task note: {error}");
+                                ExitCode::from(1)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to open authoritative state store: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
+        },
         TaskCommand::Block(command) => {
             let reason = command.reason.trim();
             if reason.is_empty() {

@@ -536,6 +536,8 @@ pub(crate) enum TaskCommand {
         after_help = TASK_UPDATE_AFTER_HELP
     )]
     Update(TaskUpdateArgs),
+    #[command(about = "append-only task notes without replacing existing notes")]
+    Note(TaskNoteArgs),
     #[command(
         about = TASK_BLOCK_ABOUT,
         long_about = TASK_BLOCK_LONG_ABOUT,
@@ -794,6 +796,49 @@ pub(crate) struct TaskShowArgs {
         default_value_t = RenderMode::Plain,
         help = "Render output mode for human-readable command output"
     )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskNoteArgs {
+    #[command(subcommand)]
+    pub(crate) command: TaskNoteCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum TaskNoteCommand {
+    #[command(about = "append one message to a task's existing notes")]
+    Append(TaskNoteAppendArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskNoteAppendArgs {
+    #[arg(help = "Task id whose notes should receive the appended message")]
+    pub(crate) task_id: String,
+
+    #[arg(long = "message", help = "Message to append to the task notes")]
+    pub(crate) message: Option<String>,
+
+    #[arg(
+        long = "message-file",
+        help = "Read the appended note message from this file path"
+    )]
+    pub(crate) message_file: Option<PathBuf>,
+
+    #[arg(
+        long = "separator",
+        default_value = "\n\n",
+        help = "Text inserted between existing notes and the appended message"
+    )]
+    pub(crate) separator: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
     pub(crate) render: RenderMode,
 
     #[arg(long = "json", help = "Emit machine-readable JSON output")]
@@ -2242,6 +2287,19 @@ mod tests {
         assert!(help.contains("--all"));
         assert!(help.contains("omit when using --epics"));
         assert!(help.contains("open or in-progress epics"));
+    }
+
+    #[test]
+    fn task_note_append_help_lists_message_options() {
+        let error = Cli::try_parse_from(["vida", "task", "note", "append", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+
+        assert!(help.contains("<TASK_ID>"));
+        assert!(help.contains("--message"));
+        assert!(help.contains("--message-file"));
+        assert!(help.contains("--separator"));
+        assert!(help.contains("append"));
     }
 
     #[test]
