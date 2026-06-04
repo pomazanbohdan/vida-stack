@@ -368,11 +368,11 @@ Default engagement policy:
 
 Host-tool permission bridge:
 
-1. this project's default development posture is agent orchestration when `vida.config.yaml -> autonomous_execution.agent_only_development` is true,
-2. a VIDA `agent-init` dispatch packet, downstream packet, or host-tool bridge request is an explicit project request for the configured host agent carrier to execute that bounded lane,
-3. if the host agent API has its own "use only when explicitly requested" rule, this project policy plus the current bounded VIDA dispatch satisfies that explicit-request requirement for the selected carrier,
-4. the bridge permission authorizes only the requested bounded lane and does not authorize broad subagent spawning, overlapping write scopes, root-session implementation, or closure without receipt-backed evidence,
-5. when the current conversation also contains user direction such as `agent-first`, `parallel agents`, `продовжи агентами`, or sprint-wide orchestrator mode, treat that direction as sticky until the user explicitly stops or narrows it.
+1. this project's default development posture is VIDA agent orchestration when `vida.config.yaml -> autonomous_execution.agent_only_development` is true,
+2. a VIDA `agent-init` dispatch packet, downstream packet, or host-tool bridge request may select an admissible configured carrier for that bounded lane,
+3. if the host agent API has its own "use only when explicitly requested" rule, this project policy, `agent_only_development`, sticky continuation, and the current bounded VIDA dispatch do not satisfy that host-tool explicit-request requirement by themselves,
+4. host subagent/delegation bridge permission requires an explicit current user instruction or host approval surface authorizing that host path for the bounded work, and then authorizes only that requested bounded lane without permitting broad subagent spawning, overlapping write scopes, root-session implementation, or closure without receipt-backed evidence,
+5. when the current conversation also contains user direction such as `agent-first`, `parallel agents`, `продовжи агентами`, or sprint-wide orchestrator mode, treat that direction as sticky for VIDA TaskFlow routing until the user explicitly stops or narrows it, but do not treat ambiguous continuation or project policy as permission to bypass host-tool subagent approval gates.
 
 Agent-init interpretation rule:
 
@@ -438,7 +438,7 @@ After bootstrap, development agents must know immediately:
 8. delegated agents are the normal path for write-producing work once a lawful packet exists.
 9. packet interpretation follows the project prompt-stack protocol rather than ad hoc precedence guesses.
 10. no session is write-ready until the project boot-readiness validation protocol passes.
-11. host subagent bridge execution is default-admissible for a bounded VIDA dispatch when agent-only development is enabled; agents must not wait for a second chat-only permission prompt after the runtime emits the bridge request.
+11. host subagent bridge execution is not default-authorized merely because a bounded VIDA dispatch exists or agent-only development is enabled; when the host API requires explicit subagent/delegation permission, agents must obtain current user or host-surface authorization before spawning host subagents.
 
 ## Routing
 
