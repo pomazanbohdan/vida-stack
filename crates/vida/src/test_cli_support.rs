@@ -19,6 +19,11 @@ fn current_dir_lock() -> &'static RecoveringMutex {
     LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
 }
 
+fn env_var_lock() -> &'static RecoveringMutex {
+    static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
+    LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
+}
+
 pub(crate) struct CurrentDirGuard {
     _lock: MutexGuard<'static, ()>,
     original: PathBuf,
@@ -47,15 +52,32 @@ pub(crate) fn guard_current_dir(path: &Path) -> CurrentDirGuard {
 }
 
 pub(crate) struct EnvVarGuard {
+    _lock: MutexGuard<'static, ()>,
     key: &'static str,
     original: Option<std::ffi::OsString>,
 }
 
 impl EnvVarGuard {
+    pub(crate) fn set(key: &'static str, value: &str) -> Self {
+        let lock = env_var_lock().lock();
+        let original = env::var_os(key);
+        env::set_var(key, value);
+        Self {
+            _lock: lock,
+            key,
+            original,
+        }
+    }
+
     pub(crate) fn unset(key: &'static str) -> Self {
+        let lock = env_var_lock().lock();
         let original = env::var_os(key);
         env::remove_var(key);
-        Self { key, original }
+        Self {
+            _lock: lock,
+            key,
+            original,
+        }
     }
 }
 

@@ -11311,7 +11311,7 @@ host_environment:
     }
 
     #[test]
-    fn taskflow_consume_continue_returns_routed_receipt_for_internal_coach_handoff() {
+    fn taskflow_consume_continue_blocks_with_routed_receipt_for_internal_coach_handoff() {
         run_on_large_test_stack(
             "taskflow_consume_continue_returns_timeout_receipt_for_internal_coach_timeout",
             || {
@@ -11537,7 +11537,7 @@ host_environment:
                     runtime.block_on(run(cli(&[
                         "taskflow", "consume", "continue", "--run-id", run_id, "--json",
                     ]))),
-                    ExitCode::SUCCESS
+                    ExitCode::from(1)
                 );
                 wait_for_state_unlock(harness.path());
                 let elapsed = started.elapsed();

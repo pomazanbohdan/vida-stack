@@ -16400,10 +16400,8 @@ agent_system:
 
     #[tokio::test]
     async fn resolve_default_resume_run_id_rejects_foreign_latest_terminal_run_before_mutation() {
-        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
-        unsafe {
-            std::env::set_var("VIDA_SESSION_ID", "session-foreign-latest");
-        }
+        let mut session_guard =
+            crate::test_cli_support::EnvVarGuard::set("VIDA_SESSION_ID", "session-foreign-latest");
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -16452,9 +16450,9 @@ agent_system:
             .await
             .expect("acquire foreign run claim");
 
-        unsafe {
-            std::env::set_var("VIDA_SESSION_ID", "session-current-consume");
-        }
+        drop(session_guard);
+        session_guard =
+            crate::test_cli_support::EnvVarGuard::set("VIDA_SESSION_ID", "session-current-consume");
         let error = match resolve_default_resume_run_id(&store).await {
             Ok(run_id) => panic!("foreign latest run must not be selected by default: {run_id}"),
             Err(error) => error,
@@ -16469,14 +16467,7 @@ agent_system:
         );
 
         let _ = fs::remove_dir_all(&root);
-        match saved_session_id {
-            Some(value) => unsafe {
-                std::env::set_var("VIDA_SESSION_ID", value);
-            },
-            None => unsafe {
-                std::env::remove_var("VIDA_SESSION_ID");
-            },
-        }
+        drop(session_guard);
     }
 
     #[tokio::test]
