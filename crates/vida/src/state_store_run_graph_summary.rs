@@ -2437,7 +2437,15 @@ impl StateStore {
                 continue;
             }
             match self.run_graph_status_from_task_rows(&run_id, &[]).await {
-                Ok(status) => return Ok(Some(status)),
+                Ok(status) => {
+                    if self
+                        .run_graph_status_points_to_terminal_task_active(&status)
+                        .await?
+                    {
+                        continue;
+                    }
+                    return Ok(Some(status));
+                }
                 Err(StateStoreError::MissingTask { .. }) => continue,
                 Err(error) => return Err(error),
             }
@@ -2456,7 +2464,15 @@ impl StateStore {
                 continue;
             }
             match self.run_graph_status_from_task_rows(&run_id, &[]).await {
-                Ok(status) => return Ok(Some(status)),
+                Ok(status) => {
+                    if self
+                        .run_graph_status_points_to_terminal_task_active(&status)
+                        .await?
+                    {
+                        continue;
+                    }
+                    return Ok(Some(status));
+                }
                 Err(StateStoreError::MissingTask { .. }) => continue,
                 Err(error) => return Err(error),
             }
@@ -2569,6 +2585,21 @@ impl StateStore {
             return Ok(false);
         }
         let task = match self.show_task(&latest.task_id).await {
+            Ok(task) => task,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        Ok(task_status_is_terminal_for_continuation(&task.status))
+    }
+
+    async fn run_graph_status_points_to_terminal_task_active(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<bool, StateStoreError> {
+        if status.status == "completed" {
+            return Ok(false);
+        }
+        let task = match self.show_task(&status.task_id).await {
             Ok(task) => task,
             Err(StateStoreError::MissingTask { .. }) => return Ok(false),
             Err(error) => return Err(error),
@@ -4488,8 +4519,8 @@ mod tests {
                 run_id: Some("run-current".to_string()),
                 lane_id: None,
                 claim_kind: "write".to_string(),
-                conflict_domain: Some("current-domain".to_string()),
-                owned_paths: vec!["current/path.rs".to_string()],
+                conflict_domain: Some("current-open-domain".to_string()),
+                owned_paths: vec!["open-scope/path.rs".to_string()],
                 read_only_paths: Vec::new(),
                 lease_mode: LeaseMode::Exclusive,
                 lease_seconds: 60,
@@ -4506,6 +4537,114 @@ mod tests {
                 .run_id,
             "run-current"
         );
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_for_current_session_skips_closed_task_active_run() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current-closed-skip");
+        }
+        let root = temp_run_graph_root("vida-run-graph-current-session-closed-skip");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        for (task_id, status) in [
+            ("task-open-current-run", "open"),
+            ("task-closed-current-run", "closed"),
+        ] {
+            store
+                .create_task_with_fixture_parent(CreateTaskRequest {
+                    task_id,
+                    title: "Current session run graph task",
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status,
+                    priority: 0,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "test",
+                })
+                .await
+                .expect("create task");
+        }
+
+        let mut open_status = crate::taskflow_run_graph::default_run_graph_status(
+            "task-open-current-run",
+            "implementation",
+            "implementation",
+        );
+        open_status.run_id = "run-open-current".to_string();
+        store
+            .record_run_graph_status(&open_status)
+            .await
+            .expect("persist open run graph status");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "current-open-run-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-current-closed-skip".to_string(),
+                process_id: None,
+                task_id: Some("task-open-current-run".to_string()),
+                run_id: Some("run-open-current".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("current-open-domain".to_string()),
+                owned_paths: vec!["open-scope/path.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire open claim");
+
+        let mut stale_closed_status = crate::taskflow_run_graph::default_run_graph_status(
+            "task-closed-current-run",
+            "implementation",
+            "implementation",
+        );
+        stale_closed_status.run_id = "run-zzz-closed-current".to_string();
+        stale_closed_status.status = "ready".to_string();
+        stale_closed_status.lifecycle_stage = "implementation_dispatch_ready".to_string();
+        store
+            .record_run_graph_status(&stale_closed_status)
+            .await
+            .expect("persist stale closed-task status");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "current-closed-run-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-current-closed-skip".to_string(),
+                process_id: None,
+                task_id: Some("task-closed-current-run".to_string()),
+                run_id: Some("run-zzz-closed-current".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("current-closed-domain".to_string()),
+                owned_paths: vec!["closed-scope/path.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire closed claim");
+
+        let latest = store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .expect("read scoped latest")
+            .expect("open run should remain after closed-task run is skipped");
+        assert_eq!(latest.run_id, "run-open-current");
+        assert_eq!(latest.task_id, "task-open-current-run");
 
         let _ = fs::remove_dir_all(&root);
         restore_vida_session_id(saved_session_id);
