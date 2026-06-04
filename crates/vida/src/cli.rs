@@ -902,12 +902,60 @@ pub(crate) struct TaskProofArgs {
 pub(crate) enum TaskProofCommand {
     #[command(about = "show configured proof targets and close-evidence coverage for one task")]
     Status(TaskProofStatusArgs),
+    #[command(
+        about = "attach browser proof artifact evidence to one task",
+        after_help = "Examples:\n  vida task proof attach-browser task-1 --route /odoo --result pass --screenshot artifacts/task-1.png --json\n\nOptions:\n  --route <route>       Browser route or URL that was checked\n  --result <result>     Proof result: pass, fail, or blocked\n  --screenshot <path>   Screenshot artifact path; optional but recommended\n  --expect <text>       Expected text or route marker\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
+    )]
+    AttachBrowser(TaskProofAttachBrowserArgs),
 }
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct TaskProofStatusArgs {
     #[arg(help = "Task id whose proof status should be inspected")]
     pub(crate) task_id: String,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskProofAttachBrowserArgs {
+    #[arg(help = "Task id whose browser proof evidence should be updated")]
+    pub(crate) task_id: String,
+
+    #[arg(long = "route", help = "Browser route or URL that was checked")]
+    pub(crate) route: String,
+
+    #[arg(long = "result", help = "Proof result: pass, fail, or blocked")]
+    pub(crate) result: String,
+
+    #[arg(long = "screenshot", help = "Screenshot artifact path")]
+    pub(crate) screenshot: Option<String>,
+
+    #[arg(long = "expect", help = "Expected text or route marker")]
+    pub(crate) expect: Option<String>,
+
+    #[arg(
+        long = "evidence",
+        help = "Additional evidence detail; accepts repeated flags"
+    )]
+    pub(crate) evidence: Vec<String>,
 
     #[arg(
         long = "state-dir",

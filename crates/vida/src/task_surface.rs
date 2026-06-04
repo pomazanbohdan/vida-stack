@@ -100,6 +100,21 @@ struct TaskProofTargetStatus {
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskProofAttachBrowserReceipt {
+    surface: &'static str,
+    status: &'static str,
+    task_id: String,
+    route: String,
+    result: String,
+    expect: Option<String>,
+    screenshot: Option<String>,
+    evidence: Vec<String>,
+    proof_target: String,
+    notes_appended: bool,
+    task: state_store::TaskRecord,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
 struct TaskTakeoverStatusReceipt {
     surface: &'static str,
     status: String,
@@ -296,6 +311,38 @@ fn task_reports_runtime_proof_blocker(task: &state_store::TaskRecord) -> bool {
             .any(|label| label == "proof-blocked-by-runtime" || label == "runtime-proof-blocked")
 }
 
+fn normalize_browser_proof_result(result: &str) -> Result<String, String> {
+    let result = result.trim().to_ascii_lowercase();
+    match result.as_str() {
+        "pass" | "passed" | "success" | "satisfied" => Ok("pass".to_string()),
+        "fail" | "failed" | "failure" => Ok("fail".to_string()),
+        "blocked" | "block" => Ok("blocked".to_string()),
+        _ => Err("--result must be one of: pass, fail, blocked".to_string()),
+    }
+}
+
+fn browser_proof_target(route: &str, expect: Option<&str>) -> String {
+    match expect.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(expect) => format!(
+            "vida proof browser --route {} --expect {}",
+            route.trim(),
+            expect
+        ),
+        None => format!("vida proof browser --route {}", route.trim()),
+    }
+}
+
+fn task_notes_have_browser_proof_evidence(task: &state_store::TaskRecord, target: &str) -> bool {
+    let Some(notes) = task.notes.as_deref() else {
+        return false;
+    };
+    let target = target.trim();
+    notes.contains("task_browser_proof:")
+        && notes.contains("result: pass")
+        && (notes.contains(&format!("proof_target: {target}"))
+            || notes.contains(&format!("command: {target}")))
+}
+
 fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
     let target = target.trim().to_string();
     let runtime_blocked = task_reports_runtime_proof_blocker(task);
@@ -306,6 +353,16 @@ fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> Tas
             evidence_source: "close_reason".to_string(),
             evidence_detail: "target text is present in task close_reason".to_string(),
             artifact_status: "not_recorded".to_string(),
+            next_action: "No action for this proof target.".to_string(),
+        };
+    }
+    if task_notes_have_browser_proof_evidence(task, &target) {
+        return TaskProofTargetStatus {
+            target,
+            status: "satisfied".to_string(),
+            evidence_source: "task_browser_proof_note".to_string(),
+            evidence_detail: "attached browser proof note reports result pass".to_string(),
+            artifact_status: "recorded_in_task_notes".to_string(),
             next_action: "No action for this proof target.".to_string(),
         };
     }
@@ -396,11 +453,11 @@ fn task_proof_status_payload(
         "proof_targets": targets,
         "missing_targets": missing_targets,
         "next_required_command": next_required_command,
-        "evidence_model": {
-            "configured_targets_source": "task.planner_metadata.proof_targets",
-            "satisfaction_source": "task.close_reason substring match",
-            "artifact_registry": "not_connected_in_this_slice"
-        },
+            "evidence_model": {
+                "configured_targets_source": "task.planner_metadata.proof_targets",
+                "satisfaction_source": "task.close_reason substring match or task_browser_proof note",
+                "artifact_registry": "task_notes.task_browser_proof"
+            },
         "state_access": task_read_metadata_value(read_metadata),
     })
 }
@@ -881,6 +938,65 @@ fn task_verify_planner_metadata(
     }
 }
 
+fn append_task_browser_proof_note(
+    existing_notes: Option<&str>,
+    proof_target: &str,
+    route: &str,
+    result: &str,
+    expect: Option<&str>,
+    screenshot: Option<&str>,
+    evidence: &[String],
+) -> String {
+    let mut note = format!(
+        "task_browser_proof:\n  recorded_at_unix_nanos: {}\n  proof_target: {}\n  command: {}\n  route: {}\n  result: {}",
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
+        proof_target.trim(),
+        proof_target.trim(),
+        route.trim(),
+        result.trim()
+    );
+    if let Some(expect) = expect.map(str::trim).filter(|value| !value.is_empty()) {
+        note.push_str("\n  expect: ");
+        note.push_str(expect);
+    }
+    if let Some(screenshot) = screenshot.map(str::trim).filter(|value| !value.is_empty()) {
+        note.push_str("\n  screenshot: ");
+        note.push_str(screenshot);
+    }
+    let evidence = evidence
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if !evidence.is_empty() {
+        note.push_str("\n  evidence: ");
+        note.push_str(&evidence.join(" | "));
+    }
+
+    match existing_notes
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(existing) => format!("{existing}\n\n{note}"),
+        None => note,
+    }
+}
+
+fn task_browser_proof_planner_metadata(
+    existing: &state_store::TaskPlannerMetadata,
+    proof_target: &str,
+) -> state_store::TaskPlannerMetadata {
+    let mut metadata = existing.clone();
+    if !metadata
+        .proof_targets
+        .iter()
+        .any(|target| target.trim() == proof_target.trim())
+    {
+        metadata.proof_targets.push(proof_target.trim().to_string());
+    }
+    metadata
+}
+
 fn print_task_verify_receipt(render: RenderMode, receipt: &TaskVerifyReceipt, as_json: bool) {
     if as_json {
         let payload =
@@ -893,6 +1009,26 @@ fn print_task_verify_receipt(render: RenderMode, receipt: &TaskVerifyReceipt, as
     print_surface_line(render, "source fixed", &receipt.source_fixed.to_string());
     print_surface_line(render, "tests green", &receipt.tests_green.to_string());
     print_surface_line(render, "proof blocked", &receipt.proof_blocked.to_string());
+}
+
+fn print_task_browser_proof_receipt(
+    render: RenderMode,
+    receipt: &TaskProofAttachBrowserReceipt,
+    as_json: bool,
+) {
+    if as_json {
+        let payload = serde_json::to_value(receipt)
+            .expect("task browser proof receipt should serialize to JSON");
+        crate::print_json_pretty(&payload);
+        return;
+    }
+    print_task_mutation(render, receipt.surface, &receipt.task, false);
+    print_surface_line(render, "route", &receipt.route);
+    print_surface_line(render, "result", &receipt.result);
+    print_surface_line(render, "proof target", &receipt.proof_target);
+    if let Some(screenshot) = receipt.screenshot.as_deref() {
+        print_surface_line(render, "screenshot", screenshot);
+    }
 }
 
 fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value {
@@ -5976,6 +6112,110 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                 }
             }
+            TaskProofCommand::AttachBrowser(command) => {
+                let route = command.route.trim();
+                if route.is_empty() {
+                    eprintln!("--route cannot be empty");
+                    return ExitCode::from(2);
+                }
+                let result = match normalize_browser_proof_result(&command.result) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
+                };
+                let state_dir = command
+                    .state_dir
+                    .clone()
+                    .unwrap_or_else(state_store::default_state_dir);
+                match StateStore::open_existing(state_dir).await {
+                    Ok(store) => {
+                        let existing = match store.show_task(&command.task_id).await {
+                            Ok(task) => task,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read task before browser proof attachment: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        let proof_target = browser_proof_target(route, command.expect.as_deref());
+                        let evidence = normalized_task_verify_evidence(&command.evidence);
+                        let notes = append_task_browser_proof_note(
+                            existing.notes.as_deref(),
+                            &proof_target,
+                            route,
+                            &result,
+                            command.expect.as_deref(),
+                            command.screenshot.as_deref(),
+                            &evidence,
+                        );
+                        let planner_metadata = task_browser_proof_planner_metadata(
+                            &existing.planner_metadata,
+                            &proof_target,
+                        );
+                        match store
+                            .update_task(state_store::UpdateTaskRequest {
+                                task_id: &command.task_id,
+                                title: None,
+                                status: None,
+                                priority: None,
+                                notes: Some(&notes),
+                                description: None,
+                                parent_id: None,
+                                add_labels: &[],
+                                remove_labels: &[],
+                                set_labels: None,
+                                execution_mode: None,
+                                order_bucket: None,
+                                parallel_group: None,
+                                conflict_domain: None,
+                                planner_metadata: Some(planner_metadata),
+                            })
+                            .await
+                        {
+                            Ok(task) => {
+                                if let Err(code) = refresh_task_snapshot_after_mutation(
+                                    &store,
+                                    "vida task proof attach-browser",
+                                )
+                                .await
+                                {
+                                    return code;
+                                }
+                                let receipt = TaskProofAttachBrowserReceipt {
+                                    surface: "vida task proof attach-browser",
+                                    status: task_json_success_status(),
+                                    task_id: task.id.clone(),
+                                    route: route.to_string(),
+                                    result,
+                                    expect: command.expect,
+                                    screenshot: command.screenshot,
+                                    evidence,
+                                    proof_target,
+                                    notes_appended: true,
+                                    task,
+                                };
+                                print_task_browser_proof_receipt(
+                                    command.render,
+                                    &receipt,
+                                    command.json,
+                                );
+                                ExitCode::SUCCESS
+                            }
+                            Err(error) => {
+                                eprintln!("Failed to attach browser proof to task: {error}");
+                                ExitCode::from(1)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to open authoritative state store: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
         },
         TaskCommand::Ready(command) => {
             let state_dir = command
@@ -8400,6 +8640,74 @@ mod tests {
         );
         assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
         assert_eq!(payload["missing_targets"][0], "cargo build -p vida");
+    }
+
+    #[test]
+    fn task_proof_attach_browser_cli_accepts_artifact_fields() {
+        let parsed = cli(&[
+            "task",
+            "proof",
+            "attach-browser",
+            "proof-task",
+            "--route",
+            "/odoo",
+            "--expect",
+            "My Tasks",
+            "--result",
+            "pass",
+            "--screenshot",
+            "artifacts/proof.png",
+            "--evidence",
+            "console clean",
+            "--json",
+        ]);
+        let Some(crate::Command::Task(args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let crate::TaskCommand::Proof(proof) = args.command else {
+            panic!("task proof command should parse");
+        };
+        let crate::TaskProofCommand::AttachBrowser(command) = proof.command else {
+            panic!("attach-browser command should parse");
+        };
+
+        assert_eq!(command.task_id, "proof-task");
+        assert_eq!(command.route, "/odoo");
+        assert_eq!(command.expect.as_deref(), Some("My Tasks"));
+        assert_eq!(command.result, "pass");
+        assert_eq!(command.screenshot.as_deref(), Some("artifacts/proof.png"));
+        assert_eq!(command.evidence, vec!["console clean".to_string()]);
+        assert!(command.json);
+    }
+
+    #[test]
+    fn task_proof_status_payload_accepts_browser_attach_note() {
+        let mut task = owned_task_record("proof-task", vec![]);
+        let proof_target = super::browser_proof_target("/odoo", Some("My Tasks"));
+        task.planner_metadata.proof_targets = vec![proof_target.clone()];
+        task.notes = Some(super::append_task_browser_proof_note(
+            None,
+            &proof_target,
+            "/odoo",
+            "pass",
+            Some("My Tasks"),
+            Some("artifacts/proof.png"),
+            &["console clean".to_string()],
+        ));
+
+        let payload = super::task_proof_status_payload(&task, None);
+
+        assert_eq!(payload["satisfied_count"], 1);
+        assert_eq!(payload["missing_count"], 0);
+        assert_eq!(payload["proof_targets"][0]["status"], "satisfied");
+        assert_eq!(
+            payload["proof_targets"][0]["evidence_source"],
+            "task_browser_proof_note"
+        );
+        assert_eq!(
+            payload["evidence_model"]["artifact_registry"],
+            "task_notes.task_browser_proof"
+        );
     }
 
     #[test]
