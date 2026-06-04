@@ -225,6 +225,55 @@ fn hydrate_dispatch_packet_owned_paths_from_task(
     hydrated
 }
 
+struct PacketRepairMutation {
+    dispatch_packet_path: String,
+    repaired: bool,
+    contract_validated: bool,
+}
+
+async fn repair_persisted_dispatch_packet_from_task(
+    store: &StateStore,
+    run_id: &str,
+    task: &TaskRecord,
+) -> Result<PacketRepairMutation, String> {
+    let receipt = store
+        .run_graph_dispatch_receipt(run_id)
+        .await
+        .map_err(|error| {
+            format!("Failed to read persisted dispatch receipt for `{run_id}`: {error}")
+        })?
+        .ok_or_else(|| {
+            format!("No persisted run-graph dispatch receipt exists for run_id `{run_id}`.")
+        })?;
+    let dispatch_packet_path = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| {
+            format!("Persisted dispatch receipt for `{run_id}` is missing dispatch_packet_path.")
+        })?;
+    let resolved_path = canonicalize_packet_path(dispatch_packet_path)?;
+    let display_path = resolved_path.display().to_string();
+    let mut packet = read_packet_body(dispatch_packet_path)?;
+    let repaired = hydrate_dispatch_packet_owned_paths_from_task(&mut packet, task);
+    if repaired {
+        std::fs::write(
+            &resolved_path,
+            serde_json::to_vec_pretty(&packet).map_err(|error| {
+                format!("Failed to encode repaired packet `{display_path}`: {error}")
+            })?,
+        )
+        .map_err(|error| format!("Failed to write repaired packet `{display_path}`: {error}"))?;
+    }
+    crate::taskflow_consume_resume::read_dispatch_packet(&display_path)?;
+    Ok(PacketRepairMutation {
+        dispatch_packet_path: display_path,
+        repaired,
+        contract_validated: true,
+    })
+}
+
 fn preview_value<'a>(body: &'a serde_json::Value, section: &str, key: &str) -> &'a str {
     body.get(section)
         .and_then(|value| value.get(key))
@@ -411,8 +460,27 @@ async fn run_taskflow_packet_repair(run_id: &str, task_id: &str, as_json: bool) 
         Ok(task) => (Some(task), None),
         Err(error) => (None, Some(error)),
     };
-    let payload =
+    let mut payload =
         build_taskflow_packet_repair_payload(run_id, task.as_ref(), load_error.as_deref());
+    if payload["status"].as_str() == Some("repair_ready") {
+        if let Some(task) = task.as_ref() {
+            match repair_persisted_dispatch_packet_from_task(&store, run_id, task).await {
+                Ok(mutation) => {
+                    payload["repair_applied"] = serde_json::json!(mutation.repaired);
+                    payload["contract_validated"] = serde_json::json!(mutation.contract_validated);
+                    payload["dispatch_packet_path"] =
+                        serde_json::json!(mutation.dispatch_packet_path);
+                }
+                Err(error) => {
+                    payload["status"] = serde_json::json!("blocked");
+                    payload["repair_error"] = serde_json::json!(error);
+                    if let Some(blockers) = payload["blocker_codes"].as_array_mut() {
+                        blockers.push(serde_json::json!("dispatch_packet_repair_failed"));
+                    }
+                }
+            }
+        }
+    }
 
     if as_json {
         crate::print_json_pretty(&payload);

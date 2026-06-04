@@ -12385,6 +12385,74 @@ fn consume_continue_json_classifies_persisted_packet_contract_invalid_with_artif
         .iter()
         .all(|action| !action.contains(&format!("--from-task {packet_run_id}"))));
 
+    let parent_create = run_command_json(
+        &[
+            "task",
+            "create",
+            "packet-repair-parent",
+            "Packet repair parent",
+            "--type",
+            "epic",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent_create["status"], "pass");
+
+    let task_create = run_command_json(
+        &[
+            "task",
+            "create",
+            packet_task_id,
+            "Packet repair metadata fixture",
+            "--type",
+            "defect",
+            "--parent-id",
+            "packet-repair-parent",
+            "--owned-path",
+            "crates/vida/src/taskflow_packet.rs",
+            "--proof-target",
+            "cargo test -p vida packet_repair -- --nocapture",
+            "--acceptance-target",
+            "packet repair hydrates owned paths",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_create["status"], "pass");
+
+    let repair = run_command_json(
+        &[
+            "taskflow",
+            "packet",
+            "repair",
+            "--run-id",
+            &packet_run_id,
+            "--from-task",
+            packet_task_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(repair["surface"], "vida taskflow packet repair");
+    assert_eq!(repair["status"], "repair_ready");
+    assert_eq!(repair["repair_applied"], true);
+    assert_eq!(repair["contract_validated"], true);
+    assert_eq!(repair["from_task"], packet_task_id);
+    assert_eq!(repair["run_id"], packet_run_id);
+
+    let repaired_packet: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&packet_path).expect("read repaired packet"))
+            .expect("parse repaired packet");
+    assert_eq!(
+        repaired_packet["owned_paths"],
+        serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+    );
+    assert_eq!(
+        repaired_packet["delivery_task_packet"]["owned_paths"],
+        serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+    );
+
     let _ = fs::remove_dir_all(&project_root);
 }
 
