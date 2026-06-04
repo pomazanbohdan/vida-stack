@@ -7,7 +7,7 @@ use crate::task_cli_render::{
 };
 use crate::taskflow_proxy::paths_intersect;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub(crate) struct TaskReadMetadata {
     pub mode: &'static str,
     pub degraded: bool,
@@ -87,6 +87,41 @@ struct TaskCloseEpicProgressBlocker {
     task_id: String,
     status: String,
     title: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskEpicProgressSummary {
+    epic_count: usize,
+    open_count: usize,
+    in_progress_count: usize,
+    closed_count: usize,
+    total_descendant_count: usize,
+    total_open_descendant_count: usize,
+    total_in_progress_descendant_count: usize,
+    total_closed_descendant_count: usize,
+    percent_closed: f64,
+    include_closed_epics: bool,
+    progress_basis: String,
+    epics: Vec<TaskEpicProgressRow>,
+    read_metadata: TaskReadMetadata,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskEpicProgressRow {
+    epic_id: String,
+    epic_title: String,
+    epic_status: String,
+    epic_priority: u32,
+    total_count: usize,
+    open_count: usize,
+    in_progress_count: usize,
+    closed_count: usize,
+    percent_complete: f64,
+    direct_child_count: usize,
+    nested_epic_count: usize,
+    closure_candidate: bool,
+    closure_candidate_state: String,
+    recommended_next_action: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -1569,6 +1604,89 @@ fn task_close_epic_progress_summary(
     })
 }
 
+fn task_epic_progress_summary(
+    rows: &[state_store::TaskRecord],
+    metadata: TaskReadMetadata,
+    include_closed_epics: bool,
+) -> Result<TaskEpicProgressSummary, state_store::StateStoreError> {
+    let mut epics = rows
+        .iter()
+        .filter(|task| task.issue_type == "epic")
+        .filter(|task| {
+            include_closed_epics || matches!(task.status.as_str(), "open" | "in_progress")
+        })
+        .collect::<Vec<_>>();
+    epics.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| left.status.cmp(&right.status))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut open_count = 0usize;
+    let mut in_progress_count = 0usize;
+    let mut closed_count = 0usize;
+    let mut total_descendant_count = 0usize;
+    let mut total_open_descendant_count = 0usize;
+    let mut total_in_progress_descendant_count = 0usize;
+    let mut total_closed_descendant_count = 0usize;
+    let mut epic_rows = Vec::with_capacity(epics.len());
+
+    for epic in epics {
+        match epic.status.as_str() {
+            "open" => open_count += 1,
+            "in_progress" => in_progress_count += 1,
+            "closed" => closed_count += 1,
+            _ => {}
+        }
+
+        let progress = StateStore::task_progress_summary_from_rows(rows, &epic.id)?;
+        total_descendant_count += progress.descendant_count;
+        total_open_descendant_count += progress.open_count;
+        total_in_progress_descendant_count += progress.in_progress_count;
+        total_closed_descendant_count += progress.closed_count;
+
+        epic_rows.push(TaskEpicProgressRow {
+            epic_id: epic.id.clone(),
+            epic_title: epic.title.clone(),
+            epic_status: epic.status.clone(),
+            epic_priority: epic.priority,
+            total_count: progress.descendant_count,
+            open_count: progress.open_count,
+            in_progress_count: progress.in_progress_count,
+            closed_count: progress.closed_count,
+            percent_complete: progress.percent_closed,
+            direct_child_count: progress.direct_child_count,
+            nested_epic_count: progress.epic_count,
+            closure_candidate: progress.closure_candidate,
+            closure_candidate_state: progress.closure_candidate_state,
+            recommended_next_action: progress.recommended_next_action,
+        });
+    }
+
+    let percent_closed = if total_descendant_count == 0 {
+        0.0
+    } else {
+        (total_closed_descendant_count as f64 / total_descendant_count as f64) * 100.0
+    };
+
+    Ok(TaskEpicProgressSummary {
+        epic_count: epic_rows.len(),
+        open_count,
+        in_progress_count,
+        closed_count,
+        total_descendant_count,
+        total_open_descendant_count,
+        total_in_progress_descendant_count,
+        total_closed_descendant_count,
+        percent_closed,
+        include_closed_epics,
+        progress_basis: "descendants_excluding_epic_roots".to_string(),
+        epics: epic_rows,
+        read_metadata: metadata,
+    })
+}
+
 fn task_close_epic_progress_task_row(
     task: &state_store::TaskRecord,
     task_by_id: &std::collections::BTreeMap<&str, &state_store::TaskRecord>,
@@ -1718,6 +1836,76 @@ fn print_task_close_epic_progress_summary(
             &format!(
                 "{}/{} closed ({:.2}%)",
                 epic.closed_count, epic.total_count, epic.percent_closed
+            ),
+        );
+    }
+}
+
+fn print_task_epic_progress_summary(
+    render: RenderMode,
+    summary: &TaskEpicProgressSummary,
+    as_json: bool,
+) {
+    let payload = crate::task_cli_render::build_pass_operator_surface_payload(
+        "vida task progress --epics",
+        serde_json::json!({
+            "epic_progress_summary": summary,
+        }),
+    );
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task epic progress should render as json",
+    ) {
+        return;
+    }
+
+    print_surface_header(render, "vida task progress --epics");
+    print_surface_line(render, "epics", &summary.epic_count.to_string());
+    print_surface_line(render, "open epics", &summary.open_count.to_string());
+    print_surface_line(
+        render,
+        "in progress epics",
+        &summary.in_progress_count.to_string(),
+    );
+    print_surface_line(render, "closed epics", &summary.closed_count.to_string());
+    print_surface_line(
+        render,
+        "descendants",
+        &summary.total_descendant_count.to_string(),
+    );
+    print_surface_line(
+        render,
+        "open descendants",
+        &summary.total_open_descendant_count.to_string(),
+    );
+    print_surface_line(
+        render,
+        "in progress descendants",
+        &summary.total_in_progress_descendant_count.to_string(),
+    );
+    print_surface_line(
+        render,
+        "closed descendants",
+        &summary.total_closed_descendant_count.to_string(),
+    );
+    print_surface_line(
+        render,
+        "percent complete",
+        &format!("{:.2}%", summary.percent_closed),
+    );
+    for epic in &summary.epics {
+        print_surface_line(
+            render,
+            &format!("epic {}", epic.epic_id),
+            &format!(
+                "{}: {}/{} closed ({:.2}%), open={}, in_progress={}",
+                epic.epic_status,
+                epic.closed_count,
+                epic.total_count,
+                epic.percent_complete,
+                epic.open_count,
+                epic.in_progress_count
             ),
         );
     }
@@ -6101,41 +6289,70 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing_read_only(state_dir.clone()).await {
-                Ok(store) => match store.task_progress_summary(&command.task_id).await {
-                    Ok(summary) => {
-                        print_task_progress(command.render, &summary, command.json);
-                        ExitCode::SUCCESS
+            if command.epics {
+                match load_task_snapshot_rows_authoritative_first(&state_dir).await {
+                    Ok((rows, metadata)) => {
+                        match task_epic_progress_summary(&rows, metadata, command.all) {
+                            Ok(summary) => {
+                                print_task_epic_progress_summary(
+                                    command.render,
+                                    &summary,
+                                    command.json,
+                                );
+                                ExitCode::SUCCESS
+                            }
+                            Err(error) => {
+                                eprintln!("Failed to compute epic progress summary: {error}");
+                                ExitCode::from(1)
+                            }
+                        }
                     }
                     Err(error) => {
-                        eprintln!("Failed to compute task progress: {error}");
+                        eprintln!("Failed to read task progress rows: {error}");
                         ExitCode::from(1)
                     }
-                },
-                Err(error) if is_authoritative_state_lock_error(&error) => {
-                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
-                        Ok(rows) => rows,
-                        Err(snapshot_error) => {
-                            eprintln!(
-                                "Failed to read task progress from snapshot: {snapshot_error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    };
-                    match StateStore::task_progress_summary_from_rows(&rows, &command.task_id) {
+                }
+            } else {
+                let Some(task_id) = command.task_id.as_deref() else {
+                    eprintln!("Task id is required unless --epics is set");
+                    return ExitCode::from(1);
+                };
+                match StateStore::open_existing_read_only(state_dir.clone()).await {
+                    Ok(store) => match store.task_progress_summary(task_id).await {
                         Ok(summary) => {
                             print_task_progress(command.render, &summary, command.json);
                             ExitCode::SUCCESS
                         }
                         Err(error) => {
-                            eprintln!("Failed to compute task progress from snapshot: {error}");
+                            eprintln!("Failed to compute task progress: {error}");
                             ExitCode::from(1)
                         }
+                    },
+                    Err(error) if is_authoritative_state_lock_error(&error) => {
+                        let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                            Ok(rows) => rows,
+                            Err(snapshot_error) => {
+                                eprintln!(
+                                    "Failed to read task progress from snapshot: {snapshot_error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        match StateStore::task_progress_summary_from_rows(&rows, task_id) {
+                            Ok(summary) => {
+                                print_task_progress(command.render, &summary, command.json);
+                                ExitCode::SUCCESS
+                            }
+                            Err(error) => {
+                                eprintln!("Failed to compute task progress from snapshot: {error}");
+                                ExitCode::from(1)
+                            }
+                        }
                     }
-                }
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
+                    Err(error) => {
+                        eprintln!("Failed to open authoritative state store: {error}");
+                        ExitCode::from(1)
+                    }
                 }
             }
         }

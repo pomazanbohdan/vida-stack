@@ -510,8 +510,8 @@ pub(crate) enum TaskCommand {
     List(TaskListArgs),
     #[command(about = "show one tracked task with dependency and planner metadata")]
     Show(TaskShowArgs),
-    #[command(about = "show progress and dependency context for one tracked task")]
-    Progress(TaskDepsArgs),
+    #[command(about = "show progress and dependency context for one task or open epics")]
+    Progress(TaskProgressArgs),
     #[command(about = "inspect proof targets and evidence status for one tracked task")]
     Proof(TaskProofArgs),
     #[command(about = "list tasks ready for execution from canonical graph truth")]
@@ -1684,6 +1684,33 @@ pub(crate) struct TaskNextLawfulArgs {
 }
 
 #[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskProgressArgs {
+    #[arg(
+        help = "Task id whose progress should be inspected; omit when using --epics",
+        required_unless_present = "epics"
+    )]
+    pub(crate) task_id: Option<String>,
+
+    #[arg(
+        long = "epics",
+        help = "List open or in-progress epics with descendant progress counts"
+    )]
+    pub(crate) epics: bool,
+
+    #[arg(long = "all", help = "Include closed epics when used with --epics")]
+    pub(crate) all: bool,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskDepsArgs {
     #[arg(help = "Task id whose dependency graph should be inspected")]
     pub(crate) task_id: String,
@@ -2202,6 +2229,19 @@ mod tests {
         assert!(help.contains("--push"));
         assert!(help.contains("--commit-file"));
         assert!(help.contains("--commit-message"));
+    }
+
+    #[test]
+    fn task_progress_help_lists_epic_summary_options() {
+        let error = Cli::try_parse_from(["vida", "task", "progress", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+
+        assert!(help.contains("[TASK_ID]"));
+        assert!(help.contains("--epics"));
+        assert!(help.contains("--all"));
+        assert!(help.contains("omit when using --epics"));
+        assert!(help.contains("open or in-progress epics"));
     }
 
     #[test]

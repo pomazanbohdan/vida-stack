@@ -102,7 +102,7 @@ fn build_operator_surface_payload(
     payload
 }
 
-fn build_pass_operator_surface_payload(
+pub(crate) fn build_pass_operator_surface_payload(
     surface: &str,
     extra_fields: serde_json::Value,
 ) -> serde_json::Value {
