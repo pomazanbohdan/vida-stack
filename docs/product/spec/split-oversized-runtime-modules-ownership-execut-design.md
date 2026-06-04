@@ -151,6 +151,12 @@ Execution order:
 3. After each extraction, record a post-split size and owner-boundary delta in this map.
 4. Do not remove transitional facades until all callers and tests prove the new ownership path.
 
+### Post-Split Extraction Log
+
+| Date | Task | Extracted owner boundary | Files | Size delta | Proof |
+| --- | --- | --- | --- | --- | --- |
+| 2026-06-04 | `architecture-refactor-oversized-module-split-lane-completion-result-writer-todo` | Runtime lane completion result writer: safe result file naming, completion summary blocker classification, and lane completion result artifact writing | `runtime_dispatch_state.rs` facade re-export plus new `runtime_dispatch_lane_completion.rs` | `runtime_dispatch_state.rs` 997.4 KB -> 992.1 KB; new child module 5.5 KB | `cargo test -p vida completion -- --nocapture --test-threads=1`; `cargo check -p vida` |
+
 ## Fail-Closed Constraints
 - Do not begin implementation from this lane.
 - Do not widen beyond the six named oversized module areas without a new packet.

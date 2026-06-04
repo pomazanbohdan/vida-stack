@@ -67,6 +67,7 @@ mod runtime_contract_vocab;
 mod runtime_dispatch_bootstrap;
 mod runtime_dispatch_downstream_packets;
 mod runtime_dispatch_execution;
+mod runtime_dispatch_lane_completion;
 mod runtime_dispatch_packet_text;
 mod runtime_dispatch_packets;
 mod runtime_dispatch_receipt_helpers;
