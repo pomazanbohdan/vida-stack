@@ -1239,6 +1239,46 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
 }
 
 #[test]
+fn task_list_fields_and_default_toon_shape_are_binary_visible() {
+    let state_dir = unique_state_dir();
+    let jsonl_path = format!("{state_dir}/issues.jsonl");
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    sample_jsonl(&jsonl_path);
+
+    let import_stdout =
+        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+    assert_json_status_pass(&import_stdout);
+
+    let field_list_stdout = run_and_assert_success(
+        &[
+            "task",
+            "list",
+            "--all",
+            "--fields",
+            "id,status,title",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let field_list_json: Value = serde_json::from_str(&field_list_stdout)
+        .expect("field-selected task list json should parse");
+    assert_eq!(field_list_json["fields"], "id,status,title");
+    assert_eq!(field_list_json["view"], "summary");
+    let field_task_a = task_row_by_id(&field_list_json, "vida-a");
+    assert_eq!(field_task_a["id"], "vida-a");
+    assert_eq!(field_task_a["status"], "open");
+    assert_eq!(field_task_a["title"], "Task A");
+    assert!(field_task_a.get("description").is_none());
+    assert!(field_task_a.get("parent_edge").is_none());
+
+    let toon_list_stdout = run_and_assert_success(&["task", "list", "--all"], &state_dir);
+    assert!(toon_list_stdout.starts_with("vida task list\n  task_count: 4"));
+    assert!(toon_list_stdout.contains("\n  tasks[4]{id,status,priority,title}:"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn dead_code_proof_protects_public_command_entrypoints() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -1325,6 +1365,116 @@ fn cli_help_description_inventory_covers_taskflow_proxy_topics() {
             assert!(
                 stdout.contains(field),
                 "taskflow help topic `{topic}` should include `{field}`:\n{stdout}"
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn cli_help_description_inventory_covers_agent_and_task_operator_options() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    for (args, expected) in [
+        (
+            &["agent-init", "--help"][..],
+            &[
+                "--role <ROLE>",
+                "Requested runtime role or conversation role for lane activation",
+                "--dispatch-packet <DISPATCH_PACKET>",
+                "--downstream-packet <DOWNSTREAM_PACKET>",
+                "--execute-dispatch",
+                "--auto-dispatch-packet",
+                "--state-dir <STATE_DIR>",
+                "--json",
+            ][..],
+        ),
+        (
+            &["agent", "dispatch-next", "--help"][..],
+            &[
+                "--lanes <LANES>",
+                "Maximum preview lanes to inspect before any manual `vida agent-init` launch",
+                "--scope <SCOPE>",
+                "--current-task-id <CURRENT_TASK_ID>",
+                "--dev-team",
+                "--json",
+            ][..],
+        ),
+        (
+            &["agent", "host-bridge", "--help"][..],
+            &[
+                "--request <REQUEST>",
+                "Path to a pending host_tool_bridge_request JSON artifact",
+                "--complete",
+                "--host-agent-id <HOST_AGENT_ID>",
+                "--summary <SUMMARY>",
+                "--receipt-id <RECEIPT_ID>",
+                "--json",
+            ][..],
+        ),
+        (
+            &["task", "list", "--help"][..],
+            &[
+                "--fields <FIELDS>",
+                "Comma-separated JSON task row fields to include",
+                "--view <VIEW>",
+                "Output view for task rows: compact, summary, or full",
+                "--limit <LIMIT>",
+                "--json",
+            ][..],
+        ),
+        (
+            &["task", "create", "--help"][..],
+            &[
+                "--parent-id <PARENT_ID>",
+                "--execution-mode <EXECUTION_MODE>",
+                "--order-bucket <ORDER_BUCKET>",
+                "--parallel-group <PARALLEL_GROUP>",
+                "--conflict-domain <CONFLICT_DOMAIN>",
+                "--owned-path <OWNED_PATHS>",
+                "--acceptance-target <ACCEPTANCE_TARGETS>",
+                "--proof-target <PROOF_TARGETS>",
+                "--json",
+            ][..],
+        ),
+        (
+            &["task", "update", "--help"][..],
+            &[
+                "--parent-id <PARENT_ID>",
+                "--clear-parent-id",
+                "--execution-mode <EXECUTION_MODE>",
+                "--clear-execution-mode",
+                "--clear-parallel-group",
+                "--clear-conflict-domain",
+                "--json",
+            ][..],
+        ),
+        (
+            &["task", "close", "--help"][..],
+            &[
+                "--reason <REASON>",
+                "--include-global-progress",
+                "--stage-owned",
+                "--commit-file <COMMIT_FILES>",
+                "--commit-message <COMMIT_MESSAGE>",
+                "--json",
+            ][..],
+        ),
+    ] {
+        let output = run_command_capture(args, &state_dir);
+        assert!(
+            output.status.success(),
+            "help command should succeed: {args:?}\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for needle in expected {
+            assert!(
+                stdout.contains(needle),
+                "help command {args:?} should expose `{needle}`:\n{stdout}"
             );
         }
     }
@@ -4978,9 +5128,10 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
     fs::create_dir_all(&state_dir).expect("create state dir");
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
-    let run_id = "exception-missing-task-run";
-    let task_id = "audit-remediation-04-correct-report-baseline";
-    let exception_task_id = "audit-remediation-04-correct-report-baseline-review";
+    let run_id = "universal-surfaces-kanban-cross-column-drag-drop";
+    let task_id = "universal-surfaces-kanban-cross-column-drag-drop";
+    let exception_task_id =
+        "universal-surfaces-kanban-cross-column-drag-drop:implementer:exception-takeover";
     let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
     fs::create_dir_all(&packet_dir).expect("create packet dir");
     let packet_path = format!("{packet_dir}/{run_id}.json");
@@ -4988,8 +5139,8 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
         &packet_path,
         serde_json::json!({
             "run_id": run_id,
-            "dispatch_target": "coach",
-            "activation_runtime_role": "coach",
+            "dispatch_target": "implementer",
+            "activation_runtime_role": "implementer",
             "packet_template_kind": "delivery_task_packet",
             "owned_paths": ["crates/vida/src/lane_surface.rs"],
             "read_only_paths": [".vida/data/state/runtime-consumption"],
@@ -5028,9 +5179,9 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
             "delivery_task_packet": {
                 "task_id": task_id,
                 "goal": "Recover a stale exception takeover run whose TaskFlow task was removed.",
-                "scope_in": ["dispatch_target:coach"],
+                "scope_in": ["dispatch_target:implementer"],
                 "handoff_task_class": "implementation",
-                "handoff_runtime_role": "coach",
+                "handoff_runtime_role": "implementer",
                 "owned_paths": ["crates/vida/src/lane_surface.rs"],
                 "read_only_paths": [".vida/data/state/runtime-consumption"],
                 "definition_of_done": ["stale missing-task lane can be retired"],
@@ -5049,7 +5200,7 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
         format!("{metadata_dir}/{run_id}.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "run_id": run_id,
-            "dispatch_target": "coach",
+            "dispatch_target": "implementer",
             "dispatch_packet_path": packet_path,
             "source_exception_path_receipt_id": run_id,
             "reason_class": "blocked_open_delegated_cycle_timeout",
@@ -5082,8 +5233,8 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
                     "run_id": run_id,
                     "route_task_class": "implementation",
                     "selected_backend": "internal_subagents",
-                    "lane_id": "coach",
-                    "lifecycle_stage": "coach_blocked",
+                    "lane_id": "implementer",
+                    "lifecycle_stage": "implementer_blocked",
                     "updated_at": "2026-06-04T00:00:00Z"
                 }),
             ))
@@ -5110,7 +5261,7 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
                 serde_json::json!({
                     "run_id": run_id,
                     "checkpoint_kind": "none",
-                    "resume_target": "coach",
+                    "resume_target": "implementer",
                     "recovery_ready": false,
                     "updated_at": "2026-06-04T00:00:00Z"
                 }),
@@ -5125,7 +5276,7 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
                     "run_id": run_id,
                     "task_id": task_id,
                     "task_class": "implementation",
-                    "active_node": "coach",
+                    "active_node": "implementer",
                     "next_node": "tester",
                     "status": "blocked",
                     "updated_at": "2026-06-04T00:00:00Z"
@@ -5135,21 +5286,21 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
             .expect("seed execution plan state");
         let receipt = serde_json::json!({
             "run_id": run_id,
-            "dispatch_target": "coach",
+            "dispatch_target": "implementer",
             "dispatch_status": "blocked",
             "lane_status": "lane_exception_takeover",
             "supersedes_receipt_id": run_id,
             "exception_path_receipt_id": run_id,
             "dispatch_kind": "agent_lane",
             "dispatch_surface": "vida agent-init",
-            "dispatch_command": format!("vida agent-init --role coach {task_id} --json"),
+            "dispatch_command": format!("vida agent-init --role implementer {task_id} --json"),
             "dispatch_packet_path": packet_path,
             "blocker_code": "host_tool_bridge_adapter_required",
             "downstream_dispatch_ready": false,
             "downstream_dispatch_blockers": ["host_tool_bridge_adapter_required"],
             "downstream_dispatch_executed_count": 0,
             "activation_agent_type": "internal_subagents",
-            "activation_runtime_role": "coach",
+            "activation_runtime_role": "implementer",
             "selected_backend": "internal_subagents",
             "recorded_at": "2026-06-04T00:00:00Z"
         });
@@ -5174,7 +5325,7 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
                 "kind": "run_graph_task",
                 "task_id": task_id,
                 "run_id": run_id,
-                "active_node": "coach"
+                "active_node": "implementer"
             },
             "binding_source": "exception_missing_task_regression_seed",
             "why_this_unit": "stale missing-task exception run was blocking continuation",

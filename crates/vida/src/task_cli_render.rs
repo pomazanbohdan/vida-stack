@@ -271,9 +271,10 @@ pub(crate) fn print_task_list(
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) {
     let output_policy = task_list_output_policy(summary_only, explicit_full);
+    let row_full = explicit_full && !summary_only;
     let task_rows = tasks
         .iter()
-        .map(|task| task_list_row_value(task, explicit_full))
+        .map(|task| task_list_row_value(task, row_full))
         .map(|value| apply_json_field_selector(value, fields))
         .collect::<Vec<_>>();
     let payload = if summary_only {

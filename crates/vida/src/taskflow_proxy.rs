@@ -4225,8 +4225,14 @@ async fn route_taskflow_task(args: &[String]) -> ExitCode {
 fn resolve_taskflow_proxy_state_dir(state_dir: Option<PathBuf>) -> Result<PathBuf, String> {
     match state_dir {
         Some(state_dir) => Ok(state_dir),
-        None => crate::resolve_runtime_project_root()
-            .map(|project_root| project_root.join(crate::state_store::default_state_dir())),
+        None => std::env::var_os("VIDA_STATE_DIR")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .map(Ok)
+            .unwrap_or_else(|| {
+                crate::resolve_runtime_project_root()
+                    .map(|project_root| project_root.join(crate::state_store::default_state_dir()))
+            }),
     }
 }
 
