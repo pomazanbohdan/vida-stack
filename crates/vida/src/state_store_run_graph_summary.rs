@@ -2821,6 +2821,14 @@ impl StateStore {
                 continue;
             }
             let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
+            let status = match self.run_graph_status(&receipt.run_id).await {
+                Ok(status) => status,
+                Err(StateStoreError::MissingTask { .. }) => continue,
+                Err(error) => return Err(error),
+            };
+            if active_exception_takeover_receipt_is_behind_status(&status, &receipt) {
+                continue;
+            }
             return Ok(Some(receipt.into()));
         }
         Ok(None)
