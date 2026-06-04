@@ -43,6 +43,9 @@ scan_ignored:
     glob: ".vida/data/**"
     reason: runtime state, internal host scratch data, and generated receipts are outside the active documentation canon
   - scope: relative_path
+    glob: ".vida/cargo-target/**"
+    reason: generated Cargo build output is outside the active documentation canon
+  - scope: relative_path
     glob: ".vida/project/agent-extensions/**"
     reason: generated project agent extension descriptors are outside the active documentation canon
   - scope: relative_path
@@ -57,6 +60,9 @@ scan_ignored:
   - scope: relative_path
     glob: "target/**"
     reason: build output markdown is outside the active documentation canon
+  - scope: relative_path
+    glob: "tmp*.md"
+    reason: root-level temporary advisory notes are outside the active documentation canon
   - scope: relative_path
     glob: "vendor/**"
     reason: vendored third-party documentation is not mutated by project DocFlow readiness checks

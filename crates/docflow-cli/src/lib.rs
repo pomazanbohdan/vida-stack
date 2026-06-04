@@ -2910,7 +2910,9 @@ fn resolve_profile_targets(
             .collect();
     }
     if profile.is_empty() {
-        return collect_check_targets(&root, Vec::<String>::new()).map_err(|err| err.to_string());
+        let excludes =
+            resolve_scan_ignored_globs(&docflow_policy_path()).map_err(|err| err.to_string())?;
+        return collect_check_targets(&root, excludes).map_err(|err| err.to_string());
     }
 
     let policy = docflow_policy_path();
@@ -4708,6 +4710,40 @@ mod tests {
         let rendered = run(cli);
         assert!(rendered.contains("\"artifact_path\":\"docs/process/a.md\""));
         assert!(rendered.contains("\"code\":\"missing_footer\""));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn check_command_default_profile_applies_policy_scan_ignores() {
+        let root = temp_dir("check-default-policy-ignores-root");
+        fs::create_dir_all(root.join(".agents/skills/example")).expect("skill dir should exist");
+        fs::create_dir_all(root.join(".vida/cargo-target/debug/build/pkg/out"))
+            .expect("cargo target dir should exist");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(root.join(".agents/skills/example/SKILL.md"), "# skill\n")
+            .expect("skill markdown");
+        fs::write(
+            root.join(".vida/cargo-target/debug/build/pkg/out/README.md"),
+            "# generated\n",
+        )
+        .expect("generated markdown");
+        fs::write(root.join("tmp-agent-notes.md"), "# scratch\n").expect("scratch markdown");
+        fs::write(root.join("docs/process/a.md"), "# a\n").expect("process markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "check",
+            "--root",
+            root.to_string_lossy().as_ref(),
+            "--json",
+        ]);
+        let rendered = run(cli);
+
+        assert!(rendered.contains("\"path\": \"docs/process/a.md\""));
+        assert!(!rendered.contains(".agents/skills/example/SKILL.md"));
+        assert!(!rendered.contains(".vida/cargo-target/debug/build/pkg/out/README.md"));
+        assert!(!rendered.contains("tmp-agent-notes.md"));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }
