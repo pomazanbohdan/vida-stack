@@ -7,6 +7,7 @@ _vida/
 **/.vida/data/**
 .hermes/
 .lean-ctx/
+.codex-remote-attachments/
 vida/config/*.current.jsonl
 target
 **/target/
