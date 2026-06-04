@@ -7528,7 +7528,7 @@ mod tests {
     }
 
     #[test]
-    fn executable_dispatch_packet_template_bypasses_activation_view_only_prelaunch_blocker() {
+    fn executable_dispatch_packet_template_preserves_activation_view_only_prelaunch_blocker() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let packet_path = harness.path().join("delivery-packet.json");
         fs::write(
@@ -7550,7 +7550,7 @@ mod tests {
         )
         .expect("packet should write");
 
-        assert!(!dispatch_packet_declares_activation_view_only(Some(
+        assert!(dispatch_packet_declares_activation_view_only(Some(
             packet_path
                 .to_str()
                 .expect("packet path should be valid utf8")
@@ -23210,9 +23210,6 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
     else {
         return false;
     };
-    if dispatch_packet_has_executable_template(&packet) {
-        return false;
-    }
     let activation_semantics = packet
         .get("activation_semantics")
         .or_else(|| packet.pointer("/activation_evidence/activation_semantics"))
@@ -23232,18 +23229,6 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
         return true;
     }
     false
-}
-
-fn dispatch_packet_has_executable_template(packet: &serde_json::Value) -> bool {
-    matches!(
-        packet["packet_template_kind"].as_str(),
-        Some(
-            "delivery_task_packet"
-                | "execution_block_packet"
-                | "coach_review_packet"
-                | "verifier_proof_packet"
-        )
-    )
 }
 
 pub(crate) fn dispatch_result_stale_after_seconds(result: &serde_json::Value) -> i64 {
