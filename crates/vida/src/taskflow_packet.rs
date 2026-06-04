@@ -340,6 +340,34 @@ fn parse_packet_repair_args(args: &[String]) -> Result<Option<(String, String, b
     Ok(Some((run_id, task_id, as_json)))
 }
 
+fn packet_repair_args_request_json(args: &[String]) -> bool {
+    matches!(args, [head, subcommand, ..] if head == "packet" && subcommand == "repair")
+        && args.iter().any(|arg| arg == "--json")
+}
+
+fn packet_repair_parse_error_payload(error: &str) -> serde_json::Value {
+    let blocker_code =
+        if error.contains("requires --run-id") || error.contains("Missing value for --run-id") {
+            "packet_repair_run_id_missing"
+        } else if error.contains("requires --from-task")
+            || error.contains("Missing value for --from-task")
+        {
+            "packet_repair_from_task_missing"
+        } else {
+            "packet_repair_argument_invalid"
+        };
+    serde_json::json!({
+        "surface": "vida taskflow packet repair",
+        "status": "blocked",
+        "blocker_codes": [blocker_code],
+        "error": error,
+        "usage": usage(),
+        "next_actions": [
+            "Rerun as `vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json`."
+        ],
+    })
+}
+
 async fn load_task_for_packet_repair(
     store: &StateStore,
     task_id: &str,
@@ -536,6 +564,10 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Err(error) => {
+            if packet_repair_args_request_json(args) {
+                crate::print_json_pretty(&packet_repair_parse_error_payload(&error));
+                return ExitCode::from(2);
+            }
             eprintln!("{error}");
             eprintln!("{}", usage());
             return ExitCode::from(2);

@@ -12529,6 +12529,73 @@ fn consume_continue_json_classifies_persisted_packet_contract_invalid_with_artif
 }
 
 #[test]
+fn packet_repair_missing_from_task_json_reports_actionable_option_error() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let (payload, success) = run_command_json_allow_failure(
+        &[
+            "taskflow", "packet", "repair", "--run-id", "some-run", "--json",
+        ],
+        &state_dir,
+    );
+
+    assert!(!success, "missing --from-task should fail closed");
+    assert_eq!(payload["surface"], "vida taskflow packet repair");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["packet_repair_from_task_missing"])
+    );
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should render")
+        .contains("--from-task <task-id>"));
+    let next_actions = require_json_string_array(&payload["next_actions"], "next_actions");
+    assert!(next_actions
+        .iter()
+        .any(|action| action.contains("--from-task <task-id>")));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn packet_repair_missing_run_id_json_reports_actionable_option_error() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let (payload, success) = run_command_json_allow_failure(
+        &[
+            "taskflow",
+            "packet",
+            "repair",
+            "--from-task",
+            "some-task",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert!(!success, "missing --run-id should fail closed");
+    assert_eq!(payload["surface"], "vida taskflow packet repair");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["packet_repair_run_id_missing"])
+    );
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should render")
+        .contains("--run-id <id>"));
+    let next_actions = require_json_string_array(&payload["next_actions"], "next_actions");
+    assert!(next_actions
+        .iter()
+        .any(|action| action.contains("--run-id <run-id>")));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn multi_session_disjoint_tasks_independent_admission_via_cli() {
     let (project_root, state_dir) = project_bound_state_dir();
     run_and_assert_success(&["boot"], &state_dir);
