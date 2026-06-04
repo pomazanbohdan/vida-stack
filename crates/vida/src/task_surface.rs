@@ -120,6 +120,115 @@ struct TaskTakeoverStatusReceipt {
     blocker_codes: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TaskExceptionTakeoverMetadata {
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
+    dispatch_target: Option<String>,
+    #[serde(default)]
+    source_exception_path_receipt_id: Option<String>,
+    #[serde(default)]
+    owned_write_scope: Vec<String>,
+}
+
+impl TaskExceptionTakeoverMetadata {
+    fn matches_summary(&self, summary: &state_store::RunGraphDispatchReceiptSummary) -> bool {
+        let run_id_matches = self
+            .run_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|value| value == summary.run_id);
+        let target_matches = self
+            .dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|value| value == summary.dispatch_target);
+        let source_receipt_matches = self
+            .source_exception_path_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|value| {
+                summary
+                    .exception_path_receipt_id
+                    .as_deref()
+                    .is_some_and(|summary_value| value == summary_value)
+            });
+
+        run_id_matches && target_matches && source_receipt_matches
+    }
+}
+
+fn task_exception_takeover_metadata_filename(run_id: &str) -> Result<String, String> {
+    if run_id.is_empty() {
+        return Err("Run id cannot be empty for exception takeover metadata.".to_string());
+    }
+    if !run_id
+        .chars()
+        .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
+    {
+        return Err(format!(
+            "Run id `{run_id}` contains unsupported characters for exception takeover metadata filename."
+        ));
+    }
+    Ok(format!("{run_id}.json"))
+}
+
+fn task_exception_takeover_metadata_path(
+    state_root: &std::path::Path,
+    run_id: &str,
+) -> Result<std::path::PathBuf, String> {
+    let file_name = task_exception_takeover_metadata_filename(run_id)?;
+    Ok(state_root
+        .join("lane-exception-path-metadata")
+        .join(file_name))
+}
+
+fn read_task_exception_takeover_metadata(
+    state_root: &std::path::Path,
+    run_id: &str,
+) -> Result<Option<TaskExceptionTakeoverMetadata>, String> {
+    let path = task_exception_takeover_metadata_path(state_root, run_id)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "Failed to read persisted exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let metadata: TaskExceptionTakeoverMetadata = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "Failed to decode persisted exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    Ok(Some(metadata))
+}
+
+fn task_exception_takeover_owned_write_scope(
+    state_root: &std::path::Path,
+    summary: &state_store::RunGraphDispatchReceiptSummary,
+) -> Vec<String> {
+    read_task_exception_takeover_metadata(state_root, &summary.run_id)
+        .ok()
+        .flatten()
+        .filter(|metadata| metadata.matches_summary(summary))
+        .map(|metadata| {
+            metadata
+                .owned_write_scope
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 struct TaskBlockReceipt {
     surface: &'static str,
@@ -422,7 +531,7 @@ async fn task_takeover_status_receipt(
         ),
     };
     let task_matches_lane = status.task_id.trim() == task.id.trim();
-    let paths = task
+    let planner_paths = task
         .planner_metadata
         .owned_paths
         .iter()
@@ -430,6 +539,16 @@ async fn task_takeover_status_receipt(
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
     let state_label = exception_takeover_state_label(takeover_state).to_string();
+    let metadata_paths = summary
+        .as_ref()
+        .filter(|_| takeover_state.is_active())
+        .map(|summary| task_exception_takeover_owned_write_scope(store.root(), summary))
+        .unwrap_or_default();
+    let paths = if takeover_state.is_active() {
+        metadata_paths
+    } else {
+        planner_paths
+    };
     let root_local_write_allowed =
         task_matches_lane && takeover_state.is_active() && !paths.is_empty();
     let allowed = root_local_write_allowed;
@@ -487,6 +606,21 @@ async fn task_takeover_status_receipt(
             command,
             Some("vida lane supersede".to_string()),
         )
+        } else if takeover_state.is_active() && paths.is_empty() {
+            (
+                "exception takeover is active but receipt-bound owned_write_scope could not be read"
+                    .to_string(),
+                vec!["exception_takeover_scope_missing".to_string()],
+                vec![format!(
+                    "Inspect the lane receipt and exception metadata: `vida lane show {} --json`.",
+                    crate::shell_quote(&status.run_id)
+                )],
+                Some(format!(
+                    "vida lane show {} --json",
+                    crate::shell_quote(&status.run_id)
+                )),
+                Some("vida lane show".to_string()),
+            )
         } else {
             let command = format!(
                 "vida lane takeover-ready {} --json",
@@ -524,6 +658,10 @@ async fn task_takeover_status_receipt(
         "selected_backend": summary.as_ref().and_then(|summary| summary.selected_backend.clone()),
         "exception_path_receipt_id": summary.as_ref().and_then(|summary| summary.exception_path_receipt_id.clone()),
         "supersedes_receipt_id": summary.as_ref().and_then(|summary| summary.supersedes_receipt_id.clone()),
+        "exception_path_metadata_path": summary
+            .as_ref()
+            .and_then(|summary| task_exception_takeover_metadata_path(store.root(), &summary.run_id).ok())
+            .map(|path| path.display().to_string()),
         "recovery_gate": recovery_gate,
     });
     let takeover_ready_state = if allowed {
@@ -7354,6 +7492,7 @@ mod tests {
         task_close_result_payload, task_close_uses_isolated_state_dir, task_continuation_candidate,
         task_create_planner_metadata_arg, task_create_semantics_mismatch,
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
+        task_exception_takeover_metadata_path, task_exception_takeover_owned_write_scope,
         task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
         task_handoff_receipt_root, task_json_success_status, task_next_lawful_apply_strategy,
         task_next_lawful_receipt, task_next_lawful_select_ready_candidate_receipt,
@@ -7457,6 +7596,68 @@ mod tests {
                 crate::release1_contracts::ExceptionTakeoverState::ActiveTakeover
             ),
             "active"
+        );
+    }
+
+    #[test]
+    fn task_takeover_status_reads_receipt_bound_owned_scope() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let run_id = "task-takeover-status-scope";
+        let metadata_path =
+            task_exception_takeover_metadata_path(harness.path(), run_id).expect("metadata path");
+        fs::create_dir_all(metadata_path.parent().expect("metadata dir should exist"))
+            .expect("metadata dir should create");
+        fs::write(
+            &metadata_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": "implementer",
+                "source_exception_path_receipt_id": "takeover-receipt",
+                "owned_write_scope": [
+                    " crates/vida/src/task_surface.rs ",
+                    ""
+                ]
+            })
+            .to_string(),
+        )
+        .expect("metadata should write");
+        let summary = state_store::RunGraphDispatchReceiptSummary {
+            run_id: run_id.to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("takeover-receipt".to_string()),
+            exception_path_receipt_id: Some("takeover-receipt".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("host_tool_bridge".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("host_tool_capability_missing".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("implementer".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-06-04T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            task_exception_takeover_owned_write_scope(harness.path(), &summary),
+            vec!["crates/vida/src/task_surface.rs".to_string()]
         );
     }
 
