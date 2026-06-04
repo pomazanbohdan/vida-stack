@@ -4324,6 +4324,28 @@ fn task_dependency_ensure_reports_ensure_surface_in_json_results() {
             .expect("next action should be a string")
             .contains("vida task dep ensure vida-c missing-task blocks --json")));
 
+    let invalid_graph_output = vida()
+        .args([
+            "task", "dep", "ensure", "vida-c", "vida-c", "blocks", "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("invalid graph ensure dependency should run");
+    assert!(!invalid_graph_output.status.success());
+    let invalid_graph_json: serde_json::Value =
+        serde_json::from_slice(&invalid_graph_output.stdout)
+            .expect("invalid graph ensure dependency json should parse");
+    assert_eq!(invalid_graph_json["surface"], "vida task dep ensure");
+    assert_eq!(invalid_graph_json["status"], "blocked");
+    assert!(invalid_graph_json["next_actions"]
+        .as_array()
+        .expect("next actions should be an array")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .expect("next action should be a string")
+            .contains("vida task dep ensure vida-c vida-c blocks --json")));
+
     let _ = fs::remove_dir_all(&state_dir);
 }
 

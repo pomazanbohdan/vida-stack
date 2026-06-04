@@ -1281,7 +1281,11 @@ pub(crate) fn print_task_dependency_bulk_add_result_for_surface(
             .failed
             .iter()
             .chain(result.unapplied.iter())
-            .next()
+            .find(|edge| {
+                !edge.issue_id.trim().is_empty()
+                    && !edge.depends_on_id.trim().is_empty()
+                    && !edge.edge_type.trim().is_empty()
+            })
             .map(|edge| {
                 format!(
                     "{} {} {} {} --json",
