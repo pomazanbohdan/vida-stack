@@ -173,7 +173,22 @@ Runtime-family rule:
 2. they may share patterns and support crates later,
 3. but `TaskFlow` must not absorb `DocFlow` responsibilities and `DocFlow` must not absorb execution authority.
 
-### 3.6 Cross-Runtime Dependency Rule
+### 3.6 Workflow-Spec Annex Rule
+
+`TaskFlow` must treat packet `workflow_spec` annexes as executable scheduling evidence only after validation.
+
+Rules:
+
+1. the annex graph is a DAG of lane steps with explicit dependencies, output schemas, proof gates, and synthesis semantics,
+2. validation fails closed on graph cycles, missing proof gates, missing schemas, unknown runtime roles, write-scope drift, sandbox mismatch, or conflicting TaskFlow dependency edges,
+3. readiness, cost budget, write scope, sandbox, `fanout_min_results`, merge policy, retry policy, timeout policy, and partial-result disclosure are first-class conditions, not hidden launcher defaults,
+4. no-silent-caps: scheduler fanout may be lower than requested only when the returned receipt states the cap, reason, selected lanes, omitted lanes, and next command,
+5. per-lane attempts and consolidator lanes use configured carrier/model profiles selected by runtime admission; hardcoded model or provider names are not kernel authority,
+6. partial lane returns must produce structured `accepted`, `conflict`, `partial`, or `blocked` synthesis output before continuation,
+7. `vida agent-init` receipts, run-graph/lane state, TaskFlow graph truth, and the root write guard remain authoritative when they conflict with the annex,
+8. the implementation program must expose compact operator output for annex validation and scheduling decisions, with broad JSON/details behind explicit options.
+
+### 3.7 Cross-Runtime Dependency Rule
 
 The modernization program runs as two coordinated tracks with one explicit seam.
 
@@ -185,7 +200,7 @@ Rules:
 4. final runtime-consumption closure may not close until the required `docflow-rs` capabilities are green,
 5. cross-runtime integration must occur only through explicit contracts, not through hidden shared assumptions.
 
-### 3.7 Storage Rule
+### 3.8 Storage Rule
 
 `TaskFlow` must keep storage law behind store contracts, while aligning product direction with the already-closed `VIDA 1` storage decision.
 
@@ -198,7 +213,7 @@ Storage rule:
 5. future additional adapters are allowed only if admitted by a higher-precedence product/runtime spec,
 6. no kernel invariant may depend on one specific storage backend.
 
-### 3.8 Direct-Rewrite Efficiency Rule
+### 3.9 Direct-Rewrite Efficiency Rule
 
 The implementation program must optimize for direct target build rather than compatibility churn.
 

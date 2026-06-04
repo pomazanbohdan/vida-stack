@@ -224,6 +224,52 @@ Use this selection order:
 5. `verifier_proof_packet` before closure,
 6. `escalation_packet` only when normal packet closure cannot be made coherent.
 
+## Workflow Spec Annex
+
+Every write-producing packet may carry a `workflow_spec` annex when the task needs more than a single role handoff. The annex is part of packet readiness, not an advisory note.
+
+Required shape:
+
+```text
+workflow_spec:
+  graph:
+    - step_id: <stable step id>
+      role: <runtime role>
+      depends_on:
+        - <step id>
+      output_schema: <schema id or inline fields>
+      proof_gate: <command, receipt, or artifact gate>
+  conditions:
+    readiness: <ready | blocked | partial>
+    cost_budget: <configured budget id or none>
+    write_scope:
+      - <owned path or none for read-only>
+    sandbox: <tool/runtime sandbox requirement>
+    fanout_min_results: <integer>
+    merge_policy: <first_success | consensus | consensus_with_conflict_flag | custom configured policy>
+    retry: <configured retry policy>
+    timeout: <configured timeout policy>
+    partial_result_disclosure: <how partial/blocker evidence is reported>
+  model_policy:
+    lane_attempts_use_configured_carriers: true
+    consolidator_uses_configured_profile: true
+    hardcoded_model_authority_forbidden: true
+  synthesis:
+    lane_output_format: <structured schema>
+    merge_result: <accepted | conflict | partial | blocked>
+    next_taskflow_update: <task note/update/child task/close>
+```
+
+Annex rules:
+
+1. `workflow_spec.graph` is a DAG and must fail closed on cycles, missing dependencies, missing proof gates, or unknown output schemas,
+2. each lane output must be structured enough for the orchestrator to synthesize without guessing,
+3. fanout caps, retries, timeouts, and cost budgets are explicit conditions; silent caps are forbidden,
+4. `fanout_min_results`, `merge_policy`, and partial-result disclosure must be recorded before multi-agent work starts,
+5. model, provider, carrier, and consolidator selection comes only from configured carrier/model profiles and runtime admission; packet prose must not hardcode model authority,
+6. `vida agent-init` dispatch receipts, TaskFlow state, DocFlow proof, and the root write guard remain authoritative over annex intent,
+7. if the annex conflicts with TaskFlow/DocFlow/runtime receipts, the packet is blocked until reshaped.
+
 ## Fail-Closed Rule
 
 If a packet:

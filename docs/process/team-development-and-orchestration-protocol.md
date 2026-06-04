@@ -142,6 +142,16 @@ Readiness rule:
 5. `escalation_packet` is invalid if any of `decision_needed`, `options`, `constraints`, or `blocking_question` is missing,
 6. invalid packets must be reshaped by the orchestrator before delegation.
 
+Workflow-spec annex rule:
+
+1. when a task needs multi-lane or multi-agent work, the orchestrator must attach a `workflow_spec` annex before dispatch,
+2. the annex must name DAG steps, dependencies, output schemas, proof gates, readiness, cost budget, write scope, sandbox, `fanout_min_results`, merge policy, retry policy, timeout policy, and partial-result disclosure,
+3. the configured role chain remains authoritative; the annex may specialize steps but must not silently skip analyst, test-author, coach, verifier, reviewer, or closure gates required by runtime state,
+4. parallel fanout is lawful only when TaskFlow scheduling, owned paths, conflict domains, and the annex graph all agree,
+5. per-lane attempts and consolidators use configured carrier/model profiles selected by runtime admission; hardcoded provider or model authority in packet prose is invalid,
+6. explorer/read-only results, external CLI outputs, or independent model reports are lane outputs to synthesize, not root-session permission to write,
+7. synthesis must update TaskFlow with the accepted result, conflicts, partial evidence, or blocker before the next write-producing lane starts.
+
 Template rule:
 
 1. render project packets using `docs/process/project-development-packet-template-protocol.md`,

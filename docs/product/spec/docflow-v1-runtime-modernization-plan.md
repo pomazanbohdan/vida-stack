@@ -115,6 +115,20 @@ For any lawful mutation path:
 2. no scattered historical path or wrapper may become the hidden discovery route,
 3. activation triggers for `DocFlow` surfaces must remain explicit in runtime-family maps and documentation tooling maps.
 
+### 3.8 Workflow-Spec Documentation Rule
+
+`DocFlow` must validate the documentation/proof side of packet `workflow_spec` annexes without claiming execution authority.
+
+Rules:
+
+1. `DocFlow` owns annex documentation validation, artifact inventory, readiness evidence, relation checks, and proof-record presence,
+2. `TaskFlow` remains the execution substrate, scheduler, lane receipt owner, continuation owner, and closure authority,
+3. annex docs must disclose readiness, cost budget, write scope, sandbox, `fanout_min_results`, merge policy, retry policy, timeout policy, and partial-result handling,
+4. annex docs must identify output schemas and proof gates that `DocFlow` can check or mark as external TaskFlow/runtime evidence,
+5. model/provider/carrier wording in docs is descriptive evidence only; configured carrier/model profiles and runtime receipts remain authoritative,
+6. DocFlow proof surfaces must fail closed when annex documentation omits required conditions or contradicts TaskFlow/root-write-guard receipts,
+7. compact proof output should state only current missing/valid annex fields by default; full relation and history payloads require explicit details mode.
+
 ## 4. Build Strategy
 
 ### 4.1 Fast-But-Effective Delivery Rule
