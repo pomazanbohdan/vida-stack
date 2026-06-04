@@ -509,9 +509,10 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_for_run(
 }
 
 pub(crate) fn latest_final_runtime_consumption_dispatch_receipt_summary(
-    state_root: &Path,
+    store: &StateStore,
 ) -> Result<Option<RunGraphDispatchReceiptSummary>, String> {
-    let Some(snapshot_path) = latest_recorded_final_runtime_consumption_snapshot_path(state_root)?
+    let Some(snapshot_path) =
+        latest_recorded_final_runtime_consumption_snapshot_path(store.root())?
     else {
         return Ok(None);
     };
@@ -522,72 +523,28 @@ pub(crate) fn latest_final_runtime_consumption_dispatch_receipt_summary(
         format!("Failed to decode latest final runtime-consumption snapshot: {error}")
     })?;
     let receipt = &payload["payload"]["dispatch_receipt"];
-    let Some(run_id) = json_non_empty_string(receipt, "run_id") else {
+    let Some(payload_run_id) = json_non_empty_string(receipt, "run_id") else {
         return Ok(None);
     };
 
-    Ok(Some(RunGraphDispatchReceiptSummary {
-        run_id,
-        dispatch_target: json_non_empty_string(receipt, "dispatch_target")
-            .unwrap_or_else(|| "none".to_string()),
-        dispatch_status: json_non_empty_string(receipt, "dispatch_status")
-            .unwrap_or_else(|| "blocked".to_string()),
-        lane_status: json_non_empty_string(receipt, "lane_status")
-            .unwrap_or_else(|| "lane_blocked".to_string()),
-        supersedes_receipt_id: json_optional_string(receipt, "supersedes_receipt_id"),
-        exception_path_receipt_id: json_optional_string(receipt, "exception_path_receipt_id"),
-        dispatch_kind: json_non_empty_string(receipt, "dispatch_kind")
-            .unwrap_or_else(|| "none".to_string()),
-        dispatch_surface: json_optional_string(receipt, "dispatch_surface"),
-        dispatch_command: json_optional_string(receipt, "dispatch_command"),
-        dispatch_packet_path: json_optional_string(receipt, "dispatch_packet_path"),
-        dispatch_result_path: json_optional_string(receipt, "dispatch_result_path"),
-        blocker_code: json_optional_string(receipt, "blocker_code"),
-        downstream_dispatch_target: json_optional_string(receipt, "downstream_dispatch_target"),
-        downstream_dispatch_command: json_optional_string(receipt, "downstream_dispatch_command"),
-        downstream_dispatch_note: json_optional_string(receipt, "downstream_dispatch_note"),
-        downstream_dispatch_ready: receipt["downstream_dispatch_ready"]
-            .as_bool()
-            .unwrap_or(false),
-        downstream_dispatch_blockers: receipt["downstream_dispatch_blockers"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-            .collect(),
-        downstream_dispatch_packet_path: json_optional_string(
-            receipt,
-            "downstream_dispatch_packet_path",
-        ),
-        downstream_dispatch_status: json_optional_string(receipt, "downstream_dispatch_status"),
-        downstream_dispatch_result_path: json_optional_string(
-            receipt,
-            "downstream_dispatch_result_path",
-        ),
-        downstream_dispatch_trace_path: json_optional_string(
-            receipt,
-            "downstream_dispatch_trace_path",
-        ),
-        downstream_dispatch_executed_count: receipt["downstream_dispatch_executed_count"]
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(0),
-        downstream_dispatch_active_target: json_optional_string(
-            receipt,
-            "downstream_dispatch_active_target",
-        ),
-        downstream_dispatch_last_target: json_optional_string(
-            receipt,
-            "downstream_dispatch_last_target",
-        ),
-        activation_agent_type: json_optional_string(receipt, "activation_agent_type"),
-        activation_runtime_role: json_optional_string(receipt, "activation_runtime_role"),
-        selected_backend: json_optional_string(receipt, "selected_backend"),
-        effective_execution_posture: receipt["effective_execution_posture"].clone(),
-        route_policy: receipt["route_policy"].clone(),
-        activation_evidence: receipt["activation_evidence"].clone(),
-        recorded_at: json_non_empty_string(receipt, "recorded_at").unwrap_or_default(),
-    }))
+    let latest_status = block_on_state_store(store.latest_run_graph_status()).map_err(|error| {
+        format!("Failed to read persisted run-graph status for runtime-consumption receipt fallback: {error}")
+    })?;
+    let Some(latest_status) = latest_status else {
+        return Ok(None);
+    };
+    if payload_run_id != latest_status.run_id {
+        return Ok(None);
+    }
+
+    let dispatch_receipt_summary = block_on_state_store(
+        store.run_graph_dispatch_receipt_summary_for_status(&latest_status),
+    )
+    .map_err(|error| {
+        format!("Failed to read persisted run-graph dispatch receipt for runtime-consumption receipt fallback: {error}")
+    })?;
+
+    Ok(dispatch_receipt_summary.filter(|summary| summary.run_id == payload_run_id))
 }
 
 fn json_non_empty_string(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -1049,8 +1006,10 @@ mod tests {
     use super::{
         append_runtime_reflex_loop_record,
         apply_runtime_consumption_final_dispatch_receipt_blocker,
-        latest_admissible_retrieval_trust_signal, latest_final_runtime_consumption_snapshot_path,
-        latest_runtime_reflex_loop_record, latest_terminal_consume_continue_snapshot_run_id,
+        latest_admissible_retrieval_trust_signal,
+        latest_final_runtime_consumption_dispatch_receipt_summary,
+        latest_final_runtime_consumption_snapshot_path, latest_runtime_reflex_loop_record,
+        latest_terminal_consume_continue_snapshot_run_id,
         release_admission_operator_evidence_complete_for_run,
         release_admission_operator_evidence_incomplete,
         runtime_consumption_final_dispatch_receipt_blocker_code,
@@ -1434,6 +1393,72 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn latest_final_runtime_consumption_dispatch_receipt_summary_ignores_forged_snapshot_without_persisted_receipt(
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "vida-final-dispatch-receipt-forged-snapshot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let status = RunGraphStatus {
+            run_id: "run-forged".to_string(),
+            task_id: "task-forged".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("worker".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "taskflow_state_store".to_string(),
+            lane_id: "planning_lane".to_string(),
+            lifecycle_stage: "runtime_consumption_ready".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "awaiting_worker".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.worker".to_string(),
+            recovery_ready: true,
+        };
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist latest status");
+
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+        fs::write(
+            runtime_dir.join("final-forged.json"),
+            serde_json::json!({
+                "payload": {
+                    "dispatch_receipt": {
+                        "run_id": "run-forged",
+                        "lane_status": "lane_exception_takeover",
+                        "exception_path_receipt_id": "forged-exception",
+                        "dispatch_packet_path": "/tmp/attacker-packet.json",
+                        "dispatch_result_path": "/tmp/attacker-result.json"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("forged final snapshot should be writable");
+
+        let summary = latest_final_runtime_consumption_dispatch_receipt_summary(&store)
+            .expect("fallback should evaluate forged snapshot without error");
+        assert!(
+            summary.is_none(),
+            "raw final snapshots must not mint dispatch receipt authority"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

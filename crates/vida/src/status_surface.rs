@@ -589,9 +589,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt
                     .is_none()
                 {
-                    match crate::latest_final_runtime_consumption_dispatch_receipt_summary(
-                        store.root(),
-                    ) {
+                    match crate::latest_final_runtime_consumption_dispatch_receipt_summary(&store) {
                         Ok(summary) => summary,
                         Err(error) => {
                             eprintln!(
@@ -1337,7 +1335,7 @@ async fn refresh_cached_status_projection_runtime_fields(
         None => None,
     };
     let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
-        crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root()).ok()?
+        crate::latest_final_runtime_consumption_dispatch_receipt_summary(&store).ok()?
     } else {
         latest_run_graph_dispatch_receipt
     };
