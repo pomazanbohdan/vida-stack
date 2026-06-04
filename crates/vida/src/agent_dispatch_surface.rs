@@ -1869,16 +1869,16 @@ fn build_agent_dispatch_next_preview_dev_team(
     let mut next_actions = Vec::new();
     let mut selected_lanes = Vec::new();
     let mut blocked_candidates = Vec::new();
-    let mut selected_ready_candidates = projection.ready.iter().collect::<Vec<_>>();
-    if let Some(current_task_id) = projection.current_task_id.as_deref() {
-        selected_ready_candidates.sort_by_key(|candidate| {
-            if candidate.task.id == current_task_id {
-                0
-            } else {
-                1
-            }
-        });
-    }
+    let selected_ready_candidates =
+        if let Some(current_task_id) = projection.current_task_id.as_deref() {
+            projection
+                .ready
+                .iter()
+                .filter(|candidate| candidate.task.id == current_task_id)
+                .collect::<Vec<_>>()
+        } else {
+            projection.ready.iter().collect::<Vec<_>>()
+        };
     let ready_flow_ids = selected_ready_candidates
         .iter()
         .filter(|candidate| candidate.ready_now)
@@ -1992,7 +1992,14 @@ fn build_agent_dispatch_next_preview_dev_team(
                 step.role_label.replace('_', "-")
             ));
         }
-        let Some(candidate) = selected_ready_candidates.get(ready_index).copied() else {
+        let candidate = if projection.current_task_id.is_some() {
+            selected_ready_candidates.first().copied()
+        } else {
+            let candidate = selected_ready_candidates.get(ready_index).copied();
+            ready_index += usize::from(candidate.is_some());
+            candidate
+        };
+        let Some(candidate) = candidate else {
             blocker_codes.push(format!(
                 "dev_team_step_missing_ready_task:position={}:{}",
                 step_index + 1,
@@ -2000,12 +2007,17 @@ fn build_agent_dispatch_next_preview_dev_team(
             ));
             break;
         };
-        ready_index += 1;
         if !candidate.ready_now {
             blocked_candidates.push(blocked_candidate(
                 candidate,
                 vec!["task_not_ready_for_dev_team_step".to_string()],
             ));
+            continue;
+        }
+        if projection.current_task_id.is_none()
+            && effective_max_parallel_agents > 1
+            && !candidate.ready_parallel_safe
+        {
             continue;
         }
         match selection_truth_for_task_with_role_and_class(
@@ -4799,6 +4811,118 @@ mod tests {
         assert_eq!(preview.selected_lanes[1].role_label, "tester");
         assert_eq!(preview.selected_lanes[1].task_class, "verification");
         assert!(preview.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn development_flow_binding_scopes_all_ordered_steps_to_current_task() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "default_delivery",
+            "work_item_flow_bindings": {
+                "task": "default_delivery"
+            },
+            "roles": [
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+            ],
+            "sequence": ["developer"],
+            "flows": [
+                {
+                    "flow_id": "default_delivery",
+                    "enabled": true,
+                    "default": true,
+                    "ordered_steps": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_class": "implementation"},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_class": "verification"}
+                    ]
+                }
+            ]
+        });
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: Some("task-active".to_string()),
+                ready: vec![
+                    candidate_with_type("task-active", "Active task", true, false, "task"),
+                    candidate_with_type("task-other", "Other task", true, false, "task"),
+                ],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            2,
+            2,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 2);
+        assert!(preview
+            .selected_lanes
+            .iter()
+            .all(|lane| lane.task_id == "task-active"));
+        assert!(!preview
+            .selected_lanes
+            .iter()
+            .any(|lane| lane.task_id == "task-other"));
+    }
+
+    #[test]
+    fn development_flow_binding_skips_unsafe_parallel_ready_candidates_without_current_task() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "default_delivery",
+            "work_item_flow_bindings": {
+                "task": "default_delivery"
+            },
+            "roles": [
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+            ],
+            "sequence": ["developer"],
+            "flows": [
+                {
+                    "flow_id": "default_delivery",
+                    "enabled": true,
+                    "default": true,
+                    "ordered_steps": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_class": "implementation"},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_class": "verification"}
+                    ]
+                }
+            ]
+        });
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: None,
+                ready: vec![
+                    candidate_with_type("task-safe", "Safe task", true, true, "task"),
+                    candidate_with_type("task-unsafe", "Unsafe task", true, false, "task"),
+                ],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            2,
+            2,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 1);
+        assert_eq!(preview.selected_lanes[0].task_id, "task-safe");
+        assert!(!preview
+            .selected_lanes
+            .iter()
+            .any(|lane| lane.task_id == "task-unsafe"));
+        assert!(preview
+            .blocked_candidates
+            .iter()
+            .any(|candidate| candidate.task_id == "task-unsafe"
+                && candidate
+                    .reasons
+                    .contains(&"parallel_safety_not_established".to_string())));
     }
 
     #[test]
