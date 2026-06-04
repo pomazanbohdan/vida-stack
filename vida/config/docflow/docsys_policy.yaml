@@ -58,6 +58,15 @@ scan_ignored:
     glob: "docs/research/**"
     reason: research notes are outside the active project documentation canon until promoted into active docs
   - scope: relative_path
+    glob: "docs/process/new.md"
+    reason: tracked DocFlow boot-smoke artifact is not an active process documentation entrypoint
+  - scope: relative_path
+    glob: "LEAN-CTX.md"
+    reason: generated lean-ctx instruction mirror is owned by the local context tool, not DocFlow footer metadata
+  - scope: relative_path
+    glob: "defect_fix_plan.md"
+    reason: legacy root-level defect scratch plan is outside the active project documentation canon
+  - scope: relative_path
     glob: "target/**"
     reason: build output markdown is outside the active documentation canon
   - scope: relative_path

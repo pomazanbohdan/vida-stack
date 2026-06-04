@@ -2593,6 +2593,10 @@ fn project_doc_owning_maps(rel: &str) -> Vec<&'static str> {
                 "docs/product/spec/current-spec-map.md",
             ]
         }
+        "docs/product/research/README.md" => vec!["docs/product/index.md"],
+        _ if rel.starts_with("docs/product/research/") => {
+            vec!["docs/product/research/README.md"]
+        }
         _ if rel.starts_with("docs/product/") => vec!["docs/product/index.md"],
         _ if rel.starts_with("docs/process/") => {
             vec![
@@ -2603,6 +2607,64 @@ fn project_doc_owning_maps(rel: &str) -> Vec<&'static str> {
         _ if rel.starts_with("docs/research/") => vec!["docs/research/README.md"],
         _ => vec![],
     }
+}
+
+fn normalized_doc_ref(value: &str) -> String {
+    value
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string()
+}
+
+fn relative_doc_ref(from_rel: &str, to_rel: &str) -> String {
+    let from = normalized_doc_ref(from_rel);
+    let to = normalized_doc_ref(to_rel);
+    let from_dir = from.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let from_parts = from_dir
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let to_parts = to
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let mut shared = 0;
+    while shared < from_parts.len()
+        && shared < to_parts.len()
+        && from_parts[shared] == to_parts[shared]
+    {
+        shared += 1;
+    }
+
+    let mut result = Vec::new();
+    result.extend(std::iter::repeat("..").take(from_parts.len() - shared));
+    result.extend(to_parts[shared..].iter().copied());
+    if result.is_empty() {
+        to
+    } else {
+        result.join("/")
+    }
+}
+
+fn project_doc_map_contains_registration(map_rel: &str, body: &str, rel: &str) -> bool {
+    let canonical_rel = normalized_doc_ref(rel);
+    let relative_rel = relative_doc_ref(map_rel, rel);
+    let readme_dir_refs = canonical_rel
+        .strip_suffix("README.md")
+        .map(|canonical_dir| {
+            let relative_dir = relative_rel
+                .strip_suffix("README.md")
+                .unwrap_or(&relative_rel)
+                .to_string();
+            (canonical_dir.to_string(), relative_dir)
+        });
+    body.contains(&canonical_rel)
+        || body.contains(&relative_rel)
+        || readme_dir_refs
+            .as_ref()
+            .is_some_and(|(canonical_dir, relative_dir)| {
+                body.contains(canonical_dir) || body.contains(relative_dir)
+            })
 }
 
 fn project_doc_registration_validation_issues(
@@ -2665,7 +2727,7 @@ fn project_doc_registration_validation_issues(
         };
         if let Some(body) = map_content {
             existing_maps.push(map_rel.to_string());
-            if body.contains(rel) {
+            if project_doc_map_contains_registration(map_rel, &body, rel) {
                 registered = true;
             }
         }
@@ -5449,6 +5511,51 @@ mod tests {
         ]);
         let rendered = run(cli);
         assert!(rendered.contains("missing_project_doc_map_registration"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn check_file_accepts_project_doc_registered_by_relative_owning_map_link() {
+        let root = temp_dir("project-doc-map-relative-check");
+        fs::create_dir_all(root.join("docs/product/spec")).expect("spec dir should exist");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("AGENTS.sidecar.md"),
+            "# Project Docs Map\n\n- `docs/project-root-map.md`\n- `docs/process/documentation-tooling-map.md`\n",
+        )
+        .expect("sidecar should exist");
+        fs::write(
+            root.join("docs/project-root-map.md"),
+            "# Root Map\n\n- `docs/product/index.md`\n- `docs/process/README.md`\n",
+        )
+        .expect("root map should exist");
+        fs::write(
+            root.join("docs/process/documentation-tooling-map.md"),
+            "# Documentation Tooling\n",
+        )
+        .expect("documentation tooling map should exist");
+        fs::write(
+            root.join("docs/product/spec/README.md"),
+            "# Product Spec Guide\n\nActive design docs:\n\n- [Flappy](flappy-bird-design.md)\n",
+        )
+        .expect("spec readme should exist");
+        fs::write(
+            root.join("docs/product/spec/flappy-bird-design.md"),
+            "# Flappy Bird Design\n\n-----\nartifact_path: product/spec/flappy-bird-design\nartifact_type: product_spec\nartifact_version: 1\nartifact_revision: init\nsource_path: docs/product/spec/flappy-bird-design.md\nstatus: proposed\nchangelog_ref: flappy-bird-design.changelog.jsonl\ncreated_at: 2026-03-14T00:00:00Z\nupdated_at: 2026-03-14T00:00:00Z\n",
+        )
+        .expect("design doc should exist");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "check-file",
+            "--path",
+            root.join("docs/product/spec/flappy-bird-design.md")
+                .to_string_lossy()
+                .as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(!rendered.contains("missing_project_doc_map_registration"));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }

@@ -61,6 +61,20 @@ Active design docs:
 - `docs/product/spec/test-first-runtime-defect-remediation-design.md`
 - `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
 - `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
+- `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
+- `docs/product/spec/continue-post-main-carveout-ready-view-design.md`
+- `docs/product/spec/exactly-one-bounded-producing-change-bug-design.md`
+- `docs/product/spec/exactly-one-bounded-small-patch-bug-design.md`
+- `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
+- `docs/product/spec/fix-continuation-reconciliation-resumed-executed-design.md`
+- `docs/product/spec/github-114-design-document-deterministic-post-design.md`
+- `docs/product/spec/mempalace-against-vida-specs-project-design-design.md`
+- `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
+- `docs/product/spec/specify-config-driven-host-system-inventory-design.md`
+- `docs/product/spec/update-agents-sidecar-only-add-project-design.md`
+- `docs/product/spec/update-only-agents-sidecar-add-project-design.md`
+- `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
+- `docs/product/spec/design-fast-high-signal-pre-commit-design.md`
 
 Current promoted runtime-control specs:
 
@@ -80,7 +94,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-06-03T22:33:00+03:00
+updated_at: 2026-06-04T01:02:48.1588214Z
 changelog_ref: README.changelog.jsonl
-- `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
-- `docs/product/spec/design-fast-high-signal-pre-commit-design.md`
