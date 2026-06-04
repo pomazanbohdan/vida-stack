@@ -51,6 +51,8 @@ struct TaskCloseEpicProgressSummary {
     closed_task_id: String,
     epic_count: usize,
     reported_epic_count: usize,
+    omitted_epic_count: usize,
+    scope: String,
     epics: Vec<TaskCloseEpicProgressRow>,
 }
 
@@ -102,6 +104,7 @@ struct TaskEpicProgressSummary {
     percent_closed: f64,
     include_closed_epics: bool,
     progress_basis: String,
+    epic_filter: Option<String>,
     epics: Vec<TaskEpicProgressRow>,
     read_metadata: TaskReadMetadata,
 }
@@ -1536,6 +1539,7 @@ fn task_rows_as_values(
 fn task_close_epic_progress_summary(
     rows: &[state_store::TaskRecord],
     closed_task_id: &str,
+    include_global_progress: bool,
 ) -> Result<TaskCloseEpicProgressSummary, state_store::StateStoreError> {
     let task_by_id = rows
         .iter()
@@ -1557,9 +1561,12 @@ fn task_close_epic_progress_summary(
         });
     }
 
+    let scoped_epic_ids = task_close_scoped_epic_ids(rows, closed_task_id);
+    let total_epic_count = rows.iter().filter(|task| task.issue_type == "epic").count();
     let mut epics = rows
         .iter()
         .filter(|task| task.issue_type == "epic")
+        .filter(|task| include_global_progress || scoped_epic_ids.contains(&task.id))
         .collect::<Vec<_>>();
     epics.sort_by(|left, right| {
         left.priority
@@ -1600,18 +1607,70 @@ fn task_close_epic_progress_summary(
         closed_task_id: closed_task_id.to_string(),
         epic_count: epic_rows.len(),
         reported_epic_count: epic_rows.len(),
+        omitted_epic_count: total_epic_count.saturating_sub(epic_rows.len()),
+        scope: if include_global_progress {
+            "all_epics"
+        } else {
+            "closed_task_ancestor_epics"
+        }
+        .to_string(),
         epics: epic_rows,
     })
+}
+
+fn task_close_scoped_epic_ids(
+    rows: &[state_store::TaskRecord],
+    closed_task_id: &str,
+) -> std::collections::BTreeSet<String> {
+    let by_id = rows
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut scoped = std::collections::BTreeSet::new();
+    let mut current_id = Some(closed_task_id.to_string());
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(task_id) = current_id {
+        if !visited.insert(task_id.clone()) {
+            break;
+        }
+        let Some(task) = by_id.get(task_id.as_str()) else {
+            break;
+        };
+        if task.issue_type == "epic" {
+            scoped.insert(task.id.clone());
+        }
+        current_id = task_parent_id(task);
+    }
+    scoped
 }
 
 fn task_epic_progress_summary(
     rows: &[state_store::TaskRecord],
     metadata: TaskReadMetadata,
     include_closed_epics: bool,
+    epic_filter: Option<&str>,
+    basis: &str,
 ) -> Result<TaskEpicProgressSummary, state_store::StateStoreError> {
+    if let Some(epic_id) = epic_filter {
+        let Some(epic) = rows.iter().find(|task| task.id == epic_id) else {
+            return Err(state_store::StateStoreError::MissingTask {
+                task_id: epic_id.to_string(),
+            });
+        };
+        if epic.issue_type != "epic" {
+            return Err(state_store::StateStoreError::InvalidTaskRecord {
+                reason: format!("task `{epic_id}` is not an epic"),
+            });
+        }
+    }
     let mut epics = rows
         .iter()
         .filter(|task| task.issue_type == "epic")
+        .filter(|task| {
+            epic_filter
+                .map(|epic_id| task.id == epic_id)
+                .unwrap_or(true)
+        })
         .filter(|task| {
             include_closed_epics || matches!(task.status.as_str(), "open" | "in_progress")
         })
@@ -1640,7 +1699,7 @@ fn task_epic_progress_summary(
             _ => {}
         }
 
-        let progress = StateStore::task_progress_summary_from_rows(rows, &epic.id)?;
+        let progress = task_progress_summary_for_basis(rows, &epic.id, basis)?;
         total_descendant_count += progress.descendant_count;
         total_open_descendant_count += progress.open_count;
         total_in_progress_descendant_count += progress.in_progress_count;
@@ -1681,9 +1740,127 @@ fn task_epic_progress_summary(
         total_closed_descendant_count,
         percent_closed,
         include_closed_epics,
-        progress_basis: "descendants_excluding_epic_roots".to_string(),
+        progress_basis: basis.to_string(),
+        epic_filter: epic_filter.map(ToOwned::to_owned),
         epics: epic_rows,
         read_metadata: metadata,
+    })
+}
+
+fn task_progress_basis_arg(value: &str) -> Result<&'static str, String> {
+    match value.trim() {
+        "" | "descendants" | "descendants_excluding_root" => Ok("descendants_excluding_root"),
+        "direct-children" | "direct_children" | "children" => Ok("direct_children"),
+        other => Err(format!(
+            "unsupported progress basis `{other}`; expected descendants or direct-children"
+        )),
+    }
+}
+
+fn task_progress_summary_for_basis(
+    rows: &[state_store::TaskRecord],
+    task_id: &str,
+    basis: &str,
+) -> Result<state_store::TaskProgressSummary, state_store::StateStoreError> {
+    match basis {
+        "direct_children" => task_direct_child_progress_summary_from_rows(rows, task_id),
+        _ => StateStore::task_progress_summary_from_rows(rows, task_id),
+    }
+}
+
+fn task_direct_child_progress_summary_from_rows(
+    rows: &[state_store::TaskRecord],
+    task_id: &str,
+) -> Result<state_store::TaskProgressSummary, state_store::StateStoreError> {
+    let root_task = rows
+        .iter()
+        .find(|task| task.id == task_id)
+        .cloned()
+        .ok_or_else(|| state_store::StateStoreError::MissingTask {
+            task_id: task_id.to_string(),
+        })?;
+    let children = rows
+        .iter()
+        .filter(|task| task_parent_id(task).as_deref() == Some(task_id))
+        .collect::<Vec<_>>();
+    let mut status_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut open_count = 0usize;
+    let mut in_progress_count = 0usize;
+    let mut closed_count = 0usize;
+    let mut epic_count = 0usize;
+
+    for task in &children {
+        *status_counts.entry(task.status.clone()).or_insert(0) += 1;
+        match task.status.as_str() {
+            "open" => open_count += 1,
+            "in_progress" => in_progress_count += 1,
+            "closed" => closed_count += 1,
+            _ => {}
+        }
+        if task.issue_type == "epic" {
+            epic_count += 1;
+        }
+    }
+
+    let descendant_count = children.len();
+    let percent_closed = if descendant_count == 0 {
+        0.0
+    } else {
+        (closed_count as f64 / descendant_count as f64) * 100.0
+    };
+    let root_closed = StateStore::task_status_is_closed_like(&root_task.status);
+    let all_children_closed_like = children
+        .iter()
+        .all(|task| StateStore::task_status_is_closed_like(&task.status));
+    let closure_candidate = root_task.issue_type == "epic"
+        && !root_closed
+        && descendant_count > 0
+        && all_children_closed_like;
+    let next_required_command = if closure_candidate {
+        Some(format!(
+            "vida task close {} --reason \"direct children closed\" --json",
+            crate::launcher_task_commands::shell_quote(&root_task.id)
+        ))
+    } else if descendant_count == 0 {
+        Some("Add child work items or close with an explicit operator reason.".to_string())
+    } else if !all_children_closed_like {
+        Some("Continue or close remaining direct children before closing the parent.".to_string())
+    } else {
+        None
+    };
+    let recommended_next_action = next_required_command.clone().unwrap_or_else(|| {
+        "No action; task is already closed or has no direct-child blocker.".to_string()
+    });
+
+    Ok(state_store::TaskProgressSummary {
+        root_task,
+        progress_basis: "direct_children".to_string(),
+        direct_child_count: descendant_count,
+        descendant_count,
+        open_count,
+        in_progress_count,
+        closed_count,
+        epic_count,
+        status_counts,
+        percent_closed,
+        closure_candidate,
+        closure_candidate_state: if closure_candidate {
+            "ready_to_close".to_string()
+        } else if root_closed {
+            "already_closed".to_string()
+        } else if descendant_count == 0 {
+            "container_without_direct_children".to_string()
+        } else {
+            "direct_children_remaining".to_string()
+        },
+        closure_candidate_reason: Some("direct-child basis selected by operator".to_string()),
+        ready_for_close: closure_candidate,
+        missing_proof: false,
+        proof_blocked_by_runtime: false,
+        blocked_by_runtime: false,
+        next_required_command,
+        recommended_next_action,
+        canonical_commands: Vec::new(),
     })
 }
 
@@ -1825,8 +2002,8 @@ fn print_task_close_epic_progress_summary(
         render,
         "epic progress",
         &format!(
-            "{} epics after closing {}",
-            summary.reported_epic_count, summary.closed_task_id
+            "{} scoped epics after closing {} ({} omitted)",
+            summary.reported_epic_count, summary.closed_task_id, summary.omitted_epic_count
         ),
     );
     for epic in &summary.epics {
@@ -6290,9 +6467,22 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
             if command.epics {
+                let basis = match task_progress_basis_arg(&command.basis) {
+                    Ok(basis) => basis,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
+                };
                 match load_task_snapshot_rows_authoritative_first(&state_dir).await {
                     Ok((rows, metadata)) => {
-                        match task_epic_progress_summary(&rows, metadata, command.all) {
+                        match task_epic_progress_summary(
+                            &rows,
+                            metadata,
+                            command.all,
+                            command.epic.as_deref(),
+                            basis,
+                        ) {
                             Ok(summary) => {
                                 print_task_epic_progress_summary(
                                     command.render,
@@ -6317,42 +6507,156 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     eprintln!("Task id is required unless --epics is set");
                     return ExitCode::from(1);
                 };
-                match StateStore::open_existing_read_only(state_dir.clone()).await {
-                    Ok(store) => match store.task_progress_summary(task_id).await {
-                        Ok(summary) => {
-                            print_task_progress(command.render, &summary, command.json);
-                            ExitCode::SUCCESS
+                let basis = match task_progress_basis_arg(&command.basis) {
+                    Ok(basis) => basis,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
+                };
+                if basis == "direct_children" {
+                    match load_task_snapshot_rows_authoritative_first(&state_dir).await {
+                        Ok((rows, _metadata)) => {
+                            match task_progress_summary_for_basis(&rows, task_id, basis) {
+                                Ok(summary) => {
+                                    print_task_progress(command.render, &summary, command.json);
+                                    ExitCode::SUCCESS
+                                }
+                                Err(error) => {
+                                    eprintln!("Failed to compute task progress: {error}");
+                                    ExitCode::from(1)
+                                }
+                            }
                         }
                         Err(error) => {
-                            eprintln!("Failed to compute task progress: {error}");
+                            eprintln!("Failed to read task progress rows: {error}");
                             ExitCode::from(1)
                         }
-                    },
-                    Err(error) if is_authoritative_state_lock_error(&error) => {
-                        let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
-                            Ok(rows) => rows,
-                            Err(snapshot_error) => {
-                                eprintln!(
-                                    "Failed to read task progress from snapshot: {snapshot_error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        };
-                        match StateStore::task_progress_summary_from_rows(&rows, task_id) {
+                    }
+                } else {
+                    match StateStore::open_existing_read_only(state_dir.clone()).await {
+                        Ok(store) => match store.task_progress_summary(task_id).await {
                             Ok(summary) => {
                                 print_task_progress(command.render, &summary, command.json);
                                 ExitCode::SUCCESS
                             }
                             Err(error) => {
-                                eprintln!("Failed to compute task progress from snapshot: {error}");
+                                eprintln!("Failed to compute task progress: {error}");
                                 ExitCode::from(1)
                             }
+                        },
+                        Err(error) if is_authoritative_state_lock_error(&error) => {
+                            let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                                Ok(rows) => rows,
+                                Err(snapshot_error) => {
+                                    eprintln!(
+                                        "Failed to read task progress from snapshot: {snapshot_error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            };
+                            match StateStore::task_progress_summary_from_rows(&rows, task_id) {
+                                Ok(summary) => {
+                                    print_task_progress(command.render, &summary, command.json);
+                                    ExitCode::SUCCESS
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to compute task progress from snapshot: {error}"
+                                    );
+                                    ExitCode::from(1)
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to open authoritative state store: {error}");
+                            ExitCode::from(1)
                         }
                     }
-                    Err(error) => {
-                        eprintln!("Failed to open authoritative state store: {error}");
-                        ExitCode::from(1)
+                }
+            }
+        }
+        TaskCommand::ClosureReady(command) => {
+            let state_dir = command
+                .state_dir
+                .unwrap_or_else(state_store::default_state_dir);
+            let basis = match task_progress_basis_arg(&command.basis) {
+                Ok(basis) => basis,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            match load_task_snapshot_rows_authoritative_first(&state_dir).await {
+                Ok((rows, metadata)) => {
+                    match task_progress_summary_for_basis(&rows, &command.task_id, basis) {
+                        Ok(summary) => {
+                            let payload =
+                                crate::task_cli_render::build_pass_operator_surface_payload(
+                                    "vida task closure-ready",
+                                    serde_json::json!({
+                                       "task_id": command.task_id,
+                                       "state_access": task_read_metadata_value(Some(&metadata)),
+                                       "basis": basis,
+                                       "ready_for_close": summary.ready_for_close,
+                                       "closure_candidate": summary.closure_candidate,
+                                       "closure_candidate_state": summary.closure_candidate_state,
+                                        "closure_candidate_reason": summary.closure_candidate_reason,
+                                        "next_required_command": summary.next_required_command,
+                                        "recommended_next_action": summary.recommended_next_action,
+                                        "progress": crate::task_cli_render::task_progress_value(&summary),
+                                    }),
+                                );
+                            if command.json {
+                                crate::print_json_pretty(&payload);
+                            } else if matches!(command.render, crate::RenderMode::Plain) {
+                                println!(
+                                    "{}",
+                                    crate::task_cli_render::task_progress_toon_text(
+                                        "vida task closure-ready",
+                                        &summary,
+                                    )
+                                );
+                            } else {
+                                print_surface_header(command.render, "vida task closure-ready");
+                                print_surface_line(command.render, "task", &command.task_id);
+                                print_surface_line(
+                                    command.render,
+                                    "ready",
+                                    if payload["ready_for_close"].as_bool().unwrap_or(false) {
+                                        "true"
+                                    } else {
+                                        "false"
+                                    },
+                                );
+                                print_surface_line(
+                                    command.render,
+                                    "state",
+                                    payload["closure_candidate_state"]
+                                        .as_str()
+                                        .unwrap_or("unknown"),
+                                );
+                                if let Some(command_text) =
+                                    payload["next_required_command"].as_str()
+                                {
+                                    print_surface_line(
+                                        command.render,
+                                        "next command",
+                                        command_text,
+                                    );
+                                }
+                            }
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to compute closure readiness: {error}");
+                            ExitCode::from(1)
+                        }
                     }
+                }
+                Err(error) => {
+                    eprintln!("Failed to read task progress rows: {error}");
+                    ExitCode::from(1)
                 }
             }
         }
@@ -7484,8 +7788,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 task_close_feedback_blocker_summary(&telemetry);
                             let epic_progress_summary = match store.all_tasks().await {
                                 Ok(rows) => {
-                                    match task_close_epic_progress_summary(&rows, &command.task_id)
-                                    {
+                                    match task_close_epic_progress_summary(
+                                        &rows,
+                                        &command.task_id,
+                                        command.include_global_progress,
+                                    ) {
                                         Ok(summary) => Some(summary),
                                         Err(error) => {
                                             eprintln!(
@@ -9065,12 +9372,24 @@ mod tests {
         blocker.title = "Blocking task".to_string();
         blocker.status = "open".to_string();
 
-        let rows = vec![epic, closed_child.clone(), blocked_child, blocker];
-        let summary = task_close_epic_progress_summary(&rows, &closed_child.id)
+        let mut unrelated_epic = owned_task_record("epic-unrelated", vec![]);
+        unrelated_epic.issue_type = "epic".to_string();
+        unrelated_epic.status = "open".to_string();
+
+        let rows = vec![
+            epic,
+            closed_child.clone(),
+            blocked_child,
+            blocker,
+            unrelated_epic,
+        ];
+        let summary = task_close_epic_progress_summary(&rows, &closed_child.id, false)
             .expect("epic progress summary should build from task graph rows");
 
         assert_eq!(summary.closed_task_id, "child-closed");
         assert_eq!(summary.epic_count, 1);
+        assert_eq!(summary.omitted_epic_count, 1);
+        assert_eq!(summary.scope, "closed_task_ancestor_epics");
         let epic_row = &summary.epics[0];
         assert_eq!(epic_row.epic_id, "epic-a");
         assert_eq!(epic_row.closed_count, 1);
@@ -9104,7 +9423,7 @@ mod tests {
             thread_id: String::new(),
         }];
         let summary =
-            task_close_epic_progress_summary(&[epic, closed_child.clone()], "child-closed")
+            task_close_epic_progress_summary(&[epic, closed_child.clone()], "child-closed", false)
                 .expect("summary should build");
 
         let payload = task_close_result_payload(
@@ -9413,6 +9732,7 @@ mod tests {
                 install_root: None,
                 commit: true,
                 push: false,
+                include_global_progress: false,
                 stage_owned: true,
                 commit_files: vec![std::path::PathBuf::from("README.md")],
                 commit_message: None,
@@ -9442,6 +9762,7 @@ mod tests {
                 install_root: None,
                 commit: true,
                 push: false,
+                include_global_progress: false,
                 stage_owned: true,
                 commit_files: Vec::new(),
                 commit_message: None,
@@ -9532,6 +9853,7 @@ mod tests {
                 install_root: None,
                 commit: false,
                 push: false,
+                include_global_progress: false,
                 stage_owned: true,
                 commit_files: Vec::new(),
                 commit_message: None,
@@ -11537,6 +11859,7 @@ mod tests {
                 install_root: None,
                 commit: true,
                 push: false,
+                include_global_progress: false,
                 stage_owned: false,
                 commit_files: Vec::new(),
                 commit_message: None,
@@ -11570,6 +11893,7 @@ mod tests {
                 install_root: None,
                 commit: false,
                 push: true,
+                include_global_progress: false,
                 stage_owned: false,
                 commit_files: Vec::new(),
                 commit_message: None,
@@ -12260,6 +12584,7 @@ mod tests {
                     install_root: None,
                     commit: false,
                     push: false,
+                    include_global_progress: false,
                     stage_owned: false,
                     commit_files: vec![],
                     commit_message: None,
@@ -12329,6 +12654,7 @@ mod tests {
                     install_root: None,
                     commit: false,
                     push: true,
+                    include_global_progress: false,
                     stage_owned: false,
                     commit_files: vec![],
                     commit_message: None,

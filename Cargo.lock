@@ -6429,6 +6429,7 @@ dependencies = [
  "taskflow-cli",
  "taskflow-contracts",
  "taskflow-core",
+ "taskflow-format-toon",
  "taskflow-state",
  "taskflow-state-fs",
  "taskflow-state-surreal",

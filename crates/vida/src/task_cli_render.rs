@@ -53,6 +53,22 @@ fn task_record_value(task: &TaskRecord) -> serde_json::Value {
     value
 }
 
+fn task_record_list_toon_text(surface: &str, tasks: &[TaskRecord]) -> String {
+    let mut lines = vec![format!("task_count: {}", tasks.len())];
+    if tasks.is_empty() {
+        lines.push("tasks: none".to_string());
+    } else {
+        lines.push("tasks:".to_string());
+        lines.extend(tasks.iter().map(|task| {
+            format!(
+                "- {} | {} | p{} | {}",
+                task.id, task.status, task.priority, task.title
+            )
+        }));
+    }
+    taskflow_format_toon::render_section(surface, &lines.join("\n  "))
+}
+
 fn optional_work_item_kind_value(issue_type: Option<&str>) -> serde_json::Value {
     issue_type.map_or(serde_json::Value::Null, task_work_item_kind_value)
 }
@@ -275,6 +291,11 @@ pub(crate) fn print_task_list(
         return;
     }
 
+    if matches!(render, RenderMode::Plain) {
+        println!("{}", task_record_list_toon_text("vida task list", tasks));
+        return;
+    }
+
     print_surface_header(render, "vida task");
     print_task_read_metadata(render, read_metadata);
     if summary_only {
@@ -298,6 +319,11 @@ pub(crate) fn print_task_ready(
         as_json,
         "task ready payload should render as json",
     ) {
+        return;
+    }
+
+    if matches!(render, RenderMode::Plain) {
+        println!("{}", task_record_list_toon_text("vida task ready", tasks));
         return;
     }
 
@@ -366,15 +392,70 @@ pub(crate) fn print_task_show(
     print_task_read_metadata(render, read_metadata);
 }
 
+pub(crate) fn task_progress_value(summary: &TaskProgressSummary) -> serde_json::Value {
+    serde_json::json!({
+        "root_task": {
+            "id": summary.root_task.id,
+            "title": summary.root_task.title,
+            "status": summary.root_task.status,
+            "issue_type": summary.root_task.issue_type,
+            "priority": summary.root_task.priority,
+        },
+        "progress_basis": summary.progress_basis,
+        "direct_child_count": summary.direct_child_count,
+        "descendant_count": summary.descendant_count,
+        "open_count": summary.open_count,
+        "in_progress_count": summary.in_progress_count,
+        "closed_count": summary.closed_count,
+        "epic_count": summary.epic_count,
+        "status_counts": summary.status_counts,
+        "percent_closed": summary.percent_closed,
+        "closure_candidate": summary.closure_candidate,
+        "closure_candidate_state": summary.closure_candidate_state,
+        "closure_candidate_reason": summary.closure_candidate_reason,
+        "ready_for_close": summary.ready_for_close,
+        "missing_proof": summary.missing_proof,
+        "proof_blocked_by_runtime": summary.proof_blocked_by_runtime,
+        "blocked_by_runtime": summary.blocked_by_runtime,
+        "next_required_command": summary.next_required_command,
+        "recommended_next_action": summary.recommended_next_action,
+        "canonical_commands": summary.canonical_commands,
+    })
+}
+
 pub(crate) fn task_progress_payload(summary: &TaskProgressSummary) -> serde_json::Value {
     build_pass_operator_surface_payload(
         "vida task progress",
         serde_json::json!({
             "task_id": summary.root_task.id,
             "root_work_item_kind": task_work_item_kind_value(&summary.root_task.issue_type),
-            "progress": summary,
+            "progress": task_progress_value(summary),
         }),
     )
+}
+
+pub(crate) fn task_progress_toon_text(surface: &str, summary: &TaskProgressSummary) -> String {
+    let mut lines = vec![
+        format!("task: {}", summary.root_task.id),
+        format!("kind: {}", summary.root_task.issue_type),
+        format!("basis: {}", summary.progress_basis),
+        format!(
+            "counts: closed={} open={} in_progress={} total={}",
+            summary.closed_count,
+            summary.open_count,
+            summary.in_progress_count,
+            summary.descendant_count
+        ),
+        format!("percent_closed: {:.2}", summary.percent_closed),
+        format!("ready_for_close: {}", summary.ready_for_close),
+        format!("state: {}", summary.closure_candidate_state),
+    ];
+    if let Some(command) = summary.next_required_command.as_deref() {
+        lines.push(format!("next: {command}"));
+    } else {
+        lines.push(format!("next: {}", summary.recommended_next_action));
+    }
+    taskflow_format_toon::render_section(surface, &lines.join("\n  "))
 }
 
 pub(crate) fn print_task_progress(
@@ -388,6 +469,11 @@ pub(crate) fn print_task_progress(
         as_json,
         "task progress should render as json",
     ) {
+        return;
+    }
+
+    if matches!(render, RenderMode::Plain) {
+        println!("{}", task_progress_toon_text("vida task progress", summary));
         return;
     }
 
@@ -1212,7 +1298,8 @@ pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPa
 mod tests {
     use super::{
         build_pass_operator_surface_payload, build_task_graph_issues_payload,
-        task_mutation_payload, task_progress_payload,
+        task_mutation_payload, task_progress_payload, task_progress_toon_text,
+        task_record_list_toon_text,
     };
     use crate::operator_contracts::shared_operator_output_contract_parity_error;
     use crate::state_store::{
@@ -1360,6 +1447,20 @@ mod tests {
     }
 
     #[test]
+    fn task_record_list_toon_text_is_compact_default_shape() {
+        let mut task = sample_task("task-1");
+        task.title = "Compact output task".to_string();
+
+        let text = task_record_list_toon_text("vida task list", &[task]);
+
+        assert!(text.starts_with("vida task list\n  task_count: 1"));
+        assert!(text.contains("\n  tasks:\n  - task-1 | open | p2 | Compact output task"));
+        assert!(!text.contains('\t'));
+        assert!(!text.contains("description"));
+        assert!(!text.contains("planner_metadata"));
+    }
+
+    #[test]
     fn task_progress_payload_exposes_closure_candidate_action() {
         let mut root = sample_task("epic-ready");
         root.issue_type = "epic".to_string();
@@ -1402,6 +1503,15 @@ mod tests {
 
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["artifact_refs"]["surface"], "vida task progress");
+        let root_task = payload["progress"]["root_task"]
+            .as_object()
+            .expect("compact root task row");
+        assert_eq!(root_task["id"], "epic-ready");
+        assert_eq!(root_task["issue_type"], "epic");
+        assert!(!root_task.contains_key("description"));
+        assert!(!root_task.contains_key("planner_metadata"));
+        assert!(!root_task.contains_key("notes"));
+        assert!(!root_task.contains_key("labels"));
         assert_eq!(payload["progress"]["closure_candidate"], true);
         assert_eq!(
             payload["progress"]["closure_candidate_state"],
@@ -1420,6 +1530,12 @@ mod tests {
             "vida task close epic-ready --reason \"all descendants closed\" --json"
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+
+        let text = task_progress_toon_text("vida task progress", &summary);
+        assert!(text.starts_with("vida task progress\n  task: epic-ready"));
+        assert!(text.contains("\n  counts: closed=2 open=0 in_progress=0 total=2"));
+        assert!(text.contains("\n  next: vida task close epic-ready"));
+        assert!(!text.contains("planner_metadata"));
     }
 
     #[test]

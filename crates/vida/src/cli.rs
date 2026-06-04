@@ -512,6 +512,8 @@ pub(crate) enum TaskCommand {
     Show(TaskShowArgs),
     #[command(about = "show progress and dependency context for one task or open epics")]
     Progress(TaskProgressArgs),
+    #[command(about = "inspect whether one task or epic is ready to close")]
+    ClosureReady(TaskClosureReadyArgs),
     #[command(about = "inspect proof targets and evidence status for one tracked task")]
     Proof(TaskProofArgs),
     #[command(about = "list tasks ready for execution from canonical graph truth")]
@@ -1517,6 +1519,12 @@ pub(crate) struct TaskCloseArgs {
     pub(crate) push: bool,
 
     #[arg(
+        long = "include-global-progress",
+        help = "Include all epic progress rows in close output; default close output is scoped and compact"
+    )]
+    pub(crate) include_global_progress: bool,
+
+    #[arg(
         long = "stage-owned",
         help = "For --commit, stage dirty files covered by task planner_metadata.owned_paths"
     )]
@@ -1744,6 +1752,16 @@ pub(crate) struct TaskProgressArgs {
     )]
     pub(crate) epics: bool,
 
+    #[arg(long = "epic", help = "Limit --epics output to one epic id")]
+    pub(crate) epic: Option<String>,
+
+    #[arg(
+        long = "basis",
+        default_value = "descendants",
+        help = "Progress basis: descendants or direct-children"
+    )]
+    pub(crate) basis: String,
+
     #[arg(long = "all", help = "Include closed epics when used with --epics")]
     pub(crate) all: bool,
 
@@ -1754,6 +1772,28 @@ pub(crate) struct TaskProgressArgs {
     pub(crate) render: RenderMode,
 
     #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskClosureReadyArgs {
+    #[arg(help = "Task or epic id whose closure readiness should be inspected")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "basis",
+        default_value = "descendants",
+        help = "Closure readiness basis: descendants or direct-children"
+    )]
+    pub(crate) basis: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
