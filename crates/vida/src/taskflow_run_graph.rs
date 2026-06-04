@@ -1228,6 +1228,12 @@ fn classify_recovery_diagnosis(
     summary: &crate::state_store::RunGraphRecoverySummary,
     projection_truth: &RunGraphProjectionTruth,
 ) -> String {
+    if blocker_codes.is_empty()
+        && recovery_projection_has_active_exception_takeover(projection_truth)
+    {
+        return "runtime_defect".to_string();
+    }
+
     // Check for carrier unavailable blocker codes
     for code in blocker_codes {
         let code_lower = code.to_lowercase();
@@ -1315,8 +1321,17 @@ fn recovery_surface_contract_with_owned_scope(
 
     let projection_resolves_open_cycle =
         recovery_projection_resolves_persisted_open_cycle(summary, projection_truth);
+    let active_exception_takeover_resolves_open_cycle =
+        recovery_active_exception_takeover_resolves_persisted_open_cycle(
+            summary,
+            projection_truth,
+            owned_write_scope_hint,
+        );
     let ready_handoff_resolves_open_cycle = recovery_ready_handoff_resolves_open_cycle(summary);
-    let mut blocker_codes = if projection_resolves_open_cycle || ready_handoff_resolves_open_cycle {
+    let mut blocker_codes = if projection_resolves_open_cycle
+        || active_exception_takeover_resolves_open_cycle
+        || ready_handoff_resolves_open_cycle
+    {
         Vec::new()
     } else {
         summary
@@ -1327,13 +1342,15 @@ fn recovery_surface_contract_with_owned_scope(
             .map(|value| vec![value.to_string()])
             .unwrap_or_default()
     };
-    blocker_codes.extend(projection_truth_blocker_codes_for_ready_handoff(
-        &summary.active_node,
-        &summary.resume_status,
-        summary.recovery_ready,
-        &summary.resume_target,
-        projection_truth,
-    ));
+    if !active_exception_takeover_resolves_open_cycle {
+        blocker_codes.extend(projection_truth_blocker_codes_for_ready_handoff(
+            &summary.active_node,
+            &summary.resume_status,
+            summary.recovery_ready,
+            &summary.resume_target,
+            projection_truth,
+        ));
+    }
     let blocker_codes = normalize_run_graph_blocker_codes(&blocker_codes, false);
 
     let next_action = projection_truth
@@ -1427,6 +1444,47 @@ fn recovery_projection_resolves_persisted_open_cycle(
                 && ready_downstream_handoff
                 && receipt.blocker_code.is_none();
             upstream_lane_completed || ready_running_handoff
+        })
+}
+
+fn recovery_active_exception_takeover_resolves_persisted_open_cycle(
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+    owned_write_scope_hint: &[String],
+) -> bool {
+    if !summary.delegation_gate.delegated_cycle_open {
+        return false;
+    }
+    if summary.delegation_gate.blocker_code.as_deref() != Some("open_delegated_cycle") {
+        return false;
+    }
+    if owned_write_scope_hint
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .all(str::is_empty)
+    {
+        return false;
+    }
+    recovery_projection_has_active_exception_takeover(projection_truth)
+}
+
+fn recovery_projection_has_active_exception_takeover(
+    projection_truth: &RunGraphProjectionTruth,
+) -> bool {
+    projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            receipt.lane_status == "lane_exception_takeover"
+                && receipt
+                    .exception_path_receipt_id
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+                && receipt
+                    .supersedes_receipt_id
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
         })
 }
 
@@ -13940,6 +13998,100 @@ mod tests {
         assert!(recommended_command
             .as_deref()
             .is_some_and(|command| !command.contains("exception-takeover")));
+    }
+
+    #[test]
+    fn recovery_surface_contract_suppresses_stale_open_cycle_after_active_exception_takeover() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-active-exception-stale-recovery".to_string(),
+            task_id: "task-active-exception-stale-recovery".to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "coach_blocked".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            recovery_ready: false,
+            handoff_state: "blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                lifecycle_stage: "coach_blocked".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "blocking".to_string(),
+                continuation_signal: "record_exception_takeover".to_string(),
+            },
+        };
+        let mut receipt =
+            clean_ready_downstream_dispatch_receipt("run-active-exception-stale-recovery");
+        receipt.dispatch_target = "coach".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_blockers = vec!["tool_execution_failed".to_string()];
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason: "run-graph status reflects stale persisted recovery evidence"
+                .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "aligned".to_string(),
+            stale_state_suspected: true,
+            next_lawful_operator_action: Some(
+                "vida taskflow run-graph status run-active-exception-stale-recovery --json"
+                    .to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract_with_owned_scope(
+                &summary,
+                &projection_truth,
+                &["crates/vida/src/taskflow_run_graph.rs".to_string()],
+            );
+
+        assert!(blocker_codes.is_empty());
+        assert!(why_not_now.is_none());
+        assert_eq!(
+            next_action.as_ref().map(|action| action.command.as_str()),
+            Some("vida taskflow run-graph status run-active-exception-stale-recovery --json")
+        );
+        assert_eq!(
+            recommended_command.as_deref(),
+            Some("vida taskflow run-graph status run-active-exception-stale-recovery --json")
+        );
+        assert_eq!(
+            recommended_surface.as_deref(),
+            Some("vida taskflow run-graph status")
+        );
+
+        let payload = build_recovery_explain_json_payload(
+            "vida taskflow recovery explain",
+            &summary,
+            &projection_truth,
+            blocker_codes,
+            why_not_now,
+            next_action,
+            recommended_command,
+            recommended_surface,
+        )
+        .expect("recovery explain payload should render");
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["diagnosis"], "runtime_defect");
+        assert_eq!(
+            payload["diagnosis_detail"]["blocker_codes"],
+            serde_json::json!([])
+        );
     }
 
     #[test]
