@@ -880,7 +880,11 @@ mod tests {
         TASKFLOW_PROTOCOL_BINDING_AUTHORITY, TASKFLOW_PROTOCOL_BINDING_SCENARIO,
     };
     use crate::contract_profile_adapter::release_contract_status;
-    use crate::state_store::{ProtocolBindingState, ProtocolBindingSummary};
+    use crate::state_store::{
+        LauncherActivationSnapshot, ProtocolBindingState, ProtocolBindingSummary, StateStore,
+    };
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn sample_evidence(
         imported: bool,
@@ -950,6 +954,60 @@ mod tests {
             release_contract_status(protocol_binding_check_ok(&summary, &rows, &evidence)),
             "pass"
         );
+    }
+
+    #[tokio::test]
+    async fn compiled_payload_import_evidence_refreshes_stale_launcher_activation_snapshot() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-protocol-binding-stale-launcher-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let config_path = crate::config_file_path().expect("resolve config path");
+        let current_digest = crate::launcher_activation_snapshot::config_file_digest(&config_path)
+            .expect("digest config");
+        let stale_snapshot = LauncherActivationSnapshot {
+            source: "state_store".to_string(),
+            source_config_path: config_path.display().to_string(),
+            source_config_digest: "stale-digest".to_string(),
+            captured_at: "2026-03-17T00:00:00Z".to_string(),
+            compiled_bundle: serde_json::json!({
+                "role_selection": {
+                    "fallback_role": "worker",
+                    "mode": "stale"
+                },
+                "agent_system": {
+                    "mode": "stale",
+                    "state_owner": "stale-owner"
+                }
+            }),
+            pack_router_keywords: serde_json::json!({}),
+        };
+        store
+            .write_launcher_activation_snapshot(&stale_snapshot)
+            .await
+            .expect("write stale launcher activation snapshot");
+
+        let evidence = super::protocol_binding_compiled_payload_import_evidence(&store).await;
+        let read_back = store
+            .read_launcher_activation_snapshot()
+            .await
+            .expect("read refreshed launcher activation snapshot");
+
+        assert_eq!(evidence.source, "state_store");
+        assert_eq!(evidence.source_config_digest, current_digest);
+        assert_ne!(evidence.source_config_digest, "stale-digest");
+        assert_eq!(
+            read_back.source_config_digest,
+            evidence.source_config_digest
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
