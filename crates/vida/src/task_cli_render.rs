@@ -477,10 +477,11 @@ pub(crate) fn task_progress_payload(summary: &TaskProgressSummary) -> serde_json
 }
 
 pub(crate) fn task_progress_toon_text(surface: &str, summary: &TaskProgressSummary) -> String {
+    let toon_scalar = |value: &str| crate::surface_render::sanitize_terminal_value(value);
     let mut lines = vec![
-        format!("task: {}", summary.root_task.id),
-        format!("kind: {}", summary.root_task.issue_type),
-        format!("basis: {}", summary.progress_basis),
+        format!("task: {}", toon_scalar(&summary.root_task.id)),
+        format!("kind: {}", toon_scalar(&summary.root_task.issue_type)),
+        format!("basis: {}", toon_scalar(&summary.progress_basis)),
         format!(
             "counts: closed={} open={} in_progress={} total={}",
             summary.closed_count,
@@ -490,12 +491,15 @@ pub(crate) fn task_progress_toon_text(surface: &str, summary: &TaskProgressSumma
         ),
         format!("percent_closed: {:.2}", summary.percent_closed),
         format!("ready_for_close: {}", summary.ready_for_close),
-        format!("state: {}", summary.closure_candidate_state),
+        format!("state: {}", toon_scalar(&summary.closure_candidate_state)),
     ];
     if let Some(command) = summary.next_required_command.as_deref() {
-        lines.push(format!("next: {command}"));
+        lines.push(format!("next: {}", toon_scalar(command)));
     } else {
-        lines.push(format!("next: {}", summary.recommended_next_action));
+        lines.push(format!(
+            "next: {}",
+            toon_scalar(&summary.recommended_next_action)
+        ));
     }
     taskflow_format_toon::render_section(surface, &lines.join("\n  "))
 }
@@ -1735,6 +1739,51 @@ mod tests {
         assert!(text.contains("\n  counts: closed=2 open=0 in_progress=0 total=2"));
         assert!(text.contains("\n  next: vida task close epic-ready"));
         assert!(!text.contains("planner_metadata"));
+    }
+
+    #[test]
+    fn task_progress_toon_text_escapes_control_characters_in_scalars() {
+        let mut root =
+            sample_task("TASK-1\n  ready_for_close: true\n  next: forged-command\x1b[31m");
+        root.issue_type = "epic\n  next: forged-from-kind\x1b[35m".to_string();
+        let mut status_counts = BTreeMap::new();
+        status_counts.insert("open".to_string(), 1);
+        let summary = TaskProgressSummary {
+            root_task: root,
+            progress_basis: "descendants_excluding_root".to_string(),
+            direct_child_count: 0,
+            descendant_count: 0,
+            open_count: 1,
+            in_progress_count: 0,
+            closed_count: 0,
+            epic_count: 0,
+            status_counts,
+            percent_closed: 0.0,
+            closure_candidate: false,
+            closure_candidate_state: "open\n  ready_for_close: true".to_string(),
+            closure_candidate_reason: None,
+            ready_for_close: false,
+            missing_proof: true,
+            proof_blocked_by_runtime: false,
+            blocked_by_runtime: false,
+            next_required_command: Some(
+                "vida task close injected\n  next: forged\x1b[0m".to_string(),
+            ),
+            recommended_next_action: "Inspect task progress".to_string(),
+            canonical_commands: vec![],
+        };
+
+        let text = task_progress_toon_text("vida task progress", &summary);
+
+        assert!(!text.contains('\x1b'));
+        assert!(!text.contains("\n  next: forged-command"));
+        assert!(!text.contains("\n  next: forged-from-kind"));
+        assert!(!text.contains("\n  next: forged"));
+        assert_eq!(text.matches("\n  ready_for_close:").count(), 1);
+        assert!(text
+            .contains(r"task: TASK-1\n  ready_for_close: true\n  next: forged-command\u{1b}[31m"));
+        assert!(text.contains(r"kind: epic\n  next: forged-from-kind\u{1b}[35m"));
+        assert!(text.contains(r"next: vida task close injected\n  next: forged\u{1b}[0m"));
     }
 
     #[test]
