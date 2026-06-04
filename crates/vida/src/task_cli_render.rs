@@ -462,18 +462,36 @@ pub(crate) fn print_task_mutation(
     task: &TaskRecord,
     as_json: bool,
 ) {
-    let payload = build_pass_operator_surface_payload(
-        title,
-        serde_json::json!({
-            "task_id": task.id,
-            "task": task_record_value(task),
-        }),
-    );
+    let payload = task_mutation_payload(title, task);
     if crate::surface_render::print_surface_json(&payload, as_json, "task should render as json") {
         return;
     }
 
     print_task_record(render, title, task);
+    print_surface_line(render, "changed tasks", "1");
+    print_surface_line(
+        render,
+        "dependency edges",
+        &task.dependencies.len().to_string(),
+    );
+}
+
+pub(crate) fn task_mutation_payload(title: &str, task: &TaskRecord) -> serde_json::Value {
+    let mutation_summary = serde_json::json!({
+        "changed_task_count": 1,
+        "changed_task_ids": [task.id.clone()],
+        "changed_dependency_edge_count": task.dependencies.len(),
+        "task_status": task.status.clone(),
+        "task_issue_type": task.issue_type.clone(),
+    });
+    build_pass_operator_surface_payload(
+        title,
+        serde_json::json!({
+            "task_id": task.id,
+            "mutation_summary": mutation_summary,
+            "task": task_record_value(task),
+        }),
+    )
 }
 
 pub(crate) fn print_task_export_summary(
@@ -1193,7 +1211,8 @@ pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPa
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pass_operator_surface_payload, build_task_graph_issues_payload, task_progress_payload,
+        build_pass_operator_surface_payload, build_task_graph_issues_payload,
+        task_mutation_payload, task_progress_payload,
     };
     use crate::operator_contracts::shared_operator_output_contract_parity_error;
     use crate::state_store::{
@@ -1226,6 +1245,35 @@ mod tests {
             provider_mapping: None,
             dependencies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn task_mutation_payload_exposes_compact_summary() {
+        let mut task = sample_task("task-1");
+        task.status = "in_progress".to_string();
+        task.dependencies
+            .push(crate::state_store::TaskDependencyRecord {
+                issue_id: "task-1".to_string(),
+                depends_on_id: "dep-1".to_string(),
+                edge_type: "blocks".to_string(),
+                created_at: "2026-04-20T00:00:00Z".to_string(),
+                created_by: "test".to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            });
+
+        let payload = task_mutation_payload("vida task update", &task);
+
+        assert_eq!(payload["mutation_summary"]["changed_task_count"], 1);
+        assert_eq!(
+            payload["mutation_summary"]["changed_task_ids"],
+            serde_json::json!(["task-1"])
+        );
+        assert_eq!(
+            payload["mutation_summary"]["changed_dependency_edge_count"],
+            1
+        );
+        assert_eq!(payload["mutation_summary"]["task_status"], "in_progress");
     }
 
     #[test]

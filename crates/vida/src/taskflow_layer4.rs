@@ -268,7 +268,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical command:");
-            println!("  vida taskflow graph-summary [--json]");
+            println!("  vida taskflow graph-summary [--operator] [--json]");
+            println!("  --operator is an explicit alias for the compact operator projection.");
             println!();
             println!("Returned semantics:");
             println!(

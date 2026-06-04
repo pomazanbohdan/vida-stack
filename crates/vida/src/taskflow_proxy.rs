@@ -4601,7 +4601,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
 }
 
 async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
-    let usage = "Usage: vida taskflow graph-summary [--state-dir <path>] [--json]";
+    let usage = "Usage: vida taskflow graph-summary [--state-dir <path>] [--operator] [--json]";
     if !matches!(args.first().map(String::as_str), Some("graph-summary")) {
         eprintln!("{usage}");
         return ExitCode::from(2);
@@ -4617,6 +4617,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         match arg.as_str() {
             "--json" => {
                 as_json = true;
+                index += 1;
+            }
+            "--operator" => {
                 index += 1;
             }
             "--state-dir" => {
