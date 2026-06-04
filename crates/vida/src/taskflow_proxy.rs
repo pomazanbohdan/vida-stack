@@ -3281,6 +3281,7 @@ fn build_taskflow_next_decision(
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
             && !explicit_next_task_binding
+            && ready_head.is_none()
             && !closed_task_terminal_continue_ready_head;
 
     // Check for foreign claim conflicts (multi-session admission rule #3)
@@ -11286,6 +11287,92 @@ agent_system:
             .blocker_codes
             .iter()
             .any(|code| code == "execution_preparation_gate_blocked"));
+    }
+
+    #[test]
+    fn taskflow_next_decision_admits_ready_head_after_terminal_closure_run() {
+        let status = crate::state_store::RunGraphStatus {
+            run_id: "terminal-run".to_string(),
+            task_id: "closed-task".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "closure".to_string(),
+            next_node: None,
+            status: "completed".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "test_author_lane".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "terminal-run".to_string(),
+            dispatch_target: "test_author".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            blocker_code: None,
+            dispatch_surface: Some("vida lane complete".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_command: Some("vida lane complete".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            exception_path_receipt_id: None,
+            supersedes_receipt_id: None,
+            recorded_at: "2026-06-04T00:00:00Z".to_string(),
+            activation_runtime_role: Some("worker".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_evidence: serde_json::Value::Null,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/result.json".to_string()),
+            downstream_dispatch_packet_path: Some("/tmp/downstream-packet.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_last_target: None,
+            downstream_dispatch_note: Some("stale downstream packet after closure".to_string()),
+            downstream_dispatch_blockers: Vec::new(),
+        };
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-task")),
+            false,
+            true,
+            None,
+            Some("epic-1"),
+            Some(&dispatch),
+            Some(&status),
+            false,
+            false,
+            false,
+            None,
+            None,
+            "test-session",
+            &[],
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert_eq!(
+            decision
+                .primary_ready_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("ready-task")
+        );
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "ready_now"
+        );
+        assert!(decision.blocker_codes.is_empty());
     }
 
     #[test]
