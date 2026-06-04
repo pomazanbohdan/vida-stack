@@ -1998,8 +1998,20 @@ fn missing_task_stale_blocked_run_can_retire(
     let prelaunch_packet_ready = receipt.dispatch_status == "executed"
         && lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready");
+    let exception_takeover_stale_blocked = receipt.dispatch_status == "blocked"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
+        && matches!(
+            lane_status,
+            value if value == crate::LaneStatus::LaneExceptionRecorded.as_str()
+                || value == crate::LaneStatus::LaneExceptionTakeover.as_str()
+        );
 
-    (receipt.dispatch_status == "blocked" && blocked_or_running) || prelaunch_packet_ready
+    (receipt.dispatch_status == "blocked" && blocked_or_running)
+        || prelaunch_packet_ready
+        || exception_takeover_stale_blocked
 }
 
 fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
@@ -5938,6 +5950,159 @@ mod tests {
             receipt.downstream_dispatch_status.as_deref(),
             Some("retired_closed_task_run")
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_retire_allows_exception_takeover_missing_task_stale_blocked_run() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-retire-exception-missing-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "runtime-audit-remediation-correct-report-baseline-publis";
+        let missing_task_id = "audit-remediation-04-correct-report-baseline";
+        let missing_exception_unit = "audit-remediation-04-correct-report-baseline-review";
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            missing_task_id,
+            "implementation",
+            "implementation",
+        );
+        status.run_id = run_id.to_string();
+        status.active_node = "coach".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "coach".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked missing-task status");
+
+        let packet_dir = root.join("runtime-consumption").join("dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("runtime-audit-remediation-correct-report-baseline.json");
+        std::fs::write(
+            &packet_path,
+            format!(
+                "{{\"run_id\":\"{run_id}\",\"delivery_task_packet\":{{\"task_id\":\"{missing_task_id}\"}}}}"
+            ),
+        )
+        .expect("write exception takeover dispatch packet");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        receipt.exception_path_receipt_id = Some(run_id.to_string());
+        receipt.supersedes_receipt_id = Some(run_id.to_string());
+        receipt.blocker_code = Some("host_tool_bridge_adapter_required".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist exception takeover receipt");
+
+        let mut metadata = ExceptionTakeoverMetadata {
+            run_id: None,
+            dispatch_target: None,
+            dispatch_packet_path: None,
+            source_exception_path_receipt_id: None,
+            reason_class: "blocked_open_delegated_cycle_timeout".to_string(),
+            active_bounded_unit: missing_exception_unit.to_string(),
+            owned_write_scope: vec!["crates/vida/src".to_string()],
+            why_delegated_or_rerouted_path_is_not_currently_lawful: "blocked".to_string(),
+            why_local_write_is_the_smallest_safe_bounded_workaround: "bounded".to_string(),
+            return_to_normal_posture_condition: "verified".to_string(),
+            verification_plan: vec!["test".to_string()],
+            recorded_at: "2026-06-04T00:00:00Z".to_string(),
+        };
+        metadata.bind_to_receipt(&receipt);
+        write_exception_takeover_metadata(store.root(), run_id, &metadata)
+            .expect("exception metadata should persist");
+
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: run_id.to_string(),
+                    task_id: missing_task_id.to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "run_graph_task",
+                        "task_id": missing_task_id,
+                        "run_id": run_id,
+                        "active_node": "coach"
+                    }),
+                    binding_source: "test-exception-missing-task".to_string(),
+                    why_this_unit: "test exception missing-task stale run".to_string(),
+                    primary_path: "exception_takeover_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+                    request_text: None,
+                    recorded_at: "2026-06-04T00:00:01Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist continuation binding");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "retire".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                run_id.to_string(),
+                "--reason".to_string(),
+                "missing TaskFlow task stale run".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after exception retire");
+        let retired = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read retired status");
+        assert_eq!(retired.status, "completed");
+        assert_eq!(retired.lifecycle_stage, "closure_complete");
+        assert_eq!(retired.resume_target, "none");
+        assert!(!retired.recovery_ready);
+        let receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read retired receipt")
+            .expect("receipt should exist");
+        assert_eq!(
+            receipt.lane_status,
+            crate::LaneStatus::LaneCompleted.as_str()
+        );
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("retired_closed_task_run")
+        );
+        assert!(store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read continuation binding")
+            .is_none());
 
         let _ = std::fs::remove_dir_all(&root);
     }

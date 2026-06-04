@@ -4973,6 +4973,309 @@ fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
 }
 
 #[test]
+fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_action() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let run_id = "exception-missing-task-run";
+    let task_id = "audit-remediation-04-correct-report-baseline";
+    let exception_task_id = "audit-remediation-04-correct-report-baseline-review";
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = format!("{packet_dir}/{run_id}.json");
+    fs::write(
+        &packet_path,
+        serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "coach",
+            "activation_runtime_role": "coach",
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["crates/vida/src/lane_surface.rs"],
+            "read_only_paths": [".vida/data/state/runtime-consumption"],
+            "role_selection_full": {
+                "ok": true,
+                "activation_source": "packet",
+                "selection_mode": "fixed",
+                "fallback_role": "orchestrator",
+                "request": "coach review",
+                "selected_role": "coach",
+                "conversational_mode": null,
+                "single_task_only": false,
+                "tracked_flow_entry": null,
+                "allow_freeform_chat": false,
+                "confidence": "high",
+                "matched_terms": [],
+                "compiled_bundle": null,
+                "execution_plan": {
+                    "backend_admissibility_matrix": [
+                        {
+                            "backend_id": "junior",
+                            "backend_class": "internal",
+                            "lane_admissibility": {
+                                "implementation": true
+                            }
+                        }
+                    ],
+                    "development_flow": {
+                        "coach": {
+                            "executor_backend": "internal_subagents"
+                        }
+                    }
+                },
+                "reason": "test"
+            },
+            "delivery_task_packet": {
+                "task_id": task_id,
+                "goal": "Recover a stale exception takeover run whose TaskFlow task was removed.",
+                "scope_in": ["dispatch_target:coach"],
+                "handoff_task_class": "implementation",
+                "handoff_runtime_role": "coach",
+                "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "definition_of_done": ["stale missing-task lane can be retired"],
+                "verification_command": "vida lane retire",
+                "proof_target": "lane retirement receipt",
+                "stop_rules": ["stop if packet contract is invalid"],
+                "blocking_question": "none"
+            }
+        })
+        .to_string(),
+    )
+    .expect("write exception takeover packet");
+    let metadata_dir = format!("{state_dir}/lane-exception-path-metadata");
+    fs::create_dir_all(&metadata_dir).expect("create metadata dir");
+    fs::write(
+        format!("{metadata_dir}/{run_id}.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "coach",
+            "dispatch_packet_path": packet_path,
+            "source_exception_path_receipt_id": run_id,
+            "reason_class": "blocked_open_delegated_cycle_timeout",
+            "active_bounded_unit": exception_task_id,
+            "owned_write_scope": ["crates/vida/src"],
+            "why_delegated_or_rerouted_path_is_not_currently_lawful": "blocked",
+            "why_local_write_is_the_smallest_safe_bounded_workaround": "bounded",
+            "return_to_normal_posture_condition": "verified",
+            "verification_plan": ["test"],
+            "recorded_at": "2026-06-04T00:00:00Z"
+        }))
+        .expect("encode exception metadata"),
+    )
+    .expect("write exception metadata");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        db.query("UPSERT type::record('routed_run_state', $run) CONTENT $state")
+            .bind(("run", run_id))
+            .bind((
+                "state",
+                serde_json::json!({
+                    "run_id": run_id,
+                    "route_task_class": "implementation",
+                    "selected_backend": "internal_subagents",
+                    "lane_id": "coach",
+                    "lifecycle_stage": "coach_blocked",
+                    "updated_at": "2026-06-04T00:00:00Z"
+                }),
+            ))
+            .await
+            .expect("seed routed run state");
+        db.query("UPSERT type::record('governance_state', $run) CONTENT $state")
+            .bind(("run", run_id))
+            .bind((
+                "state",
+                serde_json::json!({
+                    "run_id": run_id,
+                    "policy_gate": "host_tool_bridge_adapter_required",
+                    "handoff_state": "none",
+                    "context_state": "sealed",
+                    "updated_at": "2026-06-04T00:00:00Z"
+                }),
+            ))
+            .await
+            .expect("seed governance state");
+        db.query("UPSERT type::record('resumability_capsule', $run) CONTENT $state")
+            .bind(("run", run_id))
+            .bind((
+                "state",
+                serde_json::json!({
+                    "run_id": run_id,
+                    "checkpoint_kind": "none",
+                    "resume_target": "coach",
+                    "recovery_ready": false,
+                    "updated_at": "2026-06-04T00:00:00Z"
+                }),
+            ))
+            .await
+            .expect("seed resumability capsule");
+        db.query("UPSERT type::record('execution_plan_state', $run) CONTENT $state")
+            .bind(("run", run_id))
+            .bind((
+                "state",
+                serde_json::json!({
+                    "run_id": run_id,
+                    "task_id": task_id,
+                    "task_class": "implementation",
+                    "active_node": "coach",
+                    "next_node": "tester",
+                    "status": "blocked",
+                    "updated_at": "2026-06-04T00:00:00Z"
+                }),
+            ))
+            .await
+            .expect("seed execution plan state");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "coach",
+            "dispatch_status": "blocked",
+            "lane_status": "lane_exception_takeover",
+            "supersedes_receipt_id": run_id,
+            "exception_path_receipt_id": run_id,
+            "dispatch_kind": "agent_lane",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": format!("vida agent-init --role coach {task_id} --json"),
+            "dispatch_packet_path": packet_path,
+            "blocker_code": "host_tool_bridge_adapter_required",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["host_tool_bridge_adapter_required"],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "coach",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-04T00:00:00Z"
+        });
+        let _: Option<Value> = db
+            .upsert(("run_graph_dispatch_receipt", run_id))
+            .content(receipt)
+            .await
+            .expect("seed exception takeover dispatch receipt");
+        let stored_receipt: Option<Value> = db
+            .select(("run_graph_dispatch_receipt", run_id))
+            .await
+            .expect("read seeded exception takeover dispatch receipt");
+        assert!(
+            stored_receipt.is_some(),
+            "direct seed should create a run_graph_dispatch_receipt row"
+        );
+        let binding = serde_json::json!({
+            "run_id": run_id,
+            "task_id": task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "run_graph_task",
+                "task_id": task_id,
+                "run_id": run_id,
+                "active_node": "coach"
+            },
+            "binding_source": "exception_missing_task_regression_seed",
+            "why_this_unit": "stale missing-task exception run was blocking continuation",
+            "primary_path": "exception_takeover_path",
+            "sequential_vs_parallel_posture": "sequential_only_open_cycle",
+            "recorded_at": "2026-06-04T00:00:01Z"
+        });
+        let _: Option<Value> = db
+            .upsert(("run_graph_continuation_binding", run_id))
+            .content(binding)
+            .await
+            .expect("seed stale continuation binding");
+        drop(db);
+    });
+    thread::sleep(Duration::from_millis(300));
+
+    let lane_before = run_command_capture(&["lane", "show", run_id, "--json"], &state_dir);
+    assert!(
+        lane_before.status.success(),
+        "seeded lane receipt should be visible before consume continue: stdout={} stderr={}",
+        String::from_utf8_lossy(&lane_before.stdout),
+        String::from_utf8_lossy(&lane_before.stderr)
+    );
+
+    let (continue_payload, _continue_success) = run_command_json_allow_failure(
+        &[
+            "taskflow", "consume", "continue", "--run-id", run_id, "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(continue_payload["status"], "blocked");
+    let blockers =
+        require_json_string_array(&continue_payload["blocker_codes"], "consume blockers");
+    assert!(
+        blockers.contains(&"host_tool_bridge_adapter_required".to_string()),
+        "consume continue should preserve the active bridge blocker, got {continue_payload}"
+    );
+    let next_operator_action = continue_payload["projection_truth"]["next_lawful_operator_action"]
+        .as_str()
+        .expect("projection truth should include the stale-run retire command");
+    assert!(next_operator_action.contains(&format!("vida lane retire {run_id}")));
+    assert!(next_operator_action.contains(&format!("--receipt-id {run_id}")));
+
+    let lane_after_continue = run_command_capture(&["lane", "show", run_id, "--json"], &state_dir);
+    assert!(
+        lane_after_continue.status.success(),
+        "lane receipt should remain visible after consume continue recommends retire: stdout={} stderr={}",
+        String::from_utf8_lossy(&lane_after_continue.stdout),
+        String::from_utf8_lossy(&lane_after_continue.stderr)
+    );
+
+    let retire = run_command_capture(
+        &[
+            "lane",
+            "retire",
+            run_id,
+            "--receipt-id",
+            run_id,
+            "--reason",
+            "missing TaskFlow task stale run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        retire.status.success(),
+        "retire stdout={} stderr={}",
+        String::from_utf8_lossy(&retire.stdout),
+        String::from_utf8_lossy(&retire.stderr)
+    );
+    let retired: serde_json::Value =
+        serde_json::from_slice(&retire.stdout).expect("retire json should parse");
+    assert_eq!(retired["run_id"], run_id);
+    assert_eq!(retired["status"], "pass");
+    assert_eq!(retired["lane_status"], "lane_completed");
+    assert_eq!(retired["dispatch_status"], "executed");
+
+    let recovery = run_command_json(
+        &["taskflow", "recovery", "status", run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(recovery["recovery"]["resume_status"], "completed");
+    assert_eq!(recovery["recovery"]["lifecycle_stage"], "closure_complete");
+    assert_eq!(recovery["recovery"]["recovery_ready"], false);
+    let next_lawful_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    assert!(
+        !next_lawful_output.status.success(),
+        "empty sandbox should fail closed after retiring stale exception missing-task run"
+    );
+    let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
+        .expect("next-lawful blocked json should parse");
+    assert_eq!(next_lawful["status"], "blocked");
+    assert!(
+        !next_lawful.to_string().contains(run_id),
+        "retired exception missing-task run must not leak into next action"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn release_admitted_missing_stale_run_does_not_block_recovery_or_dispatch_preview() {
     let (project_root, state_dir) = project_bound_state_dir();
 

@@ -335,6 +335,7 @@ fn command_preserves_explicit_env_state_dir(command: &Option<Command>) -> bool {
     matches!(
         command,
         Some(Command::Status(_) | Command::Taskflow(_))
+            | Some(Command::Lane(_) | Command::Approval(_))
             | Some(Command::Agent(AgentArgs {
                 command: AgentCommand::DispatchNext(_) | AgentCommand::Select(_)
             }))
@@ -468,7 +469,9 @@ fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
         .filter(|arg| !arg.starts_with('-'));
     match positional.next() {
         Some("agent") => matches!(positional.next(), Some("dispatch-next" | "select")),
-        Some("task" | "taskflow" | "project-activator" | "status" | "doctor") => true,
+        Some(
+            "task" | "taskflow" | "project-activator" | "status" | "doctor" | "lane" | "approval",
+        ) => true,
         _ => false,
     }
 }
@@ -691,6 +694,55 @@ mod tests {
 
         let guard = prepare_runtime_state_dir_for_parse(&args)
             .expect("pre-parse state dir preparation should succeed");
+
+        assert!(guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(explicit_state_dir)
+        );
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_for_parse_preserves_explicit_env_for_lane_surface() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        make_project_root(harness.path());
+        let explicit_state_dir = harness.path().join("explicit-state");
+        fs::create_dir_all(&explicit_state_dir).expect("explicit state dir should exist");
+        let _cwd = crate::test_cli_support::guard_current_dir(harness.path());
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &explicit_state_dir);
+        let args = [
+            std::ffi::OsString::from("vida"),
+            std::ffi::OsString::from("lane"),
+            std::ffi::OsString::from("show"),
+            std::ffi::OsString::from("run-1"),
+            std::ffi::OsString::from("--json"),
+        ];
+
+        let guard = prepare_runtime_state_dir_for_parse(&args)
+            .expect("pre-parse state dir preparation should succeed");
+
+        assert!(guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(explicit_state_dir)
+        );
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_preserves_explicit_env_for_lane_surface() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        make_project_root(harness.path());
+        let explicit_state_dir = harness.path().join("explicit-state");
+        fs::create_dir_all(&explicit_state_dir).expect("explicit state dir should exist");
+        let _cwd = crate::test_cli_support::guard_current_dir(harness.path());
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &explicit_state_dir);
+        let cli =
+            Cli::try_parse_from(["vida", "lane", "show", "run-1", "--json"]).expect("lane cli");
+
+        let guard =
+            prepare_runtime_state_dir(&cli.command).expect("state dir preparation should succeed");
 
         assert!(guard.is_some());
         assert_eq!(
