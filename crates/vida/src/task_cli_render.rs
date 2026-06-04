@@ -1276,6 +1276,25 @@ pub(crate) fn print_task_dependency_bulk_add_result_for_surface(
     };
     let next_actions = if result.failed_count == 0 {
         Vec::new()
+    } else if surface == "vida task dep ensure" {
+        let retry_command = result
+            .failed
+            .iter()
+            .chain(result.unapplied.iter())
+            .next()
+            .map(|edge| {
+                format!(
+                    "{} {} {} {} --json",
+                    surface,
+                    crate::shell_quote(edge.issue_id.trim()),
+                    crate::shell_quote(edge.depends_on_id.trim()),
+                    crate::shell_quote(edge.edge_type.trim())
+                )
+            })
+            .unwrap_or_else(|| format!("{surface} <task-id> <depends-on-id> <edge-type> --json"));
+        vec![format!(
+            "Inspect the failed dependency edge, repair missing tasks or invalid graph edges, then rerun `{retry_command}`."
+        )]
     } else {
         vec![
             format!(

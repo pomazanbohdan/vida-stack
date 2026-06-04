@@ -4322,7 +4322,7 @@ fn task_dependency_ensure_reports_ensure_surface_in_json_results() {
         .any(|action| action
             .as_str()
             .expect("next action should be a string")
-            .contains("vida task dep ensure --json")));
+            .contains("vida task dep ensure vida-c missing-task blocks --json")));
 
     let _ = fs::remove_dir_all(&state_dir);
 }
