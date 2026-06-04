@@ -508,6 +508,8 @@ pub(crate) enum TaskCommand {
     ExportJsonl(TaskExportJsonlArgs),
     #[command(about = "list tracked backlog tasks with optional status filtering")]
     List(TaskListArgs),
+    #[command(about = "search tracked backlog tasks with compact filters")]
+    Search(TaskSearchArgs),
     #[command(about = "show one tracked task with dependency and planner metadata")]
     Show(TaskShowArgs),
     #[command(about = "show progress and dependency context for one task or open epics")]
@@ -771,11 +773,92 @@ pub(crate) struct TaskListArgs {
     #[arg(long = "status")]
     pub(crate) status: Option<String>,
 
+    #[arg(
+        long = "query",
+        help = "Filter tasks whose id, title, description, or notes contain this text"
+    )]
+    pub(crate) query: Option<String>,
+
+    #[arg(long = "issue-type", help = "Filter tasks by issue type")]
+    pub(crate) issue_type: Option<String>,
+
+    #[arg(
+        long = "parent-id",
+        help = "Filter tasks that are direct children of this parent task"
+    )]
+    pub(crate) parent_id: Option<String>,
+
+    #[arg(long = "limit", help = "Maximum number of task rows to return")]
+    pub(crate) limit: Option<usize>,
+
+    #[arg(
+        long = "fields",
+        help = "Comma-separated JSON task row fields to include, for example id,status,title"
+    )]
+    pub(crate) fields: Option<String>,
+
+    #[arg(
+        long = "view",
+        default_value = "summary",
+        help = "Output view for task rows: compact, summary, or full"
+    )]
+    pub(crate) view: String,
+
     #[arg(long = "all")]
     pub(crate) all: bool,
 
     #[arg(long = "summary")]
     pub(crate) summary: bool,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskSearchArgs {
+    #[arg(help = "Text to search across task id, title, description, and notes")]
+    pub(crate) query: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "status")]
+    pub(crate) status: Option<String>,
+
+    #[arg(long = "issue-type", help = "Filter tasks by issue type")]
+    pub(crate) issue_type: Option<String>,
+
+    #[arg(
+        long = "parent-id",
+        help = "Filter tasks that are direct children of this parent task"
+    )]
+    pub(crate) parent_id: Option<String>,
+
+    #[arg(long = "all", help = "Include closed tasks in search results")]
+    pub(crate) all: bool,
+
+    #[arg(
+        long = "limit",
+        default_value_t = 50,
+        help = "Maximum number of task rows to return"
+    )]
+    pub(crate) limit: usize,
+
+    #[arg(
+        long = "fields",
+        help = "Comma-separated JSON task row fields to include, for example id,status,title"
+    )]
+    pub(crate) fields: Option<String>,
+
+    #[arg(
+        long = "view",
+        default_value = "summary",
+        help = "Output view for task rows: compact, summary, or full"
+    )]
+    pub(crate) view: String,
 
     #[arg(long = "json")]
     pub(crate) json: bool,

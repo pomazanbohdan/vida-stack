@@ -137,6 +137,7 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         TaskCommand::ReplaceJsonl(command) => command.state_dir.is_some(),
         TaskCommand::ExportJsonl(command) => command.state_dir.is_some(),
         TaskCommand::List(command) => command.state_dir.is_some(),
+        TaskCommand::Search(command) => command.state_dir.is_some(),
         TaskCommand::Show(command) => command.state_dir.is_some(),
         TaskCommand::Progress(command) => command.state_dir.is_some(),
         TaskCommand::ClosureReady(command) => command.state_dir.is_some(),

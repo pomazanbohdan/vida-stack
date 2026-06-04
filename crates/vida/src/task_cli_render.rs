@@ -252,34 +252,43 @@ fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
 }
 
 pub(crate) fn print_task_list(
+    surface: &str,
     render: RenderMode,
     tasks: &[TaskRecord],
     summary_only: bool,
     explicit_full: bool,
+    fields: Option<&str>,
     as_json: bool,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) {
     let output_policy = task_list_output_policy(summary_only, explicit_full);
+    let task_rows = tasks
+        .iter()
+        .map(|task| task_list_row_value(task, explicit_full))
+        .map(|value| apply_json_field_selector(value, fields))
+        .collect::<Vec<_>>();
     let payload = if summary_only {
         build_pass_operator_surface_payload(
-            "vida task list",
+            surface,
             serde_json::json!({
                 "state_access": task_read_metadata_value(read_metadata),
                 "output_policy": output_policy,
+                "fields": fields,
                 "view": "summary",
                 "task_count": tasks.len(),
-                "tasks": tasks.iter().map(|task| task_list_row_value(task, false)).collect::<Vec<_>>(),
+                "tasks": task_rows,
             }),
         )
     } else {
         build_pass_operator_surface_payload(
-            "vida task list",
+            surface,
             serde_json::json!({
                 "state_access": task_read_metadata_value(read_metadata),
                 "output_policy": output_policy,
+                "fields": fields,
                 "view": "full",
                 "task_count": tasks.len(),
-                "tasks": tasks.iter().map(|task| task_list_row_value(task, true)).collect::<Vec<_>>(),
+                "tasks": task_rows,
             }),
         )
     };
@@ -292,11 +301,11 @@ pub(crate) fn print_task_list(
     }
 
     if matches!(render, RenderMode::Plain) {
-        println!("{}", task_record_list_toon_text("vida task list", tasks));
+        println!("{}", task_record_list_toon_text(surface, tasks));
         return;
     }
 
-    print_surface_header(render, "vida task");
+    print_surface_header(render, surface);
     print_task_read_metadata(render, read_metadata);
     if summary_only {
         print_surface_line(render, "view", "summary");
@@ -304,6 +313,30 @@ pub(crate) fn print_task_list(
     for task in tasks {
         println!("{}\t{}\t{}", task.id, task.status, task.title);
     }
+}
+
+fn apply_json_field_selector(value: serde_json::Value, fields: Option<&str>) -> serde_json::Value {
+    let Some(fields) = fields else {
+        return value;
+    };
+    let wanted = fields
+        .split(',')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .collect::<Vec<_>>();
+    if wanted.is_empty() {
+        return value;
+    }
+    let Some(object) = value.as_object() else {
+        return value;
+    };
+    let mut selected = serde_json::Map::new();
+    for field in wanted {
+        if let Some(value) = object.get(field) {
+            selected.insert(field.to_string(), value.clone());
+        }
+    }
+    serde_json::Value::Object(selected)
 }
 
 pub(crate) fn print_task_ready(
@@ -1458,6 +1491,24 @@ mod tests {
         assert!(!text.contains('\t'));
         assert!(!text.contains("description"));
         assert!(!text.contains("planner_metadata"));
+    }
+
+    #[test]
+    fn task_list_payload_applies_json_field_selector() {
+        let tasks = vec![sample_task("task-1")];
+        let rows = tasks
+            .iter()
+            .map(|task| super::task_list_row_value(task, false))
+            .map(|value| super::apply_json_field_selector(value, Some("id,status,title")))
+            .collect::<Vec<_>>();
+
+        let row = rows[0].as_object().expect("selected task row");
+        assert_eq!(row.len(), 3);
+        assert_eq!(row["id"], "task-1");
+        assert_eq!(row["status"], "open");
+        assert_eq!(row["title"], "Task task-1");
+        assert!(!row.contains_key("description"));
+        assert!(!row.contains_key("priority"));
     }
 
     #[test]

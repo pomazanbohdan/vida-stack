@@ -1489,6 +1489,54 @@ async fn task_list_authoritative_first(
     Ok((filtered, metadata))
 }
 
+fn task_parent_filter_matches(task: &state_store::TaskRecord, parent_id: Option<&str>) -> bool {
+    parent_id
+        .map(|parent_id| {
+            task.dependencies.iter().any(|dependency| {
+                dependency.edge_type == "parent-child" && dependency.depends_on_id == parent_id
+            })
+        })
+        .unwrap_or(true)
+}
+
+fn task_query_filter_matches(task: &state_store::TaskRecord, query: Option<&str>) -> bool {
+    let Some(query) = query.map(str::trim).filter(|query| !query.is_empty()) else {
+        return true;
+    };
+    let query = query.to_ascii_lowercase();
+    [
+        task.id.as_str(),
+        task.title.as_str(),
+        task.description.as_str(),
+        task.notes.as_deref().unwrap_or(""),
+    ]
+    .iter()
+    .any(|value| value.to_ascii_lowercase().contains(&query))
+}
+
+fn filter_task_rows_for_operator(
+    rows: Vec<state_store::TaskRecord>,
+    status: Option<&str>,
+    include_all: bool,
+    query: Option<&str>,
+    issue_type: Option<&str>,
+    parent_id: Option<&str>,
+    limit: Option<usize>,
+) -> Vec<state_store::TaskRecord> {
+    rows.into_iter()
+        .filter(|task| include_all || task.status != "closed")
+        .filter(|task| status.map(|wanted| task.status == wanted).unwrap_or(true))
+        .filter(|task| {
+            issue_type
+                .map(|wanted| task.issue_type == wanted)
+                .unwrap_or(true)
+        })
+        .filter(|task| task_parent_filter_matches(task, parent_id))
+        .filter(|task| task_query_filter_matches(task, query))
+        .take(limit.unwrap_or(usize::MAX))
+        .collect()
+}
+
 async fn task_show_authoritative_first(
     state_dir: std::path::PathBuf,
     task_id: &str,
@@ -6068,12 +6116,23 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .await
             {
                 Ok((tasks, metadata)) => {
-                    let summary_only = command.summary || !command.all;
+                    let tasks = filter_task_rows_for_operator(
+                        tasks,
+                        command.status.as_deref(),
+                        command.all,
+                        command.query.as_deref(),
+                        command.issue_type.as_deref(),
+                        command.parent_id.as_deref(),
+                        command.limit,
+                    );
+                    let summary_only = command.summary || !command.all || command.view != "full";
                     print_task_list(
+                        "vida task list",
                         command.render,
                         &tasks,
                         summary_only,
-                        command.all,
+                        command.all || command.view == "full",
+                        command.fields.as_deref(),
                         command.json,
                         Some(&metadata),
                     );
@@ -6081,6 +6140,42 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
                 Err(error) => {
                     eprintln!("Failed to list tasks: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        TaskCommand::Search(command) => {
+            let state_dir = command
+                .state_dir
+                .unwrap_or_else(state_store::default_state_dir);
+            match task_list_authoritative_first(state_dir, command.status.as_deref(), command.all)
+                .await
+            {
+                Ok((tasks, metadata)) => {
+                    let tasks = filter_task_rows_for_operator(
+                        tasks,
+                        command.status.as_deref(),
+                        command.all,
+                        Some(&command.query),
+                        command.issue_type.as_deref(),
+                        command.parent_id.as_deref(),
+                        Some(command.limit),
+                    );
+                    let full = command.view == "full";
+                    print_task_list(
+                        "vida task search",
+                        command.render,
+                        &tasks,
+                        !full,
+                        full,
+                        command.fields.as_deref(),
+                        command.json,
+                        Some(&metadata),
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("Failed to search tasks: {error}");
                     ExitCode::from(1)
                 }
             }
