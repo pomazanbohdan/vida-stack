@@ -134,8 +134,8 @@ use agent_extension_bundle_validation::{
 use agent_extension_catalog_projection::build_agent_extension_catalog_projection;
 use agent_extension_registry_projection::build_agent_extension_registry_projection;
 pub(crate) use bootstrap_value_utils::{
-    config_file_path, inferred_project_title, is_missing_or_placeholder, normalize_root_arg,
-    slugify_project_id, trimmed_non_empty,
+    config_file_path, config_file_path_for_root, inferred_project_title, is_missing_or_placeholder,
+    normalize_root_arg, slugify_project_id, trimmed_non_empty,
 };
 use carrier_runtime_projection::build_carrier_runtime_projection;
 use clap::Parser;
@@ -143,8 +143,8 @@ pub(crate) use cli::*;
 pub(crate) use compiled_agent_extension_bundle::build_compiled_agent_extension_bundle_for_root;
 pub(crate) use config_value_utils::{
     csv_json_string_list, json_bool, json_lookup, json_string, json_string_list,
-    load_project_overlay_yaml, split_csv_like, yaml_bool, yaml_lookup, yaml_string,
-    yaml_string_list,
+    load_project_overlay_yaml, load_project_overlay_yaml_for_root, split_csv_like, yaml_bool,
+    yaml_lookup, yaml_string, yaml_string_list,
 };
 #[allow(unused_imports)]
 pub(crate) use consume_final_operator_surface::{

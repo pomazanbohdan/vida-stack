@@ -1,6 +1,6 @@
 use std::{path::Path, process::ExitCode};
 
-use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot;
+use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
 use crate::{
     state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
     AgentHostBridgeArgs, AgentSelectArgs,
@@ -1457,19 +1457,6 @@ fn configured_max_parallel_agents_from_activation_bundle(
         .unwrap_or(1)
 }
 
-fn dev_team_required_task_steps_to_preview(
-    activation_bundle: &serde_json::Value,
-    lanes_requested: usize,
-    configured_max_parallel_agents: usize,
-) -> usize {
-    let effective_max_parallel_agents = lanes_requested.min(configured_max_parallel_agents.max(1));
-    dev_team_sequence(activation_bundle)
-        .into_iter()
-        .take(effective_max_parallel_agents)
-        .filter(|step| step.requires_task)
-        .count()
-}
-
 fn agent_init_command(
     task_id: &str,
     state_dir: Option<&std::path::Path>,
@@ -2335,6 +2322,13 @@ fn apply_continuation_dispatch_gate_to_preview(
     preview.status = "blocked".to_string();
     preview.selected_lanes.clear();
     preview.lanes_selected = 0;
+    if let Some(blocker) = crate::release1_contracts::blocker_code_value(
+        crate::release1_contracts::BlockerCode::LatestRunGraphStatusBlocked,
+    ) {
+        if !preview.blocker_codes.iter().any(|value| value == &blocker) {
+            preview.blocker_codes.push(blocker);
+        }
+    }
     for blocker in &gate.blocker_codes {
         if !preview.blocker_codes.iter().any(|value| value == blocker) {
             preview.blocker_codes.push(blocker.clone());
@@ -2603,7 +2597,7 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
     let state_dir = command
         .state_dir
         .clone()
-        .unwrap_or_else(state_store::default_state_dir);
+        .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
     match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
             let activation_bundle = match crate::build_taskflow_consume_bundle_payload(&store).await
@@ -2671,7 +2665,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
     let state_dir = command
         .state_dir
         .clone()
-        .unwrap_or_else(state_store::default_state_dir);
+        .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
     let explicit_state_dir = command.state_dir.as_deref();
     let projection_name = agent_dispatch_next_projection_name(&command);
     let cache_read_allowed = command.current_task_id.is_some();
@@ -2811,15 +2805,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 if let Some(object) = activation_bundle.as_object_mut() {
                     object.insert("dev_team_readiness".to_string(), readiness);
                 }
-                let required_task_steps = dev_team_required_task_steps_to_preview(
-                    &activation_bundle,
-                    command.lanes,
-                    configured_max_parallel_agents,
-                );
-                let continuation_gate_required = command.current_task_id.is_none()
-                    && required_task_steps > 0
-                    && projection.ready.len() >= required_task_steps;
-                let continuation_gate = if continuation_gate_required {
+                let continuation_gate =
                     match crate::taskflow_proxy::build_taskflow_continuation_dispatch_gate_from_store(
                         &store,
                         &state_dir,
@@ -2832,10 +2818,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                             eprintln!("Failed to compute agent continuation gate: {error}");
                             return ExitCode::from(1);
                         }
-                    }
-                } else {
-                    None
-                };
+                    };
                 drop(store);
                 let mut preview = build_agent_dispatch_next_preview(
                     &activation_bundle,
@@ -2885,7 +2868,19 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                     eprintln!("Failed to open authoritative state store: {error}");
                     return ExitCode::from(1);
                 };
-                let mut activation_bundle = match capture_launcher_activation_snapshot() {
+                let project_root =
+                    crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_dir)
+                        .or_else(|| crate::resolve_runtime_project_root().ok());
+                let Some(project_root) = project_root else {
+                    eprintln!(
+                        "Failed to resolve activation project root for state dir {}",
+                        state_dir.display()
+                    );
+                    return ExitCode::from(1);
+                };
+                let mut activation_bundle = match capture_launcher_activation_snapshot_for_root(
+                    &project_root,
+                ) {
                     Ok(snapshot) => snapshot.compiled_bundle,
                     Err(snapshot_error) => {
                         eprintln!(
@@ -5515,7 +5510,10 @@ mod tests {
         );
         assert_eq!(
             preview.flow_projection["blocker_codes"],
-            serde_json::json!(["continuation_binding_ambiguous"])
+            serde_json::json!([
+                "latest_run_graph_status_blocked",
+                "continuation_binding_ambiguous"
+            ])
         );
         assert_eq!(
             preview.flow_projection["next_actions"],

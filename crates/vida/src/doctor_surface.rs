@@ -7,6 +7,7 @@ use crate::contract_profile_adapter::{
     classify_compatibility_boundary, shared_operator_output_contract_parity_error, BlockerCode,
     CompatibilityBoundary, CompatibilityClass,
 };
+use crate::status_surface::{first_non_empty_artifact_ref, StatusRunGraphArtifactSource};
 
 fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
@@ -262,6 +263,8 @@ fn doctor_operator_blocker_codes(
     latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     latest_run_graph_gate: Option<&crate::state_store::RunGraphGateSummary>,
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    latest_run_graph_snapshot_inconsistent: bool,
+    latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
     memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
     operator_session_projection: &serde_json::Value,
@@ -368,6 +371,16 @@ fn doctor_operator_blocker_codes(
     if latest_run_graph_gate.is_some() && latest_run_graph_dispatch_receipt.is_none() {
         operator_blocker_codes
             .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string());
+    }
+    if latest_run_graph_snapshot_inconsistent {
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::RunGraphLatestSnapshotInconsistent).to_string());
+    }
+    if latest_run_graph_dispatch_receipt_checkpoint_leakage {
+        operator_blocker_codes.push(
+            blocker_code_str(BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage)
+                .to_string(),
+        );
     }
     if latest_run_graph_task_closed {
         operator_blocker_codes.push(CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_BLOCKER.to_string());
@@ -501,6 +514,23 @@ fn doctor_operator_next_actions(
     {
         operator_next_actions
             .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::RunGraphLatestSnapshotInconsistent))
+    {
+        operator_next_actions.push(
+            crate::status_surface_signals::run_graph_latest_snapshot_inconsistent_next_action()
+                .to_string(),
+        );
+    }
+    if operator_blocker_codes.iter().any(|code| {
+        code == blocker_code_str(BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage)
+    }) {
+        operator_next_actions.push(
+            crate::status_surface_signals::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action()
+                .to_string(),
+        );
     }
     if operator_blocker_codes
         .iter()
@@ -691,6 +721,93 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
+            let current_session_run_graph_status =
+                match store.latest_run_graph_status_for_current_session().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("current-session run graph status: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                };
+            let current_session_run_graph_run_id = current_session_run_graph_status
+                .as_ref()
+                .map(|status| status.run_id.as_str());
+            let current_session_run_graph_checkpoint = match current_session_run_graph_run_id {
+                Some(run_id) => match store.run_graph_checkpoint_summary(run_id).await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("current-session run graph checkpoint: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                }
+                .into(),
+                None => None,
+            };
+            let current_session_run_graph_gate = match current_session_run_graph_run_id {
+                Some(run_id) => match store.run_graph_gate_summary(run_id).await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("current-session run graph gate: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                }
+                .into(),
+                None => None,
+            };
+            let mut current_session_run_graph_dispatch_receipt_checkpoint_leakage = false;
+            let current_session_run_graph_dispatch_receipt = match current_session_run_graph_status
+                .as_ref()
+            {
+                Some(status) => match store
+                    .run_graph_dispatch_receipt_summary_for_status(status)
+                    .await
+                {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        if error
+                            .to_string()
+                            .contains("latest checkpoint evidence must share the same run_id")
+                        {
+                            current_session_run_graph_dispatch_receipt_checkpoint_leakage = true;
+                            None
+                        } else {
+                            eprintln!(
+                                "current-session run graph dispatch receipt: failed ({error})"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    }
+                },
+                None => match store
+                    .latest_active_exception_takeover_dispatch_receipt()
+                    .await
+                {
+                    Ok(receipt) => receipt
+                        .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt),
+                    Err(error) => {
+                        eprintln!(
+                            "latest active exception takeover dispatch receipt: failed ({error})"
+                        );
+                        return ExitCode::from(1);
+                    }
+                },
+            };
+            let current_session_run_graph_recovery =
+                match current_session_run_graph_run_id.or_else(|| {
+                    current_session_run_graph_dispatch_receipt
+                        .as_ref()
+                        .map(|receipt| receipt.run_id.as_str())
+                }) {
+                    Some(run_id) => match store.run_graph_recovery_summary(run_id).await {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            eprintln!("current-session run graph recovery: failed ({error})");
+                            return ExitCode::from(1);
+                        }
+                    }
+                    .into(),
+                    None => None,
+                };
             let latest_terminal_task_active_run_graph_status =
                 match store.latest_terminal_task_active_run_graph_status().await {
                     Ok(summary) => summary,
@@ -743,6 +860,25 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             } else {
                 latest_run_graph_dispatch_receipt
             };
+            let latest_run_graph_snapshot_inconsistent =
+                !current_session_run_graph_dispatch_receipt_checkpoint_leakage
+                    && !crate::state_store::latest_run_graph_evidence_snapshot_is_consistent(
+                        current_session_run_graph_status
+                            .as_ref()
+                            .map(|status| status.run_id.as_str()),
+                        current_session_run_graph_recovery
+                            .as_ref()
+                            .map(|summary| summary.run_id.as_str()),
+                        current_session_run_graph_checkpoint
+                            .as_ref()
+                            .map(|summary| summary.run_id.as_str()),
+                        current_session_run_graph_gate
+                            .as_ref()
+                            .map(|summary| summary.run_id.as_str()),
+                        current_session_run_graph_dispatch_receipt
+                            .as_ref()
+                            .map(|receipt| receipt.run_id.as_str()),
+                    );
             let (
                 latest_run_graph_task_missing,
                 latest_run_graph_task_closed,
@@ -917,6 +1053,8 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     latest_run_graph_recovery.as_ref(),
                     latest_run_graph_gate.as_ref(),
                     latest_run_graph_dispatch_receipt.as_ref(),
+                    latest_run_graph_snapshot_inconsistent,
+                    current_session_run_graph_dispatch_receipt_checkpoint_leakage,
                     latest_principal_delegation.as_ref(),
                     latest_memory_governance.as_ref(),
                     &operator_session_projection,
@@ -933,8 +1071,72 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     latest_memory_governance.as_ref(),
                 );
                 operator_next_actions.extend(trace_evidence_next_actions);
+                let current_session_run_graph_dispatch_packet_path =
+                    current_session_run_graph_dispatch_receipt
+                        .as_ref()
+                        .and_then(|receipt| receipt.dispatch_packet_path.as_deref());
+                let current_session_run_graph_packet_refs =
+                    crate::status_surface::status_dispatch_packet_refs(
+                        std::path::Path::new(&launcher_runtime_paths.project_root),
+                        current_session_run_graph_dispatch_packet_path,
+                    );
+                let (
+                    current_session_run_graph_artifact_run_id,
+                    current_session_run_graph_artifact_run_id_source,
+                ) = first_non_empty_artifact_ref(&[
+                    (
+                        current_session_run_graph_status
+                            .as_ref()
+                            .map(|status| status.run_id.as_str()),
+                        StatusRunGraphArtifactSource::Status,
+                    ),
+                    (
+                        current_session_run_graph_dispatch_receipt
+                            .as_ref()
+                            .map(|receipt| receipt.run_id.as_str()),
+                        StatusRunGraphArtifactSource::DispatchReceipt,
+                    ),
+                    (
+                        current_session_run_graph_packet_refs.run_id.as_deref(),
+                        StatusRunGraphArtifactSource::DispatchPacket,
+                    ),
+                ]);
+                let (
+                    current_session_run_graph_artifact_task_id,
+                    current_session_run_graph_artifact_task_id_source,
+                ) = first_non_empty_artifact_ref(&[
+                    (
+                        current_session_run_graph_status
+                            .as_ref()
+                            .map(|status| status.task_id.as_str()),
+                        StatusRunGraphArtifactSource::Status,
+                    ),
+                    (
+                        current_session_run_graph_packet_refs.task_id.as_deref(),
+                        StatusRunGraphArtifactSource::DispatchPacket,
+                    ),
+                ]);
                 let operator_artifact_refs = serde_json::json!({
                     "runtime_consumption_latest_snapshot_path": evidence_snapshot_path,
+                    "current_session_run_graph_status_run_id": current_session_run_graph_artifact_run_id,
+                    "current_session_run_graph_status_task_id": current_session_run_graph_artifact_task_id,
+                    "current_session_run_graph_status_run_id_source": current_session_run_graph_artifact_run_id_source
+                        .map(StatusRunGraphArtifactSource::as_str),
+                    "current_session_run_graph_status_task_id_source": current_session_run_graph_artifact_task_id_source
+                        .map(StatusRunGraphArtifactSource::as_str),
+                    "current_session_run_graph_recovery_run_id": current_session_run_graph_recovery
+                        .as_ref()
+                        .map(|summary| summary.run_id.clone()),
+                    "current_session_run_graph_checkpoint_run_id": current_session_run_graph_checkpoint
+                        .as_ref()
+                        .map(|summary| summary.run_id.clone()),
+                    "current_session_run_graph_gate_run_id": current_session_run_graph_gate
+                        .as_ref()
+                        .map(|summary| summary.run_id.clone()),
+                    "current_session_run_graph_dispatch_receipt_id": current_session_run_graph_dispatch_receipt
+                        .as_ref()
+                        .map(|receipt| receipt.run_id.clone()),
+                    "current_session_run_graph_dispatch_packet_path": current_session_run_graph_dispatch_packet_path,
                     "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
                         .as_ref()
                         .map(|receipt| receipt.run_id.clone()),
@@ -1807,6 +2009,8 @@ mod tests {
             None,
             None,
             None,
+            false,
+            false,
             None,
             None,
             &operator_session_projection,
@@ -1817,6 +2021,77 @@ mod tests {
         );
 
         assert_eq!(blockers, vec!["conflict_domain_collision"]);
+    }
+
+    #[test]
+    fn doctor_operator_contracts_block_on_latest_run_graph_snapshot_inconsistent() {
+        let blocker_codes =
+            vec![
+                crate::blocker_code_str(crate::BlockerCode::RunGraphLatestSnapshotInconsistent)
+                    .to_string(),
+            ];
+        let next_actions = super::doctor_operator_next_actions(
+            &blocker_codes,
+            &crate::state_store::BootCompatibilitySummary {
+                classification: "backward_compatible".to_string(),
+                reasons: vec![],
+                next_step: "none".to_string(),
+            },
+            &crate::state_store::MigrationPreflightSummary {
+                contract_type: "operator_contracts".to_string(),
+                schema_version: "release-1-v1".to_string(),
+                compatibility_classification: "backward_compatible".to_string(),
+                migration_state: "no_migration_required".to_string(),
+                blockers: vec![],
+                source_version_tuple: vec![],
+                next_step: "none".to_string(),
+            },
+            None,
+            None,
+        );
+
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("concrete run/task/packet")));
+        assert_eq!(
+            operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
+            None
+        );
+    }
+
+    #[test]
+    fn doctor_operator_contracts_explain_latest_run_graph_checkpoint_leakage() {
+        let blocker_codes = vec![crate::blocker_code_str(
+            crate::BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
+        )
+        .to_string()];
+        let next_actions = super::doctor_operator_next_actions(
+            &blocker_codes,
+            &crate::state_store::BootCompatibilitySummary {
+                classification: "backward_compatible".to_string(),
+                reasons: vec![],
+                next_step: "none".to_string(),
+            },
+            &crate::state_store::MigrationPreflightSummary {
+                contract_type: "operator_contracts".to_string(),
+                schema_version: "release-1-v1".to_string(),
+                compatibility_classification: "backward_compatible".to_string(),
+                migration_state: "no_migration_required".to_string(),
+                blockers: vec![],
+                source_version_tuple: vec![],
+                next_step: "none".to_string(),
+            },
+            None,
+            None,
+        );
+
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("checkpoint evidence")));
+        assert_eq!(
+            operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
+            None
+        );
     }
 
     #[test]

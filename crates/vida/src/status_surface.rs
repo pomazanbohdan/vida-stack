@@ -12,6 +12,95 @@ use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
 const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
 const STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Default)]
+pub(crate) struct StatusDispatchPacketRefs {
+    pub(crate) run_id: Option<String>,
+    pub(crate) task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum StatusRunGraphArtifactSource {
+    Status,
+    DispatchReceipt,
+    DispatchPacket,
+}
+
+impl StatusRunGraphArtifactSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::DispatchReceipt => "dispatch_receipt",
+            Self::DispatchPacket => "dispatch_packet",
+        }
+    }
+}
+
+pub(crate) fn status_dispatch_packet_refs(
+    project_root: &std::path::Path,
+    packet_path: Option<&str>,
+) -> StatusDispatchPacketRefs {
+    let Some(packet_path) = packet_path.map(str::trim).filter(|path| !path.is_empty()) else {
+        return StatusDispatchPacketRefs::default();
+    };
+    let path = std::path::Path::new(packet_path);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        project_root.join(path)
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return StatusDispatchPacketRefs::default();
+    };
+    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return StatusDispatchPacketRefs::default();
+    };
+    StatusDispatchPacketRefs {
+        run_id: string_field(&packet, "run_id")
+            .or_else(|| string_path(&packet, &["run_graph_bootstrap", "run_id"])),
+        task_id: string_field(&packet, "task_id")
+            .or_else(|| string_path(&packet, &["delivery_task_packet", "task_id"]))
+            .or_else(|| string_path(&packet, &["delivery_task_packet", "id"]))
+            .or_else(|| string_path(&packet, &["delivery_task_packet", "backlog_id"]))
+            .or_else(|| string_path(&packet, &["run_graph_bootstrap", "task_id"])),
+    }
+}
+
+fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn string_path(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut cursor = value;
+    for key in path {
+        cursor = cursor.get(*key)?;
+    }
+    cursor
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub(crate) fn non_empty_str(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+pub(crate) fn first_non_empty_artifact_ref<'a>(
+    candidates: &[(Option<&'a str>, StatusRunGraphArtifactSource)],
+) -> (Option<&'a str>, Option<StatusRunGraphArtifactSource>) {
+    candidates
+        .iter()
+        .find_map(|(value, source)| value.and_then(non_empty_str).map(|value| (value, *source)))
+        .map_or((None, None), |(value, source)| (Some(value), Some(source)))
+}
+
 pub(crate) fn degraded_read_lock_payload(
     surface: &str,
     state_dir: &std::path::Path,
@@ -369,7 +458,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 };
                 let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt
                     .is_none()
-                    && latest_run_graph_status.is_none()
+                    && (latest_run_graph_status.is_none()
+                        || latest_run_graph_dispatch_receipt_checkpoint_leakage)
                 {
                     match store
                         .latest_active_exception_takeover_dispatch_receipt()
@@ -746,6 +836,45 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     latest_run_graph_surface_truth
                         .as_ref()
                         .and_then(|value| value.get("activation_vs_execution_evidence"));
+                let latest_run_graph_dispatch_packet_path = latest_run_graph_dispatch_receipt
+                    .as_ref()
+                    .and_then(|receipt| receipt.dispatch_packet_path.as_deref());
+                let latest_run_graph_packet_refs = status_dispatch_packet_refs(
+                    &project_root,
+                    latest_run_graph_dispatch_packet_path,
+                );
+                let (latest_run_graph_artifact_run_id, latest_run_graph_artifact_run_id_source) =
+                    first_non_empty_artifact_ref(&[
+                        (
+                            latest_run_graph_status
+                                .as_ref()
+                                .map(|status| status.run_id.as_str()),
+                            StatusRunGraphArtifactSource::Status,
+                        ),
+                        (
+                            latest_run_graph_dispatch_receipt
+                                .as_ref()
+                                .map(|receipt| receipt.run_id.as_str()),
+                            StatusRunGraphArtifactSource::DispatchReceipt,
+                        ),
+                        (
+                            latest_run_graph_packet_refs.run_id.as_deref(),
+                            StatusRunGraphArtifactSource::DispatchPacket,
+                        ),
+                    ]);
+                let (latest_run_graph_artifact_task_id, latest_run_graph_artifact_task_id_source) =
+                    first_non_empty_artifact_ref(&[
+                        (
+                            latest_run_graph_status
+                                .as_ref()
+                                .map(|status| status.task_id.as_str()),
+                            StatusRunGraphArtifactSource::Status,
+                        ),
+                        (
+                            latest_run_graph_packet_refs.task_id.as_deref(),
+                            StatusRunGraphArtifactSource::DispatchPacket,
+                        ),
+                    ]);
                 if as_json {
                     let operator_session_projection =
                         match build_operator_session_projection_for_status(&store).await {
@@ -783,9 +912,18 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             protocol_binding: &protocol_binding,
                             runtime_consumption: &runtime_consumption,
                             latest_final_snapshot_path: latest_final_snapshot_path.as_deref(),
+                            latest_run_graph_status_run_id: latest_run_graph_artifact_run_id,
+                            latest_run_graph_status_task_id: latest_run_graph_artifact_task_id,
+                            latest_run_graph_status_run_id_source:
+                                latest_run_graph_artifact_run_id_source
+                                    .map(StatusRunGraphArtifactSource::as_str),
+                            latest_run_graph_status_task_id_source:
+                                latest_run_graph_artifact_task_id_source
+                                    .map(StatusRunGraphArtifactSource::as_str),
                             latest_run_graph_dispatch_receipt_id: latest_run_graph_dispatch_receipt
                                 .as_ref()
                                 .map(|receipt| receipt.run_id.as_str()),
+                            latest_run_graph_dispatch_packet_path,
                             latest_run_graph_gate_present: latest_run_graph_gate.is_some(),
                             latest_run_graph_dispatch_receipt_matches_status,
                             latest_run_graph_snapshot_inconsistent,
@@ -3200,6 +3338,8 @@ host_environment:
     fn latest_run_graph_snapshot_inconsistent_has_explicit_next_action_and_contracts_remain_valid()
     {
         let next_action = run_graph_latest_snapshot_inconsistent_next_action().to_string();
+        assert!(next_action.contains("concrete run/task/packet"));
+        assert!(next_action.contains("Only rerun `vida taskflow consume continue --json` after"));
         assert!(next_action.contains("recheck `vida status --json`"));
         assert_eq!(
             operator_contracts_consistency_error(

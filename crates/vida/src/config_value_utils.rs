@@ -1,7 +1,11 @@
-use std::fs;
+use std::{fs, path::Path};
 
 pub(crate) fn load_project_overlay_yaml() -> Result<serde_yaml::Value, String> {
-    let path = super::resolve_runtime_project_root()?.join("vida.config.yaml");
+    load_project_overlay_yaml_for_root(&super::resolve_runtime_project_root()?)
+}
+
+pub(crate) fn load_project_overlay_yaml_for_root(root: &Path) -> Result<serde_yaml::Value, String> {
+    let path = root.join("vida.config.yaml");
     let raw = fs::read_to_string(&path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     serde_yaml::from_str(&raw)

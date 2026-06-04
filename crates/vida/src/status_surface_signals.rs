@@ -3,7 +3,7 @@ pub(crate) fn migration_requires_action(migration_state: &str) -> bool {
 }
 
 pub(crate) fn run_graph_latest_snapshot_inconsistent_next_action() -> &'static str {
-    "Rebuild the latest run-graph evidence by rerunning `vida taskflow consume continue --json` and then recheck `vida status --json` once status, recovery, checkpoint, gate, and dispatch receipt share the same run_id."
+    "Inspect the concrete run/task/packet named by `vida status --json`; if the task or owned_paths are missing, repair or retire that stale run first. Only rerun `vida taskflow consume continue --json` after status, recovery, checkpoint, gate, and dispatch receipt can share one authoritative run_id, then recheck `vida status --json`."
 }
 
 pub(crate) fn run_graph_latest_dispatch_receipt_signal_ambiguous_next_action() -> &'static str {

@@ -39,7 +39,13 @@ pub(crate) fn is_missing_or_placeholder(value: Option<&str>, placeholder: &str) 
 }
 
 pub(crate) fn config_file_path() -> Result<PathBuf, String> {
-    Ok(crate::resolve_runtime_project_root()?.join("vida.config.yaml"))
+    Ok(config_file_path_for_root(
+        &crate::resolve_runtime_project_root()?,
+    ))
+}
+
+pub(crate) fn config_file_path_for_root(root: &Path) -> PathBuf {
+    root.join("vida.config.yaml")
 }
 
 pub(crate) fn normalize_root_arg(path: &Path) -> String {

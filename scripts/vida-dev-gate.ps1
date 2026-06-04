@@ -66,6 +66,7 @@ function Resolve-CargoTargetDirPolicy {
 $CargoTargetDirState = Resolve-CargoTargetDirPolicy
 $env:CARGO_TARGET_DIR = $CargoTargetDirState.effective_cargo_target_dir
 $DebugVidaPath = Join-Path $CargoTargetDirState.effective_cargo_target_dir "debug\vida.exe"
+$ReleaseVidaPath = Join-Path $CargoTargetDirState.effective_cargo_target_dir "release\vida.exe"
 
 function Invoke-Timed {
     param(
@@ -316,7 +317,8 @@ try {
         }
         Invoke-Timed "release-package" @("bash", "scripts/build-release.sh")
     } elseif ($Mode -eq "release-install") {
-        Invoke-Timed "vida-release-install" @("vida", "release", "install", "--json")
+        Invoke-Timed "cargo-build-release-vida" @("cargo", "build", "--locked", "-p", "vida", "--release")
+        Invoke-Timed "vida-release-install" @($ReleaseVidaPath, "release", "install", "--skip-build", "--source-binary", $ReleaseVidaPath, "--json")
         Invoke-Timed "installed-vida-status" @("vida", "status", "--json")
     }
 } finally {

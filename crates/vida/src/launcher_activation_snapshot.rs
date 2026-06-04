@@ -4,8 +4,9 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::state_store::LauncherActivationSnapshot;
 use crate::{
-    build_compiled_agent_extension_bundle_for_root, config_file_path, load_project_overlay_yaml,
-    split_csv_like, yaml_lookup, yaml_string, StateStore, StateStoreError,
+    build_compiled_agent_extension_bundle_for_root, config_file_path, config_file_path_for_root,
+    load_project_overlay_yaml, load_project_overlay_yaml_for_root, split_csv_like, yaml_lookup,
+    yaml_string, StateStore, StateStoreError,
 };
 
 pub(crate) fn pack_router_keywords_json(config: &serde_yaml::Value) -> serde_json::Value {
@@ -33,14 +34,17 @@ pub(crate) fn config_file_digest(path: &Path) -> Result<String, String> {
 }
 
 pub(crate) fn capture_launcher_activation_snapshot() -> Result<LauncherActivationSnapshot, String> {
-    let config = load_project_overlay_yaml()?;
-    let config_path = config_file_path()?;
+    let project_root = crate::resolve_runtime_project_root()?;
+    capture_launcher_activation_snapshot_for_root(&project_root)
+}
+
+pub(crate) fn capture_launcher_activation_snapshot_for_root(
+    project_root: &Path,
+) -> Result<LauncherActivationSnapshot, String> {
+    let config = load_project_overlay_yaml_for_root(project_root)?;
+    let config_path = config_file_path_for_root(project_root);
     let config_digest = config_file_digest(&config_path)?;
-    let config_root = config_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let compiled_bundle = build_compiled_agent_extension_bundle_for_root(&config, &config_root)?;
+    let compiled_bundle = build_compiled_agent_extension_bundle_for_root(&config, project_root)?;
     Ok(LauncherActivationSnapshot {
         source: "state_store".to_string(),
         source_config_path: config_path.display().to_string(),
@@ -56,7 +60,15 @@ pub(crate) fn capture_launcher_activation_snapshot() -> Result<LauncherActivatio
 pub(crate) async fn sync_launcher_activation_snapshot(
     store: &StateStore,
 ) -> Result<LauncherActivationSnapshot, String> {
-    let snapshot = capture_launcher_activation_snapshot()?;
+    let project_root = launcher_activation_project_root(store)?;
+    sync_launcher_activation_snapshot_for_root(store, &project_root).await
+}
+
+pub(crate) async fn sync_launcher_activation_snapshot_for_root(
+    store: &StateStore,
+    project_root: &Path,
+) -> Result<LauncherActivationSnapshot, String> {
+    let snapshot = capture_launcher_activation_snapshot_for_root(project_root)?;
     store
         .write_launcher_activation_snapshot(&snapshot)
         .await
@@ -67,23 +79,38 @@ pub(crate) async fn sync_launcher_activation_snapshot(
 pub(crate) async fn read_or_sync_launcher_activation_snapshot(
     store: &StateStore,
 ) -> Result<LauncherActivationSnapshot, String> {
+    let project_root = launcher_activation_project_root(store)?;
     match store.read_launcher_activation_snapshot().await {
         Ok(snapshot) => {
-            let config_path = config_file_path()?;
+            let config_path = config_file_path_for_root(&project_root);
             let current_digest = config_file_digest(&config_path)?;
-            if snapshot.source_config_digest == current_digest {
+            let current_config_path = config_path.display().to_string();
+            if snapshot.source_config_digest == current_digest
+                && snapshot.source_config_path == current_config_path
+            {
                 Ok(snapshot)
             } else {
-                sync_launcher_activation_snapshot(store).await
+                sync_launcher_activation_snapshot_for_root(store, &project_root).await
             }
         }
         Err(StateStoreError::MissingLauncherActivationSnapshot) => {
-            sync_launcher_activation_snapshot(store).await
+            sync_launcher_activation_snapshot_for_root(store, &project_root).await
         }
         Err(error) => Err(format!(
             "Failed to read launcher activation snapshot: {error}"
         )),
     }
+}
+
+fn launcher_activation_project_root(store: &StateStore) -> Result<PathBuf, String> {
+    crate::taskflow_task_bridge::infer_project_root_from_state_root(store.root())
+        .or_else(|| crate::resolve_runtime_project_root().ok())
+        .ok_or_else(|| {
+            format!(
+                "Unable to resolve launcher activation project root from state dir {}",
+                store.root().display()
+            )
+        })
 }
 
 fn normalize_root_arg(path: &Path) -> String {
