@@ -3954,6 +3954,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tracked_flow_spec_close_keeps_feature_epic_open_until_work_pool_handoff() {
+        let root = unique_task_store_temp_root("vida-tracked-flow-spec-close");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-x",
+                title: "Feature X",
+                display_id: None,
+                description: "tracked feature epic",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &["feature-request".to_string(), "spec-first".to_string()],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create feature epic");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-x-spec",
+                title: "Spec pack",
+                display_id: None,
+                description: "bounded spec packet",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("feature-x"),
+                labels: &["spec-pack".to_string(), "documentation".to_string()],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create spec task");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-x-work-pool",
+                title: "Work-pool pack",
+                display_id: None,
+                description: "tracked work-pool packet",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("feature-x"),
+                labels: &["work-pool-pack".to_string()],
+                execution_semantics: TaskExecutionSemantics {
+                    execution_mode: Some("container_only".to_string()),
+                    order_bucket: Some("feature-x".to_string()),
+                    parallel_group: Some("work-pool-pack".to_string()),
+                    conflict_domain: Some("feature-x-work-pool".to_string()),
+                },
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create work-pool task");
+
+        store
+            .close_task(
+                "feature-x-spec",
+                "design packet finalized and handed off into tracked work-pool shaping",
+            )
+            .await
+            .expect("close spec task");
+
+        let feature = store.show_task("feature-x").await.expect("load feature");
+        let spec = store.show_task("feature-x-spec").await.expect("load spec");
+        let work_pool = store
+            .show_task("feature-x-work-pool")
+            .await
+            .expect("load work-pool");
+
+        assert_eq!(spec.status, "closed");
+        assert_eq!(work_pool.status, "open");
+        assert_eq!(
+            feature.status, "open",
+            "tracked feature epic must stay open while its work-pool handoff child is open"
+        );
+        assert!(feature.closed_at.is_none());
+        assert!(feature.close_reason.is_none());
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate graph")
+            .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn update_task_status_closed_keeps_parent_open_with_paused_sibling() {
         let root = unique_task_store_temp_root("vida-update-child-paused-sibling");
         let store = StateStore::open(root.clone()).await.expect("open store");

@@ -130,8 +130,13 @@ fn work_packet_execution_semantics(
     task_id: &str,
     packet_label: &str,
 ) -> TaskExecutionSemantics {
+    let execution_mode = if packet_label == "work-pool-pack" {
+        "container_only"
+    } else {
+        "parallel_safe"
+    };
     TaskExecutionSemantics {
-        execution_mode: Some("parallel_safe".to_string()),
+        execution_mode: Some(execution_mode.to_string()),
         order_bucket: Some(epic_task_id.to_string()),
         parallel_group: Some(packet_label.to_string()),
         conflict_domain: Some(task_id.to_string()),
@@ -538,6 +543,14 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         &tracked["spec_task"]["close_command"],
         "tracked_flow_bootstrap.spec_task.close_command",
     )?;
+    let work_pool_task_id = required_str(
+        &tracked["work_pool_task"]["task_id"],
+        "tracked_flow_bootstrap.work_pool_task.task_id",
+    )?;
+    let work_pool_title = required_str(
+        &tracked["work_pool_task"]["title"],
+        "tracked_flow_bootstrap.work_pool_task.title",
+    )?;
     let work_pool_create_command = required_str(
         &tracked["work_pool_task"]["create_command"],
         "tracked_flow_bootstrap.work_pool_task.create_command",
@@ -588,6 +601,27 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
     })?;
     if spec_created {
         changed_files.push(format!("taskflow:{spec_task_id}"));
+    }
+
+    let (_, work_pool_created) = create_task_if_missing_with_store(TaskCreationArgs {
+        store,
+        project_root,
+        task_id: work_pool_task_id,
+        title: work_pool_title,
+        issue_type: "task",
+        status: "open",
+        parent_id: Some(epic_task_id),
+        labels: &["work-pool-pack"],
+        description: Some("tracked work-pool packet created during design-first bootstrap"),
+        execution_semantics: work_packet_execution_semantics(
+            epic_task_id,
+            work_pool_task_id,
+            "work-pool-pack",
+        ),
+        planner_metadata: TaskPlannerMetadata::default(),
+    })?;
+    if work_pool_created {
+        changed_files.push(format!("taskflow:{work_pool_task_id}"));
     }
 
     match ensure_project_docs_sidecar_pointers(project_root) {
@@ -663,6 +697,8 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
                 "tracked_flow_bootstrap.docflow.finalize_command",
                 "tracked_flow_bootstrap.docflow.check_command",
                 "tracked_flow_bootstrap.spec_task.close_command",
+            "tracked_flow_bootstrap.work_pool_task.task_id",
+            "tracked_flow_bootstrap.work_pool_task.title",
             "tracked_flow_bootstrap.work_pool_task.create_command",
             "tracked_flow_bootstrap.work_pool_task.ensure_command",
             "tracked_flow_bootstrap.dev_task.create_command",
@@ -678,6 +714,11 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         "spec_task": {
             "task_id": spec_task_id,
             "created": spec_created,
+        },
+        "work_pool_task": {
+            "task_id": work_pool_task_id,
+            "created": work_pool_created,
+            "preopened_before_spec_close": true,
         },
         "design_doc": {
             "path": design_doc_path,
@@ -915,6 +956,65 @@ mod tests {
         assert_eq!(
             updated.execution_semantics.order_bucket.as_deref(),
             Some("feature-x")
+        );
+
+        fs::remove_dir_all(&unique_root).expect("cleanup should succeed");
+    }
+
+    #[test]
+    fn work_packet_create_uses_container_only_for_work_pool() {
+        let unique_root = std::env::temp_dir().join(format!(
+            "vida-work-packet-work-pool-semantics-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should flow")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&unique_root).expect("temporary project root should be creatable");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(StateStore::open(
+                unique_root.join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let tracked = serde_json::json!({
+            "epic": {
+                "task_id": "feature-x",
+                "title": "Feature X"
+            },
+            "work_pool_task": {
+                "task_id": "feature-x-work-pool",
+                "title": "Work-pool pack: Feature X"
+            }
+        });
+
+        execute_work_packet_create_with_store(
+            &unique_root,
+            &store,
+            "shape the work pool",
+            &tracked,
+            "work_pool_task",
+        )
+        .expect("work-pool packet should be created");
+
+        let work_pool = runtime
+            .block_on(store.show_task("feature-x-work-pool"))
+            .expect("work-pool task should load");
+        assert_eq!(
+            work_pool.execution_semantics.execution_mode.as_deref(),
+            Some("container_only")
+        );
+        assert_eq!(
+            work_pool.execution_semantics.order_bucket.as_deref(),
+            Some("feature-x")
+        );
+        assert_eq!(
+            work_pool.execution_semantics.parallel_group.as_deref(),
+            Some("work-pool-pack")
+        );
+        assert_eq!(
+            work_pool.execution_semantics.conflict_domain.as_deref(),
+            Some("feature-x-work-pool")
         );
 
         fs::remove_dir_all(&unique_root).expect("cleanup should succeed");

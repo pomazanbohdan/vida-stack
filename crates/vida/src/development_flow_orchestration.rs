@@ -210,10 +210,10 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
         "handoff_sequence": [
             "create epic",
             "open spec task",
+            "open work-pool shaping task",
             "initialize bounded design document",
             "finalize and validate bounded design document",
             "close spec task",
-            "open work-pool shaping task",
             "shape dev packet in TaskFlow before delegated implementation"
         ]
     })
