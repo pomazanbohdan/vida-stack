@@ -11222,6 +11222,103 @@ fn protocol_binding_check_statuses_are_canonical() {
 }
 
 #[test]
+fn host_dispatch_handoff_projection_parity_unresolved_lane_selection_persists_blocked_resume_evidence(
+) {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let sync = vida()
+        .args(["taskflow", "protocol-binding", "sync", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("protocol-binding sync should run");
+    assert!(
+        sync.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sync.stderr)
+    );
+
+    let final_output = vida()
+        .args([
+            "taskflow",
+            "consume",
+            "final",
+            "resume lane governance conflict",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("consume final should run");
+    assert!(
+        !final_output.status.success(),
+        "unresolved lane selection should fail closed"
+    );
+    let final_parsed: serde_json::Value =
+        serde_json::from_slice(&final_output.stdout).expect("consume final json should parse");
+    assert_eq!(final_parsed["surface"], "vida taskflow consume final");
+    assert_eq!(final_parsed["status"], "blocked");
+    assert_eq!(
+        final_parsed["payload"]["run_graph_bootstrap"]["reason"],
+        "unresolved_lane_selection"
+    );
+    assert_eq!(
+        final_parsed["payload"]["run_graph_bootstrap"]["latest_status"]["status"],
+        "blocked"
+    );
+
+    let receipt = &final_parsed["payload"]["dispatch_receipt"];
+    assert_eq!(receipt["dispatch_status"], "blocked");
+    assert_eq!(receipt["lane_status"], "lane_blocked");
+    let run_id = receipt["run_id"]
+        .as_str()
+        .expect("blocked dispatch receipt should include run_id");
+    let packet_path = receipt["dispatch_packet_path"]
+        .as_str()
+        .expect("blocked dispatch receipt should include dispatch_packet_path");
+    assert!(
+        packet_path.contains("runtime-consumption"),
+        "packet path should be runtime-consumption evidence: {packet_path}"
+    );
+    assert!(
+        fs::metadata(packet_path).is_ok(),
+        "blocked dispatch packet should exist at {packet_path}"
+    );
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run graph status should run");
+    assert!(
+        run_graph.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run_graph.stderr)
+    );
+    let run_graph_parsed: serde_json::Value =
+        serde_json::from_slice(&run_graph.stdout).expect("run graph json should parse");
+    assert_eq!(run_graph_parsed["run_id"], run_id);
+    assert_eq!(run_graph_parsed["status"], "blocked");
+
+    let continue_output = vida()
+        .args(["taskflow", "consume", "continue", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("consume continue should run");
+    assert!(
+        !continue_output.status.success(),
+        "consume continue must fail closed on blocked unresolved lane evidence"
+    );
+    let stderr = String::from_utf8_lossy(&continue_output.stderr);
+    assert!(
+        stderr.contains("execution_preparation_gate_blocked"),
+        "stderr should classify blocked packet evidence as execution_preparation_gate_blocked, got: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
 fn consume_continue_fails_closed_on_lane_governance_status_evidence_conflict() {
     let (project_root, state_dir) = project_bound_state_dir();
 
