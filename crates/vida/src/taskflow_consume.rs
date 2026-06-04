@@ -1161,17 +1161,19 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &runtime_bundle,
                                 Some(blocked_run_id.as_str()),
                             );
-                            if let Ok(receipt) = serde_json::from_value::<
-                                crate::state_store::RunGraphDispatchReceipt,
-                            >(
-                                dispatch_receipt.clone()
-                            ) {
-                                if let Err(error) =
-                                    store.record_run_graph_dispatch_receipt(&receipt).await
+                            if should_record_blocked_dispatch_receipt(consume_final_mode) {
+                                if let Ok(receipt) =
+                                    serde_json::from_value::<
+                                        crate::state_store::RunGraphDispatchReceipt,
+                                    >(dispatch_receipt.clone())
                                 {
-                                    eprintln!(
-                                        "Failed to record blocked run-graph dispatch receipt: {error}"
-                                    );
+                                    if let Err(error) =
+                                        store.record_run_graph_dispatch_receipt(&receipt).await
+                                    {
+                                        eprintln!(
+                                            "Failed to record blocked run-graph dispatch receipt: {error}"
+                                        );
+                                    }
                                 }
                             }
                             let mut docflow_activation = super::blocking_docflow_activation(&error);
@@ -1648,6 +1650,10 @@ fn build_retrieval_policy_decision_gate(
     RetrievalPolicyDecisionGate { blocker_code }
 }
 
+fn should_record_blocked_dispatch_receipt(consume_final_mode: ConsumeFinalMode) -> bool {
+    !consume_final_mode.is_read_only()
+}
+
 fn blocked_dispatch_receipt(
     reason: &str,
     bundle_check: &super::TaskflowConsumeBundleCheck,
@@ -1879,9 +1885,9 @@ mod tests {
         build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
         build_retrieval_policy_decision_gate, build_runtime_consumption_dispatch_receipt,
         fail_fast_state_store_open_with_timeout, normalize_runtime_consumption_statuses,
-        parse_taskflow_consume_final_args, try_print_taskflow_consume_nested_help,
-        ApprovalDelegationEvidenceGate, ConsumeFinalMode, ExecutionPreparationEvidenceGate,
-        RetrievalPolicyDecisionGate,
+        parse_taskflow_consume_final_args, should_record_blocked_dispatch_receipt,
+        try_print_taskflow_consume_nested_help, ApprovalDelegationEvidenceGate, ConsumeFinalMode,
+        ExecutionPreparationEvidenceGate, RetrievalPolicyDecisionGate,
     };
     use std::time::Duration;
 
@@ -1911,6 +1917,19 @@ mod tests {
         assert!(!validate.as_json);
         assert_eq!(validate.mode, ConsumeFinalMode::ValidateOnly);
         assert_eq!(validate.request_text, "ship this");
+    }
+
+    #[test]
+    fn blocked_dispatch_receipts_only_persist_in_execute_mode() {
+        assert!(should_record_blocked_dispatch_receipt(
+            ConsumeFinalMode::Execute
+        ));
+        assert!(!should_record_blocked_dispatch_receipt(
+            ConsumeFinalMode::Preview
+        ));
+        assert!(!should_record_blocked_dispatch_receipt(
+            ConsumeFinalMode::ValidateOnly
+        ));
     }
 
     #[test]
