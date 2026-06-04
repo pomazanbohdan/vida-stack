@@ -90,6 +90,7 @@ Read this map when:
 2. the task asks how to run documentation inventory, proof, or migration tooling,
 3. project-doc work must stay inside the active `vida-stack` docs surface while using framework-owned documentation law,
 4. a bounded feature/change design document or linked ADR is being authored, updated, or reviewed.
+5. project-local skill or runtime-development environment documentation is being created or updated.
 
 ## Operational Rule
 
@@ -113,6 +114,7 @@ Read this map when:
 16. `vida docflow check-file`, `check`, `fastcheck`, and `readiness-check` now fail closed when a canonical project-visible doc is missing its required owning-map registration or when `AGENTS.sidecar.md` omits required bootstrap-visible documentation pointers.
 17. use `vida docflow report-check --path <file>` when the bounded proof target is the required runtime reporting prefix shape (`Thinking mode`, `Requests|Tasks`, `Agents`, `Reasoning summary`) rather than markdown footer law.
 18. when a documentation change creates or reroutes a canonical project-visible document surface, update the owning map/index and, when bootstrap-visible topology changed, update `docs/project-root-map.md` and `AGENTS.sidecar.md` in the same bounded change.
+19. when a session creates or updates project-local skills, validate the skill folder and update the owning process map or runtime-development environment runbook in the same bounded batch.
 
 ## Boundary Rule
 
@@ -124,10 +126,10 @@ Read this map when:
 artifact_path: process/documentation-tooling-map
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-14'
+artifact_revision: '2026-06-04'
 schema_version: '1'
 status: canonical
 source_path: docs/process/documentation-tooling-map.md
 created_at: '2026-03-10T09:45:00+02:00'
-updated_at: 2026-03-14T12:41:58.830287015Z
+updated_at: 2026-06-04T03:53:58.4847041Z
 changelog_ref: documentation-tooling-map.changelog.jsonl

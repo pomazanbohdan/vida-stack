@@ -33,6 +33,7 @@ Treat this bundle as the compact project `always_on_core` startup set for routin
 4. packet rendering and prompt-stack interpretation from `project-packet-rendering-runtime-capsule.md`,
 5. command timing, slow-gate classification, and script/gate optimization defaults from `command-timing-and-gate-optimization-protocol.md`,
 6. runtime-defect Error Search routing defaults from `project-error-search-runtime-diagnostics-protocol.md`.
+7. runtime development environment skill and issue-processing routing from `vida-runtime-development-environment.md`.
 
 ## Runtime Summary
 
@@ -46,6 +47,7 @@ After reading this bundle, the orchestrator should be able to answer:
 6. whether a command or gate timing must create optimization work,
 7. whether a full owner protocol read is required for an edge case,
 8. whether a runtime defect must use `META(Error Search)` because authority, ownership, receipt, proof, or routing law is involved.
+9. whether `vida-runtime-development` or `vida-github-issues` should be activated for the current bounded step.
 
 ## Expansion Rule
 
@@ -70,15 +72,16 @@ Expand beyond it only when:
 5. for packet rendering and prompt-stack law, read `docs/process/project-packet-rendering-runtime-capsule.md`,
 6. for timing evidence, slow-gate classification, and script/gate optimization, read `docs/process/command-timing-and-gate-optimization-protocol.md`,
 7. for runtime blockers, multi-defect pools, ownership conflicts, receipt/proof contradictions, routing blockers, or CI defect clusters, read `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
+8. for runtime development environment, project-local skill activation, GitHub issue processing, or operator-efficiency follow-up routing, read `docs/process/vida-runtime-development-environment.md`.
 
 -----
 artifact_path: process/project-orchestrator-startup-bundle
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-05-26'
+artifact_revision: '2026-06-04'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-startup-bundle.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: 2026-05-26T00:00:00+03:00
+updated_at: 2026-06-04T03:53:58.4992578Z
 changelog_ref: project-orchestrator-startup-bundle.changelog.jsonl

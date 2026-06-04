@@ -48,3 +48,9 @@ skills:
   - skill_id: party_chat_release_management
     description: Release-management payload for rollout sequencing, dependency timing, and go/no-go readiness.
     compatible_base_roles: pm,coach
+  - skill_id: vida_runtime_development
+    description: Project-local Codex skill for VIDA runtime TaskFlow, DocFlow, diagnostics, operator-efficiency, proof, and closeout workflow.
+    compatible_base_roles: worker,coach,verifier,pm
+  - skill_id: vida_github_issues
+    description: Project-local Codex skill for upstream GitHub Issues triage, stale issue cleanup, issue-to-TaskFlow mapping, labeling, comments, and closure evidence.
+    compatible_base_roles: worker,coach,verifier,pm

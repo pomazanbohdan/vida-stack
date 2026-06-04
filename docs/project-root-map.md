@@ -43,7 +43,9 @@ This map does not cover extracted secondary bundles by default.
 14. `docs/process/generic-runtime-protocol-promotion-plan.md`
     - project-owned boundary map for moving reusable project workflow law into generic VIDA runtime owners while retaining local residue
 15. `docs/process/multi-agent-stage-ensemble-protocol.md`
-    - proposed follow-up architecture for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
+     - proposed follow-up architecture for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
+16. `docs/process/vida-runtime-development-environment.md`
+     - compact project-owned runbook for runtime development environment alignment, project-local skills, GitHub issue processing, and operator-efficiency follow-up
 
 ## Activation Triggers
 
@@ -87,7 +89,9 @@ Do not use this map as the default route for extracted bundles unless the task e
 13. Generic runtime protocol promotion / project-overlay slimming questions:
     - continue to `docs/process/generic-runtime-protocol-promotion-plan.md`
 14. Multi-agent stage ensemble / independent attempt / consolidation questions:
-    - continue to `docs/process/multi-agent-stage-ensemble-protocol.md`
+     - continue to `docs/process/multi-agent-stage-ensemble-protocol.md`
+15. Runtime development environment / skill activation / GitHub issue processing / operator-efficiency follow-up:
+     - continue to `docs/process/vida-runtime-development-environment.md`
 
 ## Boundary Rule
 
@@ -99,10 +103,10 @@ Do not use this map as the default route for extracted bundles unless the task e
 artifact_path: project/root-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-06-02'
+artifact_revision: '2026-06-04'
 schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: 2026-06-02T00:00:00+03:00
+updated_at: 2026-06-04T03:53:58.4771525Z
 changelog_ref: project-root-map.changelog.jsonl

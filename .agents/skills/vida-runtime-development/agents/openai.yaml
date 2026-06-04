@@ -1,0 +1,4 @@
+interface:
+  display_name: "VIDA Runtime Development"
+  short_description: "VIDA runtime workflow and proof guidance"
+  default_prompt: "Use $vida-runtime-development to plan and verify a VIDA runtime TaskFlow change."

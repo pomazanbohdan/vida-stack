@@ -49,6 +49,12 @@ Shared skill note:
 2. enabling a shared skill for this project still happens through `vida.config.yaml`,
 3. use `shared:<skill_id>` in project profiles when the skill is not project-owned.
 
+Project-local Codex skill note:
+
+1. project-local Codex skills live under `.agents/skills/**`,
+2. process-facing skill registry rows live in `docs/process/agent-extensions/skills.yaml`,
+3. runtime development sessions should use `vida-runtime-development` for TaskFlow/DocFlow/runtime proof work and `vida-github-issues` for upstream GitHub issue processing when those skills are present in the active catalog.
+
 ## Carrier And Model Authority
 
 1. `vida.config.yaml` is the authority for carrier tier, model profile, model ref, reasoning effort, and normalized cost units.
@@ -83,5 +89,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/agent-extensions/README.md
 created_at: '2026-03-10T15:45:00+02:00'
-updated_at: '2026-03-13T11:20:00+02:00'
+updated_at: 2026-06-04T03:53:58.4918667Z
 changelog_ref: README.changelog.jsonl

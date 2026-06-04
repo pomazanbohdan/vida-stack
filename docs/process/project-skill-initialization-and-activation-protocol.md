@@ -116,16 +116,17 @@ No session is launch-ready until both are true:
 2. for orchestrator startup, read `docs/process/project-orchestrator-session-start-protocol.md`,
 3. for top-level routing, read `docs/process/project-orchestrator-operating-protocol.md`,
 4. for delegated packet/team law, read `docs/process/team-development-and-orchestration-protocol.md`,
-5. for Codex role/runtime settings, read `docs/process/codex-agent-configuration-guide.md`.
+5. for Codex role/runtime settings, read `docs/process/codex-agent-configuration-guide.md`,
+6. for project-local runtime development skills and GitHub issue processing skills, read `docs/process/vida-runtime-development-environment.md`.
 
 -----
 artifact_path: process/project-skill-initialization-and-activation-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-06-04'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-skill-initialization-and-activation-protocol.md
 created_at: '2026-03-13T19:10:00+02:00'
-updated_at: '2026-03-13T19:10:00+02:00'
+updated_at: 2026-06-04T03:53:58.5062097Z
 changelog_ref: project-skill-initialization-and-activation-protocol.changelog.jsonl
