@@ -109,6 +109,19 @@ fn run_command_json(args: &[&str], state_dir: &str) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("json output should parse")
 }
 
+fn run_command_json_allow_failure(args: &[&str], state_dir: &str) -> (serde_json::Value, bool) {
+    let output = run_command_capture(args, state_dir);
+    let json = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "json output should parse for args {args:?}: {error}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    (json, output.status.success())
+}
+
 fn create_epic_parent(state_dir: &str, parent_id: &str, title: &str, status: &str) {
     let parent = run_command_json(
         &[
@@ -6390,6 +6403,63 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
     let before = run_command_json(&["doctor", "--json"], &state_dir);
     let before_blockers = require_json_string_array(&before["blocker_codes"], "before blockers");
     assert!(before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
+    let (status_before, _) = run_command_json_allow_failure(&["status", "--json"], &state_dir);
+    let status_before_blockers =
+        require_json_string_array(&status_before["blocker_codes"], "status before blockers");
+    assert!(
+        status_before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "status must share the closed-run blocker before reconcile: {status_before}"
+    );
+    let (graph_before, _) =
+        run_command_json_allow_failure(&["taskflow", "graph-summary", "--json"], &state_dir);
+    let graph_before_blockers =
+        require_json_string_array(&graph_before["blocker_codes"], "graph before blockers");
+    assert!(
+        graph_before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "graph-summary must share the closed-run blocker before reconcile: {graph_before}"
+    );
+    assert!(
+        graph_before["next_actions"]
+            .as_array()
+            .expect("graph-summary next actions should render")
+            .iter()
+            .any(|action| action.as_str().is_some_and(
+                |value| value.contains("vida task reconcile-closed-runs --limit 25 --json")
+            )),
+        "graph-summary must publish the canonical reconcile command: {graph_before}"
+    );
+    let (diagnostics_before, diagnostics_before_success) = run_command_json_allow_failure(
+        &[
+            "diagnostics",
+            "post-commit",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !diagnostics_before_success,
+        "diagnostics post-commit must fail closed for unproven closed-task active run: {diagnostics_before}"
+    );
+    let diagnostics_before_blockers = require_json_string_array(
+        &diagnostics_before["blocker_codes"],
+        "diagnostics before blockers",
+    );
+    assert!(
+        diagnostics_before_blockers
+            .contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "diagnostics post-commit must share the doctor closed-run blocker: {diagnostics_before}"
+    );
+    assert!(
+        diagnostics_before["next_actions"]
+            .as_array()
+            .expect("diagnostics next actions should render")
+            .iter()
+            .any(|action| action.as_str().is_some_and(|value| value
+                .contains("vida task reconcile-closed-runs --limit 25 --json"))),
+        "diagnostics post-commit must publish the canonical reconcile command: {diagnostics_before}"
+    );
 
     let reconcile = run_command_json(
         &["task", "reconcile-closed-runs", "--limit", "25", "--json"],
@@ -6512,6 +6582,29 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
         !after["latest_terminal_task_active_run_graph_status"].is_null(),
         "unproven active run graph should not be cleared by reconcile: {after}"
     );
+    let (diagnostics_after, _) = run_command_json_allow_failure(
+        &[
+            "diagnostics",
+            "post-commit",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let diagnostics_after_blockers = require_json_string_array(
+        &diagnostics_after["blocker_codes"],
+        "diagnostics after blockers",
+    );
+    assert!(
+        diagnostics_after_blockers
+            .contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "diagnostics post-commit should preserve the blocker when reconcile skipped the unproven run: {diagnostics_after}"
+    );
+    assert_eq!(
+        diagnostics_after["taskflow_status"]["closed_task_active_run_projection_mismatch"],
+        true
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -6572,6 +6665,39 @@ fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
         before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
         "canonical task close should expose the stale active run before reconcile: {before}"
     );
+    let (diagnostics_before, diagnostics_before_success) = run_command_json_allow_failure(
+        &[
+            "diagnostics",
+            "post-commit",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !diagnostics_before_success,
+        "diagnostics post-commit must fail closed before closed-run reconcile: {diagnostics_before}"
+    );
+    let diagnostics_before_blockers = require_json_string_array(
+        &diagnostics_before["blocker_codes"],
+        "diagnostics before blockers",
+    );
+    assert!(
+        diagnostics_before_blockers
+            .contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "diagnostics post-commit must share doctor/status closed-run blocker before reconcile: {diagnostics_before}"
+    );
+    assert!(
+        diagnostics_before["next_actions"]
+            .as_array()
+            .expect("diagnostics next actions should render")
+            .iter()
+            .any(|action| action.as_str().is_some_and(|value| value
+                .contains("vida task reconcile-closed-runs --limit 25 --json")
+                && value.contains("closed tasks must not remain projected as active runtime work"))),
+        "diagnostics post-commit must publish the same canonical reconcile next action: {diagnostics_before}"
+    );
 
     let reconcile = run_command_json(
         &["task", "reconcile-closed-runs", "--limit", "25", "--json"],
@@ -6601,6 +6727,29 @@ fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
     assert!(
         !status_after_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
         "status should also ignore reconciled terminal closure runs: {status_after}"
+    );
+    let (diagnostics_after, _) = run_command_json_allow_failure(
+        &[
+            "diagnostics",
+            "post-commit",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let diagnostics_after_blockers = require_json_string_array(
+        &diagnostics_after["blocker_codes"],
+        "diagnostics after blockers",
+    );
+    assert!(
+        !diagnostics_after_blockers
+            .contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "diagnostics post-commit should clear closed-run blocker after reconcile just like doctor/status: {diagnostics_after}"
+    );
+    assert_eq!(
+        diagnostics_after["taskflow_status"]["closed_task_active_run_projection_mismatch"],
+        false
     );
 
     let _ = fs::remove_dir_all(&state_dir);
@@ -6720,7 +6869,7 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
             .bind(("receipt", receipt))
             .await
             .expect("seed receipt-backed closure truth");
-        db.query("UPDATE type::record('execution_plan_state', $run) SET status = 'executing', active_node = 'closure', next_node = NONE")
+        db.query("UPDATE type::record('execution_plan_state', $run) SET status = 'completed', active_node = 'closure', next_node = NONE")
             .bind(("run", run_id.as_str()))
             .await
             .expect("seed terminal closure plan");
@@ -6736,6 +6885,45 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
             .bind(("run", run_id.as_str()))
             .await
             .expect("seed terminal resumability");
+        drop(db);
+    });
+
+    let (diagnostics_before_reconcile, _) = run_command_json_allow_failure(
+        &[
+            "diagnostics",
+            "post-commit",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let diagnostics_before_reconcile_blockers = require_json_string_array(
+        &diagnostics_before_reconcile["blocker_codes"],
+        "diagnostics before reconcile blockers",
+    );
+    assert!(
+        !diagnostics_before_reconcile_blockers
+            .contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "receipt-backed terminal closure truth must not produce the closed-run blocker before reconcile: {diagnostics_before_reconcile}"
+    );
+    assert_eq!(
+        diagnostics_before_reconcile["taskflow_status"]
+            ["closed_task_active_run_projection_mismatch"],
+        false
+    );
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        db.query("UPDATE type::record('execution_plan_state', $run) SET status = 'executing'")
+            .bind(("run", task_id))
+            .await
+            .expect("restore stale pre-reconcile plan status");
         drop(db);
     });
 
@@ -6802,21 +6990,6 @@ fn task_reconcile_closed_runs_skips_stale_route_and_non_closure_receipt_evidence
         );
     }
 
-    for task_id in [stale_route_task_id, non_closure_task_id] {
-        let close = run_command_json(
-            &[
-                "task",
-                "close",
-                task_id,
-                "--reason",
-                "historical closure proof seeded by test",
-                "--json",
-            ],
-            &state_dir,
-        );
-        assert_eq!(close["status"], "pass");
-    }
-
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
@@ -6826,6 +6999,13 @@ fn task_reconcile_closed_runs_skips_stale_route_and_non_closure_receipt_evidence
             .use_db("primary")
             .await
             .expect("use namespace/database");
+
+        for task_id in [stale_route_task_id, non_closure_task_id, parent_id] {
+            db.query("UPDATE type::record('task', $task) SET status = 'closed'")
+                .bind(("task", task_id))
+                .await
+                .expect("close canonical task without persisted close receipt truth");
+        }
 
         for (task_id, plan_status, active_node, dispatch_target, completed_target) in [
             (

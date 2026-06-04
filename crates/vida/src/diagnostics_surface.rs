@@ -152,6 +152,25 @@ fn status_from_blockers(blockers: &[String]) -> &'static str {
     }
 }
 
+fn closed_task_active_run_projection_mismatch_next_action() -> String {
+    "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work."
+        .to_string()
+}
+
+fn post_commit_closed_task_active_run_projection_mismatch(
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    latest_terminal_task_active_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    closed_task_ids: &[String],
+    latest_run_graph_terminal_closure_has_truth: bool,
+) -> bool {
+    let latest_run_graph_task_closed = latest_run_graph_status.is_some_and(|status| {
+        closed_task_ids.iter().any(|id| id == &status.task_id)
+            && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(status)
+    });
+    (!latest_run_graph_terminal_closure_has_truth && latest_run_graph_task_closed)
+        || latest_terminal_task_active_run_graph_status.is_some()
+}
+
 fn diagnostic_exit_code(payload: &serde_json::Value) -> ExitCode {
     if payload["status"] == "pass" {
         ExitCode::SUCCESS
@@ -418,6 +437,10 @@ async fn build_post_commit_diagnostics(
         .latest_run_graph_status_for_current_session()
         .await
         .map_err(|error| format!("read latest run graph status: {error}"))?;
+    let latest_terminal_task_active_run_graph_status = store
+        .latest_terminal_task_active_run_graph_status()
+        .await
+        .map_err(|error| format!("read latest terminal-task run graph status: {error}"))?;
     let latest_run_graph_recovery = store
         .latest_run_graph_recovery_summary_for_current_session()
         .await
@@ -426,12 +449,15 @@ async fn build_post_commit_diagnostics(
         .latest_run_graph_dispatch_receipt_summary_for_current_session()
         .await
         .map_err(|error| format!("read latest run graph dispatch receipt: {error}"))?;
-    let task_ids = store
+    let tasks = store
         .all_tasks()
         .await
-        .map_err(|error| format!("read TaskFlow tasks: {error}"))?
-        .into_iter()
-        .map(|task| task.id)
+        .map_err(|error| format!("read TaskFlow tasks: {error}"))?;
+    let task_ids = tasks.iter().map(|task| task.id.clone()).collect::<Vec<_>>();
+    let closed_task_ids = tasks
+        .iter()
+        .filter(|task| crate::state_store::StateStore::task_status_is_closed_like(&task.status))
+        .map(|task| task.id.clone())
         .collect::<Vec<_>>();
     let latest_explicit_binding = store
         .latest_explicit_run_graph_continuation_binding_for_current_session()
@@ -477,10 +503,52 @@ async fn build_post_commit_diagnostics(
     {
         blocker_codes.push("latest_run_graph_status_blocked".to_string());
     }
+    let latest_run_graph_terminal_closure_has_truth = match latest_run_graph_status.as_ref() {
+        Some(status)
+            if status.status == "completed"
+                && status.lifecycle_stage == "closure_complete"
+                && status.resume_target == "none"
+                && status.next_node.as_deref().map(str::trim).is_none() =>
+        {
+            store
+                .task_close_reconcile_has_persisted_receipt_truth(&status.run_id, &status.task_id)
+                .await
+                .map_err(|error| {
+                    format!("read latest run graph terminal closure evidence: {error}")
+                })?
+        }
+        _ => false,
+    };
+    let closed_task_active_run_projection_mismatch =
+        post_commit_closed_task_active_run_projection_mismatch(
+            latest_run_graph_status.as_ref(),
+            latest_terminal_task_active_run_graph_status.as_ref(),
+            &closed_task_ids,
+            latest_run_graph_terminal_closure_has_truth,
+        );
+    if closed_task_active_run_projection_mismatch {
+        blocker_codes.push("closed_task_active_run_projection_mismatch".to_string());
+    }
     blocker_codes.sort();
     blocker_codes.dedup();
 
     let status = status_from_blockers(&blocker_codes);
+    let next_actions = if status == "pass" {
+        Vec::<String>::new()
+    } else if blocker_codes
+        .iter()
+        .any(|code| code == "closed_task_active_run_projection_mismatch")
+    {
+        vec![
+            closed_task_active_run_projection_mismatch_next_action(),
+            "If this is a VIDA runtime defect, search/comment/create only in the upstream VIDA stack issue tracker.".to_string(),
+        ]
+    } else {
+        vec![
+            "Inspect the blocked diagnostic sections before reporting closure.".to_string(),
+            "If this is a VIDA runtime defect, search/comment/create only in the upstream VIDA stack issue tracker.".to_string(),
+        ]
+    };
     let recommended_issue_workflow = serde_json::json!({
         "upstream_issue_owner": crate::orchestrator_session_surface::issue_owner(),
         "open_issue_search_terms": [
@@ -498,22 +566,17 @@ async fn build_post_commit_diagnostics(
         "surface": "vida diagnostics post-commit",
         "status": status,
         "blocker_codes": blocker_codes,
-        "next_actions": if status == "pass" {
-            Vec::<String>::new()
-        } else {
-            vec![
-                "Inspect the blocked diagnostic sections before reporting closure.".to_string(),
-                "If this is a VIDA runtime defect, search/comment/create only in the upstream VIDA stack issue tracker.".to_string()
-            ]
-        },
+        "next_actions": next_actions,
         "git_status": git_status,
         "taskflow_status": {
             "task_count": task_ids.len(),
             "latest_run_graph_status": latest_run_graph_status,
+            "latest_terminal_task_active_run_graph_status": latest_terminal_task_active_run_graph_status,
             "latest_run_graph_recovery": latest_run_graph_recovery,
             "latest_dispatch_receipt": latest_dispatch_receipt,
             "latest_explicit_continuation_binding": latest_explicit_binding,
             "continuation_target_actionability": target_actionability,
+            "closed_task_active_run_projection_mismatch": closed_task_active_run_projection_mismatch,
         },
         "docflow_status": {
             "status": "not_executed_by_diagnostic_surface",
@@ -597,8 +660,10 @@ pub(crate) async fn run_diagnostics(args: DiagnosticsArgs) -> ExitCode {
 mod tests {
     use super::{
         build_evidence_check_diagnostics, build_rules_check_diagnostics,
+        closed_task_active_run_projection_mismatch_next_action,
         compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability,
-        run_post_commit, POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
+        post_commit_closed_task_active_run_projection_mismatch, run_post_commit,
+        POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
     };
     use crate::test_cli_support::guard_current_dir;
     use crate::{
@@ -629,6 +694,80 @@ mod tests {
         assert_eq!(compacted["agents"]["count"], 2);
         assert_eq!(compacted["subagent_backends"]["count"], 3);
         assert_eq!(compacted["host_cli_system"], "codex");
+    }
+
+    fn run_graph_status_for_diagnostics_test(
+        task_id: &str,
+        status: &str,
+        lifecycle_stage: &str,
+        resume_target: &str,
+        next_node: Option<&str>,
+    ) -> crate::state_store::RunGraphStatus {
+        crate::state_store::RunGraphStatus {
+            run_id: task_id.to_string(),
+            task_id: task_id.to_string(),
+            task_class: "runtime".to_string(),
+            active_node: "closure".to_string(),
+            next_node: next_node.map(str::to_string),
+            status: status.to_string(),
+            route_task_class: "runtime".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: task_id.to_string(),
+            lifecycle_stage: lifecycle_stage.to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "ready".to_string(),
+            checkpoint_kind: "closure".to_string(),
+            resume_target: resume_target.to_string(),
+            recovery_ready: false,
+        }
+    }
+
+    #[test]
+    fn diagnostics_post_commit_flags_closed_task_active_run_projection_mismatch() {
+        let terminal_with_truth = run_graph_status_for_diagnostics_test(
+            "closed-task",
+            "completed",
+            "closure_complete",
+            "none",
+            None,
+        );
+        let stale_terminal = run_graph_status_for_diagnostics_test(
+            "stale-closed-task",
+            "completed",
+            "closure_complete",
+            "none",
+            None,
+        );
+        let blocked_closed = run_graph_status_for_diagnostics_test(
+            "closed-task",
+            "blocked",
+            "implementation_blocked",
+            "implementer",
+            Some("implementer"),
+        );
+        let closed_task_ids = vec!["closed-task".to_string(), "stale-closed-task".to_string()];
+
+        assert!(!post_commit_closed_task_active_run_projection_mismatch(
+            Some(&terminal_with_truth),
+            None,
+            &closed_task_ids,
+            true,
+        ));
+        assert!(post_commit_closed_task_active_run_projection_mismatch(
+            Some(&terminal_with_truth),
+            Some(&stale_terminal),
+            &closed_task_ids,
+            true,
+        ));
+        assert!(post_commit_closed_task_active_run_projection_mismatch(
+            Some(&blocked_closed),
+            None,
+            &closed_task_ids,
+            false,
+        ));
+        assert!(closed_task_active_run_projection_mismatch_next_action()
+            .contains("vida task reconcile-closed-runs --limit 25 --json"));
     }
 
     #[test]
