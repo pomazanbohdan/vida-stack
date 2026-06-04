@@ -11289,7 +11289,7 @@ agent_system:
     }
 
     #[test]
-    fn taskflow_next_decision_admits_ready_head_after_terminal_closure_run() {
+    fn taskflow_next_decision_blocks_ready_head_after_terminal_closure_run_without_binding() {
         let status = crate::state_store::RunGraphStatus {
             run_id: "terminal-run".to_string(),
             task_id: "closed-task".to_string(),
@@ -11359,19 +11359,20 @@ agent_system:
             &[],
         );
 
-        assert_eq!(decision.status, "pass");
-        assert_eq!(
-            decision
-                .primary_ready_task
-                .as_ref()
-                .map(|task| task.id.as_str()),
-            Some("ready-task")
-        );
+        assert_eq!(decision.status, "blocked");
+        assert!(decision.primary_ready_task.is_none());
         assert_eq!(
             decision.candidate_task_context.admissibility_gate,
-            "ready_now"
+            "completed_without_explicit_next_bounded_unit"
         );
-        assert!(decision.blocker_codes.is_empty());
+        assert!(!decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision
+                .why_not_now
+                .as_ref()
+                .map(|value| value.category.as_str()),
+            Some("completed_without_explicit_next_bounded_unit")
+        );
     }
 
     #[test]
