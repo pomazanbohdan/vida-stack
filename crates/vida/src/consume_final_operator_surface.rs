@@ -247,8 +247,9 @@ fn docflow_verdict_vida_gate_result(docflow_verdict: &serde_json::Value) -> serd
     } else {
         Vec::new()
     };
-    crate::operator_contracts::render_vida_gate_result(
+    crate::operator_contracts::render_vida_gate_result_with_status(
         "docflow.runtime_verdict",
+        if status_is_blocked { "blocked" } else { "pass" },
         blockers
             .iter()
             .map(ToOwned::to_owned)

@@ -42,6 +42,8 @@ Before every project mutation:
 3. Keep writes sequential when they mutate the same TaskFlow graph, docs map, skill folder, or runtime state.
 4. Close the TODO only after validation passes.
 5. If `task close` rejects a valid close because of literal words in the reason, record that as operator-surface evidence and retry with neutral wording only for the same bounded close step.
+6. For runtime defects, prefer architectural contract fixes over local symptom patches. Move duplicated or fragile behavior into a named helper or contract boundary when the defect affects more than one surface, receipt, JSON field family, or operator workflow.
+7. Do not preserve a narrow workaround if it leaves the same invariant implicit elsewhere. Make the invariant explicit, reusable, and covered by public-surface tests.
 
 ## Command Efficiency
 
@@ -97,5 +99,10 @@ Minimal proof for this skill's work:
 4. For packet/state repair defects, add at least one fixture that uses persisted runtime state and invokes the same command family an operator or agent would run.
 5. If an integration test is impossible in the current slice, record the exact blocker in the TaskFlow note, keep the task open unless the user explicitly accepts the risk, and create a follow-up before closing related parent work.
 6. Keep unit tests for small classifiers/helpers, but treat them as supporting proof below the integration/smoke test.
+7. When writing integration tests for a file or public surface, write the whole planned batch first. Do not run full suites after each small assertion. Use focused tests only while shaping the batch, then run broader/full suites only after the complete file/surface batch is written.
+8. A test batch should be research-shaped before execution: identify the public scenarios, success/fail-closed paths, snapshot or persisted-state parity, and operator JSON fields that belong to the same file/surface, then implement those tests together.
+9. If a focused test exposes a production defect during batch writing, fix the production defect and continue completing the remaining batch before broad/full verification.
+10. Prefer smaller integration tests with varied fixtures over one huge scenario. Cover multiple meaningful variants such as ready path, blocked DocFlow, blocked closure admission, dispatch packet preview blocked, persisted snapshot parity, and downstream dispatch gating.
+11. When a defect is architectural, tests should prove the invariant at the contract boundary and through at least one public CLI surface. Avoid tests that only encode the immediate symptom line-by-line.
 
 Do not close GitHub issues, epics, or TaskFlow parents until the relevant children and proof targets are current.

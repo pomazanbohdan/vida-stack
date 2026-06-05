@@ -251,6 +251,58 @@ fn json_string_array_contains(value: &serde_json::Value, expected: &str) -> bool
         .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(expected)))
 }
 
+fn assert_consume_final_gate_result_identity(parsed: &serde_json::Value) {
+    assert_eq!(
+        parsed["vida_gate_result"]["gate_id"],
+        "taskflow.consume_final"
+    );
+    assert_eq!(
+        parsed["docflow_vida_gate_result"]["gate_id"],
+        "docflow.runtime_verdict"
+    );
+}
+
+fn assert_consume_final_gate_results_mirror_snapshot(parsed: &serde_json::Value) {
+    assert_consume_final_gate_result_identity(parsed);
+    let snapshot_path = parsed["snapshot_path"]
+        .as_str()
+        .expect("consume final should report snapshot path");
+    let snapshot_json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(snapshot_path).expect("consume final snapshot should read"),
+    )
+    .expect("consume final snapshot json should parse");
+    assert_eq!(
+        snapshot_json["vida_gate_result"],
+        parsed["vida_gate_result"]
+    );
+    assert_eq!(
+        snapshot_json["docflow_vida_gate_result"],
+        parsed["docflow_vida_gate_result"]
+    );
+}
+
+fn assert_consume_final_docflow_gate_blocks(parsed: &serde_json::Value, blocker_code: &str) {
+    assert_consume_final_gate_result_identity(parsed);
+    assert_eq!(parsed["docflow_vida_gate_result"]["status"], "blocked");
+    assert_eq!(parsed["docflow_vida_gate_result"]["ready"], false);
+    assert!(parsed["docflow_vida_gate_result"]["blocker_codes"]
+        .as_array()
+        .is_some_and(|codes| { codes.iter().any(|code| code == blocker_code) }));
+    assert_eq!(
+        parsed["docflow_vida_gate_result"]["operator_contracts"]["status"],
+        "blocked"
+    );
+    assert!(parsed["docflow_vida_gate_result"]["next_actions"]
+        .as_array()
+        .is_some_and(|actions| {
+            actions.iter().any(|action| {
+                action.as_str().is_some_and(|value| {
+                    value.contains("vida docflow proofcheck --profile active-canon")
+                })
+            })
+        }));
+}
+
 fn write_file(path: &str, body: &str) {
     if let Some(parent) = std::path::Path::new(path).parent() {
         fs::create_dir_all(parent).expect("parent dir should exist");
@@ -4849,6 +4901,7 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
         &std::fs::read_to_string(snapshot_path).expect("snapshot should be readable"),
     )
     .expect("snapshot json should parse");
+    assert_consume_final_gate_results_mirror_snapshot(&parsed);
     assert_eq!(
         snapshot_json["failure_control_evidence"]["rollback"]["source_run_id"],
         parsed["payload"]["dispatch_receipt"]["run_id"]
@@ -5010,6 +5063,8 @@ fn taskflow_consume_final_blocks_downstream_closure_when_docflow_verdict_blocks(
     assert!(parsed["blocker_codes"]
         .as_array()
         .is_some_and(|codes| { codes.iter().any(|code| code == "docflow_verdict_block") }));
+    assert_consume_final_gate_results_mirror_snapshot(&parsed);
+    assert_consume_final_docflow_gate_blocks(&parsed, "missing_proof_verdict");
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_status"],
         serde_json::Value::Null
@@ -5029,7 +5084,6 @@ fn taskflow_consume_final_blocks_downstream_closure_when_docflow_verdict_blocks(
     {
         assert!(std::path::Path::new(downstream_packet_path).is_file());
     }
-
     let status_output = vida()
         .args(["status", "--json"])
         .current_dir(&project_root)
@@ -6424,6 +6478,8 @@ fn consume_final_fails_closed_without_lane_bundle_fallback_when_runtime_bundle_b
     assert!(shared_blockers.contains(&serde_json::Value::String(
         "docflow_verdict_block".to_string()
     )));
+    assert_consume_final_gate_results_mirror_snapshot(&parsed);
+    assert_consume_final_docflow_gate_blocks(&parsed, "missing_proof_verdict");
 }
 
 #[test]
@@ -6520,6 +6576,8 @@ fn consume_final_keeps_authoritative_launcher_snapshot_when_config_digest_change
     assert!(blocker_codes.contains(&serde_json::Value::String(
         "docflow_verdict_block".to_string()
     )));
+    assert_consume_final_gate_results_mirror_snapshot(&parsed);
+    assert_consume_final_docflow_gate_blocks(&parsed, "missing_proof_verdict");
 }
 
 #[test]
@@ -6627,6 +6685,7 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_target"],
         "work-pool-pack"
     );
+    assert_consume_final_gate_result_identity(&parsed);
     assert!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_command"]
             .as_str()

@@ -240,6 +240,29 @@ async fn consume_final_requested_owned_paths(
     owned_paths
 }
 
+fn apply_consume_final_downstream_dispatch_contract(
+    dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+    direct_consumption_ready: bool,
+) {
+    if direct_consumption_ready {
+        return;
+    }
+    if dispatch_receipt.downstream_dispatch_target.as_deref() != Some("closure") {
+        return;
+    }
+    dispatch_receipt.downstream_dispatch_target = None;
+    dispatch_receipt.downstream_dispatch_command = None;
+    dispatch_receipt.downstream_dispatch_note = None;
+    dispatch_receipt.downstream_dispatch_ready = false;
+    dispatch_receipt.downstream_dispatch_packet_path = None;
+    dispatch_receipt.downstream_dispatch_status = None;
+    dispatch_receipt.downstream_dispatch_result_path = None;
+    dispatch_receipt.downstream_dispatch_trace_path = None;
+    dispatch_receipt.downstream_dispatch_executed_count = 0;
+    dispatch_receipt.downstream_dispatch_active_target = None;
+    dispatch_receipt.downstream_dispatch_last_target = None;
+}
+
 pub(crate) fn try_print_taskflow_consume_nested_help(args: &[String]) -> bool {
     match args {
         [head] if head == "consume" => {
@@ -736,6 +759,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 super::LaneStatus::LaneBlocked.as_str().to_string();
                             dispatch_receipt.blocker_code = Some(blocker_code);
                         }
+                        apply_consume_final_downstream_dispatch_contract(
+                            &mut dispatch_receipt,
+                            direct_consumption_ready,
+                        );
                         if !consume_final_mode.is_read_only() {
                             let owned_paths_override = consume_final_owned_paths_override(
                                 &store,
