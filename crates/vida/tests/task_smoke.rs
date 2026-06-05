@@ -1475,7 +1475,9 @@ fn cli_help_description_inventory_covers_agent_and_task_operator_options() {
                 "--conflict-domain <CONFLICT_DOMAIN>",
                 "--owned-path <OWNED_PATHS>",
                 "--acceptance-target <ACCEPTANCE_TARGETS>",
+                "--acceptance",
                 "--proof-target <PROOF_TARGETS>",
+                "--proof",
                 "--json",
             ][..],
         ),
@@ -11058,6 +11060,49 @@ fn task_create_rejects_notes_file_for_local_disclosure_boundary() {
             .expect("next_action should render")
             .contains("vida task update <task-id> --notes-file"),
         "{parsed}"
+    );
+
+    fs::remove_dir_all(&state_dir).expect("cleanup state dir");
+}
+
+#[test]
+fn task_create_accepts_acceptance_and_proof_aliases() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let import_path = format!("{state_dir}/tasks.jsonl");
+    sample_jsonl(&import_path);
+
+    run_and_assert_success(
+        &["task", "import-jsonl", &import_path, "--json"],
+        &state_dir,
+    );
+
+    let parsed = run_command_json(
+        &[
+            "task",
+            "create",
+            "alias-proof-task",
+            "Alias proof task",
+            "--parent-id",
+            "vida-root",
+            "--acceptance",
+            "alias acceptance target",
+            "--proof",
+            "cargo test -p vida task_create_accepts_acceptance_and_proof_aliases",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(parsed["surface"], "vida task create");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(
+        parsed["task"]["planner_metadata"]["acceptance_targets"],
+        serde_json::json!(["alias acceptance target"])
+    );
+    assert_eq!(
+        parsed["task"]["planner_metadata"]["proof_targets"],
+        serde_json::json!(["cargo test -p vida task_create_accepts_acceptance_and_proof_aliases"])
     );
 
     fs::remove_dir_all(&state_dir).expect("cleanup state dir");

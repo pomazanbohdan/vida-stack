@@ -1317,15 +1317,17 @@ pub(crate) struct TaskCreateArgs {
 
     #[arg(
         long = "acceptance-target",
+        visible_alias = "acceptance",
         value_delimiter = ',',
-        help = "Planner metadata acceptance targets to set. Accepts comma-separated values and repeated flags."
+        help = "Planner metadata acceptance targets to set. Accepts comma-separated values, repeated flags, and alias --acceptance."
     )]
     pub(crate) acceptance_targets: Vec<String>,
 
     #[arg(
         long = "proof-target",
+        visible_alias = "proof",
         value_delimiter = ',',
-        help = "Planner metadata proof targets to set. Accepts comma-separated values and repeated flags."
+        help = "Planner metadata proof targets to set. Accepts comma-separated values, repeated flags, and alias --proof."
     )]
     pub(crate) proof_targets: Vec<String>,
 
