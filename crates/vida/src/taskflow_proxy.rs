@@ -533,16 +533,6 @@ fn cached_taskflow_graph_summary_projection_admissible(cached: &str) -> bool {
                 .is_some_and(|version| {
                     version == TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION
                 })
-                || (payload.get("surface").and_then(serde_json::Value::as_str)
-                    == Some("vida taskflow graph-summary")
-                    && payload
-                        .get("status")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some()
-                    && payload["operator_contracts"]["contract_id"].as_str()
-                        == Some(
-                            crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id,
-                        ))
         })
 }
 
@@ -4955,19 +4945,6 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
         if let Some(cached) =
             crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
-                &proxy_state_root,
-                TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
-                TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
-            )
-            .filter(|cached| cached_taskflow_graph_summary_projection_admissible(cached))
-        {
-            let rendered =
-                compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
-            println!("{rendered}");
-            return cached_operator_projection_exit_code(&rendered);
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
                 &proxy_state_root,
                 TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
                 TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
@@ -12680,6 +12657,16 @@ agent_system:
     fn graph_summary_cache_requires_current_projection_contract_version() {
         assert!(!super::cached_taskflow_graph_summary_projection_admissible(
             r#"{"surface":"vida taskflow graph-summary"}"#
+        ));
+        assert!(!super::cached_taskflow_graph_summary_projection_admissible(
+            &serde_json::json!({
+                "surface": "vida taskflow graph-summary",
+                "status": "pass",
+                "operator_contracts": {
+                    "contract_id": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id
+                }
+            })
+            .to_string()
         ));
         assert!(super::cached_taskflow_graph_summary_projection_admissible(
             &serde_json::json!({
