@@ -7294,11 +7294,13 @@ fn build_runtime_dispatch_packet_body(
         &ctx.role_selection.request,
         design_doc_path.as_deref(),
     );
-    if crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths(
-        handoff_task_class,
-    ) {
+    let delivery_task_class_requires_owned_paths =
+        crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths(
+            handoff_task_class,
+        );
+    if delivery_task_class_requires_owned_paths || !ctx.owned_paths_override.is_empty() {
         let mut owned_paths = ctx.owned_paths_override.clone();
-        if owned_paths.is_empty() {
+        if owned_paths.is_empty() && delivery_task_class_requires_owned_paths {
             owned_paths = owned_paths_for_required_delivery_task_class(
                 ctx.role_selection,
                 handoff_task_class,

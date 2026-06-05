@@ -279,6 +279,35 @@ fn assert_consume_final_gate_results_mirror_snapshot(parsed: &serde_json::Value)
         snapshot_json["docflow_vida_gate_result"],
         parsed["docflow_vida_gate_result"]
     );
+    assert_eq!(
+        snapshot_json["payload"]["requested_owned_paths"],
+        parsed["payload"]["requested_owned_paths"]
+    );
+}
+
+fn assert_consume_final_dispatch_packet_owned_paths(
+    parsed: &serde_json::Value,
+    expected: serde_json::Value,
+) {
+    if let Some(dispatch_packet_path) =
+        parsed["payload"]["dispatch_receipt"]["dispatch_packet_path"].as_str()
+    {
+        let dispatch_packet_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dispatch_packet_path)
+                .expect("consume final dispatch packet should read"),
+        )
+        .expect("consume final dispatch packet json should parse");
+        assert_eq!(
+            dispatch_packet_json["delivery_task_packet"]["owned_paths"],
+            expected
+        );
+    } else {
+        assert_eq!(
+            parsed["payload"]["dispatch_packet_preview"]["packet"]["delivery_task_packet"]
+                ["owned_paths"],
+            expected
+        );
+    }
 }
 
 fn assert_consume_final_docflow_gate_blocks(parsed: &serde_json::Value, blocker_code: &str) {
@@ -2836,10 +2865,18 @@ fn taskflow_proxy_help_supports_consume_topic() {
     assert!(stdout.contains("VIDA TaskFlow help: consume"));
     assert!(stdout.contains("vida taskflow consume bundle [--json]"));
     assert!(stdout.contains("vida taskflow consume bundle check [--json]"));
-    assert!(stdout.contains("vida taskflow consume final \"<request>\" --json"));
+    assert!(stdout.contains("vida taskflow consume final <request_text> [--task-id <task-id>] [--owned-path <path>] [--from-task-metadata] [--preview | --validate-only] [--json]"));
     assert!(stdout.contains(
         "Bundle inspection, final intake, continuation, and bounded advance are launcher-owned and in-process"
     ));
+    let operator_recipes = stdout
+        .split("Operator recipes:")
+        .nth(1)
+        .expect("consume help should include operator recipes");
+    assert!(
+        !operator_recipes.contains("--json"),
+        "operator recipes should suggest default commands, not --json-first commands: {operator_recipes}"
+    );
 }
 
 #[test]
@@ -4829,6 +4866,234 @@ fn explicit_root_and_state_dirs_keep_activation_status_canonical_through_status_
 
     let _ = fs::remove_dir_all(&root_dir);
     let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn taskflow_consume_final_help_documents_task_metadata_and_readonly_options() {
+    let output = vida()
+        .args(["taskflow", "consume", "final", "--help"])
+        .output()
+        .expect("consume final help should run");
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+        "help should not emit stderr"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow consume final"));
+    assert!(stdout.contains("vida taskflow consume final <request_text> [--task-id <task-id>] [--owned-path <path>] [--from-task-metadata] [--preview | --validate-only] [--json]"));
+    assert!(stdout
+        .contains("vida taskflow consume final --task-id <task-id> --from-task-metadata [--json]"));
+    assert!(stdout.contains("--task-id <id>"));
+    assert!(stdout.contains("--owned-path <path>"));
+    assert!(stdout.contains("Accepts comma-separated values and repeated flags"));
+    assert!(stdout.contains("--from-task-metadata"));
+    assert!(stdout.contains("planner_metadata.owned_paths"));
+    assert!(stdout.contains("--preview"));
+    assert!(stdout.contains("without execute-mode mutation"));
+    assert!(stdout.contains("--validate-only"));
+    assert!(stdout.contains("--json"));
+    let remediation = stdout
+        .split("Remediation:")
+        .nth(1)
+        .expect("consume final help should include remediation");
+    assert!(
+        !remediation.contains("--json"),
+        "remediation should suggest default commands, not --json-first commands: {remediation}"
+    );
+}
+
+#[test]
+fn taskflow_consume_final_preview_reports_explicit_owned_paths_once() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "consume-final-owned-path-preview",
+        "Consume Final Owned Path Preview",
+    );
+
+    let output = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "taskflow",
+                "consume",
+                "final",
+                "probe closure",
+                "--owned-path",
+                "crates/vida/src/taskflow_consume.rs, crates/vida/tests/boot_smoke.rs",
+                "--owned-path",
+                "crates/vida/src/taskflow_consume.rs",
+                "--preview",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("consume final preview json should parse");
+    assert_eq!(parsed["payload"]["consume_final_mode"], "preview");
+    assert_eq!(parsed["payload"]["request_text"], "probe closure");
+    assert_eq!(
+        parsed["payload"]["requested_owned_paths"],
+        serde_json::json!([
+            "crates/vida/src/taskflow_consume.rs",
+            "crates/vida/tests/boot_smoke.rs"
+        ])
+    );
+    assert_consume_final_dispatch_packet_owned_paths(
+        &parsed,
+        serde_json::json!([
+            "crates/vida/src/taskflow_consume.rs",
+            "crates/vida/tests/boot_smoke.rs"
+        ]),
+    );
+    assert_consume_final_gate_results_mirror_snapshot(&parsed);
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn taskflow_consume_final_default_preview_renders_toon_without_json_guidance() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "consume-final-default-toon-preview",
+        "Consume Final Default TOON Preview",
+    );
+
+    let output = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(["taskflow", "consume", "final", "probe closure", "--preview"])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+        "default preview should not emit stderr"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("vida taskflow consume final\n  mode: preview"),
+        "default output should be compact TOON, got: {stdout}"
+    );
+    assert!(stdout.contains("\n  request: probe closure"));
+    assert!(stdout.contains("\n  bundle_ready: "));
+    assert!(stdout.contains("\n  docflow_ready: "));
+    assert!(stdout.contains("\n  closure_admitted: "));
+    assert!(stdout.contains("\n  snapshot_path: "));
+    assert!(
+        !stdout.trim_start().starts_with('{'),
+        "default output must not be JSON"
+    );
+    assert!(
+        !stdout.contains("--json"),
+        "default output should not recommend --json-first next actions: {stdout}"
+    );
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn taskflow_consume_final_validate_only_uses_task_id_metadata_paths() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "consume-final-task-metadata-validate",
+        "Consume Final Task Metadata Validate",
+    );
+    create_scheduler_smoke_task(
+        &state_dir,
+        "consume-final-metadata-task",
+        "Consume final metadata task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+    let metadata = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "update",
+                "consume-final-metadata-task",
+                "--owned-path",
+                "crates/vida/src/taskflow_consume.rs",
+                "--owned-path",
+                "crates/vida/tests/boot_smoke.rs",
+                "--state-dir",
+                &state_dir,
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME");
+        command
+    });
+    assert!(
+        metadata.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&metadata.stdout),
+        String::from_utf8_lossy(&metadata.stderr)
+    );
+    wait_for_state_unlock(&state_dir);
+
+    let output = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "taskflow",
+                "consume",
+                "final",
+                "--task-id",
+                "consume-final-metadata-task",
+                "--from-task-metadata",
+                "--owned-path",
+                "crates/vida/src/taskflow_consume.rs, docs/process/project-error-search-runtime-diagnostics-protocol.md",
+                "--validate-only",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+
+    assert!(!output.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("consume final validate json should parse");
+    assert_eq!(parsed["payload"]["consume_final_mode"], "validate_only");
+    assert_eq!(
+        parsed["payload"]["request_text"],
+        "consume-final-metadata-task"
+    );
+    assert_eq!(
+        parsed["payload"]["requested_owned_paths"],
+        serde_json::json!([
+            "crates/vida/src/taskflow_consume.rs",
+            "crates/vida/tests/boot_smoke.rs",
+            "docs/process/project-error-search-runtime-diagnostics-protocol.md"
+        ])
+    );
+    assert_consume_final_gate_results_mirror_snapshot(&parsed);
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
 #[test]

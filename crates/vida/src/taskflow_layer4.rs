@@ -600,7 +600,10 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow consume bundle [--json]");
             println!("  vida taskflow consume bundle check [--json]");
             println!("  vida taskflow consume agent-system [--json]");
-            println!("  vida taskflow consume final \"<request>\" --json");
+            println!(
+                "  {}",
+                crate::taskflow_consume::consume_final_command_usage()
+            );
             println!("  vida taskflow consume final \"<request>\" --preview [--json]");
             println!("  vida taskflow consume final \"<request>\" --validate-only [--json]");
             println!(
@@ -629,22 +632,22 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Operator recipes:");
             println!(
-                "  Verify the active runtime bundle before closure packaging: vida taskflow consume bundle check --json"
+                "  Verify the active runtime bundle before closure packaging: vida taskflow consume bundle check"
             );
             println!(
-                "  Read one canonical carrier/role/score snapshot: vida taskflow consume agent-system --json"
+                "  Read one canonical carrier/role/score snapshot: vida taskflow consume agent-system"
             );
             println!(
-                "  Materialize one routed intake packet: vida taskflow consume final \"<request>\" --json"
+                "  Materialize one routed intake packet: vida taskflow consume final \"<request>\""
             );
             println!(
-                "  Preview packet template, owned scope, and missing contract fields before dispatch: vida taskflow consume final \"<request>\" --preview --json"
+                "  Preview packet template, owned scope, and missing contract fields before dispatch: vida taskflow consume final \"<request>\" --preview"
             );
             println!(
-                "  Resume one persisted chain from the latest or selected packet: vida taskflow consume continue [--run-id <run-id>] --json"
+                "  Resume one persisted chain from the latest or selected packet: vida taskflow consume continue [--run-id <run-id>]"
             );
             println!(
-                "  Let the bounded scheduler progress ready steps automatically: vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] --json"
+                "  Let the bounded scheduler progress ready steps automatically: vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>]"
             );
             return;
         }

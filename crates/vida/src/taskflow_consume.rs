@@ -4,6 +4,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::display_lane_label;
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
+use crate::surface_render::sanitize_terminal_value;
 use crate::BlockerCode;
 
 const CONSUME_FINAL_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -51,6 +52,10 @@ impl ConsumeFinalMode {
     }
 }
 
+pub(crate) fn consume_final_command_usage() -> &'static str {
+    "vida taskflow consume final <request_text> [--task-id <task-id>] [--owned-path <path>] [--from-task-metadata] [--preview | --validate-only] [--json]"
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ConsumeFinalArgs {
     as_json: bool,
@@ -62,7 +67,7 @@ struct ConsumeFinalArgs {
 }
 
 fn consume_final_usage() -> String {
-    "Usage: vida taskflow consume final <request_text> [--task-id <task-id>] [--owned-path <path>] [--from-task-metadata] [--preview | --validate-only] [--json]".to_string()
+    format!("Usage: {}", consume_final_command_usage())
 }
 
 fn parse_consume_final_value<'a>(
@@ -143,9 +148,7 @@ fn print_consume_final_help() {
     println!("  Create or validate the bounded final runtime-consumption handoff for one request.");
     println!();
     println!("Usage:");
-    println!(
-        "  vida taskflow consume final <request_text> [--task-id <task-id>] [--owned-path <path>] [--from-task-metadata] [--preview | --validate-only] [--json]"
-    );
+    println!("  {}", consume_final_command_usage());
     println!("  vida taskflow consume final --task-id <task-id> --from-task-metadata [--json]");
     println!();
     println!("Options:");
@@ -163,7 +166,7 @@ fn print_consume_final_help() {
     println!();
     println!("Remediation:");
     println!(
-        "  If closure is blocked, run `vida taskflow consume bundle check --json` and follow its `next_actions`."
+        "  If closure is blocked, run `vida taskflow consume bundle check` and follow its next actions."
     );
 }
 
@@ -176,7 +179,7 @@ fn print_consume_continue_help() {
     );
     println!();
     println!("Remediation:");
-    println!("  If resume is blocked, inspect `vida taskflow recovery latest --json`.");
+    println!("  If resume is blocked, inspect `vida taskflow recovery latest`.");
 }
 
 fn print_consume_advance_help() {
@@ -186,7 +189,143 @@ fn print_consume_advance_help() {
     println!("  vida taskflow consume advance [--run-id <run_id>] [--max-rounds <n>] [--json]");
     println!();
     println!("Remediation:");
-    println!("  If advance is blocked, inspect `vida taskflow recovery latest --json`.");
+    println!("  If advance is blocked, inspect `vida taskflow recovery latest`.");
+}
+
+fn consume_final_operator_command_text(command: &str) -> String {
+    command
+        .replace(" --json", "")
+        .replace("--json ", "")
+        .trim()
+        .to_string()
+}
+
+fn consume_final_toon_line(label: &str, value: &str) -> String {
+    format!(
+        "{}: {}",
+        sanitize_terminal_value(label),
+        sanitize_terminal_value(value)
+    )
+}
+
+fn consume_final_toon_bool(value: bool) -> &'static str {
+    if value {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+fn consume_final_toon_text(
+    payload: &super::TaskflowDirectConsumptionPayload,
+    snapshot_path: &str,
+) -> String {
+    let mut lines = vec![
+        consume_final_toon_line("mode", payload.consume_final_mode.as_str()),
+        consume_final_toon_line("request", &payload.request_text),
+        consume_final_toon_line(
+            "bundle_ready",
+            consume_final_toon_bool(payload.bundle_check.ok),
+        ),
+        consume_final_toon_line(
+            "docflow_ready",
+            consume_final_toon_bool(payload.docflow_verdict.ready),
+        ),
+        consume_final_toon_line(
+            "closure_admitted",
+            consume_final_toon_bool(payload.closure_admission.admitted),
+        ),
+    ];
+    if !payload.requested_owned_paths.is_empty() {
+        lines.push(consume_final_toon_line(
+            "requested_owned_paths_count",
+            &payload.requested_owned_paths.len().to_string(),
+        ));
+    }
+    if let Some(mode) =
+        payload.role_selection.execution_plan["orchestration_contract"]["mode"].as_str()
+    {
+        lines.push(consume_final_toon_line("execution_mode", mode));
+    }
+    if let Some(message) = payload.role_selection.execution_plan["orchestration_contract"]
+        ["initial_response"]["operator_message"]
+        .as_str()
+    {
+        lines.push(consume_final_toon_line("first_step", message));
+    }
+    let replanning = payload.role_selection.execution_plan["orchestration_contract"]["replanning"]
+        ["checkpoints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if !replanning.is_empty() {
+        lines.push(consume_final_toon_line("replan_checkpoints", &replanning));
+    }
+    if payload.role_selection.execution_plan["status"] == "design_first" {
+        if let Some(feature_slug) =
+            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["feature_slug"].as_str()
+        {
+            lines.push(consume_final_toon_line(
+                "tracked_flow",
+                &format!("spec-first bootstrap for `{feature_slug}`"),
+            ));
+        }
+        if let Some(command) = payload.role_selection.execution_plan["tracked_flow_bootstrap"]
+            ["bootstrap_command"]
+            .as_str()
+        {
+            lines.push(consume_final_toon_line(
+                "next_tracked_command",
+                &consume_final_operator_command_text(command),
+            ));
+        }
+        let required_lanes = payload.role_selection.execution_plan["orchestration_contract"]
+            ["delegation_policy"]["required_lanes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(display_lane_label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !required_lanes.is_empty() {
+            lines.push(consume_final_toon_line("delegated_lanes", &required_lanes));
+        }
+    } else if let Some(agent_type) = payload.taskflow_handoff_plan["activation_chain"]
+        ["implementer"]["activation_agent_type"]
+        .as_str()
+    {
+        lines.push(consume_final_toon_line("implementer_carrier", agent_type));
+    }
+    if let Some(preview) = payload.dispatch_packet_preview.as_ref() {
+        if let Some(packet_template_kind) = preview
+            .get("packet_template_kind")
+            .and_then(serde_json::Value::as_str)
+        {
+            lines.push(consume_final_toon_line(
+                "packet_template",
+                packet_template_kind,
+            ));
+        }
+        let missing_fields = preview["packet_contract_missing_fields"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !missing_fields.is_empty() {
+            lines.push(consume_final_toon_line(
+                "missing_packet_fields",
+                &missing_fields,
+            ));
+        }
+    }
+    lines.push(consume_final_toon_line("snapshot_path", snapshot_path));
+    taskflow_format_toon::render_section("vida taskflow consume final", &lines.join("\n  "))
 }
 
 async fn consume_final_owned_paths_override(
@@ -381,9 +520,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
             let consume_final_mode = consume_final_args.mode;
             let request_text = consume_final_args.request_text.clone();
             if request_text.is_empty() {
-                eprintln!(
-                    "Usage: vida taskflow consume final <request_text> [--preview | --validate-only] [--json]"
-                );
+                eprintln!("{}", consume_final_usage());
                 return ExitCode::from(2);
             }
 
@@ -533,6 +670,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     }
                                     if let Err(snapshot_error) =
                                         super::emit_taskflow_consume_final_json(&store, &payload)
+                                            .map(|_| ())
                                     {
                                         eprintln!("{snapshot_error}");
                                     }
@@ -955,15 +1093,18 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             dispatch_packet_preview,
                         };
                         if as_json {
-                            if let Err(error) =
-                                super::emit_taskflow_consume_final_json(&store, &payload)
-                            {
-                                eprintln!("{error}");
-                                return ExitCode::from(1);
-                            }
+                            let snapshot_path =
+                                match super::emit_taskflow_consume_final_json(&store, &payload) {
+                                    Ok(snapshot_path) => snapshot_path,
+                                    Err(error) => {
+                                        eprintln!("{error}");
+                                        return ExitCode::from(1);
+                                    }
+                                };
                             if let Err(error) =
                                 ensure_runtime_consumption_final_task_reconciliation_summary(
-                                    &store, None,
+                                    &store,
+                                    Some(snapshot_path),
                                 )
                                 .await
                             {
@@ -996,161 +1137,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 eprintln!("{error}");
                                 return ExitCode::from(1);
                             }
-                            super::print_surface_header(
-                                super::RenderMode::Plain,
-                                "vida taskflow consume final",
-                            );
-                            super::print_surface_line(
-                                super::RenderMode::Plain,
-                                "mode",
-                                payload.consume_final_mode.as_str(),
-                            );
-                            super::print_surface_line(
-                                super::RenderMode::Plain,
-                                "request",
-                                &payload.request_text,
-                            );
-                            super::print_surface_line(
-                                super::RenderMode::Plain,
-                                "bundle ready",
-                                if payload.bundle_check.ok {
-                                    "true"
-                                } else {
-                                    "false"
-                                },
-                            );
-                            super::print_surface_line(
-                                super::RenderMode::Plain,
-                                "docflow ready",
-                                if payload.docflow_verdict.ready {
-                                    "true"
-                                } else {
-                                    "false"
-                                },
-                            );
-                            super::print_surface_line(
-                                super::RenderMode::Plain,
-                                "closure admitted",
-                                if payload.closure_admission.admitted {
-                                    "true"
-                                } else {
-                                    "false"
-                                },
-                            );
-                            if let Some(mode) = payload.role_selection.execution_plan
-                                ["orchestration_contract"]["mode"]
-                                .as_str()
-                            {
-                                super::print_surface_line(
-                                    super::RenderMode::Plain,
-                                    "execution mode",
-                                    mode,
-                                );
-                            }
-                            if let Some(message) = payload.role_selection.execution_plan
-                                ["orchestration_contract"]["initial_response"]["operator_message"]
-                                .as_str()
-                            {
-                                super::print_surface_line(
-                                    super::RenderMode::Plain,
-                                    "first step",
-                                    message,
-                                );
-                            }
-                            let replanning = payload.role_selection.execution_plan
-                                ["orchestration_contract"]["replanning"]["checkpoints"]
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .filter_map(serde_json::Value::as_str)
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            if !replanning.is_empty() {
-                                super::print_surface_line(
-                                    super::RenderMode::Plain,
-                                    "replan checkpoints",
-                                    &replanning,
-                                );
-                            }
-                            if payload.role_selection.execution_plan["status"] == "design_first" {
-                                if let Some(feature_slug) = payload.role_selection.execution_plan
-                                    ["tracked_flow_bootstrap"]["feature_slug"]
-                                    .as_str()
-                                {
-                                    super::print_surface_line(
-                                        super::RenderMode::Plain,
-                                        "tracked flow",
-                                        &format!("spec-first bootstrap for `{feature_slug}`"),
-                                    );
-                                }
-                                if let Some(command) = payload.role_selection.execution_plan
-                                    ["tracked_flow_bootstrap"]["bootstrap_command"]
-                                    .as_str()
-                                {
-                                    super::print_surface_line(
-                                        super::RenderMode::Plain,
-                                        "next tracked command",
-                                        command,
-                                    );
-                                }
-                                let required_lanes = payload.role_selection.execution_plan
-                                    ["orchestration_contract"]["delegation_policy"]
-                                    ["required_lanes"]
-                                    .as_array()
-                                    .into_iter()
-                                    .flatten()
-                                    .filter_map(serde_json::Value::as_str)
-                                    .map(display_lane_label)
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                if !required_lanes.is_empty() {
-                                    super::print_surface_line(
-                                        super::RenderMode::Plain,
-                                        "delegated lanes",
-                                        &required_lanes,
-                                    );
-                                }
-                            } else if let Some(agent_type) = payload.taskflow_handoff_plan
-                                ["activation_chain"]["implementer"]["activation_agent_type"]
-                                .as_str()
-                            {
-                                super::print_surface_line(
-                                    super::RenderMode::Plain,
-                                    "implementer carrier",
-                                    agent_type,
-                                );
-                            }
-                            if let Some(preview) = payload.dispatch_packet_preview.as_ref() {
-                                if let Some(packet_template_kind) = preview
-                                    .get("packet_template_kind")
-                                    .and_then(serde_json::Value::as_str)
-                                {
-                                    super::print_surface_line(
-                                        super::RenderMode::Plain,
-                                        "packet template",
-                                        packet_template_kind,
-                                    );
-                                }
-                                let missing_fields = preview["packet_contract_missing_fields"]
-                                    .as_array()
-                                    .into_iter()
-                                    .flatten()
-                                    .filter_map(serde_json::Value::as_str)
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                if !missing_fields.is_empty() {
-                                    super::print_surface_line(
-                                        super::RenderMode::Plain,
-                                        "missing packet fields",
-                                        &missing_fields,
-                                    );
-                                }
-                            }
-                            super::print_surface_line(
-                                super::RenderMode::Plain,
-                                "snapshot path",
-                                &snapshot_path,
-                            );
+                            println!("{}", consume_final_toon_text(&payload, &snapshot_path));
                         }
 
                         match consume_final_mode {
@@ -1308,6 +1295,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             };
                             if let Err(snapshot_error) =
                                 super::emit_taskflow_consume_final_json(&store, &payload)
+                                    .map(|_| ())
                             {
                                 eprintln!("{snapshot_error}");
                                 return ExitCode::from(1);
@@ -1325,9 +1313,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
             }
         }
         [head, subcommand, ..] if head == "consume" && subcommand == "final" => {
-            eprintln!(
-                "Usage: vida taskflow consume final <request_text> [--preview | --validate-only] [--json]"
-            );
+            eprintln!("{}", consume_final_usage());
             ExitCode::from(2)
         }
         _ => ExitCode::from(2),

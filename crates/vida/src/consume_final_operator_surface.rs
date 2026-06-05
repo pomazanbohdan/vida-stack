@@ -9,7 +9,7 @@ use crate::operator_contracts::{
 pub(crate) fn emit_taskflow_consume_final_json(
     store: &crate::StateStore,
     payload: &crate::TaskflowDirectConsumptionPayload,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let mut payload_json = serde_json::to_value(payload)
         .map_err(|error| format!("Failed to encode consume-final payload as json: {error}"))?;
     let runtime_dispatch_receipt_blocker_code =
@@ -185,7 +185,7 @@ pub(crate) fn emit_taskflow_consume_final_json(
         }))
         .expect("consume final should render as json")
     );
-    Ok(())
+    Ok(snapshot_path)
 }
 
 pub(crate) fn build_operator_contracts_envelope(
