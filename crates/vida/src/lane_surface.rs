@@ -2001,7 +2001,7 @@ fn retired_closed_task_run_graph_status(
     status
 }
 
-fn missing_task_stale_blocked_run_can_retire(
+pub(crate) fn missing_task_stale_blocked_run_can_retire(
     status: &crate::state_store::RunGraphStatus,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
@@ -2041,12 +2041,21 @@ fn missing_task_stale_blocked_run_can_retire(
     let bridge_request_stale_blocked = receipt.dispatch_status == "bridge_request_pending"
         && lane_status == crate::LaneStatus::LaneOpen.as_str()
         && receipt.blocker_code.as_deref() == Some("host_tool_bridge_adapter_required");
+    let exception_takeover_bridge_request_stale_blocked = receipt.dispatch_status
+        == "bridge_request_pending"
+        && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
+        && receipt.blocker_code.as_deref() == Some("host_tool_bridge_adapter_required");
 
     (receipt.dispatch_status == "blocked" && blocked_or_running)
         || prelaunch_packet_ready
         || exception_takeover_stale_blocked
         || active_exception_takeover_stale_blocked
         || bridge_request_stale_blocked
+        || exception_takeover_bridge_request_stale_blocked
 }
 
 fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {

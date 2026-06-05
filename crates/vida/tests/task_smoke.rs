@@ -5391,9 +5391,8 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
         let receipt = serde_json::json!({
             "run_id": run_id,
             "dispatch_target": "implementer",
-            "dispatch_status": "blocked",
+            "dispatch_status": "bridge_request_pending",
             "lane_status": "lane_exception_takeover",
-            "supersedes_receipt_id": run_id,
             "exception_path_receipt_id": run_id,
             "dispatch_kind": "agent_lane",
             "dispatch_surface": "vida agent-init",
@@ -5447,12 +5446,14 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
     thread::sleep(Duration::from_millis(300));
 
     let lane_before = run_command_capture(&["lane", "show", run_id, "--json"], &state_dir);
-    assert!(
-        lane_before.status.success(),
-        "seeded lane receipt should be visible before consume continue: stdout={} stderr={}",
-        String::from_utf8_lossy(&lane_before.stdout),
-        String::from_utf8_lossy(&lane_before.stderr)
+    let lane_before_json: serde_json::Value =
+        serde_json::from_slice(&lane_before.stdout).expect("lane show json should parse");
+    assert_eq!(lane_before_json["status"], "blocked");
+    assert_eq!(
+        lane_before_json["dispatch_status"],
+        "bridge_request_pending"
     );
+    assert_eq!(lane_before_json["lane_status"], "lane_exception_takeover");
 
     let (continue_payload, _continue_success) = run_command_json_allow_failure(
         &[
@@ -5464,21 +5465,24 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
     let blockers =
         require_json_string_array(&continue_payload["blocker_codes"], "consume blockers");
     assert!(
-        blockers.contains(&"host_tool_bridge_adapter_required".to_string()),
-        "consume continue should preserve the active bridge blocker, got {continue_payload}"
+        blockers.contains(&"stale_missing_task_run_graph".to_string()),
+        "consume continue should classify the executable retire path, got {continue_payload}"
     );
-    let next_operator_action = continue_payload["projection_truth"]["next_lawful_operator_action"]
-        .as_str()
-        .expect("projection truth should include the stale-run retire command");
-    assert!(next_operator_action.contains(&format!("vida lane retire {run_id}")));
-    assert!(next_operator_action.contains(&format!("--receipt-id {run_id}")));
+    let next_actions = require_json_string_array(&continue_payload["next_actions"], "next actions");
+    assert!(
+        next_actions
+            .iter()
+            .any(|action| action.contains(&format!("vida lane retire {run_id}"))),
+        "consume continue should expose executable retire command in top-level next_actions: {continue_payload}"
+    );
 
     let lane_after_continue = run_command_capture(&["lane", "show", run_id, "--json"], &state_dir);
-    assert!(
-        lane_after_continue.status.success(),
-        "lane receipt should remain visible after consume continue recommends retire: stdout={} stderr={}",
-        String::from_utf8_lossy(&lane_after_continue.stdout),
-        String::from_utf8_lossy(&lane_after_continue.stderr)
+    let lane_after_continue_json: serde_json::Value =
+        serde_json::from_slice(&lane_after_continue.stdout).expect("lane show json should parse");
+    assert_eq!(lane_after_continue_json["status"], "blocked");
+    assert_eq!(
+        lane_after_continue_json["recommended_surface"],
+        "vida lane supersede"
     );
 
     let retire = run_command_capture(

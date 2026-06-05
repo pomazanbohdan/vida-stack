@@ -913,11 +913,12 @@ async fn validate_run_graph_resume_state(
     {
         return Ok(());
     }
-    if active_receipt.is_none()
-        && run_graph_resume_task_missing(store, &status).await?
-        && !active_receipt
-            .as_ref()
-            .is_some_and(dispatch_receipt_has_exception_takeover_evidence)
+    let resume_task_missing = run_graph_resume_task_missing(store, &status).await?;
+    if resume_task_missing
+        && (active_receipt.is_none()
+            || active_receipt.as_ref().is_some_and(|receipt| {
+                crate::lane_surface::missing_task_stale_blocked_run_can_retire(&status, receipt)
+            }))
     {
         return Err(stale_missing_task_run_graph_resume_error(&status));
     }
@@ -970,11 +971,12 @@ async fn validate_run_graph_resume_state_strict(
     {
         return Ok(());
     }
-    if active_receipt.is_none()
-        && run_graph_resume_task_missing(store, &status).await?
-        && !active_receipt
-            .as_ref()
-            .is_some_and(dispatch_receipt_has_exception_takeover_evidence)
+    let resume_task_missing = run_graph_resume_task_missing(store, &status).await?;
+    if resume_task_missing
+        && (active_receipt.is_none()
+            || active_receipt.as_ref().is_some_and(|receipt| {
+                crate::lane_surface::missing_task_stale_blocked_run_can_retire(&status, receipt)
+            }))
     {
         return Err(stale_missing_task_run_graph_resume_error(&status));
     }
@@ -1042,16 +1044,6 @@ fn receipt_has_active_exception_takeover(
             .is_some_and(|value| !value.trim().is_empty())
         && receipt
             .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-}
-
-fn dispatch_receipt_has_exception_takeover_evidence(
-    receipt: &crate::state_store::RunGraphDispatchReceipt,
-) -> bool {
-    receipt.lane_status == "lane_exception_takeover"
-        || receipt
-            .exception_path_receipt_id
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
 }
