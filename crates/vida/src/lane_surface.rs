@@ -2028,34 +2028,9 @@ pub(crate) fn missing_task_stale_blocked_run_can_retire(
             value if value == crate::LaneStatus::LaneExceptionRecorded.as_str()
                 || value == crate::LaneStatus::LaneExceptionTakeover.as_str()
         );
-    let active_exception_takeover_stale_blocked = receipt.dispatch_status == "executed"
-        && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|receipt_id| !receipt_id.trim().is_empty());
-    let bridge_request_stale_blocked = receipt.dispatch_status == "bridge_request_pending"
-        && lane_status == crate::LaneStatus::LaneOpen.as_str()
-        && receipt.blocker_code.as_deref() == Some("host_tool_bridge_adapter_required");
-    let exception_takeover_bridge_request_stale_blocked = receipt.dispatch_status
-        == "bridge_request_pending"
-        && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
-        && receipt.blocker_code.as_deref() == Some("host_tool_bridge_adapter_required");
-
     (receipt.dispatch_status == "blocked" && blocked_or_running)
         || prelaunch_packet_ready
         || exception_takeover_stale_blocked
-        || active_exception_takeover_stale_blocked
-        || bridge_request_stale_blocked
-        || exception_takeover_bridge_request_stale_blocked
 }
 
 fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
@@ -6163,7 +6138,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lane_retire_allows_bridge_pending_missing_task_stale_blocked_run() {
+    async fn lane_retire_rejects_bridge_pending_missing_task_stale_blocked_run() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -6250,43 +6225,35 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(1));
 
         let store = StateStore::open_existing(root.clone())
             .await
-            .expect("reopen store after bridge-pending retire");
-        let retired = store
+            .expect("reopen store after rejected bridge-pending retire");
+        let retained = store
             .run_graph_status(run_id)
             .await
-            .expect("read retired status");
-        assert_eq!(retired.status, "completed");
-        assert_eq!(retired.lifecycle_stage, "closure_complete");
-        assert_eq!(retired.resume_target, "none");
-        assert!(!retired.recovery_ready);
+            .expect("read retained status");
+        assert_eq!(retained.status, "blocked");
+        assert_eq!(retained.lifecycle_stage, "analysis_blocked");
         let receipt = store
             .run_graph_dispatch_receipt(run_id)
             .await
-            .expect("read retired receipt")
+            .expect("read retained receipt")
             .expect("receipt should exist");
-        assert_eq!(
-            receipt.lane_status,
-            crate::LaneStatus::LaneCompleted.as_str()
-        );
-        assert_eq!(
-            receipt.downstream_dispatch_status.as_deref(),
-            Some("retired_closed_task_run")
-        );
+        assert_eq!(receipt.lane_status, crate::LaneStatus::LaneOpen.as_str());
+        assert_eq!(receipt.dispatch_status, "bridge_request_pending");
         assert!(store
             .run_graph_continuation_binding(run_id)
             .await
             .expect("read continuation binding")
-            .is_none());
+            .is_some());
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn lane_retire_allows_active_exception_takeover_missing_unit_stale_blocked_run() {
+    async fn lane_retire_rejects_active_exception_takeover_missing_unit_stale_blocked_run() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -6406,37 +6373,32 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
-            .expect("reopen store after active exception retire");
-        let retired = store
+            .expect("reopen store after rejected active exception retire");
+        let retained = store
             .run_graph_status(run_id)
             .await
-            .expect("read retired status");
-        assert_eq!(retired.status, "completed");
-        assert_eq!(retired.lifecycle_stage, "closure_complete");
-        assert_eq!(retired.resume_target, "none");
-        assert!(!retired.recovery_ready);
+            .expect("read retained status");
+        assert_eq!(retained.status, "blocked");
+        assert_eq!(retained.lifecycle_stage, "implementer_blocked");
         let receipt = store
             .run_graph_dispatch_receipt(run_id)
             .await
-            .expect("read retired receipt")
+            .expect("read retained receipt")
             .expect("receipt should exist");
         assert_eq!(
             receipt.lane_status,
-            crate::LaneStatus::LaneCompleted.as_str()
+            crate::LaneStatus::LaneExceptionTakeover.as_str()
         );
-        assert_eq!(
-            receipt.downstream_dispatch_status.as_deref(),
-            Some("retired_closed_task_run")
-        );
+        assert_eq!(receipt.dispatch_status, "executed");
         assert!(store
             .run_graph_continuation_binding(run_id)
             .await
             .expect("read continuation binding")
-            .is_none());
+            .is_some());
 
         let _ = std::fs::remove_dir_all(&root);
     }
