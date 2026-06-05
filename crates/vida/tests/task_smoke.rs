@@ -4957,6 +4957,371 @@ fn run_graph_update_fails_closed_when_memory_correction_lacks_sealed_context() {
 }
 
 #[test]
+fn run_graph_status_accepts_state_dir_override() {
+    let env_state_dir = unique_state_dir();
+    let explicit_state_dir = unique_state_dir();
+    fs::create_dir_all(&env_state_dir).expect("create env state dir");
+    fs::create_dir_all(&explicit_state_dir).expect("create explicit state dir");
+
+    let help = vida()
+        .args(["taskflow", "run-graph", "status", "--help"])
+        .output()
+        .expect("run-graph status help should run");
+    assert!(
+        help.status.success(),
+        "help should pass: {}",
+        String::from_utf8_lossy(&help.stderr)
+    );
+    let help_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    assert!(
+        help_text.contains("--state-dir <path>"),
+        "run-graph status help must document --state-dir: {help_text}"
+    );
+    let topic_help = vida()
+        .args(["taskflow", "run-graph", "--help"])
+        .output()
+        .expect("run-graph topic help should run");
+    assert!(
+        topic_help.status.success(),
+        "run-graph topic help should pass: {}",
+        String::from_utf8_lossy(&topic_help.stderr)
+    );
+    let topic_help_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&topic_help.stdout),
+        String::from_utf8_lossy(&topic_help.stderr)
+    );
+    assert!(
+        topic_help_text.contains("run-graph status <run-id> [--state-dir <path>] [--json]"),
+        "run-graph topic help must document status --state-dir: {topic_help_text}"
+    );
+
+    let _ = run_and_assert_success(&["boot"], &env_state_dir);
+    let _ = run_and_assert_success(&["boot"], &explicit_state_dir);
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            "override-run",
+            "implementation",
+        ],
+        &explicit_state_dir,
+    );
+
+    let output = run_command_capture(
+        &[
+            "taskflow",
+            "run-graph",
+            "status",
+            "override-run",
+            "--state-dir",
+            &explicit_state_dir,
+            "--json",
+        ],
+        &env_state_dir,
+    );
+    assert!(
+        output.status.success(),
+        "status should use explicit --state-dir over VIDA_STATE_DIR\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("status output should parse as json");
+    assert_eq!(payload["surface"], "vida taskflow run-graph status");
+    assert_eq!(payload["run_id"], "override-run");
+    assert_eq!(payload["status"], "pass");
+    assert!(
+        payload["projection_truth"].is_object(),
+        "status should include projection truth from explicit state root: {payload}"
+    );
+
+    let _ = fs::remove_dir_all(&env_state_dir);
+    let _ = fs::remove_dir_all(&explicit_state_dir);
+}
+
+#[test]
+fn run_graph_readonly_surfaces_accept_state_dir_override() {
+    let env_state_dir = unique_state_dir();
+    let explicit_state_dir = unique_state_dir();
+    fs::create_dir_all(&env_state_dir).expect("create env state dir");
+    fs::create_dir_all(&explicit_state_dir).expect("create explicit state dir");
+
+    for (args, expected_usage) in [
+        (
+            vec!["taskflow", "run-graph", "latest", "--help"],
+            "run-graph latest [--state-dir <path>] [--json]",
+        ),
+        (
+            vec!["taskflow", "run-graph", "diagnose", "--help"],
+            "run-graph diagnose <run-id> [--state-dir <path>] [--json]",
+        ),
+        (
+            vec!["taskflow", "run-graph", "diagnose-latest", "--help"],
+            "run-graph diagnose-latest [--state-dir <path>] [--json]",
+        ),
+    ] {
+        let output = run_command_capture(&args, &env_state_dir);
+        assert!(
+            output.status.success(),
+            "help should pass for {args:?}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            text.contains(expected_usage),
+            "help for {args:?} must document state-dir usage {expected_usage}: {text}"
+        );
+    }
+
+    let _ = run_and_assert_success(&["boot"], &env_state_dir);
+    let _ = run_and_assert_success(&["boot"], &explicit_state_dir);
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            "readonly-override-run",
+            "implementation",
+        ],
+        &explicit_state_dir,
+    );
+
+    let latest = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "latest",
+            "--state-dir",
+            &explicit_state_dir,
+            "--json",
+        ],
+        &env_state_dir,
+    );
+    assert_eq!(latest["surface"], "vida taskflow run-graph latest");
+    assert_eq!(latest["run_id"], "readonly-override-run");
+    assert_eq!(latest["status"], "pass");
+
+    let diagnose = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "diagnose",
+            "readonly-override-run",
+            "--state-dir",
+            &explicit_state_dir,
+            "--json",
+        ],
+        &env_state_dir,
+    );
+    assert_eq!(diagnose["surface"], "vida taskflow run-graph diagnose");
+    assert_eq!(diagnose["run_id"], "readonly-override-run");
+    assert_eq!(diagnose["status"], "pass");
+
+    let diagnose_latest = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "diagnose-latest",
+            "--state-dir",
+            &explicit_state_dir,
+            "--json",
+        ],
+        &env_state_dir,
+    );
+    assert_eq!(
+        diagnose_latest["surface"],
+        "vida taskflow run-graph diagnose-latest"
+    );
+    assert_eq!(diagnose_latest["run_id"], "readonly-override-run");
+    assert_eq!(diagnose_latest["status"], "pass");
+    assert_eq!(
+        diagnose_latest["projection_truth"],
+        diagnose["projection_truth"]
+    );
+
+    let _ = fs::remove_dir_all(&env_state_dir);
+    let _ = fs::remove_dir_all(&explicit_state_dir);
+}
+
+#[test]
+fn run_graph_diagnose_json_surfaces_are_public_cli_covered() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            "diagnose-run",
+            "implementation",
+        ],
+        &state_dir,
+    );
+
+    let diagnose = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "diagnose",
+            "diagnose-run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(diagnose["surface"], "vida taskflow run-graph diagnose");
+    assert_eq!(diagnose["run_id"], "diagnose-run");
+    assert_eq!(diagnose["status"], "pass");
+    assert!(
+        diagnose["blocker_codes"].is_array(),
+        "diagnose must expose blocker_codes: {diagnose}"
+    );
+    assert!(
+        diagnose["next_actions"].is_array(),
+        "diagnose must expose next_actions: {diagnose}"
+    );
+    assert!(
+        diagnose["operator_contracts"].is_object(),
+        "diagnose must expose operator_contracts: {diagnose}"
+    );
+    assert!(
+        diagnose["shared_fields"].is_object(),
+        "diagnose must expose shared_fields: {diagnose}"
+    );
+    assert!(
+        diagnose["projection_truth"].is_object(),
+        "diagnose must expose projection truth: {diagnose}"
+    );
+    assert!(
+        diagnose["recovery"].is_object(),
+        "diagnose must expose recovery summary: {diagnose}"
+    );
+    assert_eq!(diagnose["operator_contracts"]["status"], diagnose["status"]);
+    assert_eq!(diagnose["shared_fields"]["status"], diagnose["status"]);
+
+    let latest = run_command_json(
+        &["taskflow", "run-graph", "diagnose-latest", "--json"],
+        &state_dir,
+    );
+    assert_eq!(latest["surface"], "vida taskflow run-graph diagnose-latest");
+    assert_eq!(latest["run_id"], "diagnose-run");
+    assert_eq!(latest["status"], "pass");
+    assert_eq!(latest["operator_contracts"]["status"], latest["status"]);
+    assert_eq!(latest["shared_fields"]["status"], latest["status"]);
+    assert_eq!(latest["projection_truth"], diagnose["projection_truth"]);
+    assert_eq!(latest["recovery"], diagnose["recovery"]);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn run_graph_dispatch_init_plain_reuses_fast_cache_public_cli() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent = run_command_json(
+        &[
+            "task",
+            "create",
+            "dispatch-cache-root",
+            "Dispatch cache root",
+            "--type",
+            "epic",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent["status"], "pass");
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            "dispatch-cache-run",
+            "Dispatch cache run",
+            "--parent-id",
+            "dispatch-cache-root",
+            "--type",
+            "task",
+            "--priority",
+            "1",
+            "--owned-path",
+            "crates/vida/src/taskflow_run_graph.rs",
+            "--proof-target",
+            "cargo test -p vida --test task_smoke run_graph_dispatch_init_plain_reuses_fast_cache_public_cli -- --nocapture",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let json_dispatch = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "dispatch-init",
+            "dispatch-cache-run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(
+        json_dispatch["surface"],
+        "vida taskflow run-graph dispatch-init"
+    );
+    assert_eq!(json_dispatch["run_id"], "dispatch-cache-run");
+    let packet_path = json_dispatch["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should render");
+    assert!(
+        std::path::Path::new(packet_path).exists(),
+        "dispatch packet path should exist: {packet_path}"
+    );
+    let dispatch_target = json_dispatch["dispatch_receipt"]["dispatch_target"]
+        .as_str()
+        .expect("dispatch target should render");
+
+    let plain = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "dispatch-init",
+            "dispatch-cache-run",
+        ],
+        &state_dir,
+    );
+    assert!(
+        plain.contains("vida taskflow run-graph dispatch-init"),
+        "plain dispatch-init should render surface header: {plain}"
+    );
+    assert!(
+        plain.contains("run: dispatch-cache-run"),
+        "plain dispatch-init should render run id: {plain}"
+    );
+    assert!(
+        plain.contains(packet_path),
+        "plain dispatch-init should reuse cached packet path {packet_path}: {plain}"
+    );
+    assert!(
+        plain.contains(dispatch_target),
+        "plain dispatch-init should reuse cached dispatch target {dispatch_target}: {plain}"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp project root should be removed");
+}
+
+#[test]
 fn run_graph_update_canonicalizes_conflicting_resume_meta() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

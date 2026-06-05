@@ -809,10 +809,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                 "continuation_required_now": false,
                 "active_bounded_unit": serde_json::Value::Null,
                 "binding_source": serde_json::Value::Null,
-                "why_this_unit": format!(
-                    "Latest run `{}` is closure_complete and no active TaskFlow work is present.",
-                    status.run_id
-                ),
+                "why_this_unit": "Latest run is closure_complete and no active TaskFlow work is present.",
                 "primary_path": "idle_project_ready",
                 "sequential_vs_parallel_posture": "not_applicable_no_active_work",
                 "pause_boundary_gate": "allowed_no_active_work",

@@ -755,7 +755,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida taskflow run-graph status <run-id> --json");
+            println!("  vida taskflow run-graph status <run-id> [--state-dir <path>] --json");
             println!("  vida taskflow recovery status <run-id> --json");
             println!("  vida taskflow packet render <run-id> --json");
             println!("  vida taskflow packet latest --json");
@@ -790,8 +790,10 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  vida taskflow run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]"
             );
-            println!("  vida taskflow run-graph status <run-id> [--json]");
-            println!("  vida taskflow run-graph latest [--json]");
+            println!("  vida taskflow run-graph status <run-id> [--state-dir <path>] [--json]");
+            println!("  vida taskflow run-graph latest [--state-dir <path>] [--json]");
+            println!("  vida taskflow run-graph diagnose <run-id> [--state-dir <path>] [--json]");
+            println!("  vida taskflow run-graph diagnose-latest [--state-dir <path>] [--json]");
             println!();
             println!("Failure modes:");
             println!(
