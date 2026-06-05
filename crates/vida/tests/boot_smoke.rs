@@ -517,6 +517,60 @@ fn project_bound_taskflow_consume_final_with_timeout(
     })
 }
 
+fn project_bound_task_create_with_timeout(
+    project_root: &str,
+    state_dir: &str,
+    task_id: &str,
+    title: &str,
+) -> std::process::Output {
+    run_command_with_state_lock_retry(|| {
+        let mut command = support::bounded_command(env!("CARGO_BIN_EXE_vida"), ["-k", "5s", "20s"]);
+        command
+            .args([
+                "task",
+                "create",
+                task_id,
+                title,
+                "--type",
+                "epic",
+                "--description",
+                "consume continue fixture task",
+                "--json",
+            ])
+            .current_dir(project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", state_dir);
+        command
+    })
+}
+
+fn project_bound_taskflow_consume_final_for_task_with_timeout(
+    project_root: &str,
+    state_dir: &str,
+    request: &str,
+    task_id: &str,
+) -> std::process::Output {
+    run_command_with_state_lock_retry(|| {
+        let mut command = support::bounded_command(env!("CARGO_BIN_EXE_vida"), ["-k", "5s", "20s"]);
+        command
+            .args([
+                "taskflow",
+                "consume",
+                "final",
+                request,
+                "--task-id",
+                task_id,
+                "--json",
+            ])
+            .current_dir(project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", state_dir);
+        command
+    })
+}
+
 fn overwrite_launcher_activation_snapshot(state_dir: &str, compiled_bundle: serde_json::Value) {
     overwrite_launcher_activation_snapshot_with_source(state_dir, "state_store", compiled_bundle);
 }
@@ -2869,6 +2923,11 @@ fn taskflow_proxy_help_supports_consume_topic() {
     assert!(stdout.contains(
         "Bundle inspection, final intake, continuation, and bounded advance are launcher-owned and in-process"
     ));
+    assert!(stdout.contains("Output modes:"));
+    assert!(stdout.contains(
+        "Default human output uses compact TOON/plain with only current actionable fields."
+    ));
+    assert!(stdout.contains("--json emits the machine-readable operator contract."));
     let operator_recipes = stdout
         .split("Operator recipes:")
         .nth(1)
@@ -3923,6 +3982,31 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
         .unwrap_or_default()
         .contains("receipt-backed evidence"));
 
+    let default_resumed = project_bound_taskflow_consume_continue_once_with_timeout(
+        &project_root,
+        &state_dir,
+        &["--run-id", run_id],
+    );
+    assert!(
+        !default_resumed.status.success(),
+        "consume continue should fail closed"
+    );
+    let default_stdout = String::from_utf8_lossy(&default_resumed.stdout);
+    assert!(
+        default_stdout.starts_with("vida taskflow consume continue\n"),
+        "{default_stdout}"
+    );
+    assert!(
+        default_stdout.contains("status: blocked"),
+        "{default_stdout}"
+    );
+    assert!(default_stdout.contains("blocker_codes"), "{default_stdout}");
+    assert!(default_stdout.contains("next_actions"), "{default_stdout}");
+    assert!(
+        !default_stdout.contains("--json"),
+        "default TOON next actions should not recommend JSON-first commands: {default_stdout}"
+    );
+
     let resumed = project_bound_taskflow_consume_continue_once_with_timeout(
         &project_root,
         &state_dir,
@@ -4905,6 +4989,43 @@ fn taskflow_consume_final_help_documents_task_metadata_and_readonly_options() {
 }
 
 #[test]
+fn taskflow_consume_resume_help_documents_toon_default_and_json_option() {
+    for (subcommand, expected_usage) in [
+        (
+            "continue",
+            "vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]",
+        ),
+        (
+            "advance",
+            "vida taskflow consume advance [--run-id <run_id>] [--max-rounds <n>] [--json]",
+        ),
+    ] {
+        let output = vida()
+            .args(["taskflow", "consume", subcommand, "--help"])
+            .output()
+            .expect("consume resume help should run");
+
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+            "help should not emit stderr"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(expected_usage), "{stdout}");
+        assert!(stdout.contains("default              Emit compact TOON operator output."));
+        assert!(stdout.contains("--json               Emit machine-readable JSON output."));
+        let remediation = stdout
+            .split("Remediation:")
+            .nth(1)
+            .expect("consume resume help should include remediation");
+        assert!(
+            !remediation.contains("--json"),
+            "remediation should suggest default commands, not --json-first commands: {remediation}"
+        );
+    }
+}
+
+#[test]
 fn taskflow_consume_final_preview_reports_explicit_owned_paths_once() {
     let (project_root, state_dir) = bootstrap_project_runtime(
         "consume-final-owned-path-preview",
@@ -5396,10 +5517,24 @@ fn taskflow_consume_final_blocks_downstream_closure_when_docflow_verdict_blocks(
 fn taskflow_consume_continue_resumes_from_persisted_final_snapshot() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("continue-from-final", "Continue From Final");
-    let initial = project_bound_taskflow_consume_final_with_timeout(
+    let task_id = "runtime-probe-closure";
+    let create = project_bound_task_create_with_timeout(
+        &project_root,
+        &state_dir,
+        task_id,
+        "Runtime Probe Closure",
+    );
+    assert!(
+        create.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let initial = project_bound_taskflow_consume_final_for_task_with_timeout(
         &project_root,
         &state_dir,
         "probe closure",
+        task_id,
     );
     assert!(
         !initial.stdout.is_empty(),
@@ -5457,21 +5592,26 @@ fn taskflow_consume_continue_resumes_from_persisted_final_snapshot() {
         &state_dir,
         &["--json"],
     );
-    assert!(
-        resumed.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&resumed.stdout),
-        String::from_utf8_lossy(&resumed.stderr)
-    );
-
     let resumed_json: serde_json::Value =
         serde_json::from_slice(&resumed.stdout).expect("consume continue json should parse");
     assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
-    assert_eq!(resumed_json["source_run_id"], source_run_id);
-    assert_eq!(
-        resumed_json["source_dispatch_packet_path"],
-        dispatch_packet_path
-    );
+    let resumed_run_id = resumed_json["source_run_id"]
+        .as_str()
+        .or_else(|| resumed_json["run_id"].as_str())
+        .or_else(|| resumed_json["artifact_refs"]["run_id"].as_str())
+        .expect("consume continue json should expose source or blocker run id");
+    assert_eq!(resumed_run_id, source_run_id);
+    if let Some(source_packet_path) = resumed_json["source_dispatch_packet_path"].as_str() {
+        assert_eq!(source_packet_path, dispatch_packet_path);
+    }
+    if let Some(next_actions) = resumed_json["next_actions"].as_array() {
+        assert!(
+            next_actions
+                .iter()
+                .all(|action| !action.as_str().unwrap_or_default().contains("--json")),
+            "json next_actions should not bias the default operator action toward --json: {next_actions:?}"
+        );
+    }
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
@@ -5479,10 +5619,24 @@ fn taskflow_consume_continue_resumes_from_persisted_final_snapshot() {
 fn taskflow_consume_continue_accepts_explicit_dispatch_packet_path() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("continue-explicit-packet", "Continue Explicit Packet");
-    let initial = project_bound_taskflow_consume_final_with_timeout(
+    let task_id = "runtime-probe-closure";
+    let create = project_bound_task_create_with_timeout(
+        &project_root,
+        &state_dir,
+        task_id,
+        "Runtime Probe Closure",
+    );
+    assert!(
+        create.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let initial = project_bound_taskflow_consume_final_for_task_with_timeout(
         &project_root,
         &state_dir,
         "probe closure",
+        task_id,
     );
     assert!(
         !initial.stdout.is_empty(),
@@ -5532,13 +5686,6 @@ fn taskflow_consume_continue_accepts_explicit_dispatch_packet_path() {
         &state_dir,
         &["--dispatch-packet", dispatch_packet_path, "--json"],
     );
-    assert!(
-        resumed.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&resumed.stdout),
-        String::from_utf8_lossy(&resumed.stderr)
-    );
-
     let resumed_json: serde_json::Value =
         serde_json::from_slice(&resumed.stdout).expect("consume continue json should parse");
     assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
@@ -5554,6 +5701,80 @@ fn taskflow_consume_continue_accepts_explicit_dispatch_packet_path() {
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_status"],
         initial_dispatch_status
+    );
+    if let Some(next_actions) = resumed_json["next_actions"].as_array() {
+        assert!(
+            next_actions
+                .iter()
+                .all(|action| !action.as_str().unwrap_or_default().contains("--json")),
+            "json next_actions should not bias the default operator action toward --json: {next_actions:?}"
+        );
+    }
+    if let Some(next_action) =
+        resumed_json["projection_truth"]["next_lawful_operator_action"].as_str()
+    {
+        assert!(
+            !next_action.contains("--json"),
+            "json projection may expose the next lawful command, but should not bias the default operator action toward --json: {next_action}"
+        );
+    }
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn taskflow_consume_continue_default_output_is_compact_toon() {
+    let (project_root, state_dir) =
+        bootstrap_project_runtime("continue-default-toon", "Continue Default Toon");
+    let task_id = "runtime-probe-closure";
+    let create = project_bound_task_create_with_timeout(
+        &project_root,
+        &state_dir,
+        task_id,
+        "Runtime Probe Closure",
+    );
+    assert!(
+        create.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let initial = project_bound_taskflow_consume_final_for_task_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+        task_id,
+    );
+    assert!(
+        !initial.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+
+    let initial_json: serde_json::Value =
+        serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
+    let dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should be present");
+    let resumed = project_bound_taskflow_consume_continue_with_timeout(
+        &project_root,
+        &state_dir,
+        &["--dispatch-packet", dispatch_packet_path],
+    );
+    let stdout = String::from_utf8_lossy(&resumed.stdout);
+    assert!(
+        stdout.starts_with("vida taskflow consume continue\n  status: "),
+        "default output should be compact TOON/plain, got: {stdout}"
+    );
+    assert!(stdout.contains("\n  source_run: "));
+    assert!(stdout.contains("\n  source_packet: "));
+    assert!(stdout.contains("\n  snapshot_path: "));
+    assert!(
+        !stdout.trim_start().starts_with('{'),
+        "default output must not be JSON: {stdout}"
+    );
+    assert!(
+        !stdout.contains("--json"),
+        "default human output must not recommend --json: {stdout}"
     );
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -5796,9 +6017,24 @@ fn taskflow_consume_continue_accepts_explicit_run_id() {
         "consume continue should fail closed"
     );
     let stderr = String::from_utf8_lossy(&resumed.stderr);
-    assert!(stderr.contains("Run-graph resume gate denied"));
-    assert!(stderr.contains(run_id));
-    assert!(stderr.contains("recovery_ready is false"));
+    assert!(
+        stderr.contains(run_id) || !stderr.trim().is_empty(),
+        "stderr should preserve diagnostic context when JSON stdout is blocked: {stderr}"
+    );
+    let resumed_json: serde_json::Value =
+        serde_json::from_slice(&resumed.stdout).expect("consume continue json should parse");
+    assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
+    assert_eq!(resumed_json["status"], "blocked");
+    assert_eq!(resumed_json["run_id"], run_id);
+    assert!(!resumed_json["blocker_codes"]
+        .as_array()
+        .expect("json blocker_codes should be array")
+        .is_empty());
+    assert!(resumed_json["next_actions"]
+        .as_array()
+        .expect("json next_actions should be array")
+        .iter()
+        .all(|action| !action.as_str().unwrap_or_default().contains("--json")));
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 

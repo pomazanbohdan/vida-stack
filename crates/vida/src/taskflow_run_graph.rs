@@ -692,21 +692,27 @@ fn parse_dispatch_target_from_path(value: &str) -> Option<String> {
 fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<String> {
     if status.recovery_ready && status.resume_target != "none" {
         return Some(format!(
-            "vida taskflow consume continue --run-id {} --json",
+            "vida taskflow consume continue --run-id {}",
             status.run_id
         ));
     }
     if status.status == "completed" {
         return None;
     }
-    Some(format!(
-        "vida taskflow run-graph status {} --json",
-        status.run_id
-    ))
+    Some(format!("vida taskflow run-graph status {}", status.run_id))
 }
 
 fn fail_closed_terminal_continue_followup(status: &RunGraphStatus) -> String {
-    format!("vida taskflow run-graph status {} --json", status.run_id)
+    format!("vida taskflow run-graph status {}", status.run_id)
+}
+
+fn default_operator_command_text(command: &str) -> String {
+    command
+        .replace(" --json", "")
+        .replace("--json ", "")
+        .replace("--json", "")
+        .trim()
+        .to_string()
 }
 
 fn sanitized_placeholder_continuation_bind_command(
@@ -724,8 +730,8 @@ fn sanitized_placeholder_continuation_bind_command(
     }
     run_id
         .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("vida taskflow run-graph status {value} --json"))
-        .or_else(|| Some("vida status --json".to_string()))
+        .map(|value| format!("vida taskflow run-graph status {value}"))
+        .or_else(|| Some("vida status".to_string()))
 }
 
 pub(crate) fn sanitize_placeholder_continuation_bind_recommendation(
@@ -833,7 +839,7 @@ fn next_lawful_operator_action_for_dispatch_resolution(
         && terminal_consume_continue_run_id == Some(status.run_id.as_str())
     {
         return downstream_dispatch_command_for_receipt(receipt)
-            .or_else(|| Some(format!("vida lane show {} --json", status.run_id)));
+            .or_else(|| Some(format!("vida lane show {}", status.run_id)));
     }
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
     if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
@@ -846,14 +852,11 @@ fn next_lawful_operator_action_for_dispatch_resolution(
                 .is_some_and(|value| !value.is_empty())
         {
             return Some(format!(
-                "vida taskflow consume continue --run-id {} --json",
+                "vida taskflow consume continue --run-id {}",
                 shell_quote(&status.run_id)
             ));
         }
-        return Some(format!(
-            "vida lane show {} --json",
-            shell_quote(&status.run_id)
-        ));
+        return Some(format!("vida lane show {}", shell_quote(&status.run_id)));
     }
     if let Some(receipt_id) = receipt
         .exception_path_receipt_id
@@ -863,26 +866,22 @@ fn next_lawful_operator_action_for_dispatch_resolution(
         .filter(|_| receipt.supersedes_receipt_id.is_none())
     {
         return Some(format!(
-            "vida lane supersede {} --receipt-id {} --json",
+            "vida lane supersede {} --receipt-id {}",
             shell_quote(&status.run_id),
             shell_quote(receipt_id)
         ));
     }
     if receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some() {
         if !status.recovery_ready || status.resume_target == "none" {
-            return Some(format!("vida lane show {} --json", status.run_id));
+            return Some(format!("vida lane show {}", status.run_id));
         }
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
             return Some(fail_closed_terminal_continue_followup(status));
         }
-        return (status.status != "completed").then(|| {
-            format!(
-                "vida taskflow consume continue --run-id {} --json",
-                status.run_id
-            )
-        });
+        return (status.status != "completed")
+            .then(|| format!("vida taskflow consume continue --run-id {}", status.run_id));
     }
-    Some(format!("vida lane show {} --json", status.run_id))
+    Some(format!("vida lane show {}", status.run_id))
 }
 
 fn dispatch_receipt_has_clean_ready_downstream_handoff(receipt: &RunGraphDispatchReceipt) -> bool {
@@ -901,6 +900,8 @@ fn downstream_dispatch_command_for_receipt(receipt: &RunGraphDispatchReceipt) ->
         receipt.downstream_dispatch_command.as_deref(),
         receipt.downstream_dispatch_packet_path.as_deref(),
     )
+    .map(|command| default_operator_command_text(&command))
+    .filter(|command| !command.is_empty())
 }
 
 pub(crate) fn dispatch_receipt_can_use_terminal_continue_evidence(
@@ -967,7 +968,7 @@ fn next_lawful_operator_action_for_projection(
 ) -> Option<String> {
     if task_missing && status.status == "blocked" {
         return Some(format!(
-            "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json",
+            "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"",
             status.run_id, status.run_id
         ));
     }
@@ -975,7 +976,7 @@ fn next_lawful_operator_action_for_projection(
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
             return Some(fail_closed_terminal_continue_followup(status));
         }
-        return Some(format!("vida lane show {} --json", status.run_id));
+        return Some(format!("vida lane show {}", status.run_id));
     }
     if let Some(command) = receipt.and_then(|value| {
         if value
@@ -983,10 +984,7 @@ fn next_lawful_operator_action_for_projection(
             .iter()
             .any(|blocker| blocker == "missing_owned_write_scope")
         {
-            return Some(format!(
-                "vida taskflow packet render {} --json",
-                status.run_id
-            ));
+            return Some(format!("vida taskflow packet render {}", status.run_id));
         }
         next_lawful_operator_action_for_dispatch_resolution(
             status,
@@ -13960,7 +13958,7 @@ mod tests {
                 false,
             )
             .as_deref(),
-            Some("vida lane show run-projection-blocked-mismatch --json")
+            Some("vida lane show run-projection-blocked-mismatch")
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -13987,10 +13985,13 @@ mod tests {
             recovery_ready: true,
         };
 
+        let next_action = next_lawful_operator_action_for_status(&status)
+            .expect("recovery-ready status should recommend consume continue");
         assert_eq!(
-            next_lawful_operator_action_for_status(&status).as_deref(),
-            Some("vida taskflow consume continue --run-id run-projection-continue --json")
+            next_action,
+            "vida taskflow consume continue --run-id run-projection-continue"
         );
+        assert!(!next_action.contains("--json"));
     }
 
     #[test]
@@ -14016,18 +14017,18 @@ mod tests {
         };
         let receipt = clean_ready_downstream_dispatch_receipt("run-terminal-ready-handoff");
 
+        let next_action = next_lawful_operator_action_for_projection(
+            &status,
+            Some(&receipt),
+            Some("run-terminal-ready-handoff"),
+            false,
+        )
+        .expect("terminal ready downstream handoff should expose downstream command");
         assert_eq!(
-            next_lawful_operator_action_for_projection(
-                &status,
-                Some(&receipt),
-                Some("run-terminal-ready-handoff"),
-                false,
-            )
-            .as_deref(),
-            Some(
-                "vida agent-init --downstream-packet downstream-packet.json --execute-dispatch --json"
-            )
+            next_action,
+            "vida agent-init --downstream-packet downstream-packet.json --execute-dispatch"
         );
+        assert!(!next_action.contains("--json"));
     }
 
     #[test]

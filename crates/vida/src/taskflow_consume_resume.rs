@@ -17,6 +17,35 @@ const CONSUME_RESUME_SHORT_LOCK_PROBE_TIMEOUT: Duration = Duration::from_secs(2)
 const CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME: &str =
     "taskflow-consume-continue-deferred-handoff";
 
+fn consume_resume_toon_text(
+    surface_name: &str,
+    status: &str,
+    source_run_id: &str,
+    source_dispatch_packet_path: &str,
+    snapshot_path: &str,
+    projection_reason: Option<&str>,
+    next_action: Option<&str>,
+) -> String {
+    let mut payload = serde_json::Map::new();
+    payload.insert("status".to_string(), status.into());
+    payload.insert("source_run".to_string(), source_run_id.into());
+    payload.insert(
+        "source_packet".to_string(),
+        source_dispatch_packet_path.into(),
+    );
+    if let Some(projection_reason) = projection_reason {
+        payload.insert("projection".to_string(), projection_reason.into());
+    }
+    if let Some(next_action) = next_action {
+        payload.insert(
+            "next_action".to_string(),
+            consume_continue_default_command_text(next_action).into(),
+        );
+    }
+    payload.insert("snapshot_path".to_string(), snapshot_path.into());
+    taskflow_format_toon::render_value_section(surface_name, &serde_json::Value::Object(payload))
+}
+
 async fn consume_continue_handoff_with_timeout<F>(
     label: &str,
     timeout: Duration,
@@ -223,14 +252,14 @@ fn consume_continue_state_access_blocker_payload(
     let blocker_code = consume_continue_state_access_blocker_code(error);
     let next_actions = if error_kind == "lock_contention" {
         serde_json::json!([
-            "Wait for the authoritative VIDA state-store holder to finish, then retry `vida taskflow consume continue --json`.",
-            "Inspect read-only continuation context with `vida task ready --json`, `vida taskflow graph-summary --json`, or `vida status --json` while the lock is held.",
+            "Wait for the authoritative VIDA state-store holder to finish, then retry `vida taskflow consume continue`.",
+            "Inspect read-only continuation context with `vida task ready`, `vida taskflow graph-summary`, or `vida status` while the lock is held.",
             "If no holder exists, use the VIDA recovery/reclaim flow; do not delete datastore LOCK files by hand."
         ])
     } else {
         serde_json::json!([
-            "Inspect the state directory and retry `vida taskflow consume continue --json` after state access is restored.",
-            "Use read-only status surfaces such as `vida status --json` for degraded context if available."
+            "Inspect the state directory and retry `vida taskflow consume continue` after state access is restored.",
+            "Use read-only status surfaces such as `vida status` for degraded context if available."
         ])
     };
     serde_json::json!({
@@ -251,28 +280,30 @@ fn consume_continue_state_access_blocker_payload(
             }
         },
         "source_surfaces": [
-            "vida taskflow consume continue --json",
+            "vida taskflow consume continue",
             "StateStore::open_existing",
             "StateStore::open_existing_read_only",
-            "vida task ready --json",
-            "vida taskflow graph-summary --json",
-            "vida status --json"
+            "vida task ready",
+            "vida taskflow graph-summary",
+            "vida status"
         ]
     })
 }
 
-fn emit_consume_continue_state_access_blocker_json(
+fn emit_consume_continue_state_access_blocker(
     state_root: &Path,
     surface_name: &str,
     operation: &str,
     error: &str,
+    as_json: bool,
 ) {
-    crate::print_json_pretty(&consume_continue_state_access_blocker_payload(
-        state_root,
-        surface_name,
-        operation,
-        error,
-    ));
+    let payload =
+        consume_continue_state_access_blocker_payload(state_root, surface_name, operation, error);
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        print_consume_continue_default_toon(surface_name, &payload);
+    }
 }
 
 fn consume_continue_resume_error_blocker_code(error: &str) -> &'static str {
@@ -386,6 +417,79 @@ fn dispatch_packet_string_field(packet: &serde_json::Value, path: &[&str]) -> Op
         .map(ToOwned::to_owned)
 }
 
+fn consume_continue_default_command_text(command: &str) -> String {
+    command
+        .replace(" --json", "")
+        .replace("--json ", "")
+        .replace("--json", "")
+        .trim()
+        .to_string()
+}
+
+fn consume_continue_default_action_text(action: &str) -> String {
+    consume_continue_default_command_text(action)
+}
+
+fn consume_continue_default_action_entries(actions: &serde_json::Value) -> Vec<String> {
+    actions
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(consume_continue_default_action_text)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn consume_continue_default_output_payload(payload: &serde_json::Value) -> serde_json::Value {
+    let mut output = serde_json::Map::new();
+    for key in [
+        "status",
+        "source_run_id",
+        "run_id",
+        "source_dispatch_packet_path",
+        "snapshot_path",
+    ] {
+        if let Some(value) = payload.get(key).filter(|value| !value.is_null()) {
+            output.insert(key.to_string(), value.clone());
+        }
+    }
+    let blocker_codes = payload
+        .get("blocker_codes")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    output.insert("blocker_codes".to_string(), blocker_codes);
+    let next_actions = consume_continue_default_action_entries(&payload["next_actions"]);
+    output.insert("next_actions".to_string(), serde_json::json!(next_actions));
+    if let Some(next_action) = payload["projection_truth"]["next_lawful_operator_action"]
+        .as_str()
+        .map(consume_continue_default_command_text)
+        .filter(|value| !value.is_empty())
+    {
+        output.insert(
+            "next_lawful_operator_action".to_string(),
+            next_action.into(),
+        );
+    }
+    if let Some(artifact_refs) = payload
+        .get("artifact_refs")
+        .filter(|value| !value.is_null())
+    {
+        output.insert("artifact_refs".to_string(), artifact_refs.clone());
+    }
+    serde_json::Value::Object(output)
+}
+
+fn print_consume_continue_default_toon(surface_name: &str, payload: &serde_json::Value) {
+    println!(
+        "{}",
+        taskflow_format_toon::render_value_section(
+            surface_name,
+            &consume_continue_default_output_payload(payload),
+        )
+    );
+}
+
 fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> serde_json::Value {
     let blocker_code = consume_continue_resume_error_blocker_code(error);
     let packet_path = consume_continue_resume_error_packet_path(error);
@@ -398,12 +502,12 @@ fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> ser
     let next_actions = if blocker_code == "stale_missing_task_run_graph" {
         let retire_action = run_id.as_ref().map_or_else(
             || {
-                "Inspect `vida taskflow recovery latest --json`; if it reports a missing-task stale run, retire that concrete run with `vida lane retire <run-id> --receipt-id <receipt-id> --reason \"missing TaskFlow task stale run\" --json`."
+                "Inspect `vida taskflow recovery latest`; if it reports a missing-task stale run, retire that concrete run with `vida lane retire <run-id> --receipt-id <receipt-id> --reason \"missing TaskFlow task stale run\"`."
                     .to_string()
             },
             |run_id| {
                 format!(
-                    "Retire the stale missing-task run with `vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json`.",
+                    "Retire the stale missing-task run with `vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"`.",
                     crate::shell_quote(run_id),
                     crate::shell_quote(run_id)
                 )
@@ -411,26 +515,32 @@ fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> ser
         );
         serde_json::json!([
             retire_action,
-            "Refresh continuation evidence with `vida status --json` and `vida taskflow recovery latest --json` before retrying `vida taskflow consume continue --json`.",
+            "Refresh continuation evidence with `vida status` and `vida taskflow recovery latest` before retrying `vida taskflow consume continue`.",
             "Do not bind recovery to the missing TaskFlow task."
         ])
     } else if blocker_code == "dispatch_packet_contract_invalid" {
         let repair_action = match (run_id.as_ref(), task_id.as_ref()) {
             (Some(run_id), Some(task_id)) => {
                 format!(
-                    "Repair the persisted dispatch packet from canonical task metadata with `vida taskflow packet repair --run-id {} --from-task {} --json`, or regenerate the packet from the active bounded task before retrying.",
+                    "Repair the persisted dispatch packet from canonical task metadata with `vida taskflow packet repair --run-id {} --from-task {}`, or regenerate the packet from the active bounded task before retrying.",
                     crate::shell_quote(run_id),
                     crate::shell_quote(task_id),
                 )
             }
+            (Some(run_id), None) => {
+                format!(
+                    "Repair the persisted dispatch packet from canonical task metadata with `vida taskflow packet repair --run-id {} --from-task <task-id>`, or regenerate the packet from the active bounded task before retrying.",
+                    crate::shell_quote(run_id),
+                )
+            }
             _ => {
-                "Repair the persisted dispatch packet from canonical task metadata with `vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json`, or regenerate the packet from the active bounded task before retrying."
+                "Repair the persisted dispatch packet from canonical task metadata with `vida taskflow packet repair --run-id <run-id> --from-task <task-id>`, or regenerate the packet from the active bounded task before retrying."
                     .to_string()
             }
         };
         serde_json::json!([
             repair_action,
-            "Ensure delivery_task_packet.owned_paths and proof targets are present before running `vida taskflow consume continue --json`.",
+            "Ensure delivery_task_packet.owned_paths and proof targets are present before running `vida taskflow consume continue`.",
             "Do not treat packet-contract failure as a continuation-binding ambiguity."
         ])
     } else if blocker_code == "continuation_binding_ambiguous"
@@ -443,7 +553,7 @@ fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> ser
             },
             |run_id| {
                 format!(
-                    "Refresh the active run explicitly with `vida taskflow consume continue --run-id {} --json`.",
+                    "Refresh the active run explicitly with `vida taskflow consume continue --run-id {}`.",
                     crate::shell_quote(run_id)
                 )
             },
@@ -455,13 +565,13 @@ fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> ser
         ])
     } else if blocker_code == "continuation_binding_ambiguous" {
         serde_json::json!([
-            "Bind the next bounded unit explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json`.",
+            "Bind the next bounded unit explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id>`.",
             "Pass `--run-id <run-id>` only when intentionally refreshing that specific run."
         ])
     } else {
         serde_json::json!([
-            "Inspect continuation evidence with `vida status --json` and `vida taskflow recovery latest --json`.",
-            "Bind or refresh the intended bounded unit before retrying `vida taskflow consume continue --json`."
+            "Inspect continuation evidence with `vida status` and `vida taskflow recovery latest`.",
+            "Bind or refresh the intended bounded unit before retrying `vida taskflow consume continue`."
         ])
     };
     let artifact_refs = serde_json::json!({
@@ -499,8 +609,13 @@ fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> ser
     })
 }
 
-pub(crate) fn emit_consume_continue_resume_error_json(error: &str, surface_name: &str) {
-    crate::print_json_pretty(&consume_continue_resume_error_payload(error, surface_name));
+pub(crate) fn emit_consume_continue_resume_error(error: &str, surface_name: &str, as_json: bool) {
+    let payload = consume_continue_resume_error_payload(error, surface_name);
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        print_consume_continue_default_toon(surface_name, &payload);
+    }
 }
 
 fn consume_advance_success_payload(
@@ -844,7 +959,7 @@ fn stale_missing_task_run_graph_resume_error(
     status: &crate::state_store::RunGraphStatus,
 ) -> String {
     format!(
-        "Stale missing-task run graph `{}` references missing TaskFlow task `{}`; retire the stale run with `vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json` before consuming continuation.",
+        "Stale missing-task run graph `{}` references missing TaskFlow task `{}`; retire the stale run with `vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"` before consuming continuation.",
         status.run_id,
         status.task_id,
         crate::shell_quote(&status.run_id),
@@ -1022,7 +1137,7 @@ fn active_exception_takeover_resume_blocker_error(
         return None;
     }
     Some(format!(
-        "Run-graph resume gate denied for `{}`: active exception takeover `{}` supersedes delegated dispatch while recovery_ready is false and resume_target is none. Inspect `vida lane show {} --json`; continue only within the active owned_write_scope or record a new bounded exception takeover for the next architectural repair.",
+        "Run-graph resume gate denied for `{}`: active exception takeover `{}` supersedes delegated dispatch while recovery_ready is false and resume_target is none. Inspect `vida lane show {}`; continue only within the active owned_write_scope or record a new bounded exception takeover for the next architectural repair.",
         status.run_id,
         receipt
             .exception_path_receipt_id
@@ -2093,8 +2208,7 @@ fn runtime_consumption_resume_receipt_next_actions(
 
     let mut next_actions = Vec::new();
     next_actions.push(
-        "Inspect the latest recovery projection with `vida taskflow recovery latest --json`."
-            .to_string(),
+        "Inspect the latest recovery projection with `vida taskflow recovery latest`.".to_string(),
     );
     let current_lane_completed_without_blocker =
         dispatch_receipt.dispatch_status == "executed" && dispatch_receipt.blocker_code.is_none();
@@ -2288,29 +2402,24 @@ async fn emit_runtime_consumption_resume_json(
                 .expect("resume command should render as json")
         );
     } else {
-        super::print_surface_header(super::RenderMode::Plain, surface_name);
-        super::print_surface_line(super::RenderMode::Plain, "status", status);
-        super::print_surface_line(
-            super::RenderMode::Plain,
-            "source run",
-            &dispatch_receipt.run_id,
+        let projection_reason = projection_truth
+            .as_ref()
+            .map(|projection_truth| projection_truth.projection_reason.as_str());
+        let next_action = projection_truth
+            .as_ref()
+            .and_then(|projection_truth| projection_truth.next_lawful_operator_action.as_deref());
+        println!(
+            "{}",
+            consume_resume_toon_text(
+                surface_name,
+                status,
+                &dispatch_receipt.run_id,
+                dispatch_packet_path,
+                &snapshot_path,
+                projection_reason,
+                next_action,
+            )
         );
-        super::print_surface_line(
-            super::RenderMode::Plain,
-            "source packet",
-            dispatch_packet_path,
-        );
-        if let Some(projection_truth) = projection_truth.as_ref() {
-            super::print_surface_line(
-                super::RenderMode::Plain,
-                "projection",
-                &projection_truth.projection_reason,
-            );
-            if let Some(next_action) = projection_truth.next_lawful_operator_action.as_deref() {
-                super::print_surface_line(super::RenderMode::Plain, "next action", next_action);
-            }
-        }
-        super::print_surface_line(super::RenderMode::Plain, "snapshot path", &snapshot_path);
     }
     Ok(())
 }
@@ -2432,7 +2541,7 @@ fn emit_deferred_agent_handoff_json(
                 "dispatch_receipt_present": true,
                 "continuation_binding_present": true,
                 "stale_state_suspected": false,
-                "next_lawful_operator_action": format!("vida lane show {} --json", dispatch_receipt.run_id),
+                "next_lawful_operator_action": format!("vida lane show {}", dispatch_receipt.run_id),
             },
             "snapshot_path": snapshot_path,
             "failure_control_evidence": snapshot_with_operator_contracts["failure_control_evidence"].clone(),
@@ -2455,19 +2564,18 @@ fn emit_deferred_agent_handoff_json(
                 .expect("deferred handoff command should render as json")
         );
     } else {
-        super::print_surface_header(super::RenderMode::Plain, surface_name);
-        super::print_surface_line(super::RenderMode::Plain, "status", finalized.status);
-        super::print_surface_line(
-            super::RenderMode::Plain,
-            "source run",
-            &dispatch_receipt.run_id,
+        println!(
+            "{}",
+            consume_resume_toon_text(
+                surface_name,
+                &finalized.status,
+                &dispatch_receipt.run_id,
+                dispatch_packet_path,
+                &snapshot_path,
+                None,
+                None,
+            )
         );
-        super::print_surface_line(
-            super::RenderMode::Plain,
-            "source packet",
-            dispatch_packet_path,
-        );
-        super::print_surface_line(super::RenderMode::Plain, "snapshot path", &snapshot_path);
     }
     Ok(finalized.status == "pass")
 }
@@ -4886,7 +4994,7 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
             scoped_status
         } else {
             return Err(format!(
-                "Default `vida taskflow consume continue --json` resolved latest run `{}`, but the current session does not own run `{}`. Pass `--run-id {}` only from an owning session, bind the intended bounded unit explicitly, or refresh status/recovery before continuing.",
+                "Default `vida taskflow consume continue` resolved latest run `{}`, but the current session does not own run `{}`. Pass `--run-id {}` only from an owning session, bind the intended bounded unit explicitly, or refresh status/recovery before continuing.",
                 global_status.run_id, global_status.run_id, global_status.run_id
             ));
         }
@@ -4983,7 +5091,7 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
     }
     if terminal_completed_run {
         return Err(format!(
-            "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id> --json` or pass `--run-id {}` to refresh that specific run.",
+            "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id>` or pass `--run-id {}` to refresh that specific run.",
             status.run_id, status.run_id, status.run_id
         ));
     }
@@ -5001,7 +5109,7 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
             .as_str()
             .unwrap_or("unknown");
         return Err(format!(
-            "Latest explicit continuation binding points to run `{binding_run_id}` while the latest run-graph status is `{}`. Default `vida taskflow consume continue --json` must not silently reselect the stale latest run; pass `--run-id {binding_run_id}` or refresh/bind the intended bounded unit explicitly.",
+            "Latest explicit continuation binding points to run `{binding_run_id}` while the latest run-graph status is `{}`. Default `vida taskflow consume continue` must not silently reselect the stale latest run; pass `--run-id {binding_run_id}` or refresh/bind the intended bounded unit explicitly.",
             status.run_id
         ));
     }
@@ -5012,7 +5120,7 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
             .as_str()
             .unwrap_or("unknown");
         return Err(format!(
-            "Latest continuation binding for run `{}` points to `{unit_kind}`, which is not resumeable through default `vida taskflow consume continue --json`. Pass `--run-id {}` to refresh the completed run explicitly or bind/shape the next bounded unit before continuing.",
+            "Latest continuation binding for run `{}` points to `{unit_kind}`, which is not resumeable through default `vida taskflow consume continue`. Pass `--run-id {}` to refresh the completed run explicitly or bind/shape the next bounded unit before continuing.",
             status.run_id, status.run_id
         ));
     }
@@ -5583,7 +5691,7 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
                 });
             if ambiguous_active_downstream_result {
                 return Err(format!(
-                    "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id> --json` or pass `--run-id {}` to refresh that specific run.",
+                    "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id>` or pass `--run-id {}` to refresh that specific run.",
                     status.run_id, status.run_id, status.run_id
                 ));
             }
@@ -6136,7 +6244,7 @@ fn try_emit_cached_deferred_agent_handoff_projection(
                     "dispatch_receipt_present": true,
                     "continuation_binding_present": true,
                     "stale_state_suspected": false,
-                    "next_lawful_operator_action": format!("vida lane show {run_id} --json"),
+                    "next_lawful_operator_action": format!("vida lane show {run_id}"),
                 },
                 "snapshot_path": serde_json::Value::Null,
                 "failure_control_evidence": failure_control_evidence,
@@ -6156,19 +6264,17 @@ fn try_emit_cached_deferred_agent_handoff_projection(
                     .expect("cached deferred handoff output should render as json")
             );
         } else {
-            super::print_surface_header(super::RenderMode::Plain, surface_name);
-            super::print_surface_line(super::RenderMode::Plain, "status", finalized.status);
-            super::print_surface_line(super::RenderMode::Plain, "source run", run_id);
-            super::print_surface_line(
-                super::RenderMode::Plain,
-                "source packet",
-                dispatch_packet_path,
-            );
-            super::print_surface_line(
-                super::RenderMode::Plain,
-                "projection path",
-                &projection_path.display().to_string(),
-            );
+            let output_payload = serde_json::json!({
+                "surface": surface_name,
+                "status": finalized.status,
+                "blocker_codes": finalized.blocker_codes.clone(),
+                "next_actions": finalized.next_actions.clone(),
+                "artifact_refs": finalized.artifact_refs.clone(),
+                "source_run_id": run_id,
+                "source_dispatch_packet_path": dispatch_packet_path,
+                "projection_path": projection_path.display().to_string(),
+            });
+            print_consume_continue_default_toon(surface_name, &output_payload);
         }
     }
     Ok(Some(ExitCode::SUCCESS))
@@ -6199,9 +6305,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
         Err(error) => {
             if emit_output {
                 eprintln!("{error}");
-                if as_json {
-                    emit_consume_continue_resume_error_json(&error, surface_name);
-                }
+                emit_consume_continue_resume_error(&error, surface_name, as_json);
             }
             return ExitCode::from(1);
         }
@@ -6222,9 +6326,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 {
                     if emit_output {
                         eprintln!("{error}");
-                        if as_json {
-                            emit_consume_continue_resume_error_json(&error, surface_name);
-                        }
+                        emit_consume_continue_resume_error(&error, surface_name, as_json);
                     }
                     return ExitCode::from(1);
                 }
@@ -6242,9 +6344,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 Err(error) => {
                     if emit_output {
                         eprintln!("{error}");
-                        if as_json {
-                            emit_consume_continue_resume_error_json(&error, surface_name);
-                        }
+                        emit_consume_continue_resume_error(&error, surface_name, as_json);
                     }
                     return ExitCode::from(1);
                 }
@@ -6259,9 +6359,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 {
                     if emit_output {
                         eprintln!("{error}");
-                        if as_json {
-                            emit_consume_continue_resume_error_json(&error, surface_name);
-                        }
+                        emit_consume_continue_resume_error(&error, surface_name, as_json);
                     }
                     return ExitCode::from(1);
                 }
@@ -6277,9 +6375,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 ) {
                     if emit_output {
                         eprintln!("{error}");
-                    }
-                    if as_json && emit_output {
-                        emit_consume_continue_resume_error_json(&error, surface_name);
+                        emit_consume_continue_resume_error(&error, surface_name, as_json);
                     }
                     return ExitCode::from(1);
                 }
@@ -6342,11 +6438,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 Err(error) => {
                     if emit_output {
                         eprintln!("{error}");
-                    }
-                    if as_json {
-                        if emit_output {
-                            emit_consume_continue_resume_error_json(&error, surface_name);
-                        }
+                        emit_consume_continue_resume_error(&error, surface_name, as_json);
                     }
                     return ExitCode::from(1);
                 }
@@ -6642,11 +6734,8 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                                 }
                             }
                         }
-                        if as_json && emit_output {
-                            emit_consume_continue_resume_error_json(&error, surface_name);
-                            return ExitCode::from(1);
-                        }
                         if emit_output {
+                            emit_consume_continue_resume_error(&error, surface_name, as_json);
                             eprintln!(
                                 "Failed to execute resumed runtime dispatch handoff: {error}"
                             );
@@ -6661,12 +6750,13 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     {
                         Ok(store) => store,
                         Err(error) => {
-                            if as_json && emit_output {
-                                emit_consume_continue_state_access_blocker_json(
+                            if emit_output {
+                                emit_consume_continue_state_access_blocker(
                                     &state_root,
                                     surface_name,
                                     "reopening authoritative state store after resumed runtime dispatch",
                                     &error,
+                                    as_json,
                                 );
                                 return ExitCode::from(1);
                             }
@@ -6776,11 +6866,10 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         }
                     }
                 }
-                if as_json && emit_output {
-                    emit_consume_continue_resume_error_json(&error, surface_name);
-                    return ExitCode::from(1);
+                if emit_output {
+                    emit_consume_continue_resume_error(&error, surface_name, as_json);
+                    eprintln!("{error}");
                 }
-                eprintln!("{error}");
                 return ExitCode::from(1);
             }
             let store = match fail_fast_state_store_open(
@@ -6791,12 +6880,13 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             {
                 Ok(store) => store,
                 Err(error) => {
-                    if as_json && emit_output {
-                        emit_consume_continue_state_access_blocker_json(
+                    if emit_output {
+                        emit_consume_continue_state_access_blocker(
                             &state_root,
                             surface_name,
                             "reopening authoritative state store before resumed receipt persistence",
                             &error,
+                            as_json,
                         );
                         return ExitCode::from(1);
                     }
@@ -6874,12 +6964,13 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             }
         }
         Err(error) => {
-            if as_json && emit_output {
-                emit_consume_continue_state_access_blocker_json(
+            if emit_output {
+                emit_consume_continue_state_access_blocker(
                     &state_dir,
                     surface_name,
                     "opening authoritative state store",
                     &error,
+                    as_json,
                 );
                 return ExitCode::from(1);
             }
@@ -6935,12 +7026,11 @@ pub(crate) async fn run_taskflow_consume_advance_command(
         )
         .await;
         if exit != ExitCode::SUCCESS {
-            if as_json {
-                emit_consume_continue_resume_error_json(
-                    "TaskFlow consume advance failed while executing the next resumed dispatch step.",
-                    "vida taskflow consume advance",
-                );
-            }
+            emit_consume_continue_resume_error(
+                "TaskFlow consume advance failed while executing the next resumed dispatch step.",
+                "vida taskflow consume advance",
+                as_json,
+            );
             return exit;
         }
 
@@ -8142,7 +8232,8 @@ agent_system:
 
         assert!(next_actions
             .iter()
-            .any(|action| action.contains("vida taskflow recovery latest --json")));
+            .any(|action| action.contains("vida taskflow recovery latest")));
+        assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert!(!next_actions
             .iter()
             .any(|action| action.contains("clean review evidence")));
@@ -12108,7 +12199,8 @@ agent_system:
 
         assert!(error.contains("active exception takeover"));
         assert!(error.contains("recovery_ready is false"));
-        assert!(error.contains("vida lane show run-exception-takeover --json"));
+        assert!(error.contains("vida lane show run-exception-takeover"));
+        assert!(!error.contains("vida lane show run-exception-takeover --json"));
         assert!(error.contains("owned_write_scope"));
 
         let payload =
@@ -16033,7 +16125,12 @@ agent_system:
             .any(|action| action
                 .as_str()
                 .unwrap_or_default()
-                .contains("continuation bind <run-id> --task-id <task-id> --json")));
+                .contains("continuation bind <run-id> --task-id <task-id>")));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be array")
+            .iter()
+            .all(|action| !action.as_str().unwrap_or_default().contains("--json")));
     }
 
     #[test]
@@ -16051,13 +16148,19 @@ agent_system:
         );
         assert!(next_actions.iter().any(|action| {
             let action = action.as_str().unwrap_or_default();
-            action.contains("consume continue --run-id run-active-blocked --json")
-                || action.contains("consume continue --run-id 'run-active-blocked' --json")
+            action.contains("consume continue --run-id run-active-blocked")
+                || action.contains("consume continue --run-id 'run-active-blocked'")
         }));
+        assert!(next_actions
+            .iter()
+            .all(|action| !action.as_str().unwrap_or_default().contains("--json")));
         assert!(next_actions.iter().all(|action| !action
             .as_str()
             .unwrap_or_default()
             .contains("continuation bind")));
+        assert!(next_actions
+            .iter()
+            .all(|action| !action.as_str().unwrap_or_default().contains("--json")));
     }
 
     #[test]

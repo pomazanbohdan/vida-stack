@@ -614,6 +614,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!("  vida taskflow bootstrap-spec \"<request>\" --json");
             println!();
+            println!("Output modes:");
+            println!(
+                "  Default human output uses compact TOON/plain with only current actionable fields."
+            );
+            println!("  --json emits the machine-readable operator contract.");
+            println!();
             println!("Failure modes:");
             println!(
                 "  `bundle` requires a booted authoritative state root and fails closed if runtime bundle surfaces are missing."

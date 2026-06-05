@@ -104,5 +104,7 @@ Minimal proof for this skill's work:
 9. If a focused test exposes a production defect during batch writing, fix the production defect and continue completing the remaining batch before broad/full verification.
 10. Prefer smaller integration tests with varied fixtures over one huge scenario. Cover multiple meaningful variants such as ready path, blocked DocFlow, blocked closure admission, dispatch packet preview blocked, persisted snapshot parity, and downstream dispatch gating.
 11. When a defect is architectural, tests should prove the invariant at the contract boundary and through at least one public CLI surface. Avoid tests that only encode the immediate symptom line-by-line.
+12. For command-output changes, integration coverage must prove the default human output is compact TOON/plain, the explicit `--json` path remains machine-readable, and `--help` documents both modes.
+13. Human-facing `next_actions`, remediation hints, and default command suggestions must prefer default commands without `--json`. Keep `--json` in option/help text and JSON-specific machine workflows only.
 
 Do not close GitHub issues, epics, or TaskFlow parents until the relevant children and proof targets are current.

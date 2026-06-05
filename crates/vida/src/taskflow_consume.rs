@@ -178,6 +178,19 @@ fn print_consume_continue_help() {
         "  vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]"
     );
     println!();
+    println!("Output:");
+    println!("  default              Emit compact TOON operator output.");
+    println!("  --json               Emit machine-readable JSON output.");
+    println!();
+    println!("Options:");
+    println!("  --run-id <run_id>    Resume or refresh a concrete run.");
+    println!("  --dispatch-packet <path>");
+    println!("                       Resume from an explicit dispatch packet.");
+    println!("  --downstream-packet <path>");
+    println!("                       Resume from an explicit downstream packet.");
+    println!("  --json               Emit machine-readable output.");
+    println!("  -h, --help           Print help.");
+    println!();
     println!("Remediation:");
     println!("  If resume is blocked, inspect `vida taskflow recovery latest`.");
 }
@@ -187,6 +200,16 @@ fn print_consume_advance_help() {
     println!();
     println!("Usage:");
     println!("  vida taskflow consume advance [--run-id <run_id>] [--max-rounds <n>] [--json]");
+    println!();
+    println!("Output:");
+    println!("  default              Emit compact TOON operator output.");
+    println!("  --json               Emit machine-readable JSON output.");
+    println!();
+    println!("Options:");
+    println!("  --run-id <run_id>    Advance a concrete run.");
+    println!("  --max-rounds <n>     Limit automatic resume rounds.");
+    println!("  --json               Emit machine-readable output.");
+    println!("  -h, --help           Print help.");
     println!();
     println!("Remediation:");
     println!("  If advance is blocked, inspect `vida taskflow recovery latest`.");
@@ -974,14 +997,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             )
                             .await
                             {
-                                if as_json {
-                                    super::taskflow_consume_resume::emit_consume_continue_resume_error_json(
-                                        &error,
-                                        "vida taskflow consume final",
-                                    );
-                                    return ExitCode::from(1);
-                                }
-                                eprintln!("Failed to execute runtime dispatch handoff: {error}");
+                                super::taskflow_consume_resume::emit_consume_continue_resume_error(
+                                    &error,
+                                    "vida taskflow consume final",
+                                    as_json,
+                                );
                                 return ExitCode::from(1);
                             }
                         }
