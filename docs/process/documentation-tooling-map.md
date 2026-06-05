@@ -44,6 +44,9 @@ This map covers project-facing documentation tooling for the active `vida-stack`
 14. `artifact-impact [--file <file> | --artifact <artifact_path>] [--format toon|jsonl]`
 15. `task-impact --root <dir> --task-id <id> [--format toon|jsonl]`
 16. `links <file-or-dir> [--format toon|jsonl]`
+17. `proofcheck --task <task-id> [--json] [--compact]`
+18. `closeout --changed [--json] [--compact]`
+19. `closeout --task <task-id> [--json] [--compact]`
 
 ## Relation Keys
 
@@ -80,7 +83,10 @@ These relation keys are project-neutral ownership and impact metadata. They appl
 7. `readiness-check --profile active-canon [--format toon|jsonl]`
 8. `readiness-write --profile active-canon [--canonical]`
 9. `proofcheck --profile active-canon-strict [files...] [--layer <N>] [--format toon|jsonl]`
-10. `doctor --root <dir> [--show-warnings] [--format toon|jsonl] [--fail-on-warnings] [--layer <N>]`
+10. `proofcheck --task <task-id> [--json] [--compact]`
+11. `closeout --changed [--json] [--compact]`
+12. `closeout --task <task-id> [--json] [--compact]`
+13. `doctor --root <dir> [--show-warnings] [--format toon|jsonl] [--fail-on-warnings] [--layer <N>]`
 
 ## Activation Triggers
 
@@ -102,19 +108,22 @@ Read this map when:
 6. use `activation-check` whenever protocol activation wiring changed,
 7. use `protocol-coverage-check` whenever canonical protocol rows, protocol-bearing artifacts, or activation-index wiring changed,
 8. use `readiness-check` whenever readiness law, projection parity, canonical bundle shape, compatibility classes, or boot-gate artifacts changed,
-9. use `readiness-write --canonical` when downstream automation or runtime proving needs the current shared readiness artifact.
-10. canonical generated DocFlow artifacts live at:
+9. use `proofcheck --task <task-id>` when the closeout decision needs DocFlow changelog evidence bound to a TaskFlow task id.
+10. use `closeout --changed` for the current git changed markdown set and `closeout --task <task-id>` for task-bound documentation evidence before closing a documentation-sensitive task.
+11. `proofcheck --task` and `closeout` default to compact TOON/plain operator output; use `--json` for machine-readable gates and `--compact` when large changed-doc lists are not needed.
+12. use `readiness-write --canonical` when downstream automation or runtime proving needs the current shared readiness artifact.
+13. canonical generated DocFlow artifacts live at:
     - `vida/config/docflow-registry.current.jsonl`
     - `vida/config/docflow-readiness.current.jsonl`
-11. root-scoped inventory commands inherit the canonical ignore policy from `vida/config/docflow/docsys_policy.yaml`; do not compensate for `_temp/`, `dist/**`, or other ignored trees with manual post-filtering.
-12. when authoring a bounded feature/change design doc, start from `docs/framework/templates/feature-design-document.template.md` and keep the heading order stable instead of improvising a new document shape,
-13. for design-first feature delivery, open one feature epic and one spec-pack task in `vida taskflow` before implementation, keep the design artifact canonical through `vida docflow`, and close the spec-pack task only after the design artifact is finalized and validated.
-14. when one decision inside that design needs durable standalone recording, link a separate ADR rather than collapsing the whole change into one narrative document.
-15. use `vida taskflow bootstrap-spec "<request>" --json` as the preferred one-shot launcher surface when a design-first feature request must materialize the initial feature epic, spec-pack task, and canonical design-doc scaffold in one pass.
-16. `vida docflow check-file`, `check`, `fastcheck`, and `readiness-check` now fail closed when a canonical project-visible doc is missing its required owning-map registration or when `AGENTS.sidecar.md` omits required bootstrap-visible documentation pointers.
-17. use `vida docflow report-check --path <file>` when the bounded proof target is the required runtime reporting prefix shape (`Thinking mode`, `Requests|Tasks`, `Agents`, `Reasoning summary`) rather than markdown footer law.
-18. when a documentation change creates or reroutes a canonical project-visible document surface, update the owning map/index and, when bootstrap-visible topology changed, update `docs/project-root-map.md` and `AGENTS.sidecar.md` in the same bounded change.
-19. when a session creates or updates project-local skills, validate the skill folder and update the owning process map or runtime-development environment runbook in the same bounded batch.
+14. root-scoped inventory commands inherit the canonical ignore policy from `vida/config/docflow/docsys_policy.yaml`; do not compensate for `_temp/`, `dist/**`, or other ignored trees with manual post-filtering.
+15. when authoring a bounded feature/change design doc, start from `docs/framework/templates/feature-design-document.template.md` and keep the heading order stable instead of improvising a new document shape,
+16. for design-first feature delivery, open one feature epic and one spec-pack task in `vida taskflow` before implementation, keep the design artifact canonical through `vida docflow`, and close the spec-pack task only after the design artifact is finalized and validated.
+17. when one decision inside that design needs durable standalone recording, link a separate ADR rather than collapsing the whole change into one narrative document.
+18. use `vida taskflow bootstrap-spec "<request>" --json` as the preferred one-shot launcher surface when a design-first feature request must materialize the initial feature epic, spec-pack task, and canonical design-doc scaffold in one pass.
+19. `vida docflow check-file`, `check`, `fastcheck`, and `readiness-check` now fail closed when a canonical project-visible doc is missing its required owning-map registration or when `AGENTS.sidecar.md` omits required bootstrap-visible documentation pointers.
+20. use `vida docflow report-check --path <file>` when the bounded proof target is the required runtime reporting prefix shape (`Thinking mode`, `Requests|Tasks`, `Agents`, `Reasoning summary`) rather than markdown footer law.
+21. when a documentation change creates or reroutes a canonical project-visible document surface, update the owning map/index and, when bootstrap-visible topology changed, update `docs/project-root-map.md` and `AGENTS.sidecar.md` in the same bounded change.
+22. when a session creates or updates project-local skills, validate the skill folder and update the owning process map or runtime-development environment runbook in the same bounded batch.
 
 ## Boundary Rule
 
@@ -131,5 +140,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/documentation-tooling-map.md
 created_at: '2026-03-10T09:45:00+02:00'
-updated_at: 2026-06-04T03:53:58.4847041Z
+updated_at: 2026-06-05T05:42:51.8222315Z
 changelog_ref: documentation-tooling-map.changelog.jsonl

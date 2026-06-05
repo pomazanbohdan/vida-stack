@@ -186,6 +186,278 @@ fn check_json_renders_blocked_and_pass_envelopes() {
     fs::remove_dir_all(pass_root).expect("pass root should be removed");
 }
 
+fn write_task_doc(root: &std::path::Path, task_id: &str) {
+    fs::create_dir_all(root.join("docs/process")).expect("process dir should be created");
+    fs::write(
+        root.join("docs/process/a.md"),
+        "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: test\nsource_path: docs/process/a.md\nstatus: draft\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-06-05T00:00:00Z\nupdated_at: 2026-06-05T00:00:00Z\n",
+    )
+    .expect("markdown should be written");
+    fs::write(
+        root.join("docs/process/a.changelog.jsonl"),
+        format!(
+            "{{\"ts\":\"2026-06-05T00:00:00Z\",\"event\":\"artifact_updated\",\"artifact_path\":\"process/a\",\"task_id\":\"{task_id}\",\"reason\":\"test\"}}\n"
+        ),
+    )
+    .expect("changelog should be written");
+}
+
+#[test]
+fn proofcheck_help_exposes_task_json_and_compact_modes() {
+    let context = vida_test_support::CommandContext::empty();
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args(["proofcheck", "--help"])
+        .output()
+        .expect("docflow proofcheck help should run");
+
+    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--task <TASK_ID>"));
+    assert!(stdout.contains("--json"));
+    assert!(stdout.contains("--compact"));
+    assert!(stdout.contains("--format <FORMAT>"));
+}
+
+#[test]
+fn closeout_help_exposes_changed_task_json_and_compact_modes() {
+    let context = vida_test_support::CommandContext::empty();
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args(["closeout", "--help"])
+        .output()
+        .expect("docflow closeout help should run");
+
+    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--changed"));
+    assert!(stdout.contains("--task <TASK_ID>"));
+    assert!(stdout.contains("--json"));
+    assert!(stdout.contains("--compact"));
+    assert!(stdout.contains("--format <FORMAT>"));
+}
+
+#[test]
+fn proofcheck_task_outputs_default_toon_and_explicit_compact_json() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("proofcheck-task");
+    write_task_doc(&root, "TASK-1");
+
+    let toon = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "proofcheck",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--task",
+            "TASK-1",
+        ])
+        .output()
+        .expect("docflow proofcheck task toon should run");
+    assert!(toon.status.success(), "{}", context.diagnostics(&toon));
+    let toon_stdout = String::from_utf8_lossy(&toon.stdout);
+    assert!(toon_stdout.starts_with("proofcheck\n  mode: task"));
+    assert!(toon_stdout.contains("task_id: TASK-1"));
+    assert!(toon_stdout.contains("changed_doc_count: 1"));
+    assert!(!toon_stdout.trim_start().starts_with('{'));
+    assert!(!toon_stdout.contains("--json"));
+
+    let json = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "proofcheck",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--task",
+            "TASK-1",
+            "--json",
+            "--compact",
+        ])
+        .output()
+        .expect("docflow proofcheck task json should run");
+    assert!(json.status.success(), "{}", context.diagnostics(&json));
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("proofcheck task json should parse");
+    assert_eq!(parsed["command"], "proofcheck");
+    assert_eq!(parsed["mode"], "task");
+    assert_eq!(parsed["task_id"], "TASK-1");
+    assert_eq!(parsed["changed_doc_count"], 1);
+    assert_eq!(
+        parsed["changed_docs"]
+            .as_array()
+            .expect("changed_docs array")
+            .len(),
+        0
+    );
+    assert!(parsed["task_close_allowed"].is_boolean());
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
+#[test]
+fn proofcheck_task_uses_root_docflow_evidence_with_default_profile() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("proofcheck-task-default-profile");
+    write_task_doc(&root, "TASK-DEFAULT");
+
+    let json = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "proofcheck",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--task",
+            "TASK-DEFAULT",
+            "--json",
+            "--compact",
+        ])
+        .output()
+        .expect("docflow proofcheck task json should run with default profile");
+    assert!(json.status.success(), "{}", context.diagnostics(&json));
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("proofcheck task json should parse");
+    assert_eq!(parsed["command"], "proofcheck");
+    assert_eq!(parsed["mode"], "task");
+    assert_eq!(parsed["task_id"], "TASK-DEFAULT");
+    assert_eq!(parsed["changed_doc_count"], 1);
+    assert_eq!(parsed["verdict"], "blocking");
+    let blocker_codes = parsed["blocker_codes"]
+        .as_array()
+        .expect("blocker_codes should be an array");
+    assert!(blocker_codes.contains(&serde_json::Value::String(
+        "docflow_check_blocking".to_string()
+    )));
+    assert!(!blocker_codes.contains(&serde_json::Value::String(
+        "docflow_closeout_failed".to_string()
+    )));
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
+#[test]
+fn closeout_changed_outputs_default_toon_and_explicit_json() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("closeout-changed");
+    write_task_doc(&root, "TASK-2");
+    let git_init = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("init")
+        .output()
+        .expect("git init should run");
+    assert!(
+        git_init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_init.stderr)
+    );
+
+    let toon = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "closeout",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--changed",
+        ])
+        .output()
+        .expect("docflow closeout changed toon should run");
+    assert!(toon.status.success(), "{}", context.diagnostics(&toon));
+    let toon_stdout = String::from_utf8_lossy(&toon.stdout);
+    assert!(toon_stdout.starts_with("closeout\n  mode: changed"));
+    assert!(toon_stdout.contains("changed_doc_count: 1"));
+    assert!(!toon_stdout.trim_start().starts_with('{'));
+    assert!(!toon_stdout.contains("--json"));
+
+    let json = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "closeout",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--changed",
+            "--json",
+        ])
+        .output()
+        .expect("docflow closeout changed json should run");
+    assert!(json.status.success(), "{}", context.diagnostics(&json));
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("closeout changed json should parse");
+    assert_eq!(parsed["command"], "closeout");
+    assert_eq!(parsed["mode"], "changed");
+    assert_eq!(parsed["changed_doc_count"], 1);
+    assert_eq!(parsed["changed_docs"][0], "docs/process/a.md");
+    assert!(parsed["task_close_allowed"].is_boolean());
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
+#[test]
+fn closeout_and_proofcheck_report_missing_evidence_blockers() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("missing-evidence");
+    fs::create_dir_all(&root).expect("root should be created");
+    let git_init = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("init")
+        .output()
+        .expect("git init should run");
+    assert!(
+        git_init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_init.stderr)
+    );
+
+    let proof = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "proofcheck",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--task",
+            "TASK-MISSING",
+            "--json",
+        ])
+        .output()
+        .expect("docflow proofcheck missing evidence should run");
+    assert!(proof.status.success(), "{}", context.diagnostics(&proof));
+    let proof_json: serde_json::Value =
+        serde_json::from_slice(&proof.stdout).expect("proofcheck missing json should parse");
+    assert_eq!(proof_json["verdict"], "blocking");
+    assert_eq!(proof_json["task_close_allowed"], false);
+    assert_eq!(
+        proof_json["blocker_codes"][0],
+        "missing_docflow_task_evidence"
+    );
+
+    let closeout = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "closeout",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--changed",
+            "--json",
+        ])
+        .output()
+        .expect("docflow closeout no changed docs should run");
+    assert!(
+        closeout.status.success(),
+        "{}",
+        context.diagnostics(&closeout)
+    );
+    let closeout_json: serde_json::Value =
+        serde_json::from_slice(&closeout.stdout).expect("closeout no changed json should parse");
+    assert_eq!(closeout_json["verdict"], "blocking");
+    assert_eq!(closeout_json["task_close_allowed"], false);
+    assert_eq!(closeout_json["blocker_codes"][0], "no_changed_docflow_docs");
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
 #[test]
 fn version_renders_as_binary() {
     let context = vida_test_support::CommandContext::empty();

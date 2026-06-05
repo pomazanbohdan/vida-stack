@@ -54,6 +54,7 @@ pub enum Command {
     )]
     RepairFooter(RepairFooterArgs),
     Proofcheck(ProofcheckArgs),
+    Closeout(CloseoutArgs),
     Doctor(DoctorArgs),
     Relations(RelationsArgs),
     RelationsScan(RegistryScanArgs),
@@ -440,8 +441,32 @@ pub struct ProofcheckArgs {
     pub layer: Option<usize>,
     #[arg(long)]
     pub root: Option<String>,
+    #[arg(long = "task")]
+    pub task_id: Option<String>,
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
+    #[arg(long = "compact", default_value_t = false)]
+    pub compact: bool,
     #[arg(long, default_value = "active-canon-strict")]
     pub profile: String,
+    #[arg(long = "format", default_value = "toon")]
+    pub format: String,
+}
+
+#[derive(Debug, Args)]
+pub struct CloseoutArgs {
+    #[arg(long)]
+    pub root: Option<String>,
+    #[arg(long, default_value = "")]
+    pub profile: String,
+    #[arg(long = "changed", default_value_t = false)]
+    pub changed: bool,
+    #[arg(long = "task")]
+    pub task_id: Option<String>,
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
+    #[arg(long = "compact", default_value_t = false)]
+    pub compact: bool,
     #[arg(long = "format", default_value = "toon")]
     pub format: String,
 }
@@ -465,6 +490,25 @@ struct ProofcheckSummaryRow {
     doctor_error_rows: usize,
     doctor_warning_rows: usize,
     verdict: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DocflowCloseoutVerdict {
+    command: String,
+    mode: String,
+    task_id: Option<String>,
+    root: String,
+    profile: String,
+    changed_doc_count: usize,
+    changed_docs: Vec<String>,
+    fastcheck_rows: usize,
+    readiness_rows: usize,
+    doctor_error_rows: usize,
+    doctor_warning_rows: usize,
+    task_close_allowed: bool,
+    verdict: String,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -830,6 +874,7 @@ pub fn run(cli: Cli) -> String {
             Err(error) => format!("rename-artifact\n  error: {error}"),
         },
         Command::Proofcheck(args) => render_proofcheck(&args),
+        Command::Closeout(args) => render_closeout(&args),
         Command::Doctor(args) => {
             let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
@@ -1579,7 +1624,38 @@ fn render_proofcheck_layer(layer: usize, paths: &[String]) -> String {
 }
 
 fn render_proofcheck(args: &ProofcheckArgs) -> String {
-    match args.format.as_str() {
+    if let Some(task_id) = args
+        .task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let profile = task_bound_closeout_profile(&args.profile);
+        let format = if args.json {
+            "json"
+        } else {
+            args.format.as_str()
+        };
+        return match task_closeout_verdict(
+            args.root.as_deref(),
+            profile,
+            Some(task_id),
+            "task",
+            task_changed_doc_paths(args.root.as_deref(), profile, task_id),
+        ) {
+            Ok(verdict) => {
+                render_docflow_closeout_verdict("proofcheck", &verdict, format, args.compact)
+            }
+            Err(error) => render_docflow_closeout_error("proofcheck", format, Some(task_id), error),
+        };
+    }
+
+    let format = if args.json {
+        "json"
+    } else {
+        args.format.as_str()
+    };
+    match format {
         "toon" => match args.layer {
             Some(layer) => match layer_scope_paths(layer) {
                 Ok(paths) => render_proofcheck_layer(layer, &paths),
@@ -1672,6 +1748,263 @@ fn render_proofcheck_jsonl(args: &ProofcheckArgs) -> String {
                 .to_string()
         })
     })
+}
+
+fn render_closeout(args: &CloseoutArgs) -> String {
+    let format = if args.json {
+        "json"
+    } else {
+        args.format.as_str()
+    };
+    let mode = if args.changed { "changed" } else { "task" };
+    let paths = if args.changed {
+        changed_markdown_paths(args.root.as_deref())
+    } else if let Some(task_id) = args
+        .task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        task_changed_doc_paths(args.root.as_deref(), &args.profile, task_id)
+    } else {
+        Err("closeout requires --changed or --task <task-id>".to_string())
+    };
+    match task_closeout_verdict(
+        args.root.as_deref(),
+        &args.profile,
+        args.task_id.as_deref(),
+        mode,
+        paths,
+    ) {
+        Ok(verdict) => render_docflow_closeout_verdict("closeout", &verdict, format, args.compact),
+        Err(error) => {
+            render_docflow_closeout_error("closeout", format, args.task_id.as_deref(), error)
+        }
+    }
+}
+
+fn task_bound_closeout_profile(profile: &str) -> &str {
+    if profile == "active-canon-strict" {
+        ""
+    } else {
+        profile
+    }
+}
+
+fn task_changed_doc_paths(
+    root: Option<&str>,
+    profile: &str,
+    task_id: &str,
+) -> Result<Vec<String>, String> {
+    let rows = changelog_task_rows(root, profile, task_id).or_else(|error| {
+        if profile.is_empty() {
+            Err(error)
+        } else {
+            changelog_task_rows(root, "", task_id)
+        }
+    })?;
+    let mut paths = BTreeSet::new();
+    for row in rows {
+        if let Some(path) = row.get("path").and_then(Value::as_str).map(str::trim) {
+            if !path.is_empty() {
+                paths.insert(path.to_string());
+            }
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn changed_markdown_paths(root: Option<&str>) -> Result<Vec<String>, String> {
+    let root_path = root
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(runtime_root);
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root_path)
+        .args(["status", "--short", "--", ":(glob)**/*.md"])
+        .output()
+        .map_err(|error| format!("git_status_failed:{error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git_status_failed:{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let mut paths = BTreeSet::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let status = &line[..2];
+        if status == " D" || status == "D " || status == "DD" {
+            continue;
+        }
+        let path = line[3..]
+            .rsplit(" -> ")
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .trim_matches('"');
+        if path.ends_with(".md") && !path.is_empty() {
+            paths.insert(path.replace('\\', "/"));
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn task_closeout_verdict(
+    root: Option<&str>,
+    profile: &str,
+    task_id: Option<&str>,
+    mode: &str,
+    paths: Result<Vec<String>, String>,
+) -> Result<DocflowCloseoutVerdict, String> {
+    let changed_docs = paths?;
+    let fast_rows = if changed_docs.is_empty() {
+        Vec::new()
+    } else {
+        fastcheck_rows(root, profile, &changed_docs)?
+    };
+    let readiness = if changed_docs.is_empty() {
+        Vec::new()
+    } else {
+        readiness_rows(root, profile, &changed_docs)?
+    };
+    let targets = if changed_docs.is_empty() {
+        Vec::new()
+    } else {
+        resolve_profile_targets(root, profile, &changed_docs)?
+    };
+    let doctor_rows = doctor_rows_for_targets(&targets, true);
+    let doctor_error_rows = doctor_rows
+        .iter()
+        .filter(|row| row.severity == "error")
+        .count();
+    let doctor_warning_rows = doctor_rows
+        .iter()
+        .filter(|row| row.severity == "warning")
+        .count();
+    let mut blocker_codes = Vec::new();
+    if changed_docs.is_empty() {
+        blocker_codes.push(if mode == "task" {
+            "missing_docflow_task_evidence".to_string()
+        } else {
+            "no_changed_docflow_docs".to_string()
+        });
+    }
+    if !fast_rows.is_empty() || !readiness.is_empty() {
+        blocker_codes.push("docflow_check_blocking".to_string());
+    }
+    if doctor_error_rows > 0 {
+        blocker_codes.push("docflow_doctor_error".to_string());
+    }
+    let task_close_allowed = !changed_docs.is_empty() && blocker_codes.is_empty();
+    let verdict = if task_close_allowed { "ok" } else { "blocking" }.to_string();
+    let mut next_actions = Vec::new();
+    if task_close_allowed {
+        next_actions.push("Continue task closeout with the current DocFlow evidence.".to_string());
+    } else if changed_docs.is_empty() && mode == "task" {
+        next_actions.push(
+            "Record DocFlow changelog evidence with the active task id before closing the task."
+                .to_string(),
+        );
+        if let Some(task_id) = task_id {
+            next_actions.push(format!("Inspect task-bound DocFlow history with `docflow task-summary --task-id {task_id}`."));
+        }
+    } else if changed_docs.is_empty() {
+        next_actions.push(
+            "Change or finalize at least one markdown DocFlow artifact before closeout."
+                .to_string(),
+        );
+    } else {
+        next_actions.push("Run `docflow check` and clear blocking DocFlow validation or doctor rows before closing the task.".to_string());
+    }
+    Ok(DocflowCloseoutVerdict {
+        command: "docflow closeout".to_string(),
+        mode: mode.to_string(),
+        task_id: task_id.map(ToString::to_string),
+        root: root.unwrap_or_default().to_string(),
+        profile: profile.to_string(),
+        changed_doc_count: changed_docs.len(),
+        changed_docs,
+        fastcheck_rows: fast_rows.len(),
+        readiness_rows: readiness.len(),
+        doctor_error_rows,
+        doctor_warning_rows,
+        task_close_allowed,
+        verdict,
+        blocker_codes,
+        next_actions,
+    })
+}
+
+fn render_docflow_closeout_verdict(
+    command: &str,
+    verdict: &DocflowCloseoutVerdict,
+    format: &str,
+    compact: bool,
+) -> String {
+    if format == "json" {
+        let mut payload = serde_json::json!(verdict);
+        payload["command"] = command.into();
+        if compact {
+            payload["changed_docs"] = serde_json::Value::Array(Vec::new());
+        }
+        return serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+            format!("{{\"command\":\"{command}\",\"verdict\":\"blocking\",\"error\":\"encode_error:{error}\"}}")
+        });
+    }
+    if format == "jsonl" {
+        return encode_line(verdict).unwrap_or_else(|error| {
+            format!("{{\"command\":\"{command}\",\"verdict\":\"blocking\",\"error\":\"encode_error:{error}\"}}")
+        });
+    }
+    let mut lines = vec![
+        command.to_string(),
+        format!("  mode: {}", verdict.mode),
+        format!("  task_id: {}", verdict.task_id.as_deref().unwrap_or("")),
+        format!("  changed_doc_count: {}", verdict.changed_doc_count),
+        format!("  task_close_allowed: {}", verdict.task_close_allowed),
+        format!("  verdict: {}", verdict.verdict),
+        format!("  blocker_codes: {}", verdict.blocker_codes.join(",")),
+    ];
+    if !compact {
+        lines.push("  changed_docs:".to_string());
+        for path in &verdict.changed_docs {
+            lines.push(format!("    - {path}"));
+        }
+    }
+    lines.push("  next_actions:".to_string());
+    for action in &verdict.next_actions {
+        lines.push(format!("    - {action}"));
+    }
+    lines.join("\n")
+}
+
+fn render_docflow_closeout_error(
+    command: &str,
+    format: &str,
+    task_id: Option<&str>,
+    error: String,
+) -> String {
+    let payload = serde_json::json!({
+        "command": command,
+        "task_id": task_id,
+        "verdict": "blocking",
+        "task_close_allowed": false,
+        "blocker_codes": ["docflow_closeout_failed"],
+        "error": error,
+        "next_actions": ["Inspect DocFlow command inputs and retry the default command after the missing root, task, or changed-doc evidence is available."]
+    });
+    if format == "json" {
+        serde_json::to_string_pretty(&payload)
+            .unwrap_or_else(|_| format!("{{\"command\":\"{command}\",\"verdict\":\"blocking\"}}"))
+    } else {
+        format!(
+            "{command}\n  verdict: blocking\n  task_close_allowed: false\n  blocker_codes: docflow_closeout_failed\n  error: {}",
+            payload["error"].as_str().unwrap_or("unknown")
+        )
+    }
 }
 
 fn proofcheck_summary(args: &ProofcheckArgs) -> Result<ProofcheckSummaryRow, String> {

@@ -13475,6 +13475,112 @@ fn docflow_proxy_runs_task_summary_surfaces_in_process_when_supported() {
 }
 
 #[test]
+fn docflow_proxy_runs_task_bound_proofcheck_and_changed_closeout() {
+    let root = unique_state_dir();
+    scaffold_runtime_project_root(&root, "project");
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: test\nsource_path: docs/process/a.md\nstatus: draft\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-06-05T00:00:00Z\nupdated_at: 2026-06-05T00:00:00Z\n",
+    )
+    .expect("process markdown");
+    fs::write(
+        format!("{root}/docs/process/a.changelog.jsonl"),
+        "{\"ts\":\"2026-06-05T00:00:00Z\",\"event\":\"artifact_updated\",\"artifact_path\":\"process/a\",\"task_id\":\"vida-rf1\",\"reason\":\"test\"}\n",
+    )
+    .expect("process changelog");
+
+    let proof_toon = vida()
+        .args([
+            "docflow",
+            "proofcheck",
+            "--root",
+            &root,
+            "--profile",
+            "",
+            "--task",
+            "vida-rf1",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("docflow proofcheck task proxy should run");
+    assert!(proof_toon.status.success());
+    let proof_stdout = String::from_utf8_lossy(&proof_toon.stdout);
+    assert!(proof_stdout.starts_with("proofcheck\n  mode: task"));
+    assert!(proof_stdout.contains("task_id: vida-rf1"));
+    assert!(!proof_stdout.trim_start().starts_with('{'));
+    assert!(!proof_stdout.contains("--json"));
+
+    let proof_json = vida()
+        .args([
+            "docflow",
+            "proofcheck",
+            "--root",
+            &root,
+            "--profile",
+            "",
+            "--task",
+            "vida-rf1",
+            "--json",
+            "--compact",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("docflow proofcheck task json proxy should run");
+    assert!(proof_json.status.success());
+    let proof_payload: serde_json::Value = serde_json::from_slice(&proof_json.stdout)
+        .expect("docflow proofcheck task proxy json should parse");
+    assert_eq!(proof_payload["command"], "proofcheck");
+    assert_eq!(proof_payload["task_id"], "vida-rf1");
+    assert_eq!(proof_payload["changed_doc_count"], 1);
+    assert_eq!(
+        proof_payload["changed_docs"]
+            .as_array()
+            .expect("compact changed_docs should be array")
+            .len(),
+        0
+    );
+
+    let git_init = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("init")
+        .output()
+        .expect("git init should run");
+    assert!(
+        git_init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_init.stderr)
+    );
+    let closeout_json = vida()
+        .args([
+            "docflow",
+            "closeout",
+            "--root",
+            &root,
+            "--profile",
+            "",
+            "--changed",
+            "--json",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("docflow closeout changed proxy should run");
+    assert!(closeout_json.status.success());
+    let closeout_payload: serde_json::Value = serde_json::from_slice(&closeout_json.stdout)
+        .expect("docflow closeout changed proxy json should parse");
+    assert_eq!(closeout_payload["command"], "closeout");
+    assert_eq!(closeout_payload["mode"], "changed");
+    assert!(closeout_payload["changed_doc_count"].as_u64().unwrap_or(0) >= 1);
+    let changed_docs = closeout_payload["changed_docs"]
+        .as_array()
+        .expect("changed_docs should be array");
+    assert!(changed_docs.contains(&serde_json::Value::String("docs/process/a.md".to_string())));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
 fn docflow_proxy_runs_migrate_links_in_process_when_supported() {
     let root = unique_state_dir();
     scaffold_runtime_project_root(&root, "project");
