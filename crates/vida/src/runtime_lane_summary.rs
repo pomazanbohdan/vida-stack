@@ -690,11 +690,14 @@ fn default_development_flow(compiled_bundle: &serde_json::Value) -> Option<&serd
 }
 
 fn default_development_flow_has_lane(compiled_bundle: &serde_json::Value, lane_id: &str) -> bool {
-    default_development_flow(compiled_bundle)
-        .and_then(|flow| flow["lane_templates"].as_array())
-        .into_iter()
-        .flatten()
-        .any(|lane| lane["lane_id"].as_str() == Some(lane_id))
+    if let Some(flow) = default_development_flow(compiled_bundle) {
+        return flow["lane_templates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|lane| lane["lane_id"].as_str() == Some(lane_id));
+    }
+    matches!(lane_id, "implementation" | "coach" | "verification")
 }
 
 fn runtime_assignment_for_standard_dispatch_alias(
@@ -723,7 +726,6 @@ fn summarize_development_flow_route_from_catalog(
     compiled_bundle: &serde_json::Value,
     route_id: &str,
 ) -> Option<serde_json::Value> {
-    default_development_flow(compiled_bundle)?;
     let (task_class, runtime_role, preferred_alias_id, route) = match route_id {
         "implementation" => {
             let coach_required = default_development_flow_has_lane(compiled_bundle, "coach");
@@ -1455,6 +1457,9 @@ mod tests {
 pub(crate) fn role_exists_in_lane_bundle(bundle: &serde_json::Value, role_id: &str) -> bool {
     if role_id.is_empty() {
         return false;
+    }
+    if role_id == "orchestrator" {
+        return true;
     }
 
     let carrier_runtime_role_exists = crate::carrier_runtime_section(bundle)["roles"]

@@ -2269,6 +2269,11 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     assert_eq!(root["status"], "pass");
 
     for task_id in [implementation_task_id, parallel_task_id] {
+        let owned_path = if task_id == implementation_task_id {
+            "crates/vida/src/taskflow_run_graph.rs"
+        } else {
+            "crates/vida/src/taskflow_layer4.rs"
+        };
         let created = run_command_json(
             &[
                 "task",
@@ -2289,6 +2294,8 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
                 "case-08-pack",
                 "--conflict-domain",
                 task_id,
+                "--owned-path",
+                owned_path,
                 "--json",
             ],
             &state_dir,

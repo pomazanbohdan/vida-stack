@@ -6791,7 +6791,16 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             )
             .await
             {
-                Ok(()) => ExitCode::SUCCESS,
+                Ok(()) => {
+                    if dispatch_receipt.dispatch_status == "blocked" {
+                        if emit_output {
+                            eprintln!("execution_preparation_gate_blocked");
+                        }
+                        ExitCode::from(1)
+                    } else {
+                        ExitCode::SUCCESS
+                    }
+                }
                 Err(error) => {
                     eprintln!("{error}");
                     ExitCode::from(1)

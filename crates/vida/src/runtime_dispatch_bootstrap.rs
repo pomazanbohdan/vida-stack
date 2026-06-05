@@ -5,6 +5,38 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> serde_json::Value {
     let run_id = runtime_consumption_run_id(role_selection);
+    if !role_selection.ok || role_selection.selected_role == "orchestrator" {
+        let status = crate::runtime_dispatch_status::blocking_runtime_consumption_run_graph_status(
+            role_selection,
+            &run_id,
+        );
+        let latest_status = serde_json::to_value(&status).unwrap_or(serde_json::Value::Null);
+        let fallback_reason = if role_selection.ok {
+            "selected role `orchestrator` is not a dispatchable runtime lane"
+        } else {
+            role_selection.reason.as_str()
+        };
+        if let Err(error) = store.record_run_graph_status(&status).await {
+            return serde_json::json!({
+                "status": "blocked",
+                "handoff_ready": false,
+                "run_id": run_id,
+                "reason": "unresolved_lane_selection",
+                "fallback_reason": fallback_reason,
+                "record_error": format!("record_blocked_selection_failed: {error}"),
+            });
+        }
+        return serde_json::json!({
+            "status": "blocked",
+            "handoff_ready": false,
+            "run_id": run_id,
+            "seed": serde_json::Value::Null,
+            "advanced": serde_json::Value::Null,
+            "latest_status": latest_status,
+            "reason": "unresolved_lane_selection",
+            "fallback_reason": fallback_reason,
+        });
+    }
     match crate::taskflow_run_graph::derive_seeded_run_graph_status(
         store,
         &run_id,
