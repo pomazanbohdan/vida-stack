@@ -461,6 +461,7 @@ pub(crate) struct TaskflowDirectConsumptionPayload {
     pub(crate) closure_authority: String,
     pub(crate) consume_final_mode: String,
     pub(crate) request_text: String,
+    pub(crate) requested_owned_paths: Vec<String>,
     pub(crate) role_selection: crate::RuntimeConsumptionLaneSelection,
     pub(crate) runtime_bundle: TaskflowConsumeBundlePayload,
     pub(crate) bundle_check: TaskflowConsumeBundleCheck,

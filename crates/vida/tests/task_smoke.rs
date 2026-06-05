@@ -12851,6 +12851,113 @@ fn cross_surface_protocol_binding_parity() {
 }
 
 #[test]
+fn consume_final_metadata_preview_and_validate_only_cli_contract() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent = run_command_json(
+        &[
+            "task",
+            "create",
+            "consume-final-root",
+            "Consume final root",
+            "--type",
+            "epic",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent["status"], "pass");
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            "consume-final-metadata-task",
+            "Consume final metadata task",
+            "--parent-id",
+            "consume-final-root",
+            "--type",
+            "task",
+            "--priority",
+            "1",
+            "--owned-path",
+            "crates/vida/src/taskflow_consume.rs",
+            "--proof-target",
+            "cargo test -p vida --test task_smoke consume_final_metadata_preview_and_validate_only_cli_contract -- --nocapture",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+    let _ = run_command_json(
+        &["taskflow", "protocol-binding", "sync", "--json"],
+        &state_dir,
+    );
+
+    let (preview, _preview_success) = run_command_json_allow_failure(
+        &[
+            "taskflow",
+            "consume",
+            "final",
+            "implementation consume-final-metadata-task",
+            "--task-id",
+            "consume-final-metadata-task",
+            "--from-task-metadata",
+            "--owned-path",
+            "crates/vida/tests/task_smoke.rs",
+            "--preview",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(preview["surface"], "vida taskflow consume final");
+    assert_eq!(preview["payload"]["consume_final_mode"], "preview");
+    assert_eq!(
+        preview["payload"]["request_text"],
+        "implementation consume-final-metadata-task"
+    );
+    let preview_text = preview.to_string();
+    assert!(
+        preview_text.contains("crates/vida/src/taskflow_consume.rs"),
+        "preview should include task planner owned path: {preview}"
+    );
+    assert!(
+        preview_text.contains("crates/vida/tests/task_smoke.rs"),
+        "preview should include explicit owned-path override: {preview}"
+    );
+
+    let (validate, _validate_success) = run_command_json_allow_failure(
+        &[
+            "taskflow",
+            "consume",
+            "final",
+            "implementation consume-final-metadata-task",
+            "--task-id",
+            "consume-final-metadata-task",
+            "--from-task-metadata",
+            "--validate-only",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(validate["surface"], "vida taskflow consume final");
+    assert_eq!(validate["payload"]["consume_final_mode"], "validate_only");
+    assert_eq!(
+        validate["payload"]["request_text"],
+        "implementation consume-final-metadata-task"
+    );
+    assert!(
+        validate
+            .to_string()
+            .contains("crates/vida/src/taskflow_consume.rs"),
+        "validate-only should include task planner owned path: {validate}"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp project root should be removed");
+}
+
+#[test]
 fn cross_surface_protocol_binding_blocker_parity() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

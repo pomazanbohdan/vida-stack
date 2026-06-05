@@ -218,6 +218,28 @@ async fn consume_final_owned_paths_override(
     owned_paths
 }
 
+async fn consume_final_requested_owned_paths(
+    store: &super::StateStore,
+    args: &ConsumeFinalArgs,
+) -> Vec<String> {
+    let mut owned_paths = Vec::new();
+    if args.from_task_metadata {
+        if let Some(task_id) = args.task_id.as_deref() {
+            for path in super::planner_metadata_owned_paths_from_task(store, task_id).await {
+                if !owned_paths.iter().any(|existing| existing == &path) {
+                    owned_paths.push(path);
+                }
+            }
+        }
+    }
+    for path in &args.owned_paths {
+        if !owned_paths.iter().any(|existing| existing == path) {
+            owned_paths.push(path.clone());
+        }
+    }
+    owned_paths
+}
+
 pub(crate) fn try_print_taskflow_consume_nested_help(args: &[String]) -> bool {
     match args {
         [head] if head == "consume" => {
@@ -417,6 +439,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     let generated_at = time::OffsetDateTime::now_utc()
                                         .format(&super::Rfc3339)
                                         .expect("rfc3339 timestamp should render");
+                                    let requested_owned_paths =
+                                        consume_final_requested_owned_paths(
+                                            &store,
+                                            &consume_final_args,
+                                        )
+                                        .await;
                                     let mut payload = super::TaskflowDirectConsumptionPayload {
                                         artifact_name: "taskflow_direct_runtime_consumption"
                                             .to_string(),
@@ -426,6 +454,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         consume_final_mode: consume_final_mode.as_str().to_string(),
                                         role_selection: blocking_role_selection,
                                         request_text: request_text.clone(),
+                                        requested_owned_paths,
                                         direct_consumption_ready: false,
                                         runtime_bundle,
                                         bundle_check,
@@ -857,6 +886,8 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         let generated_at = time::OffsetDateTime::now_utc()
                             .format(&super::Rfc3339)
                             .expect("rfc3339 timestamp should render");
+                        let requested_owned_paths =
+                            consume_final_requested_owned_paths(&store, &consume_final_args).await;
                         let payload = super::TaskflowDirectConsumptionPayload {
                             artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                             artifact_type: "runtime_consumption".to_string(),
@@ -865,6 +896,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             consume_final_mode: consume_final_mode.as_str().to_string(),
                             role_selection,
                             request_text: request_text.clone(),
+                            requested_owned_paths,
                             direct_consumption_ready,
                             runtime_bundle,
                             bundle_check,
@@ -1213,6 +1245,9 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             let generated_at = time::OffsetDateTime::now_utc()
                                 .format(&super::Rfc3339)
                                 .expect("rfc3339 timestamp should render");
+                            let requested_owned_paths =
+                                consume_final_requested_owned_paths(&store, &consume_final_args)
+                                    .await;
                             let payload = super::TaskflowDirectConsumptionPayload {
                                 artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                                 artifact_type: "runtime_consumption".to_string(),
@@ -1220,6 +1255,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 closure_authority: "taskflow".to_string(),
                                 consume_final_mode: consume_final_mode.as_str().to_string(),
                                 request_text: request_text.clone(),
+                                requested_owned_paths,
                                 role_selection,
                                 runtime_bundle,
                                 bundle_check,
