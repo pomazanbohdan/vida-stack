@@ -3467,6 +3467,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 eprintln!("Missing run-graph status for `{run_id}`.");
                 return ExitCode::from(2);
             };
+            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            if let Err(error) =
+                lane_mutation_status_guard(run_id, Some(&status), recovery.as_ref(), &receipt)
+            {
+                eprintln!("{error}");
+                return ExitCode::from(2);
+            }
             let exception_path_metadata =
                 match read_exception_takeover_metadata(store.root(), run_id) {
                     Ok(metadata) => metadata,

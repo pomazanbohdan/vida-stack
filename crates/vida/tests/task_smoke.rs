@@ -5535,6 +5535,344 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
 }
 
 #[test]
+fn terminal_exception_takeover_run_does_not_reemit_missing_task_retire_action() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let ready_task_id = "terminal-successor-ready";
+    let parent_id = "terminal-successor-parent";
+    create_epic_parent(&state_dir, parent_id, "Terminal successor parent", "open");
+    let ready = run_command_json(
+        &[
+            "task",
+            "create",
+            ready_task_id,
+            "Terminal successor ready task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(ready["status"], "pass");
+
+    let run_id = "universal-surfaces-kanban-cross-column-drag-drop";
+    let exception_task_id =
+        "universal-surfaces-kanban-cross-column-drag-drop:implementer:exception-takeover";
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = format!("{packet_dir}/{run_id}.json");
+    fs::write(
+        &packet_path,
+        serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "implementer",
+            "activation_runtime_role": "implementer",
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["crates/vida/src/taskflow_consume_resume.rs"],
+            "read_only_paths": [".vida/data/state/runtime-consumption"],
+            "role_selection_full": {
+                "ok": true,
+                "activation_source": "packet",
+                "selection_mode": "fixed",
+                "fallback_role": "orchestrator",
+                "request": "terminal closure replay",
+                "selected_role": "implementer",
+                "conversational_mode": null,
+                "single_task_only": false,
+                "tracked_flow_entry": null,
+                "allow_freeform_chat": false,
+                "confidence": "high",
+                "matched_terms": [],
+                "compiled_bundle": null,
+                "execution_plan": {
+                    "backend_admissibility_matrix": [
+                        {
+                            "backend_id": "junior",
+                            "backend_class": "internal",
+                            "lane_admissibility": {
+                                "implementation": true
+                            }
+                        }
+                    ],
+                    "development_flow": {
+                        "implementer": {
+                            "executor_backend": "internal_subagents"
+                        }
+                    }
+                },
+                "reason": "test"
+            },
+            "delivery_task_packet": {
+                "task_id": run_id,
+                "goal": "Terminal closure should supersede stale exception takeover evidence.",
+                "scope_in": ["dispatch_target:implementer"],
+                "handoff_task_class": "implementation",
+                "handoff_runtime_role": "implementer",
+                "owned_paths": ["crates/vida/src/taskflow_consume_resume.rs"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "definition_of_done": ["terminal closure remains authoritative"],
+                "verification_command": "vida taskflow consume continue",
+                "proof_target": "terminal closure consistency",
+                "stop_rules": ["stop if stale retire is recommended"],
+                "blocking_question": "none"
+            }
+        })
+        .to_string(),
+    )
+    .expect("write terminal stale packet");
+    let metadata_dir = format!("{state_dir}/lane-exception-path-metadata");
+    fs::create_dir_all(&metadata_dir).expect("create metadata dir");
+    fs::write(
+        format!("{metadata_dir}/{run_id}.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "implementer",
+            "dispatch_packet_path": packet_path,
+            "source_exception_path_receipt_id": run_id,
+            "reason_class": "blocked_open_delegated_cycle_timeout",
+            "active_bounded_unit": exception_task_id,
+            "owned_write_scope": ["crates/vida/src"],
+            "why_delegated_or_rerouted_path_is_not_currently_lawful": "blocked",
+            "why_local_write_is_the_smallest_safe_bounded_workaround": "bounded",
+            "return_to_normal_posture_condition": "verified",
+            "verification_plan": ["test"],
+            "recorded_at": "2026-06-05T00:00:00Z"
+        }))
+        .expect("encode exception metadata"),
+    )
+    .expect("write exception metadata");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        db.query("UPSERT type::record('routed_run_state', $run) CONTENT $state")
+            .bind(("run", run_id))
+            .bind((
+                "state",
+                serde_json::json!({
+                    "run_id": run_id,
+                    "route_task_class": "implementation",
+                    "selected_backend": "internal_subagents",
+                    "lane_id": "implementer",
+                    "lifecycle_stage": "closure_complete",
+                    "updated_at": "2026-06-05T00:00:00Z"
+                }),
+            ))
+            .await
+            .expect("seed terminal routed run state");
+        db.query("UPSERT type::record('governance_state', $run) CONTENT $state")
+            .bind(("run", run_id))
+            .bind((
+                "state",
+                serde_json::json!({
+                    "run_id": run_id,
+                    "policy_gate": "closed_task_stale_run_retired",
+                    "handoff_state": "none",
+                    "context_state": "sealed",
+                    "updated_at": "2026-06-05T00:00:00Z"
+                }),
+            ))
+            .await
+            .expect("seed terminal governance state");
+        db.query("UPSERT type::record('resumability_capsule', $run) CONTENT $state")
+            .bind(("run", run_id))
+            .bind((
+                "state",
+                serde_json::json!({
+                    "run_id": run_id,
+                    "checkpoint_kind": "none",
+                    "resume_target": "none",
+                    "recovery_ready": false,
+                    "updated_at": "2026-06-05T00:00:00Z"
+                }),
+            ))
+            .await
+            .expect("seed terminal resumability capsule");
+        db.query("UPSERT type::record('execution_plan_state', $run) CONTENT $state")
+            .bind(("run", run_id))
+            .bind((
+                "state",
+                serde_json::json!({
+                    "run_id": run_id,
+                    "task_id": run_id,
+                    "task_class": "implementation",
+                    "active_node": "closure",
+                    "status": "completed",
+                    "updated_at": "2026-06-05T00:00:00Z"
+                }),
+            ))
+            .await
+            .expect("seed terminal execution plan state");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "implementer",
+            "dispatch_status": "bridge_request_pending",
+            "lane_status": "lane_exception_takeover",
+            "supersedes_receipt_id": run_id,
+            "exception_path_receipt_id": run_id,
+            "dispatch_kind": "agent_lane",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": format!("vida agent-init --role implementer {run_id} --json"),
+            "dispatch_packet_path": packet_path,
+            "blocker_code": "host_tool_bridge_adapter_required",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["host_tool_bridge_adapter_required"],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "implementer",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-05T00:00:01Z"
+        });
+        let _: Option<Value> = db
+            .upsert(("run_graph_dispatch_receipt", run_id))
+            .content(receipt)
+            .await
+            .expect("seed stale terminal exception receipt");
+        let binding = serde_json::json!({
+            "run_id": run_id,
+            "task_id": run_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "downstream_dispatch_target",
+                "dispatch_target": "closure",
+                "run_id": run_id
+            },
+            "binding_source": "task_close_reconcile",
+            "why_this_unit": "terminal closure was already reconciled",
+            "primary_path": "task_close_reconcile",
+            "sequential_vs_parallel_posture": "sequential_only_terminal_closure",
+            "recorded_at": "2026-06-05T00:00:02Z"
+        });
+        let _: Option<Value> = db
+            .upsert(("run_graph_continuation_binding", run_id))
+            .content(binding)
+            .await
+            .expect("seed terminal continuation binding");
+        drop(db);
+    });
+    thread::sleep(Duration::from_millis(300));
+
+    let run_graph = run_command_json(
+        &["taskflow", "run-graph", "status", run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(run_graph["status"], "pass");
+    assert!(
+        run_graph.to_string().contains("closure_complete"),
+        "run-graph status must expose terminal closure evidence: {run_graph}"
+    );
+    assert!(
+        run_graph.to_string().contains("completed"),
+        "run-graph status must expose completed terminal evidence: {run_graph}"
+    );
+    assert!(
+        !run_graph.to_string().contains("vida lane retire"),
+        "terminal run-graph status must not recommend stale retire: {run_graph}"
+    );
+
+    let (consume, _consume_success) = run_command_json_allow_failure(
+        &[
+            "taskflow", "consume", "continue", "--run-id", run_id, "--json",
+        ],
+        &state_dir,
+    );
+    assert_ne!(
+        consume["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"]),
+        "terminal closure must not re-emit stale missing-task retire blocker: {consume}"
+    );
+    assert!(
+        !consume.to_string().contains("vida lane retire"),
+        "terminal closure must not recommend impossible lane retire: {consume}"
+    );
+
+    let recovery = run_command_json(
+        &["taskflow", "recovery", "status", run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(recovery["recovery"]["resume_status"], "completed");
+    assert_eq!(recovery["recovery"]["lifecycle_stage"], "closure_complete");
+    assert_eq!(
+        recovery["recovery"]["delegation_gate"]["delegated_cycle_open"],
+        false
+    );
+    assert!(
+        !recovery.to_string().contains("vida lane retire"),
+        "terminal recovery status must not recommend stale retire: {recovery}"
+    );
+
+    let retire = run_command_capture(
+        &[
+            "lane",
+            "retire",
+            run_id,
+            "--receipt-id",
+            run_id,
+            "--reason",
+            "missing TaskFlow task stale run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !retire.status.success(),
+        "terminal lane retire should fail closed instead of mutating terminal run"
+    );
+    let retire_stdout = String::from_utf8_lossy(&retire.stdout);
+    let retire_stderr = String::from_utf8_lossy(&retire.stderr);
+    assert!(
+        retire_stderr.contains("no longer active for mutation"),
+        "terminal lane retire should explain terminal mutation guard: stdout={retire_stdout} stderr={retire_stderr}"
+    );
+    assert!(
+        !retire_stderr.contains("Failed to verify exception bounded unit"),
+        "terminal lane retire must not fall through to missing exception bounded unit verification: {retire_stderr}"
+    );
+
+    let status = run_command_json(&["status", "--state-dir", &state_dir, "--json"], &state_dir);
+    assert!(
+        !status.to_string().contains("stale_missing_task_run_graph"),
+        "global status must not preserve terminal stale blocker: {status}"
+    );
+    assert!(
+        !status.to_string().contains("vida lane retire"),
+        "global status must not recommend terminal stale retire: {status}"
+    );
+
+    let dispatch_output = run_command_capture(
+        &["agent", "dispatch-next", "--dev-team", "--json"],
+        &state_dir,
+    );
+    let dispatch: serde_json::Value = serde_json::from_slice(&dispatch_output.stdout)
+        .unwrap_or_else(|error| {
+            panic!(
+                "dispatch-next json should parse: {error}; stdout={} stderr={}",
+                String::from_utf8_lossy(&dispatch_output.stdout),
+                String::from_utf8_lossy(&dispatch_output.stderr)
+            )
+        });
+    assert!(
+        !dispatch.to_string().contains(run_id),
+        "dispatch-next must not keep terminal run as active blocker: {dispatch}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
 fn release_admitted_missing_stale_run_does_not_block_recovery_or_dispatch_preview() {
     let (project_root, state_dir) = project_bound_state_dir();
 

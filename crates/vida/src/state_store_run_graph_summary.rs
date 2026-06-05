@@ -439,8 +439,13 @@ fn active_exception_takeover_receipt_is_behind_status(
     status: &RunGraphStatus,
     receipt: &RunGraphDispatchReceiptStored,
 ) -> bool {
-    stored_receipt_has_active_exception_takeover(receipt)
-        && status.status == "ready"
+    if !stored_receipt_has_active_exception_takeover(receipt) {
+        return false;
+    }
+    if terminal_closure_status(status) && status.resume_target == "none" {
+        return true;
+    }
+    status.status == "ready"
         && status.recovery_ready
         && status.resume_target.starts_with("dispatch.")
         && status.active_node != receipt.dispatch_target
