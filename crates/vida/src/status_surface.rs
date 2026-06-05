@@ -101,6 +101,27 @@ pub(crate) fn first_non_empty_artifact_ref<'a>(
         .map_or((None, None), |(value, source)| (Some(value), Some(source)))
 }
 
+pub(crate) fn terminal_missing_task_closure_has_clean_dispatch_receipt(
+    status: &crate::state_store::RunGraphStatus,
+    latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    if !crate::state_store::StateStore::run_graph_status_is_terminal_closure(status) {
+        return false;
+    }
+    let Some(receipt) = latest_receipt else {
+        return false;
+    };
+    receipt.run_id == status.run_id
+        && receipt.dispatch_status == "executed"
+        && receipt.lane_status == "lane_completed"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|receipt_id| !receipt_id.is_empty())
+            .is_none()
+}
+
 pub(crate) fn degraded_read_lock_payload(
     surface: &str,
     state_dir: &std::path::Path,
@@ -782,8 +803,20 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_dispatch_receipt.as_ref(),
                         &taskflow_active_candidates,
                     );
+                let latest_run_graph_missing_terminal_closure_lacks_clean_receipt =
+                    latest_run_graph_status.as_ref().is_some_and(|status| {
+                        latest_run_graph_task_missing
+                            && crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                                status,
+                            )
+                            && !terminal_missing_task_closure_has_clean_dispatch_receipt(
+                                status,
+                                latest_run_graph_dispatch_receipt.as_ref(),
+                            )
+                    });
                 let latest_run_graph_task_stale_for_write_guard = latest_run_graph_task_missing
                     || latest_run_graph_task_closed
+                    || latest_run_graph_missing_terminal_closure_lacks_clean_receipt
                     || (!exception_takeover_matches_active_taskflow_work
                         && latest_run_graph_task_orthogonal_to_taskflow);
                 let has_taskflow_active_candidates = !taskflow_active_candidates.is_empty();
@@ -3592,6 +3625,104 @@ host_environment:
                 Some("run-vida-b"),
                 Some("run-vida-a")
             )
+        );
+    }
+    fn terminal_status(run_id: &str) -> crate::state_store::RunGraphStatus {
+        crate::state_store::RunGraphStatus {
+            run_id: run_id.to_string(),
+            task_id: "missing-task".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "closure".to_string(),
+            next_node: None,
+            status: "completed".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "implementer".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            policy_gate: "closed_task_stale_run_retired".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        }
+    }
+
+    fn dispatch_receipt(
+        run_id: &str,
+        dispatch_status: &str,
+        lane_status: &str,
+        exception_path_receipt_id: Option<&str>,
+    ) -> crate::state_store::RunGraphDispatchReceiptSummary {
+        crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: run_id.to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: dispatch_status.to_string(),
+            lane_status: lane_status.to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: exception_path_receipt_id.map(ToOwned::to_owned),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --json".to_string()),
+            dispatch_packet_path: Some(
+                ".vida/data/state/runtime-consumption/dispatch-packets/run.json".to_string(),
+            ),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("implementer".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            effective_execution_posture: serde_json::json!({}),
+            route_policy: serde_json::json!({}),
+            activation_evidence: serde_json::json!({}),
+            recorded_at: "2026-06-05T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn terminal_missing_task_closure_requires_clean_completed_receipt_for_write_guard() {
+        let status = terminal_status("run-1");
+        let clean_receipt = dispatch_receipt("run-1", "executed", "lane_completed", None);
+        assert!(
+            super::terminal_missing_task_closure_has_clean_dispatch_receipt(
+                &status,
+                Some(&clean_receipt),
+            )
+        );
+
+        let exception_receipt = dispatch_receipt(
+            "run-1",
+            "bridge_request_pending",
+            "lane_exception_takeover",
+            Some("exception-receipt"),
+        );
+        assert!(
+            !super::terminal_missing_task_closure_has_clean_dispatch_receipt(
+                &status,
+                Some(&exception_receipt),
+            ),
+            "active exception-takeover receipt must not prove clean terminal task authority",
+        );
+
+        let mismatched_receipt = dispatch_receipt("other-run", "executed", "lane_completed", None);
+        assert!(
+            !super::terminal_missing_task_closure_has_clean_dispatch_receipt(
+                &status,
+                Some(&mismatched_receipt),
+            ),
+            "receipt must belong to the latest terminal run",
         );
     }
 }
