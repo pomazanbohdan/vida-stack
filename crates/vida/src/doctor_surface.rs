@@ -21,7 +21,7 @@ const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
 const CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_BLOCKER: &str =
     "closed_task_active_run_projection_mismatch";
-const CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_NEXT_ACTION: &str = "Reconcile latest run-graph state with canonical backlog status before continuing; closed tasks must not remain projected as active runtime work.";
+const CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_NEXT_ACTION: &str = "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work.";
 
 const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.";
 const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";

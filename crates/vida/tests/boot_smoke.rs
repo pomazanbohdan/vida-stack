@@ -234,6 +234,23 @@ fn task_rows_from_payload<'a>(
         .unwrap_or_else(|| panic!("{label} payload should expose task rows"))
 }
 
+fn parse_json_output(output: &Output, label: &str) -> serde_json::Value {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(&stdout).unwrap_or_else(|error| {
+        panic!(
+            "{label} json should parse: {error}\nstdout={}\nstderr={}",
+            stdout,
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
+fn json_string_array_contains(value: &serde_json::Value, expected: &str) -> bool {
+    value
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(expected)))
+}
+
 fn write_file(path: &str, body: &str) {
     if let Some(parent) = std::path::Path::new(path).parent() {
         fs::create_dir_all(parent).expect("parent dir should exist");
@@ -14079,6 +14096,161 @@ fn doctor_surface_reports_integrity_checks() {
     assert!(stdout.contains("task reconciliation rollup: pass (0 receipts)"));
     assert!(stdout.contains("taskflow snapshot bridge: pass (idle (no snapshot bridge receipts))"));
     assert!(stdout.contains("effective instruction bundle: pass (framework-agent-definition -> framework-instruction-contract -> framework-prompt-template-config)"));
+}
+
+#[test]
+fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let parent_id = "boot-diagnostics-closeout-parent";
+    let task_id = "boot-diagnostics-closeout-task";
+    create_epic_parent_for_state(&state_dir, parent_id, "Boot diagnostics closeout parent");
+
+    let create = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "closeout parity task create should run",
+        |command| {
+            command
+                .args([
+                    "task",
+                    "create",
+                    task_id,
+                    "Boot diagnostics closeout task",
+                    "--type",
+                    "task",
+                    "--status",
+                    "in_progress",
+                    "--priority",
+                    "1",
+                    "--parent-id",
+                    parent_id,
+                    "--json",
+                ])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        create.status.success(),
+        "task create should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    assert_eq!(parse_json_output(&create, "task create")["status"], "pass");
+
+    let init = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "run-graph init should run",
+        |command| {
+            command
+                .args([
+                    "taskflow",
+                    "run-graph",
+                    "init",
+                    task_id,
+                    "implementation",
+                    "--json",
+                ])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        init.status.success(),
+        "run-graph init should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let close = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "task close should run",
+        |command| {
+            command
+                .args([
+                    "task",
+                    "close",
+                    task_id,
+                    "--reason",
+                    "closed-run parity proof",
+                    "--json",
+                ])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        close.status.success(),
+        "task close should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&close.stdout),
+        String::from_utf8_lossy(&close.stderr)
+    );
+
+    let diagnostics = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "diagnostics post-commit should run",
+        |command| {
+            command.args([
+                "diagnostics",
+                "post-commit",
+                "--state-dir",
+                &state_dir,
+                "--json",
+            ]);
+        },
+    );
+    assert!(
+        !diagnostics.status.success(),
+        "diagnostics should fail closed on closed-run projection mismatch"
+    );
+    let diagnostics_json = parse_json_output(&diagnostics, "diagnostics post-commit");
+
+    let status = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "status json should run",
+        |command| {
+            command
+                .args(["status", "--json"])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    let status_json = parse_json_output(&status, "status");
+
+    let doctor = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "doctor json should run",
+        |command| {
+            command
+                .args(["doctor", "--json"])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    let doctor_json = parse_json_output(&doctor, "doctor");
+
+    let blocker = "closed_task_active_run_projection_mismatch";
+    for (label, payload) in [
+        ("diagnostics", &diagnostics_json),
+        ("status", &status_json),
+        ("doctor", &doctor_json),
+    ] {
+        assert_eq!(payload["status"], "blocked", "{label} should be blocked");
+        assert!(
+            json_string_array_contains(&payload["blocker_codes"], blocker),
+            "{label} should publish {blocker}: {payload}"
+        );
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .is_some_and(
+                    |actions| actions
+                        .iter()
+                        .any(|action| action.as_str().is_some_and(|value| value
+                            .contains("vida task reconcile-closed-runs --limit 25 --json")))
+                ),
+            "{label} should publish canonical reconcile next action: {payload}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]
