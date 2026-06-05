@@ -150,6 +150,10 @@ fn legacy_run_graph_role_runtime_role(requested_role: &str) -> Option<&'static s
     }
 }
 
+fn agent_init_selected_role_allowed(selected_role: &str) -> bool {
+    selected_role != "orchestrator"
+}
+
 fn resolve_agent_init_explicit_role(
     compiled_bundle: &serde_json::Value,
     dev_team_readiness: &serde_json::Value,
@@ -158,7 +162,9 @@ fn resolve_agent_init_explicit_role(
     if requested_role.is_empty() || requested_role == "orchestrator" {
         return None;
     }
-    if role_exists_in_lane_bundle(compiled_bundle, requested_role) {
+    if agent_init_selected_role_allowed(requested_role)
+        && role_exists_in_lane_bundle(compiled_bundle, requested_role)
+    {
         return Some(AgentInitResolvedRole {
             selected_role: requested_role.to_string(),
             mapping_source: None,
@@ -167,7 +173,9 @@ fn resolve_agent_init_explicit_role(
     if let Some(runtime_role) =
         dev_team_role_runtime_role(compiled_bundle, dev_team_readiness, requested_role)
     {
-        if role_exists_in_lane_bundle(compiled_bundle, &runtime_role) {
+        if agent_init_selected_role_allowed(&runtime_role)
+            && role_exists_in_lane_bundle(compiled_bundle, &runtime_role)
+        {
             return Some(AgentInitResolvedRole {
                 selected_role: runtime_role,
                 mapping_source: Some("dev_team.roles.runtime_role"),
@@ -177,7 +185,9 @@ fn resolve_agent_init_explicit_role(
     if let Some(runtime_role) =
         dev_team_flow_step_runtime_role(compiled_bundle, dev_team_readiness, requested_role)
     {
-        if role_exists_in_lane_bundle(compiled_bundle, &runtime_role) {
+        if agent_init_selected_role_allowed(&runtime_role)
+            && role_exists_in_lane_bundle(compiled_bundle, &runtime_role)
+        {
             return Some(AgentInitResolvedRole {
                 selected_role: runtime_role,
                 mapping_source: Some("dev_team.flows.steps.runtime_role"),
@@ -185,7 +195,9 @@ fn resolve_agent_init_explicit_role(
         }
     }
     if let Some(runtime_role) = legacy_run_graph_role_runtime_role(requested_role) {
-        if role_exists_in_lane_bundle(compiled_bundle, runtime_role) {
+        if agent_init_selected_role_allowed(runtime_role)
+            && role_exists_in_lane_bundle(compiled_bundle, runtime_role)
+        {
             return Some(AgentInitResolvedRole {
                 selected_role: runtime_role.to_string(),
                 mapping_source: Some("legacy_run_graph_node_alias"),
@@ -7378,6 +7390,56 @@ mod agent_init_surface_tests {
             state_dir: None,
             json: true,
         }
+    }
+
+    #[test]
+    fn agent_init_explicit_role_rejects_dev_team_orchestrator_runtime_role_aliases() {
+        let compiled_bundle = serde_json::json!({
+            "enabled_framework_roles": ["orchestrator", "worker", "verifier"],
+            "dev_team": {
+                "roles": {
+                    "tester": { "runtime_role": "orchestrator" },
+                    "qa": { "runtime_role": "verifier" }
+                },
+                "flows": {
+                    "default": {
+                        "steps": [
+                            { "role_id": "reviewer", "runtime_role": "orchestrator" },
+                            { "role_id": "builder", "runtime_role": "worker" }
+                        ]
+                    }
+                }
+            }
+        });
+        let dev_team_readiness = serde_json::json!({
+            "roles": [],
+            "flows": []
+        });
+
+        assert!(
+            resolve_agent_init_explicit_role(&compiled_bundle, &dev_team_readiness, "tester")
+                .is_none(),
+            "dev-team role aliases must not select the root orchestrator runtime role"
+        );
+        assert!(
+            resolve_agent_init_explicit_role(&compiled_bundle, &dev_team_readiness, "reviewer")
+                .is_none(),
+            "dev-team flow-step aliases must not select the root orchestrator runtime role"
+        );
+
+        let qa = resolve_agent_init_explicit_role(&compiled_bundle, &dev_team_readiness, "qa")
+            .expect("non-orchestrator dev-team role aliases should still resolve");
+        assert_eq!(qa.selected_role, "verifier");
+        assert_eq!(qa.mapping_source, Some("dev_team.roles.runtime_role"));
+
+        let builder =
+            resolve_agent_init_explicit_role(&compiled_bundle, &dev_team_readiness, "builder")
+                .expect("non-orchestrator dev-team flow aliases should still resolve");
+        assert_eq!(builder.selected_role, "worker");
+        assert_eq!(
+            builder.mapping_source,
+            Some("dev_team.flows.steps.runtime_role")
+        );
     }
 
     #[test]
