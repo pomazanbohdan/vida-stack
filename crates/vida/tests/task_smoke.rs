@@ -6148,6 +6148,18 @@ fn terminal_exception_takeover_run_does_not_reemit_missing_task_retire_action() 
         "terminal run-graph status must not recommend stale retire: {run_graph}"
     );
 
+    let (default_consume, _default_consume_success) =
+        run_command_json_allow_failure(&["taskflow", "consume", "continue", "--json"], &state_dir);
+    assert_ne!(
+        default_consume["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"]),
+        "default terminal consume continue must not re-emit stale missing-task retire blocker: {default_consume}"
+    );
+    assert!(
+        !default_consume.to_string().contains("vida lane retire"),
+        "default terminal consume continue must not recommend impossible lane retire: {default_consume}"
+    );
+
     let (consume, _consume_success) = run_command_json_allow_failure(
         &[
             "taskflow", "consume", "continue", "--run-id", run_id, "--json",
