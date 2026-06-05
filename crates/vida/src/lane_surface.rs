@@ -2019,15 +2019,15 @@ pub(crate) fn missing_task_stale_blocked_run_can_retire(
         && lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready");
     let exception_takeover_stale_blocked = receipt.dispatch_status == "blocked"
+        && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
         && receipt
             .exception_path_receipt_id
             .as_deref()
             .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
-        && matches!(
-            lane_status,
-            value if value == crate::LaneStatus::LaneExceptionRecorded.as_str()
-                || value == crate::LaneStatus::LaneExceptionTakeover.as_str()
-        );
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|receipt_id| !receipt_id.trim().is_empty());
     let active_exception_takeover_stale_blocked = receipt.dispatch_status == "executed"
         && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
         && receipt
@@ -4046,6 +4046,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn missing_task_stale_blocked_run_rejects_recorded_exception_without_supersession() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "missing-task",
+            "implementation",
+            "implementation",
+        );
+        status.status = "blocked".to_string();
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.lane_status = crate::LaneStatus::LaneExceptionRecorded
+            .as_str()
+            .to_string();
+        receipt.exception_path_receipt_id = Some("recorded-only".to_string());
+        receipt.supersedes_receipt_id = None;
+
+        assert!(
+            !missing_task_stale_blocked_run_can_retire(&status, &receipt),
+            "recorded exception evidence is not active takeover authority"
+        );
+
+        receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        assert!(
+            !missing_task_stale_blocked_run_can_retire(&status, &receipt),
+            "takeover status without supersession must still fail closed"
+        );
+
+        receipt.supersedes_receipt_id = Some("supersede-1".to_string());
+        assert!(
+            missing_task_stale_blocked_run_can_retire(&status, &receipt),
+            "active exception takeover with supersession remains stale-retirable"
+        );
+    }
+
     fn sample_exception_takeover_args(run_id: &str, receipt_id: &str) -> Vec<String> {
         vec![
             "exception-takeover".to_string(),
@@ -6005,6 +6041,109 @@ mod tests {
             receipt.downstream_dispatch_status.as_deref(),
             Some("retired_closed_task_run")
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_retire_rejects_recorded_exception_missing_task_without_supersession() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-retire-recorded-exception-missing-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-recorded-exception-missing-task";
+        let missing_task_id = "recorded-exception-original-task";
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            missing_task_id,
+            "implementation",
+            "implementation",
+        );
+        status.run_id = run_id.to_string();
+        status.active_node = "implementation".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "implementation_blocked".to_string();
+        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "implementation".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked missing-task status");
+
+        let packet_dir = root.join("runtime-consumption").join("dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("recorded-exception-missing-task.json");
+        std::fs::write(
+            &packet_path,
+            format!(
+                "{{\"run_id\":\"{run_id}\",\"delivery_task_packet\":{{\"task_id\":\"{missing_task_id}\"}}}}"
+            ),
+        )
+        .expect("write recorded exception dispatch packet");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.lane_status = crate::LaneStatus::LaneExceptionRecorded
+            .as_str()
+            .to_string();
+        receipt.exception_path_receipt_id = Some("recorded-exception-only".to_string());
+        receipt.supersedes_receipt_id = None;
+        receipt.blocker_code = Some("host_tool_bridge_adapter_required".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist recorded exception receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "retire".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "retire-recorded-exception-1".to_string(),
+                "--reason".to_string(),
+                "recorded exception is not active takeover".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::from(1));
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after rejected retire");
+        let blocked = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read blocked status");
+        assert_eq!(blocked.status, "blocked");
+        let receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read preserved receipt")
+            .expect("receipt should exist");
+        assert_eq!(
+            receipt.lane_status,
+            crate::LaneStatus::LaneExceptionRecorded.as_str()
+        );
+        assert_eq!(
+            receipt.exception_path_receipt_id.as_deref(),
+            Some("recorded-exception-only")
+        );
+        assert!(receipt.supersedes_receipt_id.is_none());
 
         let _ = std::fs::remove_dir_all(&root);
     }
