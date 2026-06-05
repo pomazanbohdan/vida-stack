@@ -982,16 +982,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 });
             let latest_run_graph_terminal_closure = match latest_run_graph_status.as_ref() {
                 Some(status)
-                    if status.status == "completed"
-                        && status.lifecycle_stage == "closure_complete"
-                        && status.resume_target == "none"
-                        && status.next_node.as_deref().map(str::trim).is_none() =>
+                    if crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                        status,
+                    ) =>
                 {
                     match store
-                        .task_close_reconcile_has_persisted_receipt_truth(
-                            &status.run_id,
-                            &status.task_id,
-                        )
+                        .run_graph_terminal_closure_has_task_close_truth(status)
                         .await
                     {
                         Ok(has_truth) => has_truth,
@@ -1005,9 +1001,26 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 _ => false,
             };
+            let latest_run_graph_terminal_closure_without_receipt_truth =
+                match latest_run_graph_status.as_ref() {
+                    Some(status)
+                        if crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                            status,
+                        ) =>
+                    {
+                        !latest_run_graph_terminal_closure
+                            && store
+                                .show_task(&status.task_id)
+                                .await
+                                .map(|task| task.status == "closed")
+                                .unwrap_or(false)
+                    }
+                    _ => false,
+                };
             let unresolved_closed_task_active_run = !latest_run_graph_terminal_closure
                 && latest_run_graph_task_closed
-                || latest_terminal_task_active_run_graph_status.is_some();
+                || latest_terminal_task_active_run_graph_status.is_some()
+                || latest_run_graph_terminal_closure_without_receipt_truth;
             let (trace_evidence, trace_evidence_blocker_codes, trace_evidence_next_actions) =
                 build_trace_evidence_summary(
                     latest_task_reconciliation.as_ref(),

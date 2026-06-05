@@ -1762,7 +1762,7 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     );
 
     let parent_children = run_command_json(
-        &["task", "children", "sandbox-parent", "--json"],
+        &["task", "children", "sandbox-parent", "--full", "--json"],
         &state_dir,
     );
     assert_eq!(parent_children["status"], "pass");
@@ -1907,6 +1907,27 @@ fn taskflow_tracked_flow_spec_close_keeps_parent_open_until_work_pool_exists() {
         &state_dir,
     );
     assert_eq!(spec["status"], "pass");
+    let work_pool = run_command_json(
+        &[
+            "task",
+            "create",
+            "tracked-flow-parent-work-pool",
+            "Work-pool pack: tracked flow parent",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            feature_id,
+            "--labels",
+            "work-pool-pack",
+            "--execution-mode",
+            "container_only",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(work_pool["status"], "pass");
 
     let closed_spec = run_command_json(
         &[
@@ -7353,6 +7374,36 @@ fn task_close_preserves_unevidenced_closed_task_active_run_projection() {
         forged_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
         "doctor must not suppress a terminal closure state that lacks receipt-backed execution evidence: {forged_doctor}"
     );
+    let forged_status = run_command_json(&["status", "--json"], &state_dir);
+    let forged_status_blockers =
+        require_json_string_array(&forged_status["blocker_codes"], "forged status blockers");
+    assert!(
+        forged_status_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "status must stay aligned with doctor for forged terminal closure evidence: {forged_status}"
+    );
+    let (forged_diagnostics, forged_diagnostics_success) = run_command_json_allow_failure(
+        &[
+            "diagnostics",
+            "post-commit",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !forged_diagnostics_success,
+        "diagnostics must fail closed for forged terminal closure evidence: {forged_diagnostics}"
+    );
+    let forged_diagnostics_blockers = require_json_string_array(
+        &forged_diagnostics["blocker_codes"],
+        "forged diagnostics blockers",
+    );
+    assert!(
+        forged_diagnostics_blockers
+            .contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "diagnostics must stay aligned with doctor for forged terminal closure evidence: {forged_diagnostics}"
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -9158,9 +9209,9 @@ fn task_list_json_ignores_render_color_emoji_styling() {
         serde_json::from_str(&stdout).expect("json output should parse");
     assert_eq!(parsed["status"], "pass");
     assert_eq!(parsed["surface"], "vida task list");
-    assert_eq!(parsed["view"], "full");
-    assert_eq!(parsed["output_policy"]["mode"], "full");
-    assert_eq!(parsed["output_policy"]["explicit_full"], true);
+    assert_eq!(parsed["view"], "summary");
+    assert_eq!(parsed["output_policy"]["mode"], "summary");
+    assert_eq!(parsed["output_policy"]["explicit_full"], false);
     assert!(
         parsed["tasks"].is_array(),
         "task list tasks should be json array"
@@ -9895,7 +9946,7 @@ fn donor_list_output_matches_semantic_parity_fixture() {
         concat!(
             "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
             "{\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[\"alpha\"],\"dependencies\":[{\"issue_id\":\"vida-a\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
-            "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"in_progress\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[\"beta\"],\"dependencies\":[{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-a\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+            "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"in_progress\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[\"beta\"],\"dependencies\":[{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"},{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-a\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
             "{\"id\":\"vida-c\",\"title\":\"Task C\",\"description\":\"third\",\"status\":\"closed\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"closed_at\":\"2026-03-09T00:00:00Z\",\"close_reason\":\"done\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
         ),
     )
@@ -9904,7 +9955,10 @@ fn donor_list_output_matches_semantic_parity_fixture() {
     let state_dir = format!("{temp_root}/state");
     let _import_stdout =
         run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
-    let rust_list = run_and_assert_success(&["task", "list", "--all", "--json"], &state_dir);
+    let rust_list = run_and_assert_success(
+        &["task", "list", "--all", "--view", "full", "--json"],
+        &state_dir,
+    );
 
     let expected =
         include_str!("../../../tests/golden/taskflow/donor_list_semantic.json").trim_end();

@@ -57,6 +57,28 @@ impl StateStore {
             && status.resume_target == "none"
     }
 
+    pub(crate) fn run_graph_status_is_reconciled_terminal_closure(status: &RunGraphStatus) -> bool {
+        Self::run_graph_status_is_terminal_closure(status)
+            && matches!(
+                status.policy_gate.as_str(),
+                "historical_closed_task_stale_run_retired" | "closed_task_stale_run_retired"
+            )
+    }
+
+    pub(crate) async fn run_graph_terminal_closure_has_task_close_truth(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<bool, StateStoreError> {
+        if !Self::run_graph_status_is_terminal_closure(status) {
+            return Ok(false);
+        }
+        if Self::run_graph_status_is_reconciled_terminal_closure(status) {
+            return Ok(true);
+        }
+        self.task_close_reconcile_has_persisted_receipt_truth(&status.run_id, &status.task_id)
+            .await
+    }
+
     fn task_has_canonical_close_truth(task: &TaskRecord) -> bool {
         Self::task_status_is_closed_like(&task.status)
             && task
@@ -1033,7 +1055,66 @@ impl StateStore {
         let mut skipped_count = 0usize;
 
         for row in rows {
+            let status = self.run_graph_status(&row.run_id).await?;
             if row.status == "completed" {
+                if Self::run_graph_status_is_terminal_closure(&status)
+                    && !Self::run_graph_status_is_reconciled_terminal_closure(&status)
+                {
+                    let task = match self.show_task(&row.task_id).await {
+                        Ok(task) => task,
+                        Err(StateStoreError::MissingTask { .. }) => {
+                            skipped_count += 1;
+                            skipped_runs.push(ClosedTaskRunReconciliationSkipped {
+                                inspect_command: format!(
+                                    "vida taskflow run-graph status {} --json",
+                                    crate::shell_quote(row.run_id.trim())
+                                ),
+                                run_id: row.run_id,
+                                task_id: row.task_id,
+                                status: row.status,
+                                reason: "missing_task".to_string(),
+                            });
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let has_canonical_close_truth = Self::task_has_canonical_close_truth(&task);
+                    let has_closure_receipt_truth = self
+                        .task_close_reconcile_has_persisted_closure_receipt_truth(
+                            &row.run_id,
+                            &row.task_id,
+                        )
+                        .await?;
+                    if has_canonical_close_truth || has_closure_receipt_truth {
+                        let retired_status = Self::task_close_retired_run_graph_status(
+                            status,
+                            "historical_closed_task_stale_run_retired",
+                        );
+                        self.record_run_graph_status(&retired_status).await?;
+                        self.clear_run_graph_continuation_binding(&row.run_id)
+                            .await?;
+                        reconciled_runs.push(ClosedTaskRunReconciliation {
+                            run_id: row.run_id,
+                            task_id: row.task_id,
+                            previous_status: row.status,
+                        });
+                        continue;
+                    }
+                    skipped_count += 1;
+                    skipped_runs.push(ClosedTaskRunReconciliationSkipped {
+                        inspect_command: format!(
+                            "vida taskflow run-graph status {} --json",
+                            crate::shell_quote(row.run_id.trim())
+                        ),
+                        run_id: row.run_id,
+                        task_id: row.task_id,
+                        status: row.status,
+                        reason: format!(
+                            "terminal_closure_missing_reconciliation_truth:canonical_close_truth={has_canonical_close_truth},closure_receipt_truth={has_closure_receipt_truth}"
+                        ),
+                    });
+                    continue;
+                }
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {
                     inspect_command: format!(
@@ -1097,7 +1178,6 @@ impl StateStore {
                 });
                 continue;
             }
-            let status = self.run_graph_status(&row.run_id).await?;
             let retired_status = Self::task_close_retired_run_graph_status(
                 status,
                 "historical_closed_task_stale_run_retired",

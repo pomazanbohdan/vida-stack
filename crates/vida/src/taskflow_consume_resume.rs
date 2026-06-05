@@ -1772,6 +1772,53 @@ fn latest_runtime_consumption_snapshot_for_resume_gate(
     })
 }
 
+fn latest_dispatch_packet_contract_error_for_resume_gate(
+    state_root: &std::path::Path,
+) -> Option<String> {
+    let packet_dir = state_root
+        .join("runtime-consumption")
+        .join("dispatch-packets");
+    let entries = std::fs::read_dir(packet_dir).ok()?;
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        candidates.push((modified, path));
+    }
+    candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    let packet_path = candidates.into_iter().map(|(_, path)| path).next()?;
+    let packet_path = packet_path.display().to_string();
+    let body = std::fs::read_to_string(&packet_path).ok()?;
+    let packet = serde_json::from_str::<serde_json::Value>(&body).ok()?;
+    if packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        == Some("delivery_task_packet")
+        && !packet
+            .get("delivery_task_packet")
+            .is_some_and(|packet| packet_nonempty_string_array(packet, "owned_paths"))
+    {
+        return Some(format!(
+            "execution_preparation_gate_blocked: missing_owned_paths; dispatch packet `{packet_path}`"
+        ));
+    }
+    crate::validate_runtime_dispatch_packet_contract(&packet, "Persisted dispatch packet")
+        .err()
+        .map(|error| {
+            format!("execution_preparation_gate_blocked: {error}; dispatch packet `{packet_path}`")
+        })
+        .filter(|error| {
+            consume_continue_resume_error_blocker_code(error) == "dispatch_packet_contract_invalid"
+        })
+}
+
 fn latest_runtime_consumption_snapshot_after_recorded_final_is_bundle_check(
     state_root: &std::path::Path,
 ) -> Result<bool, String> {
@@ -6174,6 +6221,22 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             let role_selection;
             let run_graph_bootstrap;
             let state_root = store.root().to_path_buf();
+            if requested_run_id.is_none()
+                && requested_dispatch_packet_path.is_none()
+                && requested_downstream_packet_path.is_none()
+            {
+                if let Some(error) =
+                    latest_dispatch_packet_contract_error_for_resume_gate(&state_root)
+                {
+                    if emit_output {
+                        eprintln!("{error}");
+                        if as_json {
+                            emit_consume_continue_resume_error_json(&error, surface_name);
+                        }
+                    }
+                    return ExitCode::from(1);
+                }
+            }
             let fast_deferred_resume_inputs = match fast_deferred_agent_handoff_resume_inputs(
                 &store,
                 surface_name,
@@ -6199,6 +6262,17 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 && requested_dispatch_packet_path.is_none()
                 && requested_downstream_packet_path.is_none()
             {
+                if let Some(error) =
+                    latest_dispatch_packet_contract_error_for_resume_gate(&state_root)
+                {
+                    if emit_output {
+                        eprintln!("{error}");
+                        if as_json {
+                            emit_consume_continue_resume_error_json(&error, surface_name);
+                        }
+                    }
+                    return ExitCode::from(1);
+                }
                 let preparation_gate_state_root = state_root.clone();
                 if let Err(error) = consume_continue_blocking_step_with_timeout(
                     "execution preparation gate",

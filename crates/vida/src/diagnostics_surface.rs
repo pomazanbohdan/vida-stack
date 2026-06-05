@@ -505,13 +505,10 @@ async fn build_post_commit_diagnostics(
     }
     let latest_run_graph_terminal_closure_has_truth = match latest_run_graph_status.as_ref() {
         Some(status)
-            if status.status == "completed"
-                && status.lifecycle_stage == "closure_complete"
-                && status.resume_target == "none"
-                && status.next_node.as_deref().map(str::trim).is_none() =>
+            if crate::state_store::StateStore::run_graph_status_is_terminal_closure(status) =>
         {
             store
-                .task_close_reconcile_has_persisted_receipt_truth(&status.run_id, &status.task_id)
+                .run_graph_terminal_closure_has_task_close_truth(status)
                 .await
                 .map_err(|error| {
                     format!("read latest run graph terminal closure evidence: {error}")
@@ -519,13 +516,19 @@ async fn build_post_commit_diagnostics(
         }
         _ => false,
     };
+    let latest_run_graph_terminal_closure_without_truth =
+        latest_run_graph_status.as_ref().is_some_and(|status| {
+            crate::state_store::StateStore::run_graph_status_is_terminal_closure(status)
+                && !latest_run_graph_terminal_closure_has_truth
+                && closed_task_ids.iter().any(|id| id == &status.task_id)
+        });
     let closed_task_active_run_projection_mismatch =
         post_commit_closed_task_active_run_projection_mismatch(
             latest_run_graph_status.as_ref(),
             latest_terminal_task_active_run_graph_status.as_ref(),
             &closed_task_ids,
             latest_run_graph_terminal_closure_has_truth,
-        );
+        ) || latest_run_graph_terminal_closure_without_truth;
     if closed_task_active_run_projection_mismatch {
         blocker_codes.push("closed_task_active_run_projection_mismatch".to_string());
     }

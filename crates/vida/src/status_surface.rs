@@ -599,9 +599,37 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 )
                         })
                     });
+                let latest_run_graph_terminal_closure_without_truth = match latest_run_graph_status
+                    .as_ref()
+                {
+                    Some(status)
+                        if crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                            status,
+                        ) =>
+                    {
+                        let has_truth = match store
+                            .run_graph_terminal_closure_has_task_close_truth(status)
+                            .await
+                        {
+                            Ok(has_truth) => has_truth,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read latest terminal closure evidence: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        !has_truth
+                            && all_tasks
+                                .iter()
+                                .any(|task| task.id == status.task_id && task.status == "closed")
+                    }
+                    _ => false,
+                };
                 let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
                     || latest_global_run_graph_task_closed
-                    || latest_terminal_task_active_run_graph_status.is_some();
+                    || latest_terminal_task_active_run_graph_status.is_some()
+                    || latest_run_graph_terminal_closure_without_truth;
                 let in_progress_tasks = all_tasks
                     .iter()
                     .filter(|task| task.status == "in_progress")

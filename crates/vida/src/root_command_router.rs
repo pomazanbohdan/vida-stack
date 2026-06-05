@@ -335,6 +335,7 @@ fn command_preserves_explicit_env_state_dir(command: &Option<Command>) -> bool {
     matches!(
         command,
         Some(Command::Status(_) | Command::Taskflow(_))
+            | Some(Command::Consume(_) | Command::Recovery(_) | Command::Route(_))
             | Some(Command::Lane(_) | Command::Approval(_))
             | Some(Command::Agent(AgentArgs {
                 command: AgentCommand::DispatchNext(_) | AgentCommand::Select(_)
@@ -472,6 +473,7 @@ fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
         Some(
             "task" | "taskflow" | "project-activator" | "status" | "doctor" | "lane" | "approval",
         ) => true,
+        Some("consume" | "recovery" | "route") => true,
         _ => false,
     }
 }

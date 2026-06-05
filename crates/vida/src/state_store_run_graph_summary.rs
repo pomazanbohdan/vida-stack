@@ -576,7 +576,9 @@ fn reconcile_run_graph_status_with_closed_task(
         status.lifecycle_stage = "implementation_complete".to_string();
     }
     status.next_node = None;
-    status.policy_gate = "not_required".to_string();
+    if !StateStore::run_graph_status_is_reconciled_terminal_closure(&status) {
+        status.policy_gate = "not_required".to_string();
+    }
     status.handoff_state = "none".to_string();
     status.context_state = "sealed".to_string();
     status.checkpoint_kind = "none".to_string();
