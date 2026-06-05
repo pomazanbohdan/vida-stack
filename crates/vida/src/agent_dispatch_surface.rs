@@ -8,6 +8,7 @@ use crate::{
 
 const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
+const HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct AgentDispatchLaneSelectionTruth {
@@ -219,14 +220,12 @@ fn host_bridge_request_string<'a>(request: &'a serde_json::Value, field: &str) -
 async fn host_bridge_request_provenance_blockers(
     request_path: &Path,
     request: &serde_json::Value,
+    state_root: Option<&Path>,
 ) -> Vec<String> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    host_bridge_request_provenance_blockers_for_state_root(
-        &cwd.join(".vida/data/state"),
-        request_path,
-        request,
-    )
-    .await
+    let state_root = state_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
+    host_bridge_request_provenance_blockers_for_state_root(&state_root, request_path, request).await
 }
 
 async fn host_bridge_request_provenance_blockers_for_state_root(
@@ -286,7 +285,12 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     let Some(run_id) = host_bridge_request_string(request, "run_id") else {
         return blockers;
     };
-    let store = match StateStore::open_existing_read_only(canonical_state_root).await {
+    let store = match StateStore::open_existing_read_only_with_timeout(
+        canonical_state_root,
+        HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT,
+    )
+    .await
+    {
         Ok(store) => store,
         Err(_) => {
             blockers.push("host_bridge_dispatch_receipt_missing".to_string());
@@ -2505,12 +2509,49 @@ pub(crate) async fn run_agent(args: AgentArgs) -> ExitCode {
 }
 
 async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
+    if command.complete
+        && command
+            .host_agent_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        let blocker_codes = vec!["host_agent_id_missing".to_string()];
+        let next_actions = vec![
+            "provide --host-agent-id from the parent host adapter before completing the lane"
+                .to_string(),
+        ];
+        let artifact_refs = serde_json::json!({
+            "request_path": command.request.display().to_string()
+        });
+        let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+            "blocked",
+            blocker_codes.clone(),
+            next_actions.clone(),
+            next_actions,
+            artifact_refs,
+        );
+        let payload = serde_json::json!({
+            "surface": "vida agent host-bridge",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "shared_fields": shared_fields,
+            "operator_contracts": operator_contracts
+        });
+        return emit_host_bridge_payload(&payload, command.json);
+    }
     match read_host_bridge_request(&command.request) {
         Ok(request) => {
             let payload = host_bridge_adapter_payload(
                 &command.request,
                 &request,
-                host_bridge_request_provenance_blockers(&command.request, &request).await,
+                host_bridge_request_provenance_blockers(
+                    &command.request,
+                    &request,
+                    command.state_dir.as_deref(),
+                )
+                .await,
             );
             if command.complete {
                 if payload["status"].as_str() != Some("pass") {
@@ -2522,13 +2563,36 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 else {
+                    let blocker_codes = vec!["host_agent_id_missing".to_string()];
+                    let next_actions = vec![
+                        "provide --host-agent-id from the parent host adapter before completing the lane"
+                            .to_string(),
+                    ];
+                    let artifact_refs = payload
+                        .get("operator_contracts")
+                        .and_then(|contracts| contracts.get("artifact_refs"))
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            serde_json::json!({
+                                "request_path": command.request.display().to_string()
+                            })
+                        });
+                    let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+                        "blocked",
+                        blocker_codes.clone(),
+                        next_actions.clone(),
+                        next_actions,
+                        artifact_refs,
+                    );
                     let mut blocked = payload.clone();
                     if let Some(object) = blocked.as_object_mut() {
                         object.insert("status".to_string(), serde_json::json!("blocked"));
                         object.insert(
                             "blocker_codes".to_string(),
-                            serde_json::json!(["host_agent_id_missing"]),
+                            serde_json::json!(blocker_codes),
                         );
+                        object.insert("shared_fields".to_string(), shared_fields);
+                        object.insert("operator_contracts".to_string(), operator_contracts);
                     }
                     return emit_host_bridge_payload(&blocked, command.json);
                 };

@@ -329,6 +329,13 @@ pub(crate) struct AgentHostBridgeArgs {
 
     #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory used for host bridge provenance checks"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]

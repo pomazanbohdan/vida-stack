@@ -1435,6 +1435,8 @@ fn cli_help_description_inventory_covers_agent_and_task_operator_options() {
                 "--host-agent-id <HOST_AGENT_ID>",
                 "--summary <SUMMARY>",
                 "--receipt-id <RECEIPT_ID>",
+                "--state-dir <STATE_DIR>",
+                "Override the TaskFlow state directory used for host bridge provenance checks",
                 "--json",
                 "Emit machine-readable JSON output",
             ][..],
@@ -6076,6 +6078,260 @@ fn agent_init_execute_dispatch_missing_packet_json_is_operator_envelope() {
         payload["dispatch_mode"]["missing_execution_evidence_semantics"],
         "non_executing_bridge_blocker"
     );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn agent_init_explicit_role_maps_dev_team_roles_and_reports_invalid_role_json() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+
+    let tester_output = run_command_capture(
+        &["agent-init", "--role", "tester", "verify task", "--json"],
+        &state_dir,
+    );
+    assert!(
+        tester_output.status.success(),
+        "tester role should map to verifier: stdout={} stderr={}",
+        String::from_utf8_lossy(&tester_output.stdout),
+        String::from_utf8_lossy(&tester_output.stderr)
+    );
+    let tester: Value = serde_json::from_slice(&tester_output.stdout)
+        .expect("tester agent-init output should be json");
+    assert_eq!(tester["surface"], "vida agent-init");
+    assert_eq!(tester["selection"]["requested_role"], "tester");
+    assert_eq!(tester["selection"]["selected_role"], "verifier");
+    assert_eq!(
+        tester["selection"]["role_mapping"]["source"],
+        "dev_team.roles.runtime_role"
+    );
+
+    let implementer_output = run_command_capture(
+        &[
+            "agent-init",
+            "--role",
+            "implementer",
+            "implement task",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        implementer_output.status.success(),
+        "legacy implementer role should map to worker: stdout={} stderr={}",
+        String::from_utf8_lossy(&implementer_output.stdout),
+        String::from_utf8_lossy(&implementer_output.stderr)
+    );
+    let implementer: Value = serde_json::from_slice(&implementer_output.stdout)
+        .expect("implementer agent-init output should be json");
+    assert_eq!(implementer["selection"]["requested_role"], "implementer");
+    assert_eq!(implementer["selection"]["selected_role"], "worker");
+    assert_eq!(
+        implementer["selection"]["role_mapping"]["source"],
+        "legacy_run_graph_node_alias"
+    );
+
+    let invalid_output = run_command_capture(
+        &["agent-init", "--role", "missing_dev_team_role", "--json"],
+        &state_dir,
+    );
+    assert!(
+        !invalid_output.status.success(),
+        "unknown role should fail closed"
+    );
+    assert!(
+        invalid_output.stderr.is_empty(),
+        "json mode should not emit plain stderr: {}",
+        String::from_utf8_lossy(&invalid_output.stderr)
+    );
+    let invalid: Value =
+        serde_json::from_slice(&invalid_output.stdout).expect("invalid role output should be json");
+    assert_eq!(invalid["surface"], "vida agent-init");
+    assert_eq!(invalid["status"], "blocked");
+    assert_eq!(invalid["blocker_codes"][0], "agent_init_role_unresolved");
+    assert_eq!(
+        invalid["operator_contracts"]["blocker_codes"][0],
+        "agent_init_role_unresolved"
+    );
+    assert!(invalid["valid_roles"]
+        .as_array()
+        .expect("valid roles should render")
+        .iter()
+        .any(|role| role == "tester"));
+    assert!(invalid["next_actions"][0]
+        .as_str()
+        .expect("next action should render")
+        .contains("vida agent-init --help"));
+
+    let _ = fs::remove_dir_all(state_dir);
+}
+
+#[test]
+fn agent_host_bridge_complete_missing_host_agent_id_uses_state_dir_and_json_envelope() {
+    let state_dir = unique_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+    create_epic_parent(&state_dir, "host-bridge-root", "Host bridge root", "open");
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "run-host-bridge",
+            "Run host bridge",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            "host-bridge-root",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+    run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            "run-host-bridge",
+            "implementation",
+        ],
+        &state_dir,
+    );
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    let bridge_dir = format!("{state_dir}/runtime-consumption/host-tool-bridge");
+    fs::create_dir_all(&packet_dir).expect("create dispatch packet dir");
+    fs::create_dir_all(&bridge_dir).expect("create host bridge dir");
+    let packet_path = format!("{packet_dir}/run-host-bridge.json");
+    let request_path = format!("{bridge_dir}/request.json");
+    let result_path = format!("{bridge_dir}/result.json");
+    let receipt_path = format!("{bridge_dir}/receipt.json");
+    fs::write(&packet_path, "{}").expect("write dispatch packet");
+    fs::write(
+        &request_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-host-bridge",
+            "run_id": "run-host-bridge",
+            "dispatch_target": "implementation",
+            "packet_path": packet_path,
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": receipt_path
+        })
+        .to_string(),
+    )
+    .expect("write host bridge request");
+
+    let (ready_payload, ready_success) = run_command_json_allow_failure(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request_path,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !ready_success,
+        "host bridge without dispatch receipt should fail closed: {ready_payload}"
+    );
+    assert_eq!(ready_payload["surface"], "vida agent host-bridge");
+    assert_eq!(ready_payload["status"], "blocked");
+    assert_eq!(
+        ready_payload["blocker_codes"],
+        serde_json::json!(["host_bridge_dispatch_receipt_missing"])
+    );
+    assert!(
+        !ready_payload["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should render")
+            .iter()
+            .any(|code| code == "host_bridge_request_untrusted_path"),
+        "explicit --state-dir should trust the state-scoped request path: {ready_payload}"
+    );
+    assert_eq!(
+        ready_payload["shared_fields"]["blocker_codes"],
+        ready_payload["blocker_codes"]
+    );
+    assert_eq!(
+        ready_payload["operator_contracts"]["blocker_codes"],
+        ready_payload["blocker_codes"]
+    );
+    assert_eq!(
+        ready_payload["operator_contracts"]["contract_id"],
+        "host-agent-bridge-adapter-v1"
+    );
+    assert!(ready_payload["host_bridge"]["completion_command"]
+        .as_str()
+        .expect("completion command should render")
+        .contains("vida lane complete run-host-bridge"));
+    assert_eq!(
+        ready_payload["shared_fields"]["artifact_refs"]["request_path"],
+        request_path
+    );
+
+    let output = run_command_capture(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request_path,
+            "--complete",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !output.status.success(),
+        "missing host-agent-id completion should fail closed"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "json host-bridge completion blocker should not emit stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "host-bridge completion blocker should render parseable json: {error}; stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+
+    assert_eq!(payload["surface"], "vida agent host-bridge");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["host_agent_id_missing"])
+    );
+    assert_eq!(
+        payload["shared_fields"]["blocker_codes"],
+        payload["blocker_codes"]
+    );
+    assert_eq!(
+        payload["operator_contracts"]["blocker_codes"],
+        payload["blocker_codes"]
+    );
+    assert!(payload["operator_contracts"]["next_actions"][0]
+        .as_str()
+        .expect("next action should render")
+        .contains("--host-agent-id"));
 
     let _ = fs::remove_dir_all(&state_dir);
 }

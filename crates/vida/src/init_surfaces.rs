@@ -26,6 +26,295 @@ const AGENT_INIT_EXECUTE_DISPATCH_MISSING_PACKET_ERROR: &str =
     "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`.";
 static AGENT_INIT_READ_SURFACE_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
+#[derive(Debug, Clone)]
+struct AgentInitResolvedRole {
+    selected_role: String,
+    mapping_source: Option<&'static str>,
+}
+
+fn sorted_unique_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut values = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn dev_team_role_runtime_role(
+    compiled_bundle: &serde_json::Value,
+    dev_team_readiness: &serde_json::Value,
+    requested_role: &str,
+) -> Option<String> {
+    if let Some(runtime_role) = compiled_bundle["dev_team"]["roles"]
+        .as_object()
+        .and_then(|roles| {
+            roles
+                .get(requested_role)
+                .and_then(|role| role["runtime_role"].as_str())
+        })
+        .map(ToOwned::to_owned)
+    {
+        return Some(runtime_role);
+    }
+    dev_team_readiness["roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|role| role["role_id"].as_str() == Some(requested_role))
+        .and_then(|role| role["runtime_role"].as_str())
+        .map(ToOwned::to_owned)
+}
+
+fn dev_team_flow_step_runtime_role(
+    compiled_bundle: &serde_json::Value,
+    dev_team_readiness: &serde_json::Value,
+    requested_role: &str,
+) -> Option<String> {
+    if let Some(runtime_role) = compiled_bundle["dev_team"]["flows"]
+        .as_object()
+        .into_iter()
+        .flat_map(|flows| flows.values())
+        .flat_map(|flow| flow["steps"].as_array().into_iter().flatten())
+        .find_map(|step| {
+            if step["role_id"].as_str() == Some(requested_role) {
+                step["runtime_role"].as_str().map(ToOwned::to_owned)
+            } else {
+                None
+            }
+        })
+    {
+        return Some(runtime_role);
+    }
+    dev_team_readiness["flows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|flow| flow["ordered_steps"].as_array().into_iter().flatten())
+        .find_map(|step| {
+            if step["role_id"].as_str() == Some(requested_role) {
+                step["runtime_role"].as_str().map(ToOwned::to_owned)
+            } else {
+                None
+            }
+        })
+}
+
+fn dev_team_role_ids(
+    compiled_bundle: &serde_json::Value,
+    dev_team_readiness: &serde_json::Value,
+) -> Vec<String> {
+    let mut role_ids = Vec::new();
+    role_ids.extend(
+        compiled_bundle["dev_team"]["roles"]
+            .as_object()
+            .into_iter()
+            .flat_map(|roles| roles.keys())
+            .cloned(),
+    );
+    role_ids.extend(
+        dev_team_readiness["roles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|role| role["role_id"].as_str())
+            .map(ToOwned::to_owned),
+    );
+    role_ids.extend(
+        compiled_bundle["dev_team"]["flows"]
+            .as_object()
+            .into_iter()
+            .flat_map(|flows| flows.values())
+            .flat_map(|flow| flow["steps"].as_array().into_iter().flatten())
+            .filter_map(|step| step["role_id"].as_str())
+            .map(ToOwned::to_owned),
+    );
+    role_ids.extend(
+        dev_team_readiness["flows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|flow| flow["ordered_steps"].as_array().into_iter().flatten())
+            .filter_map(|step| step["role_id"].as_str())
+            .map(ToOwned::to_owned),
+    );
+    sorted_unique_strings(role_ids)
+}
+
+fn legacy_run_graph_role_runtime_role(requested_role: &str) -> Option<&'static str> {
+    match requested_role {
+        "implementer" => Some("worker"),
+        _ => None,
+    }
+}
+
+fn resolve_agent_init_explicit_role(
+    compiled_bundle: &serde_json::Value,
+    dev_team_readiness: &serde_json::Value,
+    requested_role: &str,
+) -> Option<AgentInitResolvedRole> {
+    if requested_role.is_empty() || requested_role == "orchestrator" {
+        return None;
+    }
+    if role_exists_in_lane_bundle(compiled_bundle, requested_role) {
+        return Some(AgentInitResolvedRole {
+            selected_role: requested_role.to_string(),
+            mapping_source: None,
+        });
+    }
+    if let Some(runtime_role) =
+        dev_team_role_runtime_role(compiled_bundle, dev_team_readiness, requested_role)
+    {
+        if role_exists_in_lane_bundle(compiled_bundle, &runtime_role) {
+            return Some(AgentInitResolvedRole {
+                selected_role: runtime_role,
+                mapping_source: Some("dev_team.roles.runtime_role"),
+            });
+        }
+    }
+    if let Some(runtime_role) =
+        dev_team_flow_step_runtime_role(compiled_bundle, dev_team_readiness, requested_role)
+    {
+        if role_exists_in_lane_bundle(compiled_bundle, &runtime_role) {
+            return Some(AgentInitResolvedRole {
+                selected_role: runtime_role,
+                mapping_source: Some("dev_team.flows.steps.runtime_role"),
+            });
+        }
+    }
+    if let Some(runtime_role) = legacy_run_graph_role_runtime_role(requested_role) {
+        if role_exists_in_lane_bundle(compiled_bundle, runtime_role) {
+            return Some(AgentInitResolvedRole {
+                selected_role: runtime_role.to_string(),
+                mapping_source: Some("legacy_run_graph_node_alias"),
+            });
+        }
+    }
+    None
+}
+
+fn agent_init_role_candidates(
+    compiled_bundle: &serde_json::Value,
+    dev_team_readiness: &serde_json::Value,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+    candidates.extend(
+        compiled_bundle["enabled_framework_roles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+    );
+    candidates.extend(
+        compiled_bundle["project_roles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row["role_id"].as_str())
+            .map(ToOwned::to_owned),
+    );
+    for row in crate::carrier_runtime_section(compiled_bundle)["roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        candidates.extend(
+            ["role_id", "runtime_role", "default_runtime_role"]
+                .into_iter()
+                .filter_map(|field| row[field].as_str())
+                .map(ToOwned::to_owned),
+        );
+        candidates.extend(
+            row["runtime_roles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+        );
+        for profile in row["model_profiles"]
+            .as_object()
+            .into_iter()
+            .flat_map(|profiles| profiles.values())
+        {
+            candidates.extend(
+                profile["runtime_roles"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+            );
+        }
+    }
+    candidates.extend(dev_team_role_ids(compiled_bundle, dev_team_readiness));
+    if role_exists_in_lane_bundle(compiled_bundle, "worker") {
+        candidates.push("implementer".to_string());
+    }
+    sorted_unique_strings(candidates)
+}
+
+fn emit_agent_init_invalid_role(
+    args: &AgentInitArgs,
+    requested_role: &str,
+    compiled_bundle: &serde_json::Value,
+    dev_team_readiness: &serde_json::Value,
+) -> ExitCode {
+    let blocker_code = if requested_role == "orchestrator" {
+        "agent_init_orchestrator_role_forbidden"
+    } else {
+        "agent_init_role_unresolved"
+    };
+    let blocker_codes = vec![blocker_code.to_string()];
+    let next_actions = vec![
+        "Use `vida agent-init --help` to inspect available options.".to_string(),
+        "Use one of `valid_roles`, or a configured dev-team role id that maps to a runtime role."
+            .to_string(),
+    ];
+    if args.json {
+        let artifact_refs = serde_json::json!({
+            "surface": "vida agent-init",
+            "usage": "vida agent-init --role <runtime-role|dev-team-role> [task-id] --json",
+        });
+        let shared_fields = serde_json::json!({
+            "trace_id": serde_json::Value::Null,
+            "workflow_class": serde_json::Value::Null,
+            "risk_tier": serde_json::Value::Null,
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+        });
+        crate::print_json_pretty(&serde_json::json!({
+            "surface": "vida agent-init",
+            "status": "blocked",
+            "requested_role": requested_role,
+            "valid_roles": agent_init_role_candidates(compiled_bundle, dev_team_readiness),
+            "blocker_codes": shared_fields["blocker_codes"],
+            "next_actions": shared_fields["next_actions"],
+            "artifact_refs": shared_fields["artifact_refs"],
+            "shared_fields": shared_fields,
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "trace_id": serde_json::Value::Null,
+                "workflow_class": serde_json::Value::Null,
+                "risk_tier": serde_json::Value::Null,
+                "blocker_codes": shared_fields["blocker_codes"],
+                "next_actions": shared_fields["next_actions"],
+                "artifact_refs": shared_fields["artifact_refs"],
+            }
+        }));
+    } else {
+        eprintln!(
+            "Agent init requires a non-orchestrator lane role present in the compiled activation bundle."
+        );
+    }
+    ExitCode::from(2)
+}
+
 fn agent_init_execute_dispatch_timeout_seconds(dispatch_handoff_timeout_seconds: u64) -> u64 {
     dispatch_handoff_timeout_seconds
         .saturating_add(AGENT_INIT_EXECUTE_DISPATCH_RECONCILIATION_GRACE_SECONDS)
@@ -5644,6 +5933,10 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 );
                 return ExitCode::from(2);
             }
+            let dev_team_readiness = super::taskflow_consume_bundle::build_dev_team_readiness(
+                &bundle.config_path,
+                &bundle.activation_bundle,
+            );
             let selection = if let Some(packet_path) = args.dispatch_packet.as_deref() {
                 if args.role.is_some() || args.request_text.is_some() {
                     eprintln!(
@@ -5690,15 +5983,28 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 }
             } else if let Some(role) = args.role.clone() {
                 let compiled_bundle = &bundle.activation_bundle;
-                if !role_exists_in_lane_bundle(compiled_bundle, &role) || role == "orchestrator" {
-                    eprintln!(
-                        "Agent init requires a non-orchestrator lane role present in the compiled activation bundle."
+                let Some(resolved_role) =
+                    resolve_agent_init_explicit_role(compiled_bundle, &dev_team_readiness, &role)
+                else {
+                    return emit_agent_init_invalid_role(
+                        &args,
+                        &role,
+                        compiled_bundle,
+                        &dev_team_readiness,
                     );
-                    return ExitCode::from(2);
-                }
+                };
+                let role_mapping = resolved_role.mapping_source.map(|source| {
+                    serde_json::json!({
+                        "requested_role": role,
+                        "selected_role": resolved_role.selected_role,
+                        "source": source,
+                    })
+                });
                 serde_json::json!({
                     "mode": "explicit_role",
-                    "selected_role": role,
+                    "selected_role": resolved_role.selected_role,
+                    "requested_role": role,
+                    "role_mapping": role_mapping,
                     "request_text": args.request_text.clone().unwrap_or_default(),
                 })
             } else {
@@ -5742,10 +6048,6 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     bundle.agent_init_view,
                     &project_activation_view,
                 );
-            let dev_team_readiness = super::taskflow_consume_bundle::build_dev_team_readiness(
-                &bundle.config_path,
-                &bundle.activation_bundle,
-            );
             let activation_semantics = agent_init_activation_semantics(&selection);
             let dispatch_mode = agent_init_dispatch_mode(&args, &selection);
             let surface_payload = build_agent_init_surface_payload(
