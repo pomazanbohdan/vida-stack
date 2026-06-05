@@ -1814,16 +1814,65 @@ fn task_changed_doc_paths(
     Ok(paths.into_iter().collect())
 }
 
+fn git_null_config_path() -> &'static str {
+    if cfg!(windows) { "NUL" } else { "/dev/null" }
+}
+
+fn run_git_status_with_timeout(
+    mut command: std::process::Command,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("git_status_failed:{error}"))?;
+    let started = std::time::Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| format!("git_status_failed:{error}"))?
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .map_err(|error| format!("git_status_failed:{error}"));
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("git_status_failed:timeout".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 fn changed_markdown_paths(root: Option<&str>) -> Result<Vec<String>, String> {
     let root_path = root
         .map(std::path::PathBuf::from)
         .unwrap_or_else(runtime_root);
-    let output = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", git_null_config_path())
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_KEY_0")
+        .env_remove("GIT_CONFIG_VALUE_0")
+        .env_remove("GIT_CONFIG_PARAMETERS")
         .arg("-C")
         .arg(&root_path)
-        .args(["status", "--short", "--", ":(glob)**/*.md"])
-        .output()
-        .map_err(|error| format!("git_status_failed:{error}"))?;
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=",
+            "status",
+            "--short",
+            "--",
+            ":(glob)**/*.md",
+        ]);
+    let output = run_git_status_with_timeout(command, std::time::Duration::from_secs(10))?;
     if !output.status.success() {
         return Err(format!(
             "git_status_failed:{}",

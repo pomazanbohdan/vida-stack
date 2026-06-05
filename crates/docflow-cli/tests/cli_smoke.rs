@@ -392,6 +392,87 @@ fn closeout_changed_outputs_default_toon_and_explicit_json() {
     fs::remove_dir_all(root).expect("root should be removed");
 }
 
+#[cfg(unix)]
+#[test]
+fn closeout_changed_disables_repo_local_fsmonitor_helper() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("closeout-changed-fsmonitor");
+    let docs_dir = root.join("docs");
+    fs::create_dir_all(&docs_dir).expect("docs dir should be created");
+    fs::write(docs_dir.join("pwn.md"), "# changed doc\n").expect("markdown doc should be written");
+
+    let git_init = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("init")
+        .output()
+        .expect("git init should run");
+    assert!(
+        git_init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_init.stderr)
+    );
+
+    let marker = root.join("fsmonitor-executed");
+    let helper = root.join("fsmonitor.sh");
+    fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' DOCFLOW_FSMONITOR_EXECUTED >> '{}'\nexit 0\n",
+            marker.display()
+        ),
+    )
+    .expect("fsmonitor helper should be written");
+    let mut permissions = fs::metadata(&helper)
+        .expect("fsmonitor helper metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&helper, permissions).expect("fsmonitor helper should be executable");
+
+    let git_config = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args([
+            "config",
+            "core.fsmonitor",
+            helper.to_str().expect("helper path should be utf8"),
+        ])
+        .output()
+        .expect("git config should run");
+    assert!(
+        git_config.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_config.stderr)
+    );
+
+    let json = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "closeout",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--changed",
+            "--json",
+        ])
+        .output()
+        .expect("docflow closeout changed json should run");
+    assert!(json.status.success(), "{}", context.diagnostics(&json));
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("closeout changed json should parse");
+    assert_eq!(parsed["command"], "closeout");
+    assert_eq!(parsed["mode"], "changed");
+    assert_eq!(parsed["changed_docs"][0], "docs/pwn.md");
+    assert!(
+        !marker.exists(),
+        "repo-local core.fsmonitor helper should not execute during closeout --changed"
+    );
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
 #[test]
 fn closeout_and_proofcheck_report_missing_evidence_blockers() {
     let context = vida_test_support::CommandContext::empty();
