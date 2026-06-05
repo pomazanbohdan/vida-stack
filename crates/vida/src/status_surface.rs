@@ -1812,6 +1812,11 @@ fn cached_status_projection_matches_current_session(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
+        if cached_worktree_environment_id.is_none()
+            && cached_projection_is_state_bound_read_only_operator_fallback(payload)
+        {
+            return true;
+        }
         return cached_worktree_environment_id.is_some_and(|cached_id| {
             let Ok(owner_evidence) =
                 crate::orchestrator_session_surface::build_runtime_owner_evidence(state_dir, false)
@@ -1842,6 +1847,28 @@ fn cached_status_projection_matches_current_session(
         .as_str()
         .map(str::trim)
         .is_some_and(|current_session_id| current_session_id == cached_session_id)
+}
+
+fn cached_projection_is_state_bound_read_only_operator_fallback(
+    payload: &serde_json::Value,
+) -> bool {
+    let marker_present = payload
+        .get("projection_cache_dependencies")
+        .and_then(|dependencies| dependencies.get("task_snapshot_marker"))
+        .is_some();
+    let freshness_contract = payload
+        .get("projection_cache")
+        .and_then(|cache| cache.get("freshness_contract"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+
+    marker_present
+        && matches!(
+            freshness_contract,
+            "state_marker_fresh_structural_cache_ok_for_read_only_operator_query"
+                | "bounded_state_marker_stale_ok_for_doctor_summary_read_only_operator_query"
+                | "recent_bounded_stale_ok_for_read_only_operator_query"
+        )
 }
 
 #[cfg(test)]
