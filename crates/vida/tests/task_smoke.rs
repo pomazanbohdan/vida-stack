@@ -5120,6 +5120,7 @@ fn task_attempt_transition_fails_closed_on_stale_task_binding() {
         .as_str()
         .expect("error should be string")
         .contains("stale_task_binding"));
+    assert_eq!(blocked["canonical_task_notes_mutated"], false);
 }
 
 #[test]
@@ -5219,10 +5220,11 @@ fn task_attempt_dispatch_status_collect_and_stage_status_help_document_output_mo
     assert!(attempt_help.contains("dispatch"));
     assert!(attempt_help.contains("status"));
     assert!(attempt_help.contains("collect"));
+    assert!(attempt_help.contains("consolidate"));
     assert!(attempt_help.contains("Default output is compact TOON"));
     assert!(attempt_help.contains("--json"));
 
-    for subcommand in ["dispatch", "status", "collect"] {
+    for subcommand in ["dispatch", "status", "collect", "consolidate"] {
         let help = run_and_assert_success(&["task", "attempt", subcommand, "--help"], &state_dir);
         assert!(help.contains("--stage-id <STAGE>"));
         assert!(
@@ -5232,6 +5234,24 @@ fn task_attempt_dispatch_status_collect_and_stage_status_help_document_output_mo
         assert!(help.contains("--json"));
         assert!(help.contains("--state-dir"));
         assert!(help.contains("compact TOON"));
+    }
+    let consolidate_help =
+        run_and_assert_success(&["task", "attempt", "consolidate", "--help"], &state_dir);
+    for expected in [
+        "--consolidation-receipt",
+        "--consolidator-profile",
+        "--merge-policy",
+        "--fact",
+        "--hypothesis",
+        "--conflict",
+        "--partial-attempt-id",
+        "--timeout-attempt-id",
+        "--cap-limited-attempt-id",
+    ] {
+        assert!(
+            consolidate_help.contains(expected),
+            "consolidate help should document {expected}: {consolidate_help}"
+        );
     }
 
     let stage_help = run_and_assert_success(&["task", "stage", "status", "--help"], &state_dir);
@@ -5442,6 +5462,380 @@ fn task_attempt_collect_validates_artifacts_without_mutating_canonical_task_note
         after["task"]["notes"], before_notes,
         "collect may validate attempt artifacts but must not mutate canonical task notes"
     );
+}
+
+#[test]
+fn task_attempt_consolidate_validates_artifacts_and_emits_canonical_receipt() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-consolidate-task");
+    create_task_attempt_fixture_with_notes(&state_dir, &task_id);
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+    let artifact_a = format!("{artifact_dir}/analysis-a.json");
+    let artifact_b = format!("{artifact_dir}/analysis-b.json");
+    fs::write(
+        &artifact_a,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-consolidate-a",
+            "task_id": &task_id,
+            "stage_id": "analysis",
+            "observed_facts": ["dispatch creates attempt rows"],
+            "hypotheses": ["default policy can be configured"],
+            "proof_results": [],
+            "risks": [],
+            "limitations": [],
+            "conflicts": [],
+            "result_status": "accepted"
+        })
+        .to_string(),
+    )
+    .expect("write first attempt artifact");
+    fs::write(
+        &artifact_b,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-consolidate-b",
+            "task_id": &task_id,
+            "stage_id": "analysis",
+            "observed_facts": ["collect does not mutate canonical task notes"],
+            "hypotheses": ["coach should review synthesized receipt"],
+            "proof_results": [],
+            "risks": [],
+            "limitations": [],
+            "conflicts": [],
+            "result_status": "partial",
+            "timeout": true,
+            "cap_limited": true
+        })
+        .to_string(),
+    )
+    .expect("write second attempt artifact");
+
+    for (attempt_id, status, artifact_ref) in [
+        ("attempt-consolidate-a", "accepted", artifact_a.as_str()),
+        (
+            "attempt-consolidate-b",
+            "partially_accepted",
+            artifact_b.as_str(),
+        ),
+    ] {
+        let record = run_command_json(
+            &[
+                "task",
+                "attempt",
+                "record",
+                &task_id,
+                "--attempt-id",
+                attempt_id,
+                "--stage-id",
+                "analysis",
+                "--backend",
+                "internal_codex",
+                "--model-profile",
+                "test-middle",
+                "--isolation",
+                "readonly",
+                "--status",
+                status,
+                "--artifact-ref",
+                artifact_ref,
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(record["status"], "pass");
+    }
+    let before = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    let before_notes = before["task"]["notes"].clone();
+
+    let consolidate = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "consolidate",
+            &task_id,
+            "--stage",
+            "analysis",
+            "--consolidation-receipt",
+            "receipt-analysis-consolidated",
+            "--consolidator-profile",
+            "primary_orchestrator",
+            "--merge-policy",
+            "evidence_first_conflicts_fail_closed",
+            "--fact",
+            "operator supplied fact",
+            "--hypothesis",
+            "operator supplied hypothesis",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(consolidate["surface"], "vida task attempt consolidate");
+    assert_eq!(consolidate["status"], "pass");
+    assert_eq!(
+        consolidate["consolidation_receipt"]["receipt_id"],
+        "receipt-analysis-consolidated"
+    );
+    assert_eq!(
+        consolidate["consolidation_receipt"]["consolidator_profile"],
+        "primary_orchestrator"
+    );
+    assert_eq!(
+        consolidate["consolidation_receipt"]["merge_policy"],
+        "evidence_first_conflicts_fail_closed"
+    );
+    assert_eq!(
+        consolidate["consolidation_receipt"]["result_status"],
+        "accepted"
+    );
+    assert_eq!(consolidate["consolidation_receipt"]["attempt_count"], 2);
+    assert_eq!(
+        consolidate["consolidation_receipt"]["accepted_attempt_ids"],
+        serde_json::json!(["attempt-consolidate-a"])
+    );
+    assert_eq!(
+        consolidate["consolidation_receipt"]["partial_attempt_ids"],
+        serde_json::json!(["attempt-consolidate-b"])
+    );
+    assert_eq!(
+        consolidate["consolidation_receipt"]["timeout_attempt_ids"],
+        serde_json::json!(["attempt-consolidate-b"])
+    );
+    assert_eq!(
+        consolidate["consolidation_receipt"]["cap_limited_attempt_ids"],
+        serde_json::json!(["attempt-consolidate-b"])
+    );
+    assert_eq!(
+        consolidate["facts"],
+        serde_json::json!([
+            "dispatch creates attempt rows",
+            "collect does not mutate canonical task notes",
+            "operator supplied fact"
+        ])
+    );
+    assert_eq!(
+        consolidate["hypotheses"],
+        serde_json::json!([
+            "default policy can be configured",
+            "coach should review synthesized receipt",
+            "operator supplied hypothesis"
+        ])
+    );
+    assert_eq!(consolidate["conflicts"], serde_json::json!([]));
+    assert_eq!(consolidate["canonical_task_notes_mutated"], false);
+    assert_eq!(consolidate["blocker_codes"], serde_json::json!([]));
+    assert!(consolidate["next_actions"].as_array().is_some());
+    assert_eq!(
+        consolidate["stage_summary"]["latest_consolidation_receipt_id"],
+        "receipt-analysis-consolidated"
+    );
+
+    let default_output = run_and_assert_success_with_explicit_state_dir(
+        &[
+            "task",
+            "attempt",
+            "consolidate",
+            &task_id,
+            "--stage",
+            "analysis",
+        ],
+        &state_dir,
+    );
+    assert!(default_output.starts_with("vida task attempt consolidate\n"));
+    assert!(default_output.contains("status: pass"));
+    assert!(default_output.contains("consolidation_receipt"));
+    assert!(default_output.contains("facts"));
+    assert!(default_output.contains("hypotheses"));
+    assert!(default_output.contains("conflicts"));
+    assert!(!default_output.trim_start().starts_with('{'));
+    assert!(!default_output.contains("--json"));
+
+    let after = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    assert_eq!(
+        after["task"]["notes"], before_notes,
+        "consolidation emits a receipt but must not mutate canonical task notes"
+    );
+}
+
+#[test]
+fn task_attempt_consolidate_rejects_stale_attempts() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-consolidate-stale-task");
+    create_task_attempt_fixture(&state_dir, &task_id);
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+    let artifact_path = format!("{artifact_dir}/analysis-stale.json");
+    fs::write(
+        &artifact_path,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-consolidate-stale",
+            "task_id": &task_id,
+            "stage_id": "analysis",
+            "observed_facts": ["stale attempt must not consolidate"],
+            "hypotheses": [],
+            "proof_results": [],
+            "risks": [],
+            "limitations": [],
+            "conflicts": []
+        })
+        .to_string(),
+    )
+    .expect("write stale attempt artifact");
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-consolidate-stale",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "vibe",
+            "--model-profile",
+            "medium",
+            "--isolation",
+            "readonly",
+            "--freshness",
+            "old-snapshot",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            &artifact_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "attempt",
+            "consolidate",
+            &task_id,
+            "--stage",
+            "analysis",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success);
+    assert_eq!(blocked["surface"], "vida task attempt consolidate");
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(
+        blocked["blocker_codes"],
+        serde_json::json!(["dispatch_packet_contract_invalid"])
+    );
+    assert!(blocked["error"]
+        .as_str()
+        .expect("error should be string")
+        .contains("stale_task_binding"));
+}
+
+#[test]
+fn task_attempt_consolidate_fails_closed_for_missing_or_malformed_artifacts() {
+    let state_dir = unique_state_dir();
+    let missing_task_id = unique_test_id("attempt-consolidate-missing-artifact");
+    create_task_attempt_fixture(&state_dir, &missing_task_id);
+    let missing_path = format!("{state_dir}/missing-artifact.json");
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &missing_task_id,
+            "--attempt-id",
+            "attempt-consolidate-missing",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--isolation",
+            "readonly",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            &missing_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+    let (missing_blocked, missing_success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "attempt",
+            "consolidate",
+            &missing_task_id,
+            "--stage",
+            "analysis",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!missing_success);
+    assert_eq!(missing_blocked["status"], "blocked");
+    assert!(missing_blocked["error"]
+        .as_str()
+        .expect("error should be string")
+        .contains("attempt_artifact_validation_failed"));
+    assert_eq!(missing_blocked["canonical_task_notes_mutated"], false);
+
+    let malformed_state_dir = unique_state_dir();
+    let malformed_task_id = unique_test_id("attempt-consolidate-malformed-artifact");
+    create_task_attempt_fixture(&malformed_state_dir, &malformed_task_id);
+    let malformed_path = format!("{malformed_state_dir}/malformed-artifact.json");
+    fs::write(&malformed_path, "{not-json").expect("write malformed artifact");
+    let malformed_record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &malformed_task_id,
+            "--attempt-id",
+            "attempt-consolidate-malformed",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--isolation",
+            "readonly",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            &malformed_path,
+            "--json",
+        ],
+        &malformed_state_dir,
+    );
+    assert_eq!(malformed_record["status"], "pass");
+    let (malformed_blocked, malformed_success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "attempt",
+            "consolidate",
+            &malformed_task_id,
+            "--stage",
+            "analysis",
+            "--json",
+        ],
+        &malformed_state_dir,
+    );
+    assert!(!malformed_success);
+    assert_eq!(malformed_blocked["status"], "blocked");
+    assert!(malformed_blocked["error"]
+        .as_str()
+        .expect("error should be string")
+        .contains("not valid JSON"));
+    assert_eq!(malformed_blocked["canonical_task_notes_mutated"], false);
 }
 
 #[test]

@@ -118,8 +118,8 @@ use state_store_source_scan::{
     record_id_for_slice_source,
 };
 pub use state_store_task_attempts::{
-    RecordTaskAttemptRequest, TaskAttemptRecord, TaskStageRecord, TaskStageSummary,
-    TransitionTaskAttemptRequest,
+    ConsolidateTaskStageAttemptsRequest, RecordTaskAttemptRequest, TaskAttemptRecord,
+    TaskStageConsolidationReceipt, TaskStageRecord, TaskStageSummary, TransitionTaskAttemptRequest,
 };
 pub(crate) use state_store_task_models::{
     apply_provider_mapping_to_task_jsonl_record, provider_external_key, TaskContent,

@@ -76,6 +76,45 @@ pub struct TaskStageSummary {
     pub artifact_refs: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue, PartialEq, Eq)]
+pub struct TaskStageConsolidationReceipt {
+    pub receipt_id: String,
+    pub task_id: String,
+    pub stage_id: String,
+    pub consolidator_profile: String,
+    pub merge_policy: String,
+    pub result_status: String,
+    pub attempt_count: usize,
+    pub accepted_attempt_ids: Vec<String>,
+    pub rejected_attempt_ids: Vec<String>,
+    pub stale_attempt_ids: Vec<String>,
+    pub partial_attempt_ids: Vec<String>,
+    pub timeout_attempt_ids: Vec<String>,
+    pub cap_limited_attempt_ids: Vec<String>,
+    pub conflict_attempt_ids: Vec<String>,
+    pub artifact_refs: Vec<String>,
+    pub facts: Vec<String>,
+    pub hypotheses: Vec<String>,
+    pub conflicts: Vec<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsolidateTaskStageAttemptsRequest {
+    pub receipt_id: Option<String>,
+    pub task_id: String,
+    pub stage_id: String,
+    pub consolidator_profile: String,
+    pub merge_policy: String,
+    pub artifact_refs: Vec<String>,
+    pub facts: Vec<String>,
+    pub hypotheses: Vec<String>,
+    pub conflicts: Vec<String>,
+    pub partial_attempt_ids: Vec<String>,
+    pub timeout_attempt_ids: Vec<String>,
+    pub cap_limited_attempt_ids: Vec<String>,
+}
+
 const TASK_ATTEMPT_STATUSES: &[&str] = &[
     "submitted",
     "running",
@@ -256,6 +295,139 @@ impl StateStore {
             .await?;
         let attempts: Vec<TaskAttemptRecord> = response.take(0)?;
         Ok(attempts)
+    }
+
+    pub async fn consolidate_task_stage_attempts(
+        &self,
+        request: ConsolidateTaskStageAttemptsRequest,
+    ) -> Result<TaskStageConsolidationReceipt, StateStoreError> {
+        let task = self
+            .validate_task_attempt_binding(&request.task_id, &request.stage_id)
+            .await?;
+        let task_id = normalize_non_empty("task_id", &request.task_id)?;
+        let stage_id = normalize_non_empty("stage_id", &request.stage_id)?;
+        let attempts = self.task_stage_attempts(&task_id, &stage_id).await?;
+        if attempts.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task attempt consolidate requires at least one attempt for task `{task_id}` stage `{stage_id}`"
+                ),
+            });
+        }
+        let stale_attempt_ids = attempts
+            .iter()
+            .filter(|attempt| attempt.freshness != task.updated_at)
+            .map(|attempt| attempt.attempt_id.clone())
+            .collect::<Vec<_>>();
+        if !stale_attempt_ids.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "stale_task_binding: cannot consolidate stale attempts for task `{}` stage `{}`: {}",
+                    task.id,
+                    stage_id,
+                    stale_attempt_ids.join(", ")
+                ),
+            });
+        }
+
+        let accepted_attempt_ids = attempts
+            .iter()
+            .filter(|attempt| attempt.status == "accepted")
+            .map(|attempt| attempt.attempt_id.clone())
+            .collect::<Vec<_>>();
+        let rejected_attempt_ids = attempts
+            .iter()
+            .filter(|attempt| attempt.status == "rejected")
+            .map(|attempt| attempt.attempt_id.clone())
+            .collect::<Vec<_>>();
+        let mut partial_attempt_ids = normalize_artifact_refs(request.partial_attempt_ids);
+        for attempt in attempts
+            .iter()
+            .filter(|attempt| attempt.status == "partially_accepted")
+        {
+            if !partial_attempt_ids.contains(&attempt.attempt_id) {
+                partial_attempt_ids.push(attempt.attempt_id.clone());
+            }
+        }
+
+        let conflicts = normalize_artifact_refs(request.conflicts);
+        let result_status = if conflicts.is_empty() {
+            "accepted"
+        } else {
+            "conflict"
+        }
+        .to_string();
+        let receipt_id = request.receipt_id.unwrap_or_else(|| {
+            format!(
+                "{}--{}--consolidation--{}",
+                sanitize_record_id(&task_id),
+                sanitize_record_id(&stage_id),
+                unix_timestamp_nanos()
+            )
+        });
+        let receipt = TaskStageConsolidationReceipt {
+            receipt_id: normalize_non_empty("receipt_id", &receipt_id)?,
+            task_id: task_id.clone(),
+            stage_id: stage_id.clone(),
+            consolidator_profile: normalize_non_empty(
+                "consolidator_profile",
+                &request.consolidator_profile,
+            )?,
+            merge_policy: normalize_non_empty("merge_policy", &request.merge_policy)?,
+            result_status,
+            attempt_count: attempts.len(),
+            accepted_attempt_ids,
+            rejected_attempt_ids,
+            stale_attempt_ids: Vec::new(),
+            partial_attempt_ids,
+            timeout_attempt_ids: normalize_artifact_refs(request.timeout_attempt_ids),
+            cap_limited_attempt_ids: normalize_artifact_refs(request.cap_limited_attempt_ids),
+            conflict_attempt_ids: if conflicts.is_empty() {
+                Vec::new()
+            } else {
+                attempts
+                    .iter()
+                    .map(|attempt| attempt.attempt_id.clone())
+                    .collect()
+            },
+            artifact_refs: normalize_artifact_refs(request.artifact_refs),
+            facts: normalize_artifact_refs(request.facts),
+            hypotheses: normalize_artifact_refs(request.hypotheses),
+            conflicts,
+            created_at: task_attempt_timestamp(),
+        };
+
+        let _: Option<TaskStageConsolidationReceipt> = self
+            .db
+            .upsert((
+                "task_stage_consolidation_receipt",
+                receipt.receipt_id.as_str(),
+            ))
+            .content(receipt.clone())
+            .await?;
+
+        let record_id = task_stage_record_id(&task_id, &stage_id)?;
+        let existing = self.task_stage_record(&task_id, &stage_id).await?;
+        let now = task_attempt_timestamp();
+        let stage = TaskStageRecord {
+            stage_record_id: record_id,
+            task_id,
+            stage_id,
+            status: receipt.result_status.clone(),
+            latest_consolidation_receipt_id: Some(receipt.receipt_id.clone()),
+            created_at: existing
+                .as_ref()
+                .map(|stage| stage.created_at.clone())
+                .unwrap_or_else(|| now.clone()),
+            updated_at: now,
+        };
+        let _: Option<TaskStageRecord> = self
+            .db
+            .upsert(("task_stage", stage.stage_record_id.as_str()))
+            .content(stage)
+            .await?;
+
+        Ok(receipt)
     }
 
     async fn task_stage_record(

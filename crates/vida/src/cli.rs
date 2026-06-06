@@ -1755,6 +1755,8 @@ pub(crate) enum TaskAttemptCommand {
     Status(TaskAttemptStatusArgs),
     #[command(about = "collect attempt artifacts into the ledger without mutating task notes")]
     Collect(TaskAttemptCollectArgs),
+    #[command(about = "consolidate validated stage attempts into one canonical stage receipt")]
+    Consolidate(TaskAttemptConsolidateArgs),
     #[command(about = "record one stage attempt for a task")]
     Record(TaskAttemptRecordArgs),
     #[command(about = "transition an existing stage attempt after validating task binding")]
@@ -1885,6 +1887,92 @@ pub(crate) struct TaskAttemptCollectArgs {
         help = "Optional consolidation receipt id produced from this attempt"
     )]
     pub(crate) consolidation_receipt_id: Option<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskAttemptConsolidateArgs {
+    #[arg(help = "Task id that owns the stage attempts")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "stage-id",
+        visible_alias = "stage",
+        value_name = "STAGE",
+        help = "Stage id to consolidate"
+    )]
+    pub(crate) stage_id: String,
+
+    #[arg(
+        long = "consolidation-receipt",
+        help = "Optional caller-supplied canonical stage consolidation receipt id"
+    )]
+    pub(crate) consolidation_receipt_id: Option<String>,
+
+    #[arg(
+        long = "consolidator-profile",
+        default_value = "primary_orchestrator",
+        help = "Consolidator model/profile or primary orchestrator policy used for the receipt"
+    )]
+    pub(crate) consolidator_profile: String,
+
+    #[arg(
+        long = "merge-policy",
+        default_value = "facts_require_artifact_evidence_conflicts_fail_closed",
+        help = "Merge policy used to separate facts, hypotheses, conflicts, and partial results"
+    )]
+    pub(crate) merge_policy: String,
+
+    #[arg(
+        long = "fact",
+        help = "Operator-supplied canonical fact to merge with validated artifact facts; accepts repeated flags"
+    )]
+    pub(crate) facts: Vec<String>,
+
+    #[arg(
+        long = "hypothesis",
+        help = "Operator-supplied hypothesis to keep separate from canonical facts; accepts repeated flags"
+    )]
+    pub(crate) hypotheses: Vec<String>,
+
+    #[arg(
+        long = "conflict",
+        help = "Operator-supplied unresolved conflict to surface in the consolidation receipt; accepts repeated flags"
+    )]
+    pub(crate) conflicts: Vec<String>,
+
+    #[arg(
+        long = "partial-attempt-id",
+        help = "Attempt id classified as partial coverage; accepts repeated flags"
+    )]
+    pub(crate) partial_attempt_ids: Vec<String>,
+
+    #[arg(
+        long = "timeout-attempt-id",
+        help = "Attempt id classified as timed out; accepts repeated flags"
+    )]
+    pub(crate) timeout_attempt_ids: Vec<String>,
+
+    #[arg(
+        long = "cap-limited-attempt-id",
+        help = "Attempt id classified as cap-limited; accepts repeated flags"
+    )]
+    pub(crate) cap_limited_attempt_ids: Vec<String>,
 
     #[arg(
         long = "state-dir",

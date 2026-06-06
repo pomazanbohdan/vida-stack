@@ -165,6 +165,7 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
             super::TaskAttemptCommand::Dispatch(command) => command.state_dir.is_some(),
             super::TaskAttemptCommand::Status(command) => command.state_dir.is_some(),
             super::TaskAttemptCommand::Collect(command) => command.state_dir.is_some(),
+            super::TaskAttemptCommand::Consolidate(command) => command.state_dir.is_some(),
             super::TaskAttemptCommand::Record(command) => command.state_dir.is_some(),
             super::TaskAttemptCommand::Transition(command) => command.state_dir.is_some(),
             super::TaskAttemptCommand::Summary(command) => command.state_dir.is_some(),

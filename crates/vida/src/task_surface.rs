@@ -6278,6 +6278,45 @@ async fn run_task_attempt_collect(command: TaskAttemptCollectArgs) -> ExitCode {
     }
 }
 
+async fn run_task_attempt_consolidate(command: TaskAttemptConsolidateArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    match StateStore::open_existing(state_dir).await {
+        Ok(store) => match task_attempt_consolidation_for_command(&store, &command).await {
+            Ok((receipt, summary)) => print_task_attempt_payload(
+                "vida task attempt consolidate",
+                command.render,
+                command.json,
+                task_attempt_consolidation_payload(
+                    "vida task attempt consolidate",
+                    receipt,
+                    summary,
+                ),
+            ),
+            Err(error) => print_task_attempt_payload(
+                "vida task attempt consolidate",
+                command.render,
+                command.json,
+                task_attempt_error_payload(
+                    "vida task attempt consolidate",
+                    Some(command.task_id.as_str()),
+                    Some(command.stage_id.as_str()),
+                    None,
+                    &error,
+                ),
+            ),
+        },
+        Err(error) => print_task_attempt_payload(
+            "vida task attempt consolidate",
+            command.render,
+            command.json,
+            task_attempt_store_error_payload("vida task attempt consolidate", &error),
+        ),
+    }
+}
+
 async fn run_task_stage(command: TaskStageArgs) -> ExitCode {
     match command.command {
         TaskStageCommand::Status(command) => {
@@ -6346,6 +6385,191 @@ fn validate_attempt_artifact_refs(values: &[String]) -> Result<Vec<String>, Stri
         }
     }
     Ok(refs)
+}
+
+#[derive(Default)]
+struct TaskAttemptArtifactConsolidation {
+    artifact_refs: Vec<String>,
+    facts: Vec<String>,
+    hypotheses: Vec<String>,
+    conflicts: Vec<String>,
+    partial_attempt_ids: Vec<String>,
+    timeout_attempt_ids: Vec<String>,
+    cap_limited_attempt_ids: Vec<String>,
+}
+
+async fn task_attempt_consolidation_for_command(
+    store: &StateStore,
+    command: &TaskAttemptConsolidateArgs,
+) -> Result<
+    (
+        state_store::TaskStageConsolidationReceipt,
+        Option<state_store::TaskStageSummary>,
+    ),
+    state_store::StateStoreError,
+> {
+    let attempts = store
+        .task_stage_attempts(&command.task_id, &command.stage_id)
+        .await?;
+    let mut consolidated = consolidate_attempt_artifacts(&attempts).map_err(|reason| {
+        state_store::StateStoreError::InvalidTaskRecord {
+            reason: format!("attempt_artifact_validation_failed: {reason}"),
+        }
+    })?;
+    merge_repeated_values(&mut consolidated.facts, &command.facts);
+    merge_repeated_values(&mut consolidated.hypotheses, &command.hypotheses);
+    merge_repeated_values(&mut consolidated.conflicts, &command.conflicts);
+    merge_repeated_values(
+        &mut consolidated.partial_attempt_ids,
+        &command.partial_attempt_ids,
+    );
+    merge_repeated_values(
+        &mut consolidated.timeout_attempt_ids,
+        &command.timeout_attempt_ids,
+    );
+    merge_repeated_values(
+        &mut consolidated.cap_limited_attempt_ids,
+        &command.cap_limited_attempt_ids,
+    );
+    let receipt = store
+        .consolidate_task_stage_attempts(state_store::ConsolidateTaskStageAttemptsRequest {
+            receipt_id: command.consolidation_receipt_id.clone(),
+            task_id: command.task_id.clone(),
+            stage_id: command.stage_id.clone(),
+            consolidator_profile: command.consolidator_profile.clone(),
+            merge_policy: command.merge_policy.clone(),
+            artifact_refs: consolidated.artifact_refs,
+            facts: consolidated.facts,
+            hypotheses: consolidated.hypotheses,
+            conflicts: consolidated.conflicts,
+            partial_attempt_ids: consolidated.partial_attempt_ids,
+            timeout_attempt_ids: consolidated.timeout_attempt_ids,
+            cap_limited_attempt_ids: consolidated.cap_limited_attempt_ids,
+        })
+        .await?;
+    let summary = store
+        .task_stage_summary(&receipt.task_id, &receipt.stage_id)
+        .await
+        .ok();
+    Ok((receipt, summary))
+}
+
+fn consolidate_attempt_artifacts(
+    attempts: &[state_store::TaskAttemptRecord],
+) -> Result<TaskAttemptArtifactConsolidation, String> {
+    let mut consolidated = TaskAttemptArtifactConsolidation::default();
+    for attempt in attempts {
+        let refs = validate_attempt_artifact_refs(&attempt.artifact_refs)?;
+        for artifact_ref in refs {
+            if !consolidated.artifact_refs.contains(&artifact_ref) {
+                consolidated.artifact_refs.push(artifact_ref.clone());
+            }
+            let path = std::path::Path::new(&artifact_ref);
+            if !path.exists() {
+                return Err(format!(
+                    "task attempt consolidate requires local JSON artifact refs; `{artifact_ref}` does not exist"
+                ));
+            }
+            let raw = std::fs::read_to_string(path).map_err(|error| {
+                format!("failed to read attempt artifact `{artifact_ref}`: {error}")
+            })?;
+            let json: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+                format!("attempt artifact `{artifact_ref}` is not valid JSON: {error}")
+            })?;
+            validate_stage_attempt_artifact_identity(&json, attempt, &artifact_ref)?;
+            append_json_string_array(&json, &["observed_facts", "facts"], &mut consolidated.facts);
+            append_json_string_array(&json, &["hypotheses"], &mut consolidated.hypotheses);
+            append_json_string_array(&json, &["conflicts"], &mut consolidated.conflicts);
+            let result_status = json["result_status"]
+                .as_str()
+                .or_else(|| json["status"].as_str())
+                .unwrap_or("");
+            if attempt.status == "partially_accepted"
+                || matches!(result_status, "partial" | "partially_accepted")
+            {
+                push_unique(&mut consolidated.partial_attempt_ids, &attempt.attempt_id);
+            }
+            if json["timeout"].as_bool() == Some(true) || result_status == "timeout" {
+                push_unique(&mut consolidated.timeout_attempt_ids, &attempt.attempt_id);
+            }
+            if json["cap_limited"].as_bool() == Some(true) || result_status == "cap_limited" {
+                push_unique(
+                    &mut consolidated.cap_limited_attempt_ids,
+                    &attempt.attempt_id,
+                );
+            }
+        }
+    }
+    Ok(consolidated)
+}
+
+fn validate_stage_attempt_artifact_identity(
+    json: &serde_json::Value,
+    attempt: &state_store::TaskAttemptRecord,
+    artifact_ref: &str,
+) -> Result<(), String> {
+    for (field, expected) in [
+        ("schema_version", "stage-attempt-v1"),
+        ("attempt_id", attempt.attempt_id.as_str()),
+        ("task_id", attempt.task_id.as_str()),
+        ("stage_id", attempt.stage_id.as_str()),
+    ] {
+        let actual = json[field].as_str().unwrap_or("");
+        if actual != expected {
+            return Err(format!(
+                "attempt artifact `{artifact_ref}` field `{field}` expected `{expected}`, got `{actual}`"
+            ));
+        }
+    }
+    let has_fact_array =
+        json["observed_facts"].as_array().is_some() || json["facts"].as_array().is_some();
+    if !has_fact_array {
+        return Err(format!(
+            "attempt artifact `{artifact_ref}` must include observed_facts or facts array"
+        ));
+    }
+    for field in [
+        "observed_facts",
+        "facts",
+        "hypotheses",
+        "proof_results",
+        "risks",
+        "limitations",
+        "conflicts",
+    ] {
+        if !json[field].is_null() && !json[field].is_array() {
+            return Err(format!(
+                "attempt artifact `{artifact_ref}` field `{field}` must be an array"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn merge_repeated_values(target: &mut Vec<String>, values: &[String]) {
+    for value in normalize_artifact_refs_for_attempt(values) {
+        push_unique(target, &value);
+    }
+}
+
+fn append_json_string_array(json: &serde_json::Value, keys: &[&str], values: &mut Vec<String>) {
+    for key in keys {
+        for value in json[*key].as_array().into_iter().flatten() {
+            if let Some(value) = value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                push_unique(values, value);
+            }
+        }
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: &str) {
+    if !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
+    }
 }
 
 async fn task_stage_status_payload_for_command(
@@ -6565,6 +6789,7 @@ async fn run_task_attempt(command: TaskAttemptArgs) -> ExitCode {
         TaskAttemptCommand::Dispatch(command) => run_task_attempt_dispatch(command).await,
         TaskAttemptCommand::Status(command) => run_task_attempt_status(command).await,
         TaskAttemptCommand::Collect(command) => run_task_attempt_collect(command).await,
+        TaskAttemptCommand::Consolidate(command) => run_task_attempt_consolidate(command).await,
         TaskAttemptCommand::Record(command) => {
             let state_dir = command
                 .state_dir
@@ -6761,6 +6986,22 @@ fn print_task_attempt_payload(
                         payload["canonical_task_notes_mutated"].clone(),
                     ),
                     crate::operator_toon_report::OperatorToonField::value(
+                        "consolidation_receipt",
+                        payload["consolidation_receipt"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "facts",
+                        payload["facts"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "hypotheses",
+                        payload["hypotheses"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "conflicts",
+                        payload["conflicts"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
                         "active_stage",
                         payload["active_stage"].clone(),
                     ),
@@ -6883,6 +7124,34 @@ fn task_attempt_collect_payload(
     payload
 }
 
+fn task_attempt_consolidation_payload(
+    surface: &str,
+    receipt: state_store::TaskStageConsolidationReceipt,
+    summary: Option<state_store::TaskStageSummary>,
+) -> serde_json::Value {
+    task_attempt_operator_payload(
+        surface,
+        Vec::new(),
+        Vec::new(),
+        serde_json::json!({
+            "surface": surface,
+            "task_id": receipt.task_id,
+            "stage_id": receipt.stage_id,
+            "consolidation_receipt_id": receipt.receipt_id,
+            "artifact_refs": receipt.artifact_refs,
+        }),
+        serde_json::json!({
+            "attempt": serde_json::Value::Null,
+            "stage_summary": summary,
+            "consolidation_receipt": receipt,
+            "facts": receipt.facts,
+            "hypotheses": receipt.hypotheses,
+            "conflicts": receipt.conflicts,
+            "canonical_task_notes_mutated": false,
+        }),
+    )
+}
+
 fn task_stage_status_payload(
     surface: &str,
     task_id: &str,
@@ -6932,6 +7201,7 @@ fn task_attempt_store_error_payload(
             "attempt": serde_json::Value::Null,
             "stage_summary": serde_json::Value::Null,
             "error": error.to_string(),
+            "canonical_task_notes_mutated": false,
         }),
     )
 }
@@ -6972,6 +7242,7 @@ fn task_attempt_error_payload(
             "attempt": serde_json::Value::Null,
             "stage_summary": serde_json::Value::Null,
             "error": error.to_string(),
+            "canonical_task_notes_mutated": false,
         }),
     )
 }
