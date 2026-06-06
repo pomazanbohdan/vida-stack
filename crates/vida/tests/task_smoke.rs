@@ -5839,6 +5839,730 @@ fn task_attempt_consolidate_fails_closed_for_missing_or_malformed_artifacts() {
 }
 
 #[test]
+fn implementation_attempt_isolation() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    init_git_repo(&project_root);
+    for path in [
+        "crates/vida/src/runtime_dispatch_execution.rs",
+        "crates/vida/src/lane_surface.rs",
+        "crates/vida/tests/task_smoke.rs",
+    ] {
+        let full_path = format!("{project_root}/{path}");
+        fs::create_dir_all(
+            std::path::Path::new(&full_path)
+                .parent()
+                .expect("fixture file should have parent"),
+        )
+        .expect("create fixture source parent");
+        fs::write(&full_path, format!("// baseline {path}\n")).expect("write fixture source");
+    }
+    for args in [
+        ["config", "user.email", "vida@example.invalid"].as_slice(),
+        ["config", "user.name", "VIDA Test"].as_slice(),
+        ["add", "."].as_slice(),
+        ["commit", "--quiet", "-m", "baseline"].as_slice(),
+    ] {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&project_root)
+            .output()
+            .expect("git fixture command should run");
+        assert!(
+            output.status.success(),
+            "git fixture command failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let base = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&project_root)
+        .output()
+        .expect("git rev-parse should run");
+    assert!(base.status.success());
+    let base_git_revision = String::from_utf8_lossy(&base.stdout).trim().to_string();
+
+    run_and_assert_success(&["boot"], &state_dir);
+    create_epic_parent(
+        &state_dir,
+        "implementation-attempt-isolation-parent",
+        "Implementation attempt isolation parent",
+        "open",
+    );
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            "implementation-attempt-isolation-task",
+            "Implementation attempt isolation task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            "implementation-attempt-isolation-parent",
+            "--owned-path",
+            "crates/vida/src/runtime_dispatch_execution.rs",
+            "--owned-path",
+            "crates/vida/src/lane_surface.rs",
+            "--owned-path",
+            "crates/vida/src/runtime_dispatch_packets.rs",
+            "--owned-path",
+            "crates/vida/tests/task_smoke.rs",
+            "--proof-target",
+            "cargo test -p vida implementation_attempt_isolation -- --nocapture",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+    let patch_path = format!("{artifact_dir}/impl-a.patch");
+    fs::write(
+        &patch_path,
+        "diff --git a/crates/vida/src/runtime_dispatch_execution.rs b/crates/vida/src/runtime_dispatch_execution.rs\n",
+    )
+    .expect("write patch artifact");
+    let artifact_a = format!("{artifact_dir}/impl-a.json");
+    fs::write(
+        &artifact_a,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "artifact_kind": "patch_proposal",
+            "attempt_id": "impl-a",
+            "task_id": "implementation-attempt-isolation-task",
+            "stage_id": "implementation",
+            "isolation": {
+                "mode": "patch_proposal",
+                "canonical_worktree_mutated": false
+            },
+            "patch_artifact": {
+                "path": patch_path,
+                "changed_files": ["crates/vida/src/runtime_dispatch_execution.rs"]
+            },
+            "base_git_revision": base_git_revision,
+            "changed_files": ["crates/vida/src/runtime_dispatch_execution.rs"],
+            "observed_facts": ["patch proposal is isolated from canonical worktree"]
+        })
+        .to_string(),
+    )
+    .expect("write patch proposal metadata");
+    let artifact_b = format!("{artifact_dir}/impl-b.json");
+    fs::write(
+        &artifact_b,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "artifact_kind": "isolated_worktree_manifest",
+            "attempt_id": "impl-b",
+            "task_id": "implementation-attempt-isolation-task",
+            "stage_id": "implementation",
+            "isolation": {
+                "mode": "isolated_worktree",
+                "canonical_worktree_mutated": false,
+                "worktree_path": format!("{project_root}/attempt-worktrees/impl-b")
+            },
+            "base_git_revision": base_git_revision,
+            "changed_files": [
+                "crates/vida/src/lane_surface.rs",
+                "crates/vida/tests/task_smoke.rs"
+            ],
+            "observed_facts": ["isolated worktree result is represented as a manifest"]
+        })
+        .to_string(),
+    )
+    .expect("write isolated worktree metadata");
+
+    let patch_record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            "implementation-attempt-isolation-task",
+            "--attempt-id",
+            "impl-a",
+            "--stage-id",
+            "implementation",
+            "--backend",
+            "vibe",
+            "--model-profile",
+            "mistral-medium",
+            "--isolation",
+            "patch_proposal",
+            "--status",
+            "produced",
+            "--artifact-ref",
+            &artifact_a,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(patch_record["status"], "pass");
+    assert_eq!(patch_record["attempt"]["isolation"], "patch_proposal");
+    let worktree_record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            "implementation-attempt-isolation-task",
+            "--attempt-id",
+            "impl-b",
+            "--stage-id",
+            "implementation",
+            "--backend",
+            "jcode",
+            "--model-profile",
+            "mistral-medium",
+            "--isolation",
+            "isolated_worktree",
+            "--status",
+            "produced",
+            "--artifact-ref",
+            &artifact_b,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(worktree_record["status"], "pass");
+    assert_eq!(worktree_record["attempt"]["isolation"], "isolated_worktree");
+
+    let collected = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "collect",
+            "implementation-attempt-isolation-task",
+            "--stage-id",
+            "implementation",
+            "--attempt-id",
+            "impl-b",
+            "--artifact-ref",
+            &artifact_b,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(collected["status"], "pass");
+    assert_eq!(collected["canonical_task_notes_mutated"], false);
+    assert!(collected["attempt"]["artifact_refs"]
+        .as_array()
+        .expect("artifact refs should render")
+        .iter()
+        .any(|value| value == &serde_json::json!(artifact_b)));
+
+    let status = run_command_json(
+        &[
+            "task",
+            "stage",
+            "status",
+            "implementation-attempt-isolation-task",
+            "--stage-id",
+            "implementation",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(status["status"], "pass");
+    assert_eq!(status["stage_summary"]["attempt_count"], 2);
+    assert!(status["stage_summary"]["artifact_refs"]
+        .as_array()
+        .expect("stage artifact refs should render")
+        .iter()
+        .any(|value| value == &serde_json::json!(artifact_a)));
+    assert!(status["stage_summary"]["artifact_refs"]
+        .as_array()
+        .expect("stage artifact refs should render")
+        .iter()
+        .any(|value| value == &serde_json::json!(artifact_b)));
+    let artifact_b_json: Value =
+        serde_json::from_str(&fs::read_to_string(&artifact_b).expect("artifact should read"))
+            .expect("artifact should parse");
+    assert_eq!(artifact_b_json["base_git_revision"], base_git_revision);
+    assert_eq!(
+        artifact_b_json["changed_files"],
+        serde_json::json!([
+            "crates/vida/src/lane_surface.rs",
+            "crates/vida/tests/task_smoke.rs"
+        ])
+    );
+
+    let git_status = Command::new("git")
+        .args(["status", "--short", "--", "crates", "docs"])
+        .current_dir(&project_root)
+        .output()
+        .expect("git status should run");
+    assert!(git_status.status.success());
+    assert!(
+        String::from_utf8_lossy(&git_status.stdout)
+            .trim()
+            .is_empty(),
+        "canonical worktree must stay clean after collecting isolated attempts: {}",
+        String::from_utf8_lossy(&git_status.stdout)
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn external_attempt_scope_guard() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+    create_epic_parent(
+        &state_dir,
+        "external-attempt-scope-parent",
+        "External attempt scope parent",
+        "open",
+    );
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            "external-attempt-scope-task",
+            "External attempt scope task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            "external-attempt-scope-parent",
+            "--owned-path",
+            "crates/vida/src/runtime_dispatch_execution.rs",
+            "--owned-path",
+            "crates/vida/src/lane_surface.rs",
+            "--owned-path",
+            "crates/vida/src/runtime_dispatch_packets.rs",
+            "--owned-path",
+            "crates/vida/tests/task_smoke.rs",
+            "--proof-target",
+            "cargo test -p vida external_attempt_scope_guard -- --nocapture",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+    run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            "external-attempt-scope-task",
+            "implementation",
+        ],
+        &state_dir,
+    );
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    let bridge_dir = format!("{state_dir}/runtime-consumption/host-tool-bridge");
+    let result_dir = format!("{state_dir}/runtime-consumption/dispatch-results");
+    fs::create_dir_all(&packet_dir).expect("create packet dir");
+    fs::create_dir_all(&bridge_dir).expect("create bridge dir");
+    fs::create_dir_all(&result_dir).expect("create result dir");
+    let owned_paths = serde_json::json!([
+        "crates/vida/src/runtime_dispatch_execution.rs",
+        "crates/vida/src/lane_surface.rs",
+        "crates/vida/src/runtime_dispatch_packets.rs",
+        "crates/vida/tests/task_smoke.rs"
+    ]);
+    let implementation_isolation = serde_json::json!({
+        "schema_version": "implementation-isolation-v1",
+        "canonical_worktree_writes_allowed": false,
+        "default_mode": "patch_proposal",
+        "allowed_modes": ["patch_proposal", "isolated_worktree"],
+        "artifact_contract": "stage_attempt_implementation_artifact_v1",
+        "owned_paths": owned_paths,
+        "required_result_fields": [
+            "artifact_kind",
+            "attempt_id",
+            "task_id",
+            "stage_id",
+            "changed_files"
+        ],
+        "scope_policy": {
+            "changed_files_must_be_subset_of_owned_paths": true,
+            "patch_paths_must_be_subset_of_owned_paths": true
+        }
+    });
+    let packet_path = format!("{packet_dir}/external-attempt-scope-task.json");
+    fs::write(
+        &packet_path,
+        serde_json::json!({
+            "run_id": "external-attempt-scope-task",
+            "task_id": "external-attempt-scope-task",
+            "dispatch_target": "implementation",
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": owned_paths,
+            "read_only_paths": ["docs/process"],
+            "implementation_isolation": implementation_isolation,
+            "delivery_task_packet": {
+                "backlog_id": "external-attempt-scope-task",
+                "goal": "Execute implementation attempt with isolated artifacts",
+                "scope_in": ["dispatch_target:implementation"],
+                "owned_paths": owned_paths,
+                "read_only_paths": ["docs/process"],
+                "definition_of_done": ["implementation attempt artifact is validated"],
+                "verification_command": "vida taskflow consume continue",
+                "proof_target": "implementation attempt scope guard",
+                "stop_rules": ["stop after bounded implementation artifact"],
+                "blocking_question": "Does the implementation attempt stay inside owned paths?",
+                "handoff_task_class": "implementation",
+                "implementation_isolation": implementation_isolation
+            }
+        })
+        .to_string(),
+    )
+    .expect("write dispatch packet");
+
+    let request_path = format!("{bridge_dir}/request.json");
+    let result_path = format!("{bridge_dir}/result.json");
+    let receipt_path = format!("{bridge_dir}/receipt.json");
+    let dispatch_result_path = format!("{result_dir}/external-attempt-scope-task-dispatch.json");
+    fs::write(
+        &request_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "external-attempt-scope-request",
+            "run_id": "external-attempt-scope-task",
+            "task_id": "external-attempt-scope-task",
+            "dispatch_target": "implementation",
+            "packet_path": packet_path,
+            "runtime_role": "worker",
+            "task_class": "implementation",
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "adapter_params": {},
+            "implementation_isolation": implementation_isolation,
+            "expected_implementation_artifact_kinds": ["patch_proposal", "isolated_worktree_manifest"],
+            "implementation_artifacts": [{
+                "artifact_kind": "patch_proposal",
+                "attempt_id": "impl-pass",
+                "task_id": "external-attempt-scope-task",
+                "stage_id": "implementation",
+                "changed_files": ["crates/vida/src/runtime_dispatch_execution.rs"],
+                "patch_ref": "state://attempt-artifacts/impl-pass.patch"
+            }],
+            "owned_paths": owned_paths,
+            "read_only_paths": ["docs/process"],
+            "proof_target": "implementation attempt scope guard",
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": receipt_path
+        })
+        .to_string(),
+    )
+    .expect("write host bridge request");
+    fs::write(
+        &dispatch_result_path,
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "host_tool_bridge_request": {
+                "request_path": request_path,
+                "result_path": result_path,
+                "receipt_path": receipt_path
+            }
+        })
+        .to_string(),
+    )
+    .expect("write dispatch result");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": "external-attempt-scope-task",
+            "dispatch_target": "implementation",
+            "dispatch_status": "bridge_request_pending",
+            "lane_status": "lane_open",
+            "dispatch_kind": "agent_lane",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": "vida agent-init --dispatch-packet packet --execute-dispatch",
+            "dispatch_packet_path": packet_path,
+            "dispatch_result_path": dispatch_result_path,
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-06T00:00:00Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", "external-attempt-scope-task"))
+            .bind(("receipt", receipt))
+            .await
+            .expect("seed host bridge dispatch receipt");
+        drop(db);
+    });
+
+    let pass = run_command_json(
+        &[
+            "lane",
+            "complete",
+            "external-attempt-scope-task",
+            "--receipt-id",
+            "external-attempt-pass",
+            "--host-bridge-request",
+            &request_path,
+            "--host-agent-id",
+            "agent-pass",
+            "--host-bridge-summary",
+            "parent host adapter completed receipt-backed execution",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(pass["status"], "pass");
+    assert_eq!(pass["lane_status"], "lane_completed");
+    let pass_result: Value =
+        serde_json::from_str(&fs::read_to_string(&result_path).expect("result should read"))
+            .expect("result should parse");
+    assert_eq!(pass_result["scope_validation"]["status"], "pass");
+    assert_eq!(
+        pass_result["scope_validation"]["reported_changed_files"],
+        serde_json::json!(["crates/vida/src/runtime_dispatch_execution.rs"])
+    );
+
+    fs::remove_file(&result_path).expect("remove pass result");
+    fs::remove_file(&receipt_path).expect("remove pass receipt");
+    let mut blocked_request: Value =
+        serde_json::from_str(&fs::read_to_string(&request_path).expect("request should read"))
+            .expect("request should parse");
+    blocked_request["status"] = serde_json::json!("pending");
+    blocked_request["implementation_artifacts"] = serde_json::json!([{
+        "artifact_kind": "patch_proposal",
+        "attempt_id": "impl-blocked",
+        "task_id": "external-attempt-scope-task",
+        "stage_id": "implementation",
+        "changed_files": ["crates/vida/src/task_surface.rs", "docs/outside.md"],
+        "patch_ref": "state://attempt-artifacts/impl-blocked.patch"
+    }]);
+    fs::write(&request_path, blocked_request.to_string()).expect("write blocked request");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": "external-attempt-scope-task",
+            "dispatch_target": "implementation",
+            "dispatch_status": "bridge_request_pending",
+            "lane_status": "lane_open",
+            "dispatch_kind": "agent_lane",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": "vida agent-init --dispatch-packet packet --execute-dispatch",
+            "dispatch_packet_path": packet_path,
+            "dispatch_result_path": dispatch_result_path,
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-06T00:00:01Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", "external-attempt-scope-task"))
+            .bind(("receipt", receipt))
+            .await
+            .expect("reset receipt should run");
+        drop(db);
+    });
+
+    let (blocked, blocked_success) = run_command_json_allow_failure(
+        &[
+            "lane",
+            "complete",
+            "external-attempt-scope-task",
+            "--receipt-id",
+            "external-attempt-blocked",
+            "--host-bridge-request",
+            &request_path,
+            "--host-agent-id",
+            "agent-blocked",
+            "--host-bridge-summary",
+            "blocked by reviewer summary and implementation artifact scope violation",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !blocked_success,
+        "scope violation completion should fail closed with nonzero exit: {blocked}"
+    );
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(blocked["lane_status"], "lane_blocked");
+    assert!(
+        blocked["blocker_codes"]
+            .as_array()
+            .expect("blocked lane blocker codes should render")
+            .iter()
+            .any(|code| code == "implementation_attempt_scope_guard_violation"),
+        "scope guard blocker must stay visible on lane output: {blocked}"
+    );
+    assert!(
+        blocked["blocker_codes"]
+            .as_array()
+            .expect("blocked lane blocker codes should render")
+            .iter()
+            .any(|code| code == "lane_completion_blocked_by_summary"),
+        "summary blocker should remain visible with scope blocker: {blocked}"
+    );
+    let blocked_result: Value = serde_json::from_str(
+        &fs::read_to_string(&result_path).expect("blocked result should read"),
+    )
+    .expect("blocked result should parse");
+    assert_eq!(blocked_result["scope_validation"]["status"], "blocked");
+    assert!(
+        blocked_result["blocker_codes"]
+            .as_array()
+            .expect("host bridge result blocker codes should render")
+            .iter()
+            .any(|code| code == "implementation_attempt_scope_guard_violation"),
+        "host bridge result should preserve scope blocker: {blocked_result}"
+    );
+    assert!(
+        blocked_result["blocker_codes"]
+            .as_array()
+            .expect("host bridge result blocker codes should render")
+            .iter()
+            .any(|code| code == "lane_completion_blocked_by_summary"),
+        "host bridge result should preserve summary blocker: {blocked_result}"
+    );
+    assert_eq!(
+        blocked_result["scope_validation"]["out_of_scope_paths"],
+        serde_json::json!(["crates/vida/src/task_surface.rs", "docs/outside.md"])
+    );
+
+    fs::remove_file(&result_path).expect("remove blocked result");
+    fs::remove_file(&receipt_path).expect("remove blocked receipt");
+    let mut missing_artifacts_request: Value =
+        serde_json::from_str(&fs::read_to_string(&request_path).expect("request should read"))
+            .expect("request should parse");
+    missing_artifacts_request["status"] = serde_json::json!("pending");
+    missing_artifacts_request["implementation_artifacts"] = serde_json::json!([]);
+    fs::write(&request_path, missing_artifacts_request.to_string())
+        .expect("write missing-artifacts request");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": "external-attempt-scope-task",
+            "dispatch_target": "implementation",
+            "dispatch_status": "bridge_request_pending",
+            "lane_status": "lane_open",
+            "dispatch_kind": "agent_lane",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": "vida agent-init --dispatch-packet packet --execute-dispatch",
+            "dispatch_packet_path": packet_path,
+            "dispatch_result_path": dispatch_result_path,
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-06T00:00:02Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", "external-attempt-scope-task"))
+            .bind(("receipt", receipt))
+            .await
+            .expect("reset receipt should run");
+        drop(db);
+    });
+
+    let (missing, missing_success) = run_command_json_allow_failure(
+        &[
+            "lane",
+            "complete",
+            "external-attempt-scope-task",
+            "--receipt-id",
+            "external-attempt-missing-artifacts",
+            "--host-bridge-request",
+            &request_path,
+            "--host-agent-id",
+            "agent-missing",
+            "--host-bridge-summary",
+            "parent host adapter completed receipt-backed execution",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !missing_success,
+        "missing implementation artifacts should fail closed: {missing}"
+    );
+    assert_eq!(missing["status"], "blocked");
+    assert!(
+        missing["blocker_codes"]
+            .as_array()
+            .expect("missing-artifacts blocker codes should render")
+            .iter()
+            .any(|code| code == "implementation_artifacts_missing"),
+        "missing artifacts blocker must stay visible on lane output: {missing}"
+    );
+    let missing_result: Value = serde_json::from_str(
+        &fs::read_to_string(&result_path).expect("missing-artifacts result should read"),
+    )
+    .expect("missing-artifacts result should parse");
+    assert_eq!(
+        missing_result["scope_validation"]["blocker_codes"],
+        serde_json::json!(["implementation_artifacts_missing"])
+    );
+
+    let git_status = Command::new("git")
+        .args(["-C", &project_root, "status", "--short"])
+        .output()
+        .expect("git status should run");
+    if git_status.status.success() {
+        assert!(
+            String::from_utf8_lossy(&git_status.stdout)
+                .trim()
+                .is_empty(),
+            "scope guard must not mutate canonical worktree: {}",
+            String::from_utf8_lossy(&git_status.stdout)
+        );
+    }
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn task_stage_status_reports_task_attempt_ledger_summary() {
     let state_dir = unique_state_dir();
     let task_id = unique_test_id("stage-status-task");

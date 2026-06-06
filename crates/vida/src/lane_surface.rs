@@ -1220,27 +1220,18 @@ fn lane_summary_raw_blocker_codes(
 
 fn canonical_lane_show_blocker_codes(blocker_codes: &[String]) -> Vec<String> {
     let mut canonical_codes = crate::release1_contracts::canonical_blocker_code_list(blocker_codes);
-    if blocker_codes
+    for blocker_code in blocker_codes
         .iter()
-        .any(|value| value.trim() == "host_tool_bridge_adapter_required")
-        && !canonical_codes
-            .iter()
-            .any(|code| code == "host_tool_bridge_adapter_required")
+        .map(|value| value.trim())
+        .filter(|value| lane_show_preserves_raw_blocker_code(value))
     {
-        canonical_codes.push("host_tool_bridge_adapter_required".to_string());
-    }
-    if blocker_codes
-        .iter()
-        .any(|value| value.trim() == "internal_activation_view_only")
-        && !canonical_codes
-            .iter()
-            .any(|code| code == "internal_activation_view_only")
-    {
-        canonical_codes.push("internal_activation_view_only".to_string());
+        if !canonical_codes.iter().any(|code| code == blocker_code) {
+            canonical_codes.push(blocker_code.to_string());
+        }
     }
     let has_uncanonical_dispatch_blocker = blocker_codes.iter().any(|value| {
         !value.trim().is_empty()
-            && value.trim() != "host_tool_bridge_adapter_required"
+            && !lane_show_preserves_raw_blocker_code(value.trim())
             && crate::release1_contracts::canonical_blocker_code_list([value.as_str()]).is_empty()
     });
     if has_uncanonical_dispatch_blocker
@@ -1258,6 +1249,19 @@ fn canonical_lane_show_blocker_codes(blocker_codes: &[String]) -> Vec<String> {
         canonical_codes.dedup();
     }
     canonical_codes
+}
+
+fn lane_show_preserves_raw_blocker_code(blocker_code: &str) -> bool {
+    matches!(
+        blocker_code,
+        "host_tool_bridge_adapter_required"
+            | "internal_activation_view_only"
+            | "implementation_artifact_changed_files_missing"
+            | "implementation_artifact_contract_invalid"
+            | "implementation_artifacts_missing"
+            | "implementation_attempt_scope_guard_violation"
+            | "lane_completion_blocked_by_summary"
+    )
 }
 
 fn blocked_lane_show_next_action(
@@ -2230,6 +2234,7 @@ struct HostBridgeCompletionEvidence {
     receipt_path: String,
     execution_state: String,
     blocker_code: Option<String>,
+    blocker_codes: Vec<String>,
 }
 
 struct HostBridgeReceiptPaths {
@@ -2505,6 +2510,49 @@ fn write_json_artifact_replace_existing(
         .map_err(|error| format!("Failed to write {label} `{}`: {error}", path.display()))
 }
 
+fn host_bridge_implementation_scope_validation(
+    request: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let isolation = request
+        .get("implementation_isolation")
+        .filter(|value| value.is_object())?;
+    let owned_paths = isolation
+        .get("owned_paths")
+        .or_else(|| request.get("owned_paths"))
+        .and_then(serde_json::Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(
+        crate::runtime_dispatch_packets::implementation_artifact_scope_validation(
+            &owned_paths,
+            request
+                .get("implementation_artifacts")
+                .unwrap_or(&serde_json::Value::Null),
+        ),
+    )
+}
+
+fn host_bridge_scope_validation_blocker_codes(validation: &serde_json::Value) -> Vec<String> {
+    validation
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+}
+
 fn materialize_host_bridge_completion_evidence(
     state_root: &Path,
     request_path: &str,
@@ -2601,16 +2649,34 @@ fn materialize_host_bridge_completion_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("parent host bridge reported internal agent completion");
-    let blocker_code = crate::runtime_dispatch_state::runtime_lane_completion_summary_blocker_code(
-        dispatch_target,
-        Some(summary),
-    );
-    let execution_state = if blocker_code.is_some() {
+    let summary_blocker_code =
+        crate::runtime_dispatch_state::runtime_lane_completion_summary_blocker_code(
+            dispatch_target,
+            Some(summary),
+        );
+    let implementation_scope_validation = host_bridge_implementation_scope_validation(&request);
+    let mut blocker_codes = Vec::new();
+    if let Some(scope_blocker_codes) = implementation_scope_validation
+        .as_ref()
+        .filter(|validation| {
+            validation.get("status").and_then(serde_json::Value::as_str) == Some("blocked")
+        })
+        .map(host_bridge_scope_validation_blocker_codes)
+    {
+        blocker_codes.extend(scope_blocker_codes);
+    }
+    if let Some(summary_blocker_code) = summary_blocker_code {
+        blocker_codes.push(summary_blocker_code);
+    }
+    blocker_codes.sort();
+    blocker_codes.dedup();
+    let blocker_code = blocker_codes.first().cloned();
+    let execution_state = if !blocker_codes.is_empty() {
         "blocked"
     } else {
         "executed"
     };
-    let status = if blocker_code.is_some() {
+    let status = if !blocker_codes.is_empty() {
         "blocked"
     } else {
         "pass"
@@ -2625,8 +2691,16 @@ fn materialize_host_bridge_completion_evidence(
         "dispatch_target": dispatch_target,
         "completion_receipt_id": receipt_id,
         "blocker_code": blocker_code.clone(),
+        "blocker_codes": blocker_codes.clone(),
         "host_agent_id": host_agent_id,
         "summary": summary,
+        "implementation_artifacts": request
+            .get("implementation_artifacts")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+        "scope_validation": implementation_scope_validation
+            .clone()
+            .unwrap_or_else(|| serde_json::Value::Null),
         "source_dispatch_packet_path": packet_path,
         "activation_semantics": {
             "activation_kind": "execution_evidence",
@@ -2641,7 +2715,7 @@ fn materialize_host_bridge_completion_evidence(
             "evidence_kind": "host_tool_bridge_result",
             "backend_id": backend_id,
             "receipt_backed": true,
-            "completion_verdict": if blocker_code.is_some() { "rework_required" } else { "pass" },
+            "completion_verdict": if !blocker_codes.is_empty() { "rework_required" } else { "pass" },
             "records_dispatch_result": true
         },
         "recorded_at": recorded_at,
@@ -2656,10 +2730,14 @@ fn materialize_host_bridge_completion_evidence(
         "dispatch_target": dispatch_target,
         "completion_receipt_id": receipt_id,
         "blocker_code": blocker_code.clone(),
+        "blocker_codes": blocker_codes.clone(),
         "host_agent_id": host_agent_id,
         "request_path": canonical_request_path.display().to_string(),
         "result_path": result_path.display().to_string(),
         "source_dispatch_packet_path": packet_path,
+        "scope_validation": implementation_scope_validation
+            .clone()
+            .unwrap_or_else(|| serde_json::Value::Null),
         "recorded_at": recorded_at,
     });
     if replace_existing_evidence && result_path.exists() {
@@ -2673,12 +2751,16 @@ fn materialize_host_bridge_completion_evidence(
         write_json_artifact_new(&receipt_path, &receipt, "host bridge receipt")?;
     }
     if let Some(object) = request.as_object_mut() {
-        object.insert("status".to_string(), serde_json::json!("completed"));
+        object.insert("status".to_string(), serde_json::json!(status));
         object.insert(
             "completion_receipt_id".to_string(),
             serde_json::json!(receipt_id),
         );
         object.insert("completed_at".to_string(), serde_json::json!(recorded_at));
+        object.insert(
+            "scope_validation".to_string(),
+            implementation_scope_validation.unwrap_or_else(|| serde_json::Value::Null),
+        );
         object.insert(
             "host_agent_id".to_string(),
             host_agent_id
@@ -2692,6 +2774,7 @@ fn materialize_host_bridge_completion_evidence(
         receipt_path: receipt_path.display().to_string(),
         execution_state: execution_state.to_string(),
         blocker_code: blocker_code.clone(),
+        blocker_codes,
     })
 }
 
@@ -3352,16 +3435,24 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .as_ref()
                     .is_some_and(|evidence| evidence.execution_state == "blocked");
             if completion_blocked {
-                let blocker_code = completion_blocker_code
-                    .clone()
-                    .or_else(|| {
-                        host_bridge_evidence
-                            .as_ref()
-                            .and_then(|evidence| evidence.blocker_code.clone())
-                    })
+                let mut blocker_codes = Vec::new();
+                if let Some(evidence) = host_bridge_evidence.as_ref() {
+                    blocker_codes.extend(evidence.blocker_codes.clone());
+                }
+                if let Some(completion_blocker_code) = completion_blocker_code.clone() {
+                    blocker_codes.push(completion_blocker_code);
+                }
+                if blocker_codes.is_empty() {
+                    blocker_codes.push("lane_completion_blocked_by_summary".to_string());
+                }
+                blocker_codes.sort();
+                blocker_codes.dedup();
+                let blocker_code = blocker_codes
+                    .first()
+                    .cloned()
                     .unwrap_or_else(|| "lane_completion_blocked_by_summary".to_string());
                 receipt.downstream_dispatch_ready = false;
-                receipt.downstream_dispatch_blockers = vec![blocker_code.clone()];
+                receipt.downstream_dispatch_blockers = blocker_codes;
                 receipt.downstream_dispatch_status = Some("blocked".to_string());
                 receipt.dispatch_status = "blocked".to_string();
                 receipt.blocker_code = Some(blocker_code);

@@ -2335,6 +2335,24 @@ fn dispatch_packet_string_field(dispatch_packet_path: &str, field: &str) -> Opti
         })
 }
 
+fn dispatch_packet_value_field(
+    dispatch_packet_path: &str,
+    field: &str,
+) -> Option<serde_json::Value> {
+    std::fs::read_to_string(dispatch_packet_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|packet| {
+            packet.get(field).cloned().or_else(|| {
+                packet
+                    .get("delivery_task_packet")
+                    .and_then(|value| value.get(field))
+                    .cloned()
+            })
+        })
+        .filter(|value| !value.is_null())
+}
+
 fn host_tool_bridge_request_id_segment(value: &str) -> String {
     let mut segment = value
         .chars()
@@ -2413,6 +2431,8 @@ fn validate_existing_host_bridge_request_matches_expected(
         "adapter_capability_id",
         "invocation_mode",
         "adapter_params",
+        "implementation_isolation",
+        "expected_implementation_artifact_kinds",
         "owned_paths",
         "read_only_paths",
         "proof_target",
@@ -2547,6 +2567,14 @@ fn materialize_host_tool_bridge_request(
                 "close_tool": configured_host_tool_bridge_string(selected_cli_entry, "close_tool"),
             })
         });
+    let implementation_isolation =
+        dispatch_packet_value_field(dispatch_packet_path, "implementation_isolation")
+            .unwrap_or(serde_json::Value::Null);
+    let expected_implementation_artifact_kinds = if implementation_isolation.is_null() {
+        serde_json::json!([])
+    } else {
+        serde_json::json!(["patch_proposal", "isolated_worktree_manifest"])
+    };
     let request = serde_json::json!({
         "schema_version": 1,
         "status": "pending",
@@ -2566,6 +2594,9 @@ fn materialize_host_tool_bridge_request(
         "adapter_capability_id": adapter_capability_id,
         "invocation_mode": invocation_mode,
         "adapter_params": adapter_params,
+        "implementation_isolation": implementation_isolation,
+        "expected_implementation_artifact_kinds": expected_implementation_artifact_kinds,
+        "implementation_artifacts": [],
         "owned_paths": dispatch_packet_string_list(dispatch_packet_path, "owned_paths"),
         "read_only_paths": dispatch_packet_string_list(dispatch_packet_path, "read_only_paths"),
         "proof_target": dispatch_packet_string_field(dispatch_packet_path, "proof_target"),
@@ -8382,6 +8413,105 @@ agent_system:
                 &receipt
             ),
             420
+        );
+
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn host_bridge_request_carries_implementation_isolation_contract() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-implementation-isolation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create temp root");
+        let state_root = project_root.join(".vida").join("data").join("state");
+        std::fs::create_dir_all(
+            state_root
+                .join("runtime-consumption")
+                .join("dispatch-packets"),
+        )
+        .expect("create packet dir");
+        let packet_path = state_root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("implementation.json");
+        let implementation_isolation = serde_json::json!({
+            "schema_version": "implementation-isolation-v1",
+            "canonical_worktree_writes_allowed": false,
+            "default_mode": "patch_proposal",
+            "allowed_modes": ["patch_proposal", "isolated_worktree"],
+            "artifact_contract": "stage_attempt_implementation_artifact_v1",
+            "owned_paths": ["crates/vida/src/runtime_dispatch_execution.rs"],
+            "required_result_fields": [
+                "artifact_kind",
+                "attempt_id",
+                "task_id",
+                "stage_id",
+                "changed_files"
+            ],
+            "scope_policy": {
+                "changed_files_must_be_subset_of_owned_paths": true,
+                "patch_paths_must_be_subset_of_owned_paths": true
+            }
+        });
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "delivery_task_packet": {
+                    "owned_paths": ["crates/vida/src/runtime_dispatch_execution.rs"],
+                    "read_only_paths": ["docs/process"],
+                    "proof_target": "implementation proof",
+                    "implementation_isolation": implementation_isolation.clone()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+host_tool_bridge:
+  request_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  result_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  receipt_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+"#,
+        )
+        .expect("host bridge config should parse");
+        let receipt = internal_codex_fallback_receipt(
+            packet_path.to_str().expect("packet path should render"),
+        );
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            Some(&selected_cli_entry),
+            packet_path.to_str().expect("packet path should render"),
+            "internal_subagents",
+            "junior",
+            &receipt,
+            &role_selection,
+        )
+        .expect("host bridge request should materialize");
+
+        assert_eq!(
+            request["implementation_isolation"]["schema_version"],
+            "implementation-isolation-v1"
+        );
+        assert_eq!(
+            request["expected_implementation_artifact_kinds"],
+            serde_json::json!(["patch_proposal", "isolated_worktree_manifest"])
+        );
+        assert_eq!(request["implementation_artifacts"], serde_json::json!([]));
+        assert_eq!(
+            request["implementation_isolation"],
+            implementation_isolation
         );
 
         let _ = std::fs::remove_dir_all(project_root);

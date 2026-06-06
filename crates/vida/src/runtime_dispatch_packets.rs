@@ -274,6 +274,195 @@ pub(crate) fn delivery_packet_task_class_requires_owned_paths(handoff_task_class
     )
 }
 
+pub(crate) fn delivery_packet_task_class_requires_implementation_isolation(
+    handoff_task_class: &str,
+) -> bool {
+    matches!(
+        handoff_task_class,
+        TASK_CLASS_IMPLEMENTATION | "implementation_medium" | "delivery_task"
+    )
+}
+
+pub(crate) fn implementation_isolation_contract(
+    handoff_task_class: &str,
+    owned_paths: &[String],
+) -> serde_json::Value {
+    if !delivery_packet_task_class_requires_implementation_isolation(handoff_task_class) {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "schema_version": "implementation-isolation-v1",
+        "canonical_worktree_writes_allowed": false,
+        "default_mode": "patch_proposal",
+        "allowed_modes": ["patch_proposal", "isolated_worktree"],
+        "artifact_contract": "stage_attempt_implementation_artifact_v1",
+        "owned_paths": owned_paths,
+        "required_result_fields": [
+            "artifact_kind",
+            "attempt_id",
+            "task_id",
+            "stage_id",
+            "changed_files"
+        ],
+        "scope_policy": {
+            "changed_files_must_be_subset_of_owned_paths": true,
+            "patch_paths_must_be_subset_of_owned_paths": true
+        }
+    })
+}
+
+pub(crate) fn implementation_artifact_scope_validation(
+    owned_paths: &[String],
+    artifacts: &serde_json::Value,
+) -> serde_json::Value {
+    let normalized_owned_paths = owned_paths
+        .iter()
+        .filter_map(|path| normalize_scope_path_for_compare(path))
+        .collect::<Vec<_>>();
+    let mut blocker_codes = Vec::new();
+    let mut reported_changed_files = Vec::new();
+    let mut out_of_scope_paths = Vec::new();
+    let mut contract_invalid = false;
+
+    let Some(rows) = artifacts.as_array() else {
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["implementation_artifact_contract_invalid"],
+            "owned_paths": normalized_owned_paths,
+            "reported_changed_files": [],
+            "out_of_scope_paths": []
+        });
+    };
+
+    if rows.is_empty() {
+        blocker_codes.push("implementation_artifacts_missing".to_string());
+    }
+
+    for artifact in rows {
+        let Some(object) = artifact.as_object() else {
+            contract_invalid = true;
+            continue;
+        };
+        let artifact_kind = object
+            .get("artifact_kind")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim);
+        if !matches!(
+            artifact_kind,
+            Some("patch_proposal") | Some("isolated_worktree_manifest")
+        ) {
+            contract_invalid = true;
+        }
+        for field in ["attempt_id", "task_id", "stage_id", "changed_files"] {
+            if !object.contains_key(field) {
+                contract_invalid = true;
+            }
+        }
+        collect_implementation_changed_files(artifact, &mut reported_changed_files);
+    }
+
+    reported_changed_files.sort();
+    reported_changed_files.dedup();
+    for changed_file in &reported_changed_files {
+        match normalize_scope_path_for_compare(changed_file) {
+            Some(path) if path_is_in_owned_scope(&path, &normalized_owned_paths) => {}
+            Some(path) => out_of_scope_paths.push(path),
+            None => out_of_scope_paths.push(changed_file.clone()),
+        }
+    }
+    out_of_scope_paths.sort();
+    out_of_scope_paths.dedup();
+
+    if contract_invalid {
+        blocker_codes.push("implementation_artifact_contract_invalid".to_string());
+    }
+    if !rows.is_empty() && reported_changed_files.is_empty() {
+        blocker_codes.push("implementation_artifact_changed_files_missing".to_string());
+    }
+    if !out_of_scope_paths.is_empty() {
+        blocker_codes.push("implementation_attempt_scope_guard_violation".to_string());
+    }
+    blocker_codes.sort();
+    blocker_codes.dedup();
+
+    serde_json::json!({
+        "status": if blocker_codes.is_empty() { "pass" } else { "blocked" },
+        "blocker_codes": blocker_codes,
+        "owned_paths": normalized_owned_paths,
+        "reported_changed_files": reported_changed_files,
+        "out_of_scope_paths": out_of_scope_paths
+    })
+}
+
+fn collect_implementation_changed_files(value: &serde_json::Value, files: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(changed_files) = object.get("changed_files") {
+                collect_scope_path_values(changed_files, files);
+            }
+            for nested in object.values() {
+                collect_implementation_changed_files(nested, files);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for nested in values {
+                collect_implementation_changed_files(nested, files);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_scope_path_values(value: &serde_json::Value, files: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(path) => {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                files.push(trimmed.to_string());
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_scope_path_values(value, files);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for key in ["path", "file", "filename"] {
+                if let Some(path) = object.get(key).and_then(serde_json::Value::as_str) {
+                    let trimmed = path.trim();
+                    if !trimmed.is_empty() {
+                        files.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_scope_path_for_compare(path: &str) -> Option<String> {
+    let mut normalized = path.trim().replace('\\', "/");
+    while let Some(stripped) = normalized.strip_prefix("./") {
+        normalized = stripped.to_string();
+    }
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.contains(':')
+        || normalized
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn path_is_in_owned_scope(path: &str, owned_paths: &[String]) -> bool {
+    owned_paths
+        .iter()
+        .any(|owned_path| path == owned_path || path.starts_with(&format!("{owned_path}/")))
+}
+
 #[cfg(test)]
 pub(crate) fn runtime_delivery_task_packet(
     run_id: &str,
@@ -303,6 +492,10 @@ pub(crate) fn runtime_delivery_task_packet_with_scope_context(
     request_text: &str,
     tracked_design_doc_path: Option<&str>,
 ) -> serde_json::Value {
+    let owned_paths =
+        delivery_packet_owned_paths(handoff_task_class, request_text, tracked_design_doc_path);
+    let implementation_isolation =
+        implementation_isolation_contract(handoff_task_class, &owned_paths);
     serde_json::json!({
         "packet_id": runtime_delivery_packet_id(run_id, dispatch_target),
         "backlog_id": run_id,
@@ -322,11 +515,8 @@ pub(crate) fn runtime_delivery_task_packet_with_scope_context(
             "mutation outside bounded packet scope",
             "closure without recorded handoff evidence"
         ],
-        "owned_paths": delivery_packet_owned_paths(
-            handoff_task_class,
-            request_text,
-            tracked_design_doc_path,
-        ),
+        "owned_paths": owned_paths,
+        "implementation_isolation": implementation_isolation,
         "read_only_paths": [
             ".vida/data/state/runtime-consumption",
             "docs/product/spec",
