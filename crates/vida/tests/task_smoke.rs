@@ -4899,6 +4899,41 @@ fn create_task_attempt_fixture_with_notes(state_dir: &str, task_id: &str) {
     assert_eq!(updated["status"], "pass");
 }
 
+fn create_task_attempt_fixture_with_owned_paths(
+    state_dir: &str,
+    task_id: &str,
+    owned_paths: &[&str],
+) {
+    fs::create_dir_all(state_dir).expect("create state dir");
+    create_epic_parent(
+        state_dir,
+        "attempt-ledger-epic",
+        "Attempt ledger epic",
+        "open",
+    );
+    let mut args = vec![
+        "task",
+        "create",
+        task_id,
+        "Attempt ledger task",
+        "--type",
+        "task",
+        "--status",
+        "open",
+        "--priority",
+        "2",
+        "--parent-id",
+        "attempt-ledger-epic",
+    ];
+    for owned_path in owned_paths {
+        args.push("--owned-path");
+        args.push(owned_path);
+    }
+    args.push("--json");
+    let task = run_command_json(&args, state_dir);
+    assert_eq!(task["status"], "pass");
+}
+
 #[test]
 fn task_attempt_ledger_persists_backend_model_isolation_freshness_status_and_artifacts() {
     let state_dir = unique_state_dir();
@@ -5836,6 +5871,280 @@ fn task_attempt_consolidate_fails_closed_for_missing_or_malformed_artifacts() {
         .expect("error should be string")
         .contains("not valid JSON"));
     assert_eq!(malformed_blocked["canonical_task_notes_mutated"], false);
+}
+
+#[test]
+fn task_attempt_implementation_artifact_validation() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("implementation-artifact-validation");
+    create_task_attempt_fixture_with_owned_paths(
+        &state_dir,
+        &task_id,
+        &[
+            "crates/vida/src/task_surface.rs",
+            "crates/vida/tests/task_smoke.rs",
+        ],
+    );
+    let updated = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--notes",
+            "canonical implementation task notes stay owned by consolidation",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(updated["status"], "pass");
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+
+    let valid_artifact = format!("{artifact_dir}/impl-valid.json");
+    fs::write(
+        &valid_artifact,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "artifact_kind": "patch_proposal",
+            "attempt_id": "impl-valid",
+            "task_id": &task_id,
+            "stage_id": "implementation",
+            "changed_files": [
+                "crates/vida/src/task_surface.rs",
+                "crates/vida/tests/task_smoke.rs"
+            ],
+            "observed_facts": ["implementation artifact is scoped to owned paths"],
+            "hypotheses": [],
+            "proof_results": [],
+            "risks": [],
+            "limitations": [],
+            "conflicts": []
+        })
+        .to_string(),
+    )
+    .expect("write valid implementation artifact");
+
+    let record_valid = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "impl-valid",
+            "--stage-id",
+            "implementation",
+            "--backend",
+            "vibe",
+            "--model-profile",
+            "mistral-medium",
+            "--isolation",
+            "patch_proposal",
+            "--status",
+            "produced",
+            "--artifact-ref",
+            &valid_artifact,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record_valid["status"], "pass");
+    let before_valid = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    let before_notes = before_valid["task"]["notes"].clone();
+    let collect_valid = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "collect",
+            &task_id,
+            "--stage-id",
+            "implementation",
+            "--attempt-id",
+            "impl-valid",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(collect_valid["status"], "pass");
+    assert_eq!(collect_valid["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        collect_valid["artifact_refs"],
+        serde_json::json!({"validated": [valid_artifact]})
+    );
+    assert_eq!(collect_valid["canonical_task_notes_mutated"], false);
+    let after_valid = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    assert_eq!(after_valid["task"]["notes"], before_notes);
+
+    for (attempt_id, changed_files, expected_reason) in [
+        (
+            "impl-out-of-scope",
+            serde_json::json!(["crates/vida/src/runtime_dispatch_execution.rs"]),
+            "outside task owned_paths",
+        ),
+        (
+            "impl-traversal",
+            serde_json::json!(["../Cargo.toml"]),
+            "relative repository path without parent traversal",
+        ),
+        (
+            "impl-non-string",
+            serde_json::json!([123]),
+            "changed_files entries must be strings",
+        ),
+    ] {
+        let artifact_path = format!("{artifact_dir}/{attempt_id}.json");
+        fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "schema_version": "stage-attempt-v1",
+                "artifact_kind": "patch_proposal",
+                "attempt_id": attempt_id,
+                "task_id": &task_id,
+                "stage_id": "implementation",
+                "changed_files": changed_files,
+                "observed_facts": ["implementation artifact must fail closed"],
+                "hypotheses": [],
+                "proof_results": [],
+                "risks": [],
+                "limitations": [],
+                "conflicts": []
+            })
+            .to_string(),
+        )
+        .expect("write blocked implementation artifact");
+        let record = run_command_json(
+            &[
+                "task",
+                "attempt",
+                "record",
+                &task_id,
+                "--attempt-id",
+                attempt_id,
+                "--stage-id",
+                "implementation",
+                "--backend",
+                "jcode",
+                "--model-profile",
+                "mistral-medium",
+                "--isolation",
+                "patch_proposal",
+                "--status",
+                "produced",
+                "--artifact-ref",
+                &artifact_path,
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(record["status"], "pass");
+        let (blocked, success) = run_command_json_allow_failure(
+            &[
+                "task",
+                "attempt",
+                "collect",
+                &task_id,
+                "--stage-id",
+                "implementation",
+                "--attempt-id",
+                attempt_id,
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert!(!success);
+        assert_eq!(blocked["status"], "blocked");
+        assert_eq!(
+            blocked["blocker_codes"],
+            serde_json::json!(["dispatch_packet_contract_invalid"])
+        );
+        assert!(blocked["error"]
+            .as_str()
+            .expect("blocked artifact error should render")
+            .contains("attempt_artifact_validation_failed"));
+        assert!(blocked["error"]
+            .as_str()
+            .expect("blocked artifact error should render")
+            .contains(expected_reason));
+        assert_eq!(blocked["canonical_task_notes_mutated"], false);
+    }
+
+    let consolidate_state_dir = unique_state_dir();
+    let consolidate_task_id = unique_test_id("implementation-artifact-consolidate");
+    create_task_attempt_fixture_with_owned_paths(
+        &consolidate_state_dir,
+        &consolidate_task_id,
+        &["crates/vida/src/task_surface.rs"],
+    );
+    let consolidate_artifact_dir = format!("{consolidate_state_dir}/attempt-artifacts");
+    fs::create_dir_all(&consolidate_artifact_dir).expect("create consolidate artifact dir");
+    let out_of_scope_artifact = format!("{consolidate_artifact_dir}/impl-consolidate-oos.json");
+    fs::write(
+        &out_of_scope_artifact,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "artifact_kind": "isolated_worktree_manifest",
+            "attempt_id": "impl-consolidate-oos",
+            "task_id": &consolidate_task_id,
+            "stage_id": "implementation",
+            "changed_files": ["crates/vida/tests/task_smoke.rs"],
+            "observed_facts": ["consolidation must reject out-of-scope implementation manifests"],
+            "hypotheses": [],
+            "proof_results": [],
+            "risks": [],
+            "limitations": [],
+            "conflicts": []
+        })
+        .to_string(),
+    )
+    .expect("write out-of-scope consolidation artifact");
+    let record_consolidate = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &consolidate_task_id,
+            "--attempt-id",
+            "impl-consolidate-oos",
+            "--stage-id",
+            "implementation",
+            "--backend",
+            "jcode",
+            "--model-profile",
+            "mistral-medium",
+            "--isolation",
+            "isolated_worktree",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            &out_of_scope_artifact,
+            "--json",
+        ],
+        &consolidate_state_dir,
+    );
+    assert_eq!(record_consolidate["status"], "pass");
+    let (consolidate_blocked, consolidate_success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "attempt",
+            "consolidate",
+            &consolidate_task_id,
+            "--stage-id",
+            "implementation",
+            "--json",
+        ],
+        &consolidate_state_dir,
+    );
+    assert!(!consolidate_success);
+    assert_eq!(consolidate_blocked["status"], "blocked");
+    assert_eq!(
+        consolidate_blocked["blocker_codes"],
+        serde_json::json!(["dispatch_packet_contract_invalid"])
+    );
+    assert!(consolidate_blocked["error"]
+        .as_str()
+        .expect("consolidate artifact error should render")
+        .contains("outside task owned_paths"));
+    assert_eq!(consolidate_blocked["canonical_task_notes_mutated"], false);
 }
 
 #[test]

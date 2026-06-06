@@ -6199,7 +6199,13 @@ async fn run_task_attempt_collect(command: TaskAttemptCollectArgs) -> ExitCode {
                 } else {
                     command.artifact_refs.clone()
                 };
-            let validated_artifacts = match validate_attempt_artifact_refs(&artifact_refs) {
+            let validated_artifacts = match validate_attempt_artifacts_for_task(
+                &store,
+                &existing_attempt,
+                &artifact_refs,
+            )
+            .await
+            {
                 Ok(values) => values,
                 Err(reason) => {
                     return print_task_attempt_payload(
@@ -6208,7 +6214,10 @@ async fn run_task_attempt_collect(command: TaskAttemptCollectArgs) -> ExitCode {
                         command.json,
                         task_attempt_operator_payload(
                             "vida task attempt collect",
-                            vec!["attempt_artifact_validation_failed".to_string()],
+                            vec![crate::release1_contracts::blocker_code_str(
+                                crate::release1_contracts::BlockerCode::DispatchPacketContractInvalid,
+                            )
+                            .to_string()],
                             vec![
                                 "Provide non-empty artifact refs that exist when they point at local files."
                                     .to_string(),
@@ -6222,7 +6231,7 @@ async fn run_task_attempt_collect(command: TaskAttemptCollectArgs) -> ExitCode {
                             serde_json::json!({
                                 "attempt": serde_json::Value::Null,
                                 "stage_summary": serde_json::Value::Null,
-                                "error": reason,
+                                "error": format!("attempt_artifact_validation_failed: {reason}"),
                                 "canonical_task_notes_mutated": false,
                             }),
                         ),
@@ -6411,11 +6420,13 @@ async fn task_attempt_consolidation_for_command(
     let attempts = store
         .task_stage_attempts(&command.task_id, &command.stage_id)
         .await?;
-    let mut consolidated = consolidate_attempt_artifacts(&attempts).map_err(|reason| {
-        state_store::StateStoreError::InvalidTaskRecord {
-            reason: format!("attempt_artifact_validation_failed: {reason}"),
-        }
-    })?;
+    let task = store.show_task(&command.task_id).await?;
+    let mut consolidated =
+        consolidate_attempt_artifacts(&attempts, &task.planner_metadata.owned_paths).map_err(
+            |reason| state_store::StateStoreError::InvalidTaskRecord {
+                reason: format!("attempt_artifact_validation_failed: {reason}"),
+            },
+        )?;
     merge_repeated_values(&mut consolidated.facts, &command.facts);
     merge_repeated_values(&mut consolidated.hypotheses, &command.hypotheses);
     merge_repeated_values(&mut consolidated.conflicts, &command.conflicts);
@@ -6456,27 +6467,15 @@ async fn task_attempt_consolidation_for_command(
 
 fn consolidate_attempt_artifacts(
     attempts: &[state_store::TaskAttemptRecord],
+    owned_paths: &[String],
 ) -> Result<TaskAttemptArtifactConsolidation, String> {
     let mut consolidated = TaskAttemptArtifactConsolidation::default();
     for attempt in attempts {
-        let refs = validate_attempt_artifact_refs(&attempt.artifact_refs)?;
-        for artifact_ref in refs {
+        let artifacts = validate_attempt_artifacts(&attempt.artifact_refs, attempt, owned_paths)?;
+        for (artifact_ref, json) in artifacts {
             if !consolidated.artifact_refs.contains(&artifact_ref) {
                 consolidated.artifact_refs.push(artifact_ref.clone());
             }
-            let path = std::path::Path::new(&artifact_ref);
-            if !path.exists() {
-                return Err(format!(
-                    "task attempt consolidate requires local JSON artifact refs; `{artifact_ref}` does not exist"
-                ));
-            }
-            let raw = std::fs::read_to_string(path).map_err(|error| {
-                format!("failed to read attempt artifact `{artifact_ref}`: {error}")
-            })?;
-            let json: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
-                format!("attempt artifact `{artifact_ref}` is not valid JSON: {error}")
-            })?;
-            validate_stage_attempt_artifact_identity(&json, attempt, &artifact_ref)?;
             append_json_string_array(&json, &["observed_facts", "facts"], &mut consolidated.facts);
             append_json_string_array(&json, &["hypotheses"], &mut consolidated.hypotheses);
             append_json_string_array(&json, &["conflicts"], &mut consolidated.conflicts);
@@ -6501,6 +6500,52 @@ fn consolidate_attempt_artifacts(
         }
     }
     Ok(consolidated)
+}
+
+async fn validate_attempt_artifacts_for_task(
+    store: &StateStore,
+    attempt: &state_store::TaskAttemptRecord,
+    artifact_refs: &[String],
+) -> Result<Vec<String>, String> {
+    let task = store
+        .show_task(&attempt.task_id)
+        .await
+        .map_err(|error| format!("failed to read task owned_paths: {error}"))?;
+    validate_attempt_artifacts(artifact_refs, attempt, &task.planner_metadata.owned_paths).map(
+        |artifacts| {
+            artifacts
+                .into_iter()
+                .map(|(artifact_ref, _)| artifact_ref)
+                .collect()
+        },
+    )
+}
+
+fn validate_attempt_artifacts(
+    values: &[String],
+    attempt: &state_store::TaskAttemptRecord,
+    owned_paths: &[String],
+) -> Result<Vec<(String, serde_json::Value)>, String> {
+    let refs = validate_attempt_artifact_refs(values)?;
+    refs.into_iter()
+        .map(|artifact_ref| {
+            let path = std::path::Path::new(&artifact_ref);
+            if !path.exists() {
+                return Err(format!(
+                    "task attempt artifacts require local JSON artifact refs; `{artifact_ref}` does not exist"
+                ));
+            }
+            let raw = std::fs::read_to_string(path).map_err(|error| {
+                format!("failed to read attempt artifact `{artifact_ref}`: {error}")
+            })?;
+            let json: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+                format!("attempt artifact `{artifact_ref}` is not valid JSON: {error}")
+            })?;
+            validate_stage_attempt_artifact_identity(&json, attempt, &artifact_ref)?;
+            validate_attempt_artifact_changed_files_scope(&json, &artifact_ref, owned_paths)?;
+            Ok((artifact_ref, json))
+        })
+        .collect()
 }
 
 fn validate_stage_attempt_artifact_identity(
@@ -6544,6 +6589,64 @@ fn validate_stage_attempt_artifact_identity(
         }
     }
     Ok(())
+}
+
+fn validate_attempt_artifact_changed_files_scope(
+    json: &serde_json::Value,
+    artifact_ref: &str,
+    owned_paths: &[String],
+) -> Result<(), String> {
+    let Some(changed_files) = json["changed_files"].as_array() else {
+        return Ok(());
+    };
+    let normalized_owned_paths = owned_paths
+        .iter()
+        .filter_map(|path| normalize_attempt_artifact_repo_path(path))
+        .collect::<Vec<_>>();
+    if normalized_owned_paths.is_empty() && !changed_files.is_empty() {
+        return Err(format!(
+            "attempt artifact `{artifact_ref}` changed_files require task owned_paths"
+        ));
+    }
+    for changed_file in changed_files {
+        let Some(changed_file) = changed_file.as_str() else {
+            return Err(format!(
+                "attempt artifact `{artifact_ref}` changed_files entries must be strings"
+            ));
+        };
+        let Some(changed_file) = normalize_attempt_artifact_repo_path(changed_file) else {
+            return Err(format!(
+                "attempt artifact `{artifact_ref}` changed_files entry `{changed_file}` must be a relative repository path without parent traversal"
+            ));
+        };
+        if !normalized_owned_paths
+            .iter()
+            .any(|owned_path| attempt_artifact_path_is_owned(&changed_file, owned_path))
+        {
+            return Err(format!(
+                "attempt artifact `{artifact_ref}` changed file `{changed_file}` is outside task owned_paths"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_attempt_artifact_repo_path(path: &str) -> Option<String> {
+    let normalized = path.trim().replace('\\', "/");
+    let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
+    Some(normalized.to_string())
+}
+
+fn attempt_artifact_path_is_owned(changed_file: &str, owned_path: &str) -> bool {
+    changed_file == owned_path || changed_file.starts_with(&format!("{owned_path}/"))
 }
 
 fn merge_repeated_values(target: &mut Vec<String>, values: &[String]) {
