@@ -5500,6 +5500,134 @@ fn task_attempt_collect_validates_artifacts_without_mutating_canonical_task_note
 }
 
 #[test]
+#[cfg(unix)]
+fn task_attempt_collect_rejects_symlink_artifacts_before_reading() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-collect-symlink-artifact");
+    create_task_attempt_fixture_with_notes(&state_dir, &task_id);
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+    let target_path = format!("{artifact_dir}/analysis-target.json");
+    fs::write(
+        &target_path,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-collect-symlink",
+            "task_id": &task_id,
+            "stage_id": "analysis",
+            "observed_facts": ["symlink targets must not be read"],
+            "hypotheses": [],
+            "proof_results": [],
+            "risks": [],
+            "limitations": []
+        })
+        .to_string(),
+    )
+    .expect("write target attempt artifact");
+    let symlink_path = format!("{artifact_dir}/analysis-symlink.json");
+    std::os::unix::fs::symlink(&target_path, &symlink_path).expect("create artifact symlink");
+
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-collect-symlink",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--isolation",
+            "readonly",
+            "--status",
+            "produced",
+            "--artifact-ref",
+            &symlink_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task", "attempt", "collect", &task_id, "--stage", "analysis", "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success);
+    assert_eq!(blocked["surface"], "vida task attempt collect");
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(
+        blocked["blocker_codes"],
+        serde_json::json!(["dispatch_packet_contract_invalid"])
+    );
+    let error = blocked["error"].as_str().expect("error should be string");
+    assert!(error.contains("attempt_artifact_validation_failed"));
+    assert!(error.contains("is a symlink"));
+    assert_eq!(blocked["canonical_task_notes_mutated"], false);
+}
+
+#[test]
+fn task_attempt_collect_rejects_oversized_artifacts_before_reading() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-collect-oversized-artifact");
+    create_task_attempt_fixture_with_notes(&state_dir, &task_id);
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+    let artifact_path = format!("{artifact_dir}/analysis-large.json");
+    fs::write(&artifact_path, vec![b' '; 1024 * 1024 + 1]).expect("write oversized artifact");
+
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-collect-large",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--isolation",
+            "readonly",
+            "--status",
+            "produced",
+            "--artifact-ref",
+            &artifact_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task", "attempt", "collect", &task_id, "--stage", "analysis", "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success);
+    assert_eq!(blocked["surface"], "vida task attempt collect");
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(
+        blocked["blocker_codes"],
+        serde_json::json!(["dispatch_packet_contract_invalid"])
+    );
+    let error = blocked["error"].as_str().expect("error should be string");
+    assert!(error.contains("attempt_artifact_validation_failed"));
+    assert!(error.contains("exceeds the 1048576 byte size limit"));
+    assert_eq!(blocked["canonical_task_notes_mutated"], false);
+}
+
+#[test]
 fn task_attempt_consolidate_validates_artifacts_and_emits_canonical_receipt() {
     let state_dir = unique_state_dir();
     let task_id = unique_test_id("attempt-consolidate-task");

@@ -6497,6 +6497,8 @@ async fn latest_task_stage_attempt_id(
     })
 }
 
+const MAX_ATTEMPT_ARTIFACT_BYTES: u64 = 1024 * 1024;
+
 fn validate_attempt_artifact_refs(values: &[String]) -> Result<Vec<String>, String> {
     let refs = normalize_artifact_refs_for_attempt(values);
     if refs.is_empty() {
@@ -6647,11 +6649,7 @@ fn validate_attempt_artifacts(
     refs.into_iter()
         .map(|artifact_ref| {
             let path = std::path::Path::new(&artifact_ref);
-            if !path.exists() {
-                return Err(format!(
-                    "task attempt artifacts require local JSON artifact refs; `{artifact_ref}` does not exist"
-                ));
-            }
+            validate_attempt_artifact_path(path, &artifact_ref)?;
             let raw = std::fs::read_to_string(path).map_err(|error| {
                 format!("failed to read attempt artifact `{artifact_ref}`: {error}")
             })?;
@@ -6663,6 +6661,33 @@ fn validate_attempt_artifacts(
             Ok((artifact_ref, json))
         })
         .collect()
+}
+
+fn validate_attempt_artifact_path(
+    path: &std::path::Path,
+    artifact_ref: &str,
+) -> Result<(), String> {
+    let symlink_metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "task attempt artifacts require local JSON artifact refs; `{artifact_ref}` cannot be inspected: {error}"
+        )
+    })?;
+    if symlink_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "task attempt artifacts require regular local JSON files; `{artifact_ref}` is a symlink"
+        ));
+    }
+    if !symlink_metadata.is_file() {
+        return Err(format!(
+            "task attempt artifacts require regular local JSON files; `{artifact_ref}` is not a regular file"
+        ));
+    }
+    if symlink_metadata.len() > MAX_ATTEMPT_ARTIFACT_BYTES {
+        return Err(format!(
+            "task attempt artifact `{artifact_ref}` exceeds the {MAX_ATTEMPT_ARTIFACT_BYTES} byte size limit"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_stage_attempt_artifact_identity(
