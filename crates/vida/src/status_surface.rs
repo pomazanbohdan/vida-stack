@@ -583,7 +583,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     match latest_run_graph_status.as_ref() {
                         Some(status) => {
                             match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
-                                Ok(verdict) => (verdict.task_closed_stale_run(), verdict.task_missing()),
+                                Ok(verdict) => (verdict.task_closed(), verdict.task_missing()),
                                 Err(error) => {
                                     eprintln!("Failed to read latest run graph task authority: {error}");
                                     return ExitCode::from(1);
@@ -596,7 +596,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     match latest_global_run_graph_status.as_ref() {
                         Some(status) => {
                             match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
-                                Ok(verdict) => verdict.task_closed_stale_run(),
+                                Ok(verdict) => verdict.task_closed(),
                                 Err(error) => {
                                     eprintln!("Failed to read global run graph task authority: {error}");
                                     return ExitCode::from(1);
@@ -1585,7 +1585,7 @@ async fn refresh_cached_status_projection_runtime_fields(
                     )
                     .await
                     .ok()?;
-                (verdict.task_closed_stale_run(), verdict.task_missing())
+                (verdict.task_closed(), verdict.task_missing())
             }
             None => (false, false),
         };
@@ -1597,7 +1597,7 @@ async fn refresh_cached_status_projection_runtime_fields(
                 )
                 .await
                 .ok()?;
-            verdict.task_closed_stale_run()
+            verdict.task_closed()
         }
         None => false,
     };

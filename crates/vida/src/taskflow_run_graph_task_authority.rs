@@ -25,6 +25,15 @@ impl RunGraphTaskAuthorityVerdict {
         self.kind == RunGraphTaskAuthorityKind::ClosedTaskStaleRun
     }
 
+    pub(crate) fn task_closed(&self) -> bool {
+        self.task_status.as_deref() == Some("closed")
+            || matches!(
+                self.kind,
+                RunGraphTaskAuthorityKind::ClosedTaskStaleRun
+                    | RunGraphTaskAuthorityKind::TerminalClosureOk
+            )
+    }
+
     pub(crate) fn stale_for_active_projection(&self) -> bool {
         matches!(
             self.kind,
@@ -89,12 +98,16 @@ pub(crate) async fn run_graph_task_authority_verdict(
     store: &StateStore,
     status: &RunGraphStatus,
 ) -> Result<RunGraphTaskAuthorityVerdict, StateStoreError> {
-    if run_graph_status_is_terminal_closure(status) {
+    if run_graph_status_is_terminal_closure(status)
+        && store
+            .run_graph_terminal_closure_has_task_close_truth(status)
+            .await?
+    {
         return Ok(RunGraphTaskAuthorityVerdict {
             kind: RunGraphTaskAuthorityKind::TerminalClosureOk,
             run_id: status.run_id.clone(),
             task_id: status.task_id.clone(),
-            task_status: None,
+            task_status: Some("closed".to_string()),
         });
     }
 

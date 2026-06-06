@@ -162,7 +162,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
                     .map_err(|error| {
                         format!("Failed to read latest run graph task authority: {error}")
                     })?;
-                (verdict.task_closed_stale_run(), verdict.task_missing())
+                (verdict.task_closed(), verdict.task_missing())
             }
             None => (false, false),
         };
@@ -176,7 +176,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
                 .map_err(|error| {
                     format!("Failed to read global run graph task authority: {error}")
                 })?;
-            verdict.task_closed_stale_run()
+            verdict.task_closed()
         }
         None => false,
     };

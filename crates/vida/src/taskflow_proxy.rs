@@ -3256,7 +3256,7 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
                     .map_err(|error| {
                         format!("Failed to read latest run graph task authority: {error}")
                     })?;
-                (verdict.task_closed_stale_run(), verdict.task_missing())
+                (verdict.task_closed(), verdict.task_missing())
             }
             None => (false, false),
         };
@@ -4933,7 +4933,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
                 )
                 .await
                 {
-                    Ok(verdict) => (verdict.task_closed_stale_run(), verdict.task_missing()),
+                    Ok(verdict) => (verdict.task_closed(), verdict.task_missing()),
                     Err(error) => {
                         eprintln!("Failed to read latest run graph task authority: {error}");
                         return ExitCode::from(1);
@@ -5484,7 +5484,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
                 )
                 .await
                 {
-                    Ok(verdict) => (verdict.task_closed_stale_run(), verdict.task_missing()),
+                    Ok(verdict) => (verdict.task_closed(), verdict.task_missing()),
                     Err(error) => {
                         eprintln!("Failed to read latest run graph task authority: {error}");
                         return ExitCode::from(1);

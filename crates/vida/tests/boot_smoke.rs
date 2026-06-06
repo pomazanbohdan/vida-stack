@@ -16467,6 +16467,162 @@ fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
 }
 
 #[test]
+fn orchestrator_init_and_next_lawful_reject_closed_task_ready_dev_pack_dispatch_json() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "closed-dev-pack-projection-project",
+        "Closed Dev Pack Projection Project",
+    );
+    let task_id = "closed-dev-pack-projection-task";
+    create_scheduler_smoke_task(
+        &state_dir,
+        task_id,
+        "Closed dev-pack projection task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+
+    let dispatch_init = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "dispatch-init should run",
+        |command| {
+            command
+                .args(["taskflow", "run-graph", "dispatch-init", task_id, "--json"])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        dispatch_init.status.success(),
+        "dispatch-init stdout={} stderr={}",
+        String::from_utf8_lossy(&dispatch_init.stdout),
+        String::from_utf8_lossy(&dispatch_init.stderr)
+    );
+    let dispatch_json = parse_json_output(&dispatch_init, "dispatch-init");
+    let source_dispatch_packet_path = dispatch_json["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should render");
+    let run_id = dispatch_json["run_id"]
+        .as_str()
+        .expect("dispatch-init run id should render");
+    let dispatch_target = dispatch_json["dispatch_receipt"]["dispatch_target"]
+        .as_str()
+        .expect("dispatch target should render");
+    let completion_result_path = format!("{project_root}/closed-dev-pack-result.json");
+    write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, dispatch_target);
+    let downstream_dispatch_packet_path = materialize_downstream_dispatch_packet_fixture(
+        &state_dir,
+        source_dispatch_packet_path,
+        run_id,
+        "dev-pack",
+        &completion_result_path,
+        "closed-dev-pack",
+    );
+    persist_authoritative_ready_downstream_receipt_fixture(
+        &state_dir,
+        run_id,
+        dispatch_target,
+        source_dispatch_packet_path,
+        "dev-pack",
+        &downstream_dispatch_packet_path,
+        &completion_result_path,
+    );
+
+    let close = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "task close should run",
+        |command| {
+            command
+                .args([
+                    "task",
+                    "close",
+                    task_id,
+                    "--reason",
+                    "closed dev-pack projection proof",
+                    "--json",
+                ])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        close.status.success(),
+        "task close stdout={} stderr={}",
+        String::from_utf8_lossy(&close.stdout),
+        String::from_utf8_lossy(&close.stderr)
+    );
+    mark_project_run_graph_closure_complete(&project_root, &state_dir, run_id);
+
+    let orchestrator = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "orchestrator-init json should run",
+        |command| {
+            command
+                .args(["orchestrator-init", "--json"])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    let orchestrator_json = parse_json_output(&orchestrator, "orchestrator-init");
+    assert_ne!(
+        orchestrator_json["active_bounded_unit"]["task_id"], task_id,
+        "orchestrator-init must not bind a closed task as active: {orchestrator_json}"
+    );
+    assert_ne!(
+        orchestrator_json["active_bounded_unit"]["dispatch_target"], "dev-pack",
+        "orchestrator-init must not keep closed downstream dev-pack active: {orchestrator_json}"
+    );
+    assert_ne!(
+        orchestrator_json["why_this_unit"],
+        "Latest dispatch receipt explicitly names downstream target `dev-pack` as the next lawful bounded unit."
+    );
+
+    let next_lawful = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "next-lawful json should run",
+        |command| {
+            command
+                .args(["task", "next-lawful", "--json"])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    let next_lawful_json = parse_json_output(&next_lawful, "task next-lawful");
+    assert_eq!(
+        next_lawful_json["status"], "blocked",
+        "next-lawful must fail closed for a closed runtime task: {next_lawful_json}"
+    );
+    assert!(
+        json_string_array_contains(
+            &next_lawful_json["blocker_codes"],
+            "runtime_binding_task_closed"
+        ),
+        "next-lawful should publish runtime_binding_task_closed: {next_lawful_json}"
+    );
+    assert_ne!(
+        next_lawful_json["binding_source"],
+        "latest_run_graph_completed_dispatch_receipt",
+        "next-lawful must not treat completed-lane evidence as a pass binding for a closed task: {next_lawful_json}"
+    );
+    assert_ne!(
+        next_lawful_json["active_bounded_unit"]["dispatch_target"], "dev-pack",
+        "next-lawful must not keep closed downstream dev-pack active: {next_lawful_json}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
 fn status_surface_supports_json_summary() {
     let state_dir = unique_state_dir();
 

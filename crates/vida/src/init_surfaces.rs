@@ -1773,16 +1773,28 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     if latest_terminal_task_active_run_graph_status.is_some() {
         return false;
     }
+    let all_tasks = match store.list_tasks(None, true).await {
+        Ok(tasks) => tasks,
+        Err(_) => return false,
+    };
+    let cached_active_task_closed = payload
+        .get("active_bounded_unit")
+        .and_then(|unit| unit.get("task_id"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|task_id| {
+            all_tasks
+                .iter()
+                .any(|task| task.id == task_id && task.status == "closed")
+        });
+    if cached_active_task_closed {
+        return false;
+    }
     let latest_run_graph_status = match store.latest_run_graph_status().await {
         Ok(summary) => summary,
         Err(_) => return false,
     };
     let Some(latest_run_graph_status) = latest_run_graph_status else {
         return true;
-    };
-    let all_tasks = match store.list_tasks(None, true).await {
-        Ok(tasks) => tasks,
-        Err(_) => return false,
     };
     let Some(latest_task) = all_tasks
         .iter()
@@ -2657,6 +2669,88 @@ mod tests {
             )
             .await,
             "orchestrator-init cache must not preserve active bounded units for missing tasks"
+        );
+    }
+
+    #[tokio::test]
+    async fn orchestrator_init_cache_rejects_closed_task_downstream_active_projection() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("state store should open");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "closed-downstream-task",
+                title: "Closed downstream task",
+                display_id: None,
+                description: "Closed task with stale downstream cached projection",
+                issue_type: "epic",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("closed fixture task should exist");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "closed-downstream-task",
+            "closed-downstream-task",
+            "closure",
+        );
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("terminal run graph status should record");
+        store.close().await;
+        let cached = json!({
+            "surface": "vida orchestrator-init",
+            "view": "summary",
+            "status": "ready_enough_for_normal_work",
+            "active_bounded_unit": {
+                "kind": "downstream_dispatch_target",
+                "task_id": "closed-downstream-task",
+                "run_id": "closed-downstream-task",
+                "dispatch_target": "dev-pack"
+            },
+            "continuation_binding": {
+                "status": "bound",
+                "active_bounded_unit": {
+                    "kind": "downstream_dispatch_target",
+                    "task_id": "closed-downstream-task",
+                    "run_id": "closed-downstream-task",
+                    "dispatch_target": "dev-pack"
+                },
+                "why_this_unit": "Latest dispatch receipt explicitly names downstream target `dev-pack` as the next lawful bounded unit.",
+                "sequential_vs_parallel_posture": "sequential_only_downstream_bound"
+            },
+            "init": {
+                "continuation_binding": {
+                    "status": "bound",
+                    "active_bounded_unit": {
+                        "kind": "downstream_dispatch_target",
+                        "task_id": "closed-downstream-task",
+                        "run_id": "closed-downstream-task",
+                        "dispatch_target": "dev-pack"
+                    },
+                    "why_this_unit": "Latest dispatch receipt explicitly names downstream target `dev-pack` as the next lawful bounded unit.",
+                    "sequential_vs_parallel_posture": "sequential_only_downstream_bound"
+                }
+            }
+        });
+
+        assert!(
+            !cached_orchestrator_init_payload_is_currently_admissible(
+                harness.path(),
+                &cached.to_string()
+            )
+            .await,
+            "orchestrator-init cache must not preserve closed task downstream active units"
         );
     }
 

@@ -792,6 +792,29 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                 receipt.downstream_dispatch_status.as_deref(),
                 Some("packet_ready") | Some("executed")
             );
+            if latest_run_graph_task_closed {
+                return apply_closed_task_active_run_projection_mismatch_gate(serde_json::json!({
+                    "status": "ambiguous",
+                    "continuation_allowed": false,
+                    "continuation_required_now": false,
+                    "active_bounded_unit": serde_json::Value::Null,
+                    "binding_source": serde_json::Value::Null,
+                    "why_this_unit": serde_json::Value::Null,
+                    "primary_path": "diagnosis_path",
+                    "sequential_vs_parallel_posture": "unknown_until_run_graph_blocker_resolved",
+                    "pause_boundary_gate": "forbidden_while_runtime_projection_mismatch",
+                    "ambiguity_reason": "latest_run_graph_task_closed",
+                    "stale_run_graph_status": {
+                        "task_id": status.task_id,
+                        "run_id": status.run_id,
+                        "active_node": status.active_node,
+                        "status": status.status,
+                        "lifecycle_stage": status.lifecycle_stage,
+                    },
+                    "next_actions": []
+                }));
+            }
+
             if receipt.run_id == status.run_id
                 && receipt.downstream_dispatch_ready
                 && downstream_status_ready
@@ -1327,6 +1350,26 @@ mod tests {
             activation_evidence: serde_json::Value::Null,
             recorded_at: "2026-04-24T18:50:54Z".to_string(),
         }
+    }
+
+    fn ready_downstream_dispatch(
+        run_id: &str,
+        target: &str,
+    ) -> crate::state_store::RunGraphDispatchReceiptSummary {
+        let mut dispatch = exception_takeover_dispatch(run_id);
+        dispatch.dispatch_status = "executed".to_string();
+        dispatch.lane_status = "lane_completed".to_string();
+        dispatch.supersedes_receipt_id = None;
+        dispatch.exception_path_receipt_id = None;
+        dispatch.blocker_code = None;
+        dispatch.downstream_dispatch_target = Some(target.to_string());
+        dispatch.downstream_dispatch_ready = true;
+        dispatch.downstream_dispatch_status = Some("packet_ready".to_string());
+        dispatch.downstream_dispatch_packet_path = Some(format!(
+            ".vida/data/state/runtime-consumption/dispatch-packets/{run_id}.json"
+        ));
+        dispatch.downstream_dispatch_blockers = Vec::new();
+        dispatch
     }
 
     fn exception_takeover_binding(
@@ -2038,6 +2081,38 @@ mod tests {
                     )
                     && !value.contains("--json")
             }))));
+    }
+
+    #[test]
+    fn closed_completed_task_does_not_bind_ready_downstream_handoff() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "closed-downstream-task",
+            "closed-downstream-task",
+            "work-pool-pack",
+        );
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "work_pool_pack_complete".to_string();
+        let dispatch = ready_downstream_dispatch("closed-downstream-task", "dev-pack");
+
+        let summary = super::build_continuation_binding_summary_with_task_authority(
+            None,
+            Some(&status),
+            None,
+            Some(&dispatch),
+            Some("closed-downstream-task"),
+            false,
+            false,
+            true,
+            false,
+        );
+
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+        assert_ne!(summary["status"], "bound");
+        assert_ne!(
+            summary["why_this_unit"],
+            "Latest dispatch receipt explicitly names downstream target `dev-pack` as the next lawful bounded unit."
+        );
     }
 
     #[test]

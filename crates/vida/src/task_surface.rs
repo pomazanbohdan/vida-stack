@@ -8496,7 +8496,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         match scoped_runtime_binding {
                             Some(binding)
                                 if latest_dispatch_receipt.as_ref().is_some_and(|dispatch| {
-                                    dispatch.run_id == binding.run_id
+                                    continuation_binding_has_live_unit(&tasks, binding)
+                                        && dispatch.run_id == binding.run_id
                                         && runtime_dispatch_receipt_has_ready_downstream_handoff(
                                             Some(binding.run_id.as_str()),
                                             Some(dispatch),
@@ -8514,13 +8515,15 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 )
                             }
                             Some(binding)
-                                if runtime_recovery_blocks_task_next_lawful(
-                                    runtime_recovery.as_ref(),
-                                    latest_dispatch_receipt.as_ref(),
-                                ) && runtime_binding_has_active_exception_takeover(
-                                    binding,
-                                    latest_dispatch_receipt.as_ref(),
-                                ) =>
+                                if continuation_binding_has_live_unit(&tasks, binding)
+                                    && runtime_recovery_blocks_task_next_lawful(
+                                        runtime_recovery.as_ref(),
+                                        latest_dispatch_receipt.as_ref(),
+                                    )
+                                    && runtime_binding_has_active_exception_takeover(
+                                        binding,
+                                        latest_dispatch_receipt.as_ref(),
+                                    ) =>
                             {
                                 pass_exception_takeover_task_next_lawful_receipt(
                                     binding,
@@ -8528,10 +8531,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 )
                             }
                             Some(binding)
-                                if runtime_dispatch_receipt_has_completed_lane(
-                                    Some(binding.run_id.as_str()),
-                                    latest_dispatch_receipt.as_ref(),
-                                ) =>
+                                if continuation_binding_has_live_unit(&tasks, binding)
+                                    && runtime_dispatch_receipt_has_completed_lane(
+                                        Some(binding.run_id.as_str()),
+                                        latest_dispatch_receipt.as_ref(),
+                                    ) =>
                             {
                                 pass_completed_lane_task_next_lawful_receipt(
                                     binding,
@@ -10059,6 +10063,31 @@ mod tests {
             })
             .await
             .expect("task should create");
+    }
+
+    fn run_cli_on_runtime_stack_for_test(args: Vec<String>) -> ExitCode {
+        std::thread::Builder::new()
+            .name("vida-test-cli-runtime".to_string())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let runtime =
+                    tokio::runtime::Runtime::new().expect("test CLI runtime should initialize");
+                let argv = args.iter().map(String::as_str).collect::<Vec<_>>();
+                runtime.block_on(crate::run(cli(&argv)))
+            })
+            .expect("test CLI runtime thread should spawn")
+            .join()
+            .expect("test CLI runtime thread should complete")
+    }
+
+    fn run_on_runtime_stack_for_test(work: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .name("vida-test-expanded-stack".to_string())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(work)
+            .expect("expanded test stack thread should spawn")
+            .join()
+            .expect("expanded test stack thread should complete");
     }
 
     #[test]
@@ -13119,13 +13148,17 @@ mod tests {
                 .expect("snapshot should refresh");
         });
 
-        let code = runtime.block_on(crate::run(cli(&[
-            "task",
-            "next-lawful",
-            "--state-dir",
-            harness.path().to_str().expect("state path should be utf8"),
-            "--json",
-        ])));
+        let code = run_cli_on_runtime_stack_for_test(vec![
+            "task".to_string(),
+            "next-lawful".to_string(),
+            "--state-dir".to_string(),
+            harness
+                .path()
+                .to_str()
+                .expect("state path should be utf8")
+                .to_string(),
+            "--json".to_string(),
+        ]);
 
         assert_eq!(code, ExitCode::SUCCESS);
     }
@@ -13211,6 +13244,12 @@ mod tests {
 
     #[test]
     fn task_next_lawful_command_selects_ready_task_over_closed_downstream_closure_marker() {
+        run_on_runtime_stack_for_test(
+            task_next_lawful_command_selects_ready_task_over_closed_downstream_closure_marker_body,
+        );
+    }
+
+    fn task_next_lawful_command_selects_ready_task_over_closed_downstream_closure_marker_body() {
         let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         runtime.block_on(async {
