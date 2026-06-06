@@ -2932,13 +2932,15 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
         execute_requested,
     );
 
-    if current_task_id.is_none() {
-        if let Some(gate) =
-            build_taskflow_continuation_dispatch_gate_from_store(store, state_dir, scope_task_id)
-                .await?
-        {
-            apply_scheduler_continuation_dispatch_gate(&mut plan, &gate);
-        }
+    let continuation_gate_scope = current_task_id.or(scope_task_id);
+    if let Some(gate) = build_taskflow_continuation_dispatch_gate_from_store(
+        store,
+        state_dir,
+        continuation_gate_scope,
+    )
+    .await?
+    {
+        apply_scheduler_continuation_dispatch_gate(&mut plan, &gate);
     }
 
     let active_reservations = store
@@ -12017,7 +12019,7 @@ agent_system:
         assert_eq!(plan.fanout_guard["status"], "pass");
         assert_eq!(plan.fanout_guard["effective_max_parallel_agents"], 2);
         assert_eq!(plan.fanout_guard["lanes_selected"], 2);
-        assert_eq!(plan.fanout_guard["ready_parallel_safe_count"], 2);
+        assert_eq!(plan.fanout_guard["ready_parallel_safe_count"], 1);
         assert_eq!(
             plan.fanout_guard["host_bridge_capacity"]["blocked_result_code"],
             "host_agent_capacity_unavailable"
@@ -12038,6 +12040,7 @@ agent_system:
         assert_eq!(plan.selected_primary_task, None);
         assert!(plan.selected_task_ids.is_empty());
         assert!(plan.reservations.is_empty());
+        assert_eq!(plan.fanout_guard["lanes_selected"], 0);
         assert_eq!(plan.selected_parallel_tasks.len(), 1);
         assert_eq!(plan.selected_parallel_tasks[0].id, "parallel-ready");
         assert_eq!(plan.execute_supported, false);

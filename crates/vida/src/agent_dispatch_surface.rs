@@ -2626,8 +2626,12 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
     } else {
         usize::try_from(plan.max_parallel_agents).unwrap_or(usize::MAX)
     };
-    let parallelization_planner =
+    let mut parallelization_planner =
         build_parallelization_planner(&plan.scheduling, lanes_requested, effective_parallel);
+    apply_scheduler_plan_continuation_gate_to_parallelization_planner(
+        &mut parallelization_planner,
+        &plan,
+    );
     let fanout_guard = agent_dispatch_fanout_guard_from_scheduler_plan(
         &plan,
         &selected_lanes,
@@ -2653,6 +2657,64 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
         fanout_guard,
         flow_projection: non_dev_team_flow_projection(),
         source_surfaces: agent_dispatch_source_surfaces(),
+    }
+}
+
+fn apply_scheduler_plan_continuation_gate_to_parallelization_planner(
+    planner: &mut serde_json::Value,
+    plan: &crate::taskflow_proxy::TaskflowSchedulerDispatchPlan,
+) {
+    let blocked_by_continuation_gate = plan.selected_task_ids.is_empty()
+        && plan.blocker_codes.iter().any(|code| {
+            matches!(
+                code.as_str(),
+                "continuation_binding_ambiguous"
+                    | "open_delegated_cycle"
+                    | "latest_run_graph_status_blocked"
+            )
+        });
+    if !blocked_by_continuation_gate {
+        return;
+    }
+
+    let proposals = plan
+        .selected_parallel_tasks
+        .iter()
+        .map(|task| {
+            serde_json::json!({
+                "task_id": task.id,
+                "title": task.title,
+                "proposal_kind": "parallel_safe_dispatch_packet_preview",
+                "materializes_packet": false,
+                "next_surface": "vida agent-init",
+                "reason": "candidate remains visible as diagnostic-only evidence while continuation gate blocks execution"
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(object) = planner.as_object_mut() {
+        object.insert(
+            "status".to_string(),
+            serde_json::json!(if proposals.is_empty() {
+                "no_packet_proposals"
+            } else {
+                "proposals_available"
+            }),
+        );
+        object.insert("packet_proposals".to_string(), serde_json::json!(proposals));
+        object.insert("materializes_packets".to_string(), serde_json::json!(false));
+        object.insert("diagnostic_only".to_string(), serde_json::json!(true));
+        object.insert(
+            "blocked_by_continuation_gate".to_string(),
+            serde_json::json!(true),
+        );
+        object.insert(
+            "continuation_gate_scope".to_string(),
+            serde_json::json!("task_scoped"),
+        );
+        object.insert(
+            "independent_parallel_available".to_string(),
+            serde_json::json!(!plan.selected_parallel_tasks.is_empty()),
+        );
     }
 }
 

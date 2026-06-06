@@ -2642,6 +2642,75 @@ fn seed_scheduler_execute_smoke_tasks(state_dir: &str) {
     );
 }
 
+fn seed_scheduler_continuation_gate_fixture(project_root: &str, state_dir: &str) {
+    seed_scheduler_execute_smoke_tasks(state_dir);
+    create_scheduler_smoke_task(
+        state_dir,
+        "sched-parallel-b",
+        "Scheduler parallel B",
+        "3",
+        "parallel_safe",
+        Some("wave-a"),
+        Some("docs"),
+        Some("parallel-b"),
+    );
+
+    let init = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "run graph init should persist continuation fixture",
+        |command| {
+            command
+                .current_dir(project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", state_dir)
+                .args([
+                    "taskflow",
+                    "run-graph",
+                    "init",
+                    "sched-primary",
+                    "implementation",
+                    "analysis",
+                ]);
+        },
+    );
+    assert!(
+        init.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let update = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "run graph update should block continuation fixture",
+        |command| {
+            command
+                .current_dir(project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", state_dir)
+                .args([
+                    "taskflow",
+                    "run-graph",
+                    "update",
+                    "sched-primary",
+                    "implementation",
+                    "implementation",
+                    "blocked",
+                    "implementation",
+                    r#"{"lifecycle_stage":"implementation_blocked","policy_gate":"continuation_gate_fixture","handoff_state":"awaiting_worker","context_state":"sealed","checkpoint_kind":"execution_cursor","resume_target":"dispatch.worker_lane","recovery_ready":true}"#,
+                ]);
+        },
+    );
+    assert!(
+        update.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&update.stdout),
+        String::from_utf8_lossy(&update.stderr)
+    );
+}
+
 fn scheduler_execute_smoke_payload(requested_parallel_limit: u64) -> serde_json::Value {
     let state_dir = unique_state_dir();
     let boot = boot_with_retry(&state_dir);
@@ -3244,6 +3313,189 @@ fn agent_dispatch_next_dev_team_continuation_gate_preserves_diagnostic_packet_pr
         payload["flow_projection"]["current_step"]["dispatch_command"],
         serde_json::Value::Null
     );
+    let _ = std::fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn agent_dispatch_next_standard_continuation_gate_preserves_diagnostic_proposals() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "agent-dispatch-next-standard-continuation-gate-diagnostics",
+        "Agent Dispatch Next Standard Continuation Gate Diagnostics",
+    );
+    seed_scheduler_continuation_gate_fixture(&project_root, &state_dir);
+
+    let output = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "standard dispatch should preserve diagnostic proposals under continuation gate",
+        |command| {
+            command
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .args([
+                    "agent",
+                    "dispatch-next",
+                    "--current-task-id",
+                    "sched-primary",
+                    "--state-dir",
+                    &state_dir,
+                    "--lanes",
+                    "3",
+                    "--json",
+                ]);
+        },
+    );
+    assert!(
+        !output.status.success(),
+        "continuation gate must fail closed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("dispatch-next json should parse");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(payload["mode"], "preview");
+    assert_eq!(payload["lanes_selected"], 0);
+    assert_eq!(payload["selected_lanes"], serde_json::json!([]));
+    assert!(
+        payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code == "continuation_binding_ambiguous"),
+        "{payload}"
+    );
+    assert_eq!(
+        payload["parallelization_planner"]["blocked_by_continuation_gate"],
+        true
+    );
+    assert_eq!(
+        payload["parallelization_planner"]["continuation_gate_scope"],
+        "task_scoped"
+    );
+    assert_eq!(
+        payload["parallelization_planner"]["materializes_packets"],
+        false
+    );
+    assert_eq!(payload["parallelization_planner"]["diagnostic_only"], true);
+    assert_eq!(
+        payload["packet_materialization"]["materializes_packets"],
+        false
+    );
+
+    let proposals = payload["parallelization_planner"]["packet_proposals"]
+        .as_array()
+        .expect("diagnostic packet proposals should render");
+    let proposal_task_ids = proposals
+        .iter()
+        .map(|proposal| proposal["task_id"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        proposal_task_ids,
+        vec!["sched-parallel-a", "sched-parallel-b"]
+    );
+    assert!(
+        proposals
+            .iter()
+            .all(|proposal| proposal["materializes_packet"] == false),
+        "preserved proposals must be diagnostic-only: {payload}"
+    );
+    assert_eq!(payload["flow_projection"]["status"], "not_applicable");
+    assert_eq!(payload["flow_projection"]["diagnostic_only"], true);
+
+    let _ = std::fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn taskflow_scheduler_dispatch_continuation_gate_preserves_diagnostic_candidates() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "taskflow-scheduler-continuation-gate-diagnostics",
+        "TaskFlow Scheduler Continuation Gate Diagnostics",
+    );
+    seed_scheduler_continuation_gate_fixture(&project_root, &state_dir);
+
+    let output = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "scheduler dispatch should preserve diagnostic candidates under continuation gate",
+        |command| {
+            command
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .args([
+                    "taskflow",
+                    "scheduler",
+                    "dispatch",
+                    "--current-task-id",
+                    "sched-primary",
+                    "--state-dir",
+                    &state_dir,
+                    "--limit",
+                    "3",
+                    "--json",
+                ]);
+        },
+    );
+    assert!(
+        !output.status.success(),
+        "continuation gate must fail closed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("scheduler dispatch json should parse");
+    assert_eq!(payload["surface"], "vida taskflow scheduler dispatch");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(payload["selected_primary_task"], serde_json::Value::Null);
+    assert_eq!(payload["selected_current_task_id"], serde_json::Value::Null);
+    assert_eq!(payload["selected_task_ids"], serde_json::json!([]));
+    assert_eq!(payload["reservations"], serde_json::json!([]));
+    assert_eq!(payload["execute_supported"], false);
+    assert_eq!(payload["execution_attempted"], false);
+    assert_eq!(payload["activation_attempt_supported"], false);
+    assert_eq!(payload["activation_attempted"], false);
+    assert!(
+        payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code == "continuation_binding_ambiguous"),
+        "{payload}"
+    );
+    assert_eq!(payload["dispatch_receipt"]["dispatch_status"], "blocked");
+    assert_eq!(
+        payload["dispatch_receipt"]["selected_task_ids"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        payload["dispatch_receipt"]["reservation_ids"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        payload["dispatch_receipt"]["packet_backed_execution_gates"],
+        serde_json::json!([])
+    );
+
+    let selected_parallel_task_ids = payload["selected_parallel_tasks"]
+        .as_array()
+        .expect("diagnostic parallel candidates should render")
+        .iter()
+        .map(|entry| entry["id"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected_parallel_task_ids,
+        vec!["sched-parallel-a", "sched-parallel-b"]
+    );
+    assert_eq!(payload["fanout_guard"]["status"], "blocked");
+    assert_eq!(payload["fanout_guard"]["lanes_selected"], 0);
+    assert_eq!(
+        payload["fanout_guard"]["selected_task_ids"],
+        serde_json::json!([])
+    );
+    assert_eq!(payload["fanout_guard"]["partial_outcomes_visible"], true);
+
     let _ = std::fs::remove_dir_all(project_root);
 }
 
