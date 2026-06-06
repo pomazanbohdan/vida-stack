@@ -2510,15 +2510,91 @@ fn write_json_artifact_replace_existing(
         .map_err(|error| format!("Failed to write {label} `{}`: {error}", path.display()))
 }
 
+fn host_bridge_dispatch_packet_json(
+    state_root: &Path,
+    persisted_receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<serde_json::Value>, String> {
+    let Some(dispatch_packet_path) = persisted_receipt.dispatch_packet_path.as_deref() else {
+        return Ok(None);
+    };
+    let dispatch_packet_path =
+        crate::runtime_dispatch_state::normalize_persisted_runtime_path(dispatch_packet_path);
+    let canonical_packet_path =
+        canonicalize_existing_state_path(state_root, &dispatch_packet_path, "dispatch packet")?;
+    let raw = std::fs::read_to_string(&canonical_packet_path).map_err(|error| {
+        format!(
+            "Failed to read persisted host bridge dispatch packet `{}`: {error}",
+            canonical_packet_path.display()
+        )
+    })?;
+    serde_json::from_str(&raw).map(Some).map_err(|error| {
+        format!(
+            "Failed to decode persisted host bridge dispatch packet `{}`: {error}",
+            canonical_packet_path.display()
+        )
+    })
+}
+
+fn host_bridge_dispatch_packet_implementation_isolation(
+    state_root: &Path,
+    persisted_receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<serde_json::Value>, String> {
+    Ok(
+        host_bridge_dispatch_packet_json(state_root, persisted_receipt)?.and_then(|packet| {
+            packet.get("implementation_isolation").cloned().or_else(|| {
+                packet
+                    .get("delivery_task_packet")
+                    .and_then(|value| value.get("implementation_isolation"))
+                    .cloned()
+            })
+        }),
+    )
+}
+
+fn host_bridge_request_has_implementation_artifacts(request: &serde_json::Value) -> bool {
+    request
+        .get("implementation_artifacts")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|artifacts| !artifacts.is_empty())
+}
+
+fn host_bridge_invalid_implementation_isolation_validation() -> serde_json::Value {
+    serde_json::json!({
+        "status": "blocked",
+        "blocker_codes": ["implementation_artifact_contract_invalid"],
+        "owned_paths": [],
+        "reported_changed_files": [],
+        "out_of_scope_paths": []
+    })
+}
+
 fn host_bridge_implementation_scope_validation(
+    state_root: &Path,
     request: &serde_json::Value,
-) -> Option<serde_json::Value> {
-    let isolation = request
-        .get("implementation_isolation")
-        .filter(|value| value.is_object())?;
+    persisted_receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<serde_json::Value>, String> {
+    let isolation =
+        host_bridge_dispatch_packet_implementation_isolation(state_root, persisted_receipt)?;
+    let artifacts = request
+        .get("implementation_artifacts")
+        .unwrap_or(&serde_json::Value::Null);
+    let Some(isolation) = isolation.filter(|value| !value.is_null()) else {
+        return Ok(
+            host_bridge_request_has_implementation_artifacts(request).then(|| {
+                crate::runtime_dispatch_packets::implementation_artifact_scope_validation(
+                    &[],
+                    artifacts,
+                )
+            }),
+        );
+    };
+    let Some(isolation) = isolation.as_object() else {
+        return Ok(Some(
+            host_bridge_invalid_implementation_isolation_validation(),
+        ));
+    };
     let owned_paths = isolation
         .get("owned_paths")
-        .or_else(|| request.get("owned_paths"))
         .and_then(serde_json::Value::as_array)
         .map(|paths| {
             paths
@@ -2530,14 +2606,12 @@ fn host_bridge_implementation_scope_validation(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    Some(
+    Ok(Some(
         crate::runtime_dispatch_packets::implementation_artifact_scope_validation(
             &owned_paths,
-            request
-                .get("implementation_artifacts")
-                .unwrap_or(&serde_json::Value::Null),
+            artifacts,
         ),
-    )
+    ))
 }
 
 fn host_bridge_scope_validation_blocker_codes(validation: &serde_json::Value) -> Vec<String> {
@@ -2637,9 +2711,14 @@ fn materialize_host_bridge_completion_evidence(
         .get("request_id")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("host-tool-bridge-request");
-    let packet_path = request
-        .get("packet_path")
-        .and_then(serde_json::Value::as_str)
+    let packet_path = persisted_receipt
+        .dispatch_packet_path
+        .as_deref()
+        .or_else(|| {
+            request
+                .get("packet_path")
+                .and_then(serde_json::Value::as_str)
+        })
         .unwrap_or_default();
     let backend_id = request
         .get("backend_id")
@@ -2654,7 +2733,8 @@ fn materialize_host_bridge_completion_evidence(
             dispatch_target,
             Some(summary),
         );
-    let implementation_scope_validation = host_bridge_implementation_scope_validation(&request);
+    let implementation_scope_validation =
+        host_bridge_implementation_scope_validation(state_root, &request, persisted_receipt)?;
     let mut blocker_codes = Vec::new();
     if let Some(scope_blocker_codes) = implementation_scope_validation
         .as_ref()
@@ -7878,6 +7958,175 @@ mod tests {
         );
         assert_eq!(completion_result["closure_ready"], false);
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_completion_uses_persisted_dispatch_packet_scope() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-immutable-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/run-scope.json");
+        let request_path = root.join("host-tool-bridge/requests/run-scope.json");
+        let result_path = root.join("host-tool-bridge/results/run-scope.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/run-scope.json");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-scope-activation.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        let immutable_isolation = serde_json::json!({
+            "schema_version": "implementation-isolation-v1",
+            "canonical_worktree_writes_allowed": false,
+            "default_mode": "patch_proposal",
+            "allowed_modes": ["patch_proposal", "isolated_worktree"],
+            "artifact_contract": "stage_attempt_implementation_artifact_v1",
+            "owned_paths": ["allowed"],
+            "scope_policy": {
+                "changed_files_must_be_subset_of_owned_paths": true,
+                "patch_paths_must_be_subset_of_owned_paths": true
+            }
+        });
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-scope",
+                "dispatch_target": "implementation",
+                "owned_paths": ["allowed"],
+                "implementation_isolation": immutable_isolation
+            })
+            .to_string(),
+        )
+        .expect("write immutable dispatch packet");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-scope".to_string();
+        receipt.dispatch_target = "implementation".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+
+        let write_request = |implementation_isolation: serde_json::Value| {
+            std::fs::write(
+                &request_path,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "status": "pending",
+                    "request_id": "run-scope",
+                    "run_id": "run-scope",
+                    "dispatch_target": "implementation",
+                    "packet_path": packet_path.display().to_string(),
+                    "backend_id": "internal_subagents",
+                    "dispatch_transport": "host_tool_bridge",
+                    "implementation_isolation": implementation_isolation,
+                    "implementation_artifacts": [{
+                        "artifact_kind": "patch_proposal",
+                        "attempt_id": "attempt-scope",
+                        "task_id": "run-scope",
+                        "stage_id": "implementation",
+                        "changed_files": ["secret/outside.txt"]
+                    }],
+                    "owned_paths": ["allowed", "secret"],
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                })
+                .to_string(),
+            )
+            .expect("write mutable host bridge request");
+        };
+
+        write_request(serde_json::json!({
+            "schema_version": "implementation-isolation-v1",
+            "owned_paths": ["allowed", "secret"]
+        }));
+        let widened_evidence = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            "run-scope",
+            "implementation",
+            &receipt,
+            "receipt-widened",
+            Some("agent-scope"),
+            Some("parent host adapter completed receipt-backed execution"),
+            false,
+        )
+        .expect("widened mutable scope should materialize blocked evidence");
+        assert_eq!(widened_evidence.execution_state, "blocked");
+        assert!(widened_evidence
+            .blocker_codes
+            .iter()
+            .any(|code| code == "implementation_attempt_scope_guard_violation"));
+        let widened_result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("widened result should read"),
+        )
+        .expect("widened result should parse");
+        assert_eq!(widened_result["status"], "blocked");
+        assert_eq!(
+            widened_result["scope_validation"]["owned_paths"],
+            serde_json::json!(["allowed"])
+        );
+        assert_eq!(
+            widened_result["scope_validation"]["out_of_scope_paths"],
+            serde_json::json!(["secret/outside.txt"])
+        );
+
+        std::fs::remove_file(&result_path).expect("remove widened result");
+        std::fs::remove_file(&receipt_path).expect("remove widened receipt");
+        write_request(serde_json::Value::Null);
+        let null_evidence = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            "run-scope",
+            "implementation",
+            &receipt,
+            "receipt-null",
+            Some("agent-scope"),
+            Some("parent host adapter completed receipt-backed execution"),
+            false,
+        )
+        .expect("null mutable scope should still use immutable packet scope");
+        assert_eq!(null_evidence.execution_state, "blocked");
+        assert!(null_evidence
+            .blocker_codes
+            .iter()
+            .any(|code| code == "implementation_attempt_scope_guard_violation"));
+        let null_result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("null result should read"),
+        )
+        .expect("null result should parse");
+        assert_eq!(
+            null_result["scope_validation"]["owned_paths"],
+            serde_json::json!(["allowed"])
+        );
+        assert_eq!(
+            null_result["scope_validation"]["out_of_scope_paths"],
+            serde_json::json!(["secret/outside.txt"])
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
