@@ -591,7 +591,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                 "ambiguity_reason": "runtime_evidence_ambiguous",
                 "next_actions": [
                     "Do not continue by heuristic while run-graph continuation evidence is ambiguous.",
-                    "Refresh continuation evidence with `vida taskflow consume continue --json` and recheck `vida status --json` before selecting the next bounded step."
+                    "Refresh continuation evidence with `vida taskflow consume continue` and recheck `vida status` before selecting the next bounded step."
                 ]
             });
         }
@@ -895,7 +895,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
             "ambiguity_reason": "runtime_evidence_ambiguous",
             "next_actions": [
                 "Do not continue by heuristic while run-graph continuation evidence is ambiguous.",
-                "Refresh continuation evidence with `vida taskflow consume continue --json` and recheck `vida status --json` before selecting the next bounded step."
+                "Refresh continuation evidence with `vida taskflow consume continue` and recheck `vida status` before selecting the next bounded step."
             ]
         });
     }
@@ -1251,7 +1251,7 @@ pub(crate) fn apply_closed_task_active_run_projection_mismatch_gate(
         object.insert(
             "next_actions".to_string(),
             serde_json::json!([
-                "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work."
+                "Run `vida task reconcile-closed-runs --limit 25` and inspect skipped runs with `vida taskflow run-graph status <run-id>`; closed tasks must not remain projected as active runtime work."
             ]),
         );
     }

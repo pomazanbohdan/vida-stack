@@ -13455,9 +13455,10 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
             .as_array()
             .expect("graph-summary next actions should render")
             .iter()
-            .any(|action| action.as_str().is_some_and(
-                |value| value.contains("vida task reconcile-closed-runs --limit 25 --json")
-            )),
+            .any(|action| action.as_str().is_some_and(|value| {
+                value.contains("vida task reconcile-closed-runs --limit 25")
+                    && !value.contains("vida task reconcile-closed-runs --limit 25 --json")
+            })),
         "graph-summary must publish the canonical reconcile command: {graph_before}"
     );
     let (orchestrator_before, _) = run_command_json_allow_failure(
@@ -13478,9 +13479,10 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
             .as_array()
             .expect("orchestrator-init continuation next actions should render")
             .iter()
-            .any(|action| action.as_str().is_some_and(
-                |value| value.contains("vida task reconcile-closed-runs --limit 25 --json")
-            )),
+            .any(|action| action.as_str().is_some_and(|value| {
+                value.contains("vida task reconcile-closed-runs --limit 25")
+                    && !value.contains("vida task reconcile-closed-runs --limit 25 --json")
+            })),
         "orchestrator-init must publish the canonical reconcile command: {orchestrator_before}"
     );
     let (diagnostics_before, diagnostics_before_success) = run_command_json_allow_failure(
@@ -13511,8 +13513,10 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
             .as_array()
             .expect("diagnostics next actions should render")
             .iter()
-            .any(|action| action.as_str().is_some_and(|value| value
-                .contains("vida task reconcile-closed-runs --limit 25 --json"))),
+            .any(|action| action.as_str().is_some_and(|value| {
+                value.contains("vida task reconcile-closed-runs --limit 25")
+                    && !value.contains("vida task reconcile-closed-runs --limit 25 --json")
+            })),
         "diagnostics post-commit must publish the canonical reconcile command: {diagnostics_before}"
     );
 
@@ -14091,9 +14095,11 @@ fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
             .as_array()
             .expect("diagnostics next actions should render")
             .iter()
-            .any(|action| action.as_str().is_some_and(|value| value
-                .contains("vida task reconcile-closed-runs --limit 25 --json")
-                && value.contains("closed tasks must not remain projected as active runtime work"))),
+            .any(|action| action.as_str().is_some_and(|value| {
+                value.contains("vida task reconcile-closed-runs --limit 25")
+                    && !value.contains("vida task reconcile-closed-runs --limit 25 --json")
+                    && value.contains("closed tasks must not remain projected as active runtime work")
+            })),
         "diagnostics post-commit must publish the same canonical reconcile next action: {diagnostics_before}"
     );
 
@@ -14309,6 +14315,36 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
         diagnostics_before_reconcile["taskflow_status"]
             ["closed_task_active_run_projection_mismatch"],
         false
+    );
+    let status_before_reconcile = run_command_json(&["status", "--json"], &state_dir);
+    let status_before_reconcile_blockers = require_json_string_array(
+        &status_before_reconcile["blocker_codes"],
+        "status before reconcile blockers",
+    );
+    assert!(
+        !status_before_reconcile_blockers
+            .contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "status must treat receipt-backed terminal closure as completed truth before reconcile: {status_before_reconcile}"
+    );
+    let (graph_before_reconcile, _) = run_command_json_allow_failure(
+        &["taskflow", "graph-summary", "--operator", "--json"],
+        &state_dir,
+    );
+    let graph_before_reconcile_blockers = require_json_string_array(
+        &graph_before_reconcile["blocker_codes"],
+        "graph-summary before reconcile blockers",
+    );
+    assert!(
+        !graph_before_reconcile_blockers
+            .contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "graph-summary must not block on receipt-backed terminal closure truth before reconcile: {graph_before_reconcile}"
+    );
+    let closeout_before_reconcile =
+        run_command_json(&["taskflow", "closeout", "--json", "--compact"], &state_dir);
+    assert_ne!(
+        closeout_before_reconcile["continuation_binding"]["ambiguity_reason"],
+        "closed_task_active_run_projection_mismatch",
+        "taskflow closeout must share terminal closure truth semantics before reconcile: {closeout_before_reconcile}"
     );
     runtime.block_on(async {
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)

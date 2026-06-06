@@ -153,7 +153,7 @@ fn status_from_blockers(blockers: &[String]) -> &'static str {
 }
 
 fn closed_task_active_run_projection_mismatch_next_action() -> String {
-    "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work."
+    "Run `vida task reconcile-closed-runs --limit 25` and inspect skipped runs with `vida taskflow run-graph status <run-id>`; closed tasks must not remain projected as active runtime work."
         .to_string()
 }
 
@@ -483,7 +483,7 @@ async fn build_post_commit_diagnostics(
             serde_json::json!({
                 "status": "blocked",
                 "blocker_code": "host_dispatch_preflight_missing",
-                "next_actions": ["Run `vida status --json` from a VIDA-initialized project root."]
+                "next_actions": ["Run `vida status` from a VIDA-initialized project root."]
             })
         });
     let host_dispatch_preflight =
@@ -774,7 +774,8 @@ mod tests {
             false,
         ));
         assert!(closed_task_active_run_projection_mismatch_next_action()
-            .contains("vida task reconcile-closed-runs --limit 25 --json"));
+            .contains("vida task reconcile-closed-runs --limit 25"));
+        assert!(!closed_task_active_run_projection_mismatch_next_action().contains("--json"));
     }
 
     #[test]

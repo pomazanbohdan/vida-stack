@@ -279,7 +279,10 @@ pub(crate) async fn build_taskflow_closeout_summary(
                     store, status,
                 )
                 .await?;
-            (verdict.task_closed(), verdict.task_missing())
+            (
+                verdict.stale_for_active_projection(),
+                verdict.task_missing(),
+            )
         }
         None => (false, false),
     };

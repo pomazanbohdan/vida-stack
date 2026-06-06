@@ -583,7 +583,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     match latest_run_graph_status.as_ref() {
                         Some(status) => {
                             match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
-                                Ok(verdict) => (verdict.task_closed(), verdict.task_missing()),
+                                Ok(verdict) => (
+                                    verdict.stale_for_active_projection(),
+                                    verdict.task_missing(),
+                                ),
                                 Err(error) => {
                                     eprintln!("Failed to read latest run graph task authority: {error}");
                                     return ExitCode::from(1);
@@ -596,7 +599,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     match latest_global_run_graph_status.as_ref() {
                         Some(status) => {
                             match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
-                                Ok(verdict) => verdict.task_closed(),
+                                Ok(verdict) => verdict.stale_for_active_projection(),
                                 Err(error) => {
                                     eprintln!("Failed to read global run graph task authority: {error}");
                                     return ExitCode::from(1);
@@ -604,6 +607,26 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             }
                         }
                         None => false,
+                    };
+                let latest_global_run_graph_terminal_closure_has_truth =
+                    match latest_global_run_graph_status.as_ref() {
+                        Some(status)
+                            if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                                status,
+                            ) =>
+                        {
+                            match store.run_graph_terminal_closure_has_task_close_truth(status).await
+                            {
+                                Ok(has_truth) => has_truth,
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to read global terminal closure evidence: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        }
+                        _ => false,
                     };
                 let latest_run_graph_terminal_closure_without_truth = match latest_run_graph_status
                     .as_ref()
@@ -632,9 +655,49 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     _ => false,
                 };
+                let global_closed_run_is_current = latest_global_run_graph_task_closed
+                    && !latest_global_run_graph_terminal_closure_has_truth
+                    && latest_global_run_graph_status
+                        .as_ref()
+                        .is_some_and(|global| {
+                            latest_run_graph_status
+                                .as_ref()
+                                .map(|current| current.run_id == global.run_id)
+                                .unwrap_or(true)
+                        });
+                let terminal_closed_run_is_current = match latest_terminal_task_active_run_graph_status
+                    .as_ref()
+                {
+                    Some(terminal)
+                        if latest_run_graph_status
+                            .as_ref()
+                            .map(|current| current.run_id == terminal.run_id)
+                            .unwrap_or(true) =>
+                    {
+                        if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                            terminal,
+                        ) {
+                            match store
+                                .run_graph_terminal_closure_has_task_close_truth(terminal)
+                                .await
+                            {
+                                Ok(has_truth) => !has_truth,
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to read terminal task-active closure evidence: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        } else {
+                            true
+                        }
+                    }
+                    _ => false,
+                };
                 let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
-                    || latest_global_run_graph_task_closed
-                    || latest_terminal_task_active_run_graph_status.is_some()
+                    || global_closed_run_is_current
+                    || terminal_closed_run_is_current
                     || latest_run_graph_terminal_closure_without_truth;
                 let in_progress_tasks = all_tasks
                     .iter()
@@ -1439,10 +1502,10 @@ fn refresh_cached_protocol_binding_projection(
         &["shared_fields", "artifact_refs"][..],
         &["operator_contracts", "artifact_refs"][..],
     ] {
-        let mut current = &mut *payload;
-        for segment in path {
-            current = current.get_mut(*segment)?;
-        }
+        let pointer = format!("/{}", path.join("/"));
+        let Some(current) = payload.pointer_mut(&pointer) else {
+            continue;
+        };
         current.as_object_mut()?.insert(
             "protocol_binding_latest_receipt_id".to_string(),
             serde_json::to_value(&protocol_binding.latest_receipt_id).ok()?,
@@ -1455,10 +1518,10 @@ fn refresh_cached_protocol_binding_projection(
             &["shared_fields", "blocker_codes"][..],
             &["operator_contracts", "blocker_codes"][..],
         ] {
-            let mut current = &mut *payload;
-            for segment in path {
-                current = current.get_mut(*segment)?;
-            }
+            let pointer = format!("/{}", path.join("/"));
+            let Some(current) = payload.pointer_mut(&pointer) else {
+                continue;
+            };
             remove_string_from_json_array(current, "protocol_binding_blocking_issues");
         }
     }
@@ -1585,7 +1648,10 @@ async fn refresh_cached_status_projection_runtime_fields(
                     )
                     .await
                     .ok()?;
-                (verdict.task_closed(), verdict.task_missing())
+                (
+                    verdict.stale_for_active_projection(),
+                    verdict.task_missing(),
+                )
             }
             None => (false, false),
         };
@@ -1597,7 +1663,7 @@ async fn refresh_cached_status_projection_runtime_fields(
                 )
                 .await
                 .ok()?;
-            verdict.task_closed()
+            verdict.stale_for_active_projection()
         }
         None => false,
     };
@@ -1662,9 +1728,39 @@ async fn refresh_cached_status_projection_runtime_fields(
         continuation_binding,
         taskflow_active_candidates,
     );
+    let global_closed_run_is_current = latest_global_run_graph_task_closed
+        && latest_global_run_graph_status
+            .as_ref()
+            .is_some_and(|global| {
+                latest_run_graph_status
+                    .as_ref()
+                    .map(|current| current.run_id == global.run_id)
+                    .unwrap_or(true)
+            });
+    let terminal_closed_run_is_current = match latest_terminal_task_active_run_graph_status.as_ref()
+    {
+        Some(terminal)
+            if latest_run_graph_status
+                .as_ref()
+                .map(|current| current.run_id == terminal.run_id)
+                .unwrap_or(true) =>
+        {
+            if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                terminal,
+            ) {
+                !store
+                    .run_graph_terminal_closure_has_task_close_truth(terminal)
+                    .await
+                    .ok()?
+            } else {
+                true
+            }
+        }
+        _ => false,
+    };
     let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
-        || latest_global_run_graph_task_closed
-        || latest_terminal_task_active_run_graph_status.is_some();
+        || global_closed_run_is_current
+        || terminal_closed_run_is_current;
     let continuation_binding = if closed_task_active_run_projection_mismatch {
         crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
             continuation_binding,

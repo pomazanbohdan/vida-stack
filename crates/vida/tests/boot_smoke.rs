@@ -16482,6 +16482,10 @@ fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
         },
     );
     let status_json = parse_json_output(&status, "status");
+    assert_eq!(
+        status_json["view"], "summary",
+        "default status --json should use compact operator summary output"
+    );
 
     let doctor = bounded_vida_output_with_state_lock_retry(
         &["-k", "5s", "20s"],
@@ -16511,14 +16515,207 @@ fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
                 .is_some_and(
                     |actions| actions
                         .iter()
-                        .any(|action| action.as_str().is_some_and(|value| value
-                            .contains("vida task reconcile-closed-runs --limit 25 --json")))
+                        .any(|action| action.as_str().is_some_and(|value| {
+                            value.contains("vida task reconcile-closed-runs --limit 25")
+                                && !value
+                                    .contains("vida task reconcile-closed-runs --limit 25 --json")
+                        }))
                 ),
-            "{label} should publish canonical reconcile next action: {payload}"
+            "{label} should publish default human reconcile next action: {payload}"
         );
     }
 
     let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn status_init_and_graph_summary_ignore_stale_global_closed_run_when_current_run_is_active() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "stale-global-closed-run-current-active-project",
+        "Stale Global Closed Run Current Active Project",
+    );
+    let closed_task_id = "stale-global-closed-run-task";
+    let active_task_id = "current-session-active-run-task";
+
+    create_scheduler_smoke_task(
+        &state_dir,
+        closed_task_id,
+        "Stale global closed run task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+    let closed_init = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "closed run dispatch-init should run",
+        |command| {
+            command
+                .args([
+                    "taskflow",
+                    "run-graph",
+                    "dispatch-init",
+                    closed_task_id,
+                    "--json",
+                ])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        closed_init.status.success(),
+        "closed dispatch-init stdout={} stderr={}",
+        String::from_utf8_lossy(&closed_init.stdout),
+        String::from_utf8_lossy(&closed_init.stderr)
+    );
+    let close = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "closed stale task close should run",
+        |command| {
+            command
+                .args([
+                    "task",
+                    "close",
+                    closed_task_id,
+                    "--reason",
+                    "stale global closed run proof",
+                    "--json",
+                ])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        close.status.success(),
+        "close stdout={} stderr={}",
+        String::from_utf8_lossy(&close.stdout),
+        String::from_utf8_lossy(&close.stderr)
+    );
+
+    let stale_graph_summary = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "stale graph-summary cache should render",
+        |command| {
+            command
+                .args(["taskflow", "graph-summary", "--operator", "--json"])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    let stale_graph_json = parse_json_output(&stale_graph_summary, "stale graph-summary");
+    assert!(
+        json_string_array_contains(
+            &stale_graph_json["blocker_codes"],
+            "closed_task_active_run_projection_mismatch"
+        ),
+        "fixture should first produce a stale closed-run graph-summary cache: {stale_graph_json}"
+    );
+
+    create_scheduler_smoke_task(
+        &state_dir,
+        active_task_id,
+        "Current session active run task",
+        "2",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+    let active_init = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "active run dispatch-init should run",
+        |command| {
+            command
+                .args([
+                    "taskflow",
+                    "run-graph",
+                    "dispatch-init",
+                    active_task_id,
+                    "--json",
+                ])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        active_init.status.success(),
+        "active dispatch-init stdout={} stderr={}",
+        String::from_utf8_lossy(&active_init.stdout),
+        String::from_utf8_lossy(&active_init.stderr)
+    );
+
+    let status = status_with_timeout(&project_root, &state_dir, &["status", "--json"]);
+    let status_json = parse_json_output(&status, "status after active dispatch");
+    assert!(
+        !json_string_array_contains(
+            &status_json["blocker_codes"],
+            "closed_task_active_run_projection_mismatch"
+        ),
+        "status must not let stale global closed run block current active run: {status_json}"
+    );
+    assert_eq!(
+        status_json["active_bounded_unit"]["task_id"], active_task_id,
+        "status should bind the current-session active run: {status_json}"
+    );
+
+    let orchestrator = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "orchestrator-init after active dispatch should run",
+        |command| {
+            command
+                .args(["orchestrator-init", "--json"])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    let orchestrator_json = parse_json_output(&orchestrator, "orchestrator-init after active");
+    assert_eq!(
+        orchestrator_json["active_bounded_unit"]["task_id"], active_task_id,
+        "orchestrator-init should bind the current active run, not stale closed run: {orchestrator_json}"
+    );
+    assert_ne!(
+        orchestrator_json["continuation_binding"]["ambiguity_reason"],
+        "closed_task_active_run_projection_mismatch",
+        "orchestrator-init should not keep stale closed-run ambiguity: {orchestrator_json}"
+    );
+
+    let graph_summary = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "graph-summary after active dispatch should run",
+        |command| {
+            command
+                .args(["taskflow", "graph-summary", "--operator", "--json"])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    let graph_json = parse_json_output(&graph_summary, "graph-summary after active");
+    assert!(
+        !json_string_array_contains(
+            &graph_json["blocker_codes"],
+            "closed_task_active_run_projection_mismatch"
+        ),
+        "graph-summary must reject stale closed-run cache after current active dispatch: {graph_json}"
+    );
+    assert_eq!(
+        graph_json["current_task_id"], active_task_id,
+        "graph-summary should recompute current task after stale cache: {graph_json}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
 }
 
 #[test]

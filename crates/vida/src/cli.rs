@@ -2870,7 +2870,7 @@ pub(crate) struct StatusArgs {
 
     #[arg(
         long = "view",
-        default_value = "full",
+        default_value = "compact",
         help = "Output view for status fields: compact, summary, or full"
     )]
     pub(crate) view: String,

@@ -541,6 +541,9 @@ fn cached_taskflow_graph_summary_projection_admissible(cached: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(cached)
         .ok()
         .is_some_and(|payload| {
+            if graph_summary_payload_has_closed_task_active_run_projection_mismatch(&payload) {
+                return false;
+            }
             payload
                 .get("projection_contract_version")
                 .and_then(serde_json::Value::as_str)
@@ -558,6 +561,18 @@ fn cached_taskflow_graph_summary_projection_admissible(cached: &str) -> bool {
                             crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id,
                         ))
         })
+}
+
+fn graph_summary_payload_has_closed_task_active_run_projection_mismatch(
+    payload: &serde_json::Value,
+) -> bool {
+    payload["continuation_binding"]["ambiguity_reason"].as_str()
+        == Some("closed_task_active_run_projection_mismatch")
+        || payload["blocker_codes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|code| code.as_str() == Some("closed_task_active_run_projection_mismatch"))
 }
 
 fn normalize_scheduler_path(path: &str) -> Option<String> {
@@ -1019,10 +1034,15 @@ fn apply_closed_task_active_run_projection_mismatch_to_graph_summary(
         blocker_codes.push(code);
     }
     next_actions.clear();
-    next_actions.push(
-        "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work."
-            .to_string(),
+    let reconcile_command = crate::operator_command_text::human_command(
+        "vida task reconcile-closed-runs --limit 25 --json",
     );
+    let inspect_command = crate::operator_command_text::human_command(
+        "vida taskflow run-graph status <run-id> --json",
+    );
+    next_actions.push(format!(
+        "Run `{reconcile_command}` and inspect skipped runs with `{inspect_command}`; closed tasks must not remain projected as active runtime work."
+    ));
 }
 
 fn normalize_scheduler_max_parallel_agents(activation_bundle: &serde_json::Value) -> u64 {
@@ -3256,7 +3276,10 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
                     .map_err(|error| {
                         format!("Failed to read latest run graph task authority: {error}")
                     })?;
-                (verdict.task_closed(), verdict.task_missing())
+                (
+                    verdict.stale_for_active_projection(),
+                    verdict.task_missing(),
+                )
             }
             None => (false, false),
         };
@@ -4043,7 +4066,7 @@ fn taskflow_graph_summary_blocked_payload(error_stage: &str, error: &str) -> ser
     )
     .unwrap_or_else(|| "dependency_graph_issues".to_string())];
     let next_actions = vec![
-        "Run `vida task validate-graph --json` and repair the reported dependency graph issues before using graph-summary."
+        "Run `vida task validate-graph` and repair the reported dependency graph issues before using graph-summary."
             .to_string(),
     ];
     let (shared_fields, operator_contracts, artifact_refs) =
@@ -4933,7 +4956,10 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
                 )
                 .await
                 {
-                    Ok(verdict) => (verdict.task_closed(), verdict.task_missing()),
+                    Ok(verdict) => (
+                        verdict.stale_for_active_projection(),
+                        verdict.task_missing(),
+                    ),
                     Err(error) => {
                         eprintln!("Failed to read latest run graph task authority: {error}");
                         return ExitCode::from(1);
@@ -5484,7 +5510,10 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
                 )
                 .await
                 {
-                    Ok(verdict) => (verdict.task_closed(), verdict.task_missing()),
+                    Ok(verdict) => (
+                        verdict.stale_for_active_projection(),
+                        verdict.task_missing(),
+                    ),
                     Err(error) => {
                         eprintln!("Failed to read latest run graph task authority: {error}");
                         return ExitCode::from(1);
@@ -5493,8 +5522,35 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             }
             None => (false, false),
         };
+    let terminal_closed_run_is_current = match latest_terminal_task_active_run_graph_status.as_ref()
+    {
+        Some(terminal)
+            if latest_run_graph
+                .as_ref()
+                .map(|current| current.run_id == terminal.run_id)
+                .unwrap_or(true) =>
+        {
+            if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                terminal,
+            ) {
+                match store
+                    .run_graph_terminal_closure_has_task_close_truth(terminal)
+                    .await
+                {
+                    Ok(has_truth) => !has_truth,
+                    Err(error) => {
+                        eprintln!("Failed to read terminal task-active closure evidence: {error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            } else {
+                true
+            }
+        }
+        _ => false,
+    };
     let closed_task_active_run_projection_mismatch =
-        latest_run_graph_task_closed || latest_terminal_task_active_run_graph_status.is_some();
+        latest_run_graph_task_closed || terminal_closed_run_is_current;
     let latest_run_graph_legacy_ownerless = match latest_run_graph.as_ref() {
         Some(status) => match store.run_graph_legacy_ownerless(&status.run_id).await {
             Ok(ownerless) => ownerless,
@@ -7331,12 +7387,18 @@ fn route_assignment_catalog_drift_payload(route: &serde_json::Value) -> Option<s
 fn route_assignment_reseed_next_actions(run_id: &str, task_id: &str) -> Vec<String> {
     vec![
         format!(
-            "Refresh the stale route assignment by reseeding dispatch context with `vida taskflow run-graph dispatch-init {} --json`.",
-            crate::shell_quote(task_id)
+            "Refresh the stale route assignment by reseeding dispatch context with `{}`.",
+            crate::operator_command_text::human_command(&format!(
+                "vida taskflow run-graph dispatch-init {} --json",
+                crate::shell_quote(task_id)
+            ))
         ),
         format!(
-            "Re-check the active route with `vida taskflow route explain --run-id {} --json`.",
-            crate::shell_quote(run_id)
+            "Re-check the active route with `{}`.",
+            crate::operator_command_text::human_command(&format!(
+                "vida taskflow route explain --run-id {} --json",
+                crate::shell_quote(run_id)
+            ))
         ),
         "Do not trust scheduler or execute-dispatch packets that still report `model_not_pinned`."
             .to_string(),
@@ -10917,10 +10979,9 @@ mod tests {
         let actions =
             super::route_assignment_reseed_next_actions("run-route-drift", "task-route-drift");
 
-        assert!(
-            actions[0].contains("vida taskflow run-graph dispatch-init task-route-drift --json")
-        );
-        assert!(actions[1].contains("vida taskflow route explain --run-id run-route-drift --json"));
+        assert!(actions[0].contains("vida taskflow run-graph dispatch-init task-route-drift"));
+        assert!(actions[1].contains("vida taskflow route explain --run-id run-route-drift"));
+        assert!(actions.iter().all(|action| !action.contains("--json")));
         assert!(actions[2].contains("model_not_pinned"));
     }
 
@@ -13097,7 +13158,8 @@ agent_system:
             .iter()
             .any(|code| code == "closed_task_active_run_projection_mismatch"));
         assert!(next_actions.iter().any(|action| {
-            action.contains("vida task reconcile-closed-runs --limit 25 --json")
+            action.contains("vida task reconcile-closed-runs --limit 25")
+                && !action.contains("vida task reconcile-closed-runs --limit 25 --json")
                 && action.contains("closed tasks must not remain projected as active runtime work")
         }));
         assert_eq!(next_actions.len(), 1);
@@ -13112,6 +13174,30 @@ agent_system:
             &serde_json::json!({
                 "surface": "vida taskflow graph-summary",
                 "projection_contract_version": super::TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION
+            })
+            .to_string()
+        ));
+    }
+
+    #[test]
+    fn graph_summary_cache_rejects_closed_task_active_run_projection_mismatch() {
+        assert!(!super::cached_taskflow_graph_summary_projection_admissible(
+            &serde_json::json!({
+                "surface": "vida taskflow graph-summary",
+                "projection_contract_version": super::TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION,
+                "status": "blocked",
+                "blocker_codes": ["closed_task_active_run_projection_mismatch"]
+            })
+            .to_string()
+        ));
+        assert!(!super::cached_taskflow_graph_summary_projection_admissible(
+            &serde_json::json!({
+                "surface": "vida taskflow graph-summary",
+                "projection_contract_version": super::TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION,
+                "status": "blocked",
+                "continuation_binding": {
+                    "ambiguity_reason": "closed_task_active_run_projection_mismatch"
+                }
             })
             .to_string()
         ));
