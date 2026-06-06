@@ -9,6 +9,8 @@ use crate::taskflow_run_graph::{
 };
 use crate::RuntimeConsumptionLaneSelection;
 
+const MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES: u64 = 1024 * 1024;
+
 fn reconcile_run_graph_status_with_dispatch_receipt(
     mut status: RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceiptStored>,
@@ -2657,24 +2659,29 @@ impl StateStore {
         else {
             return Ok(None);
         };
-        let packet_path = std::path::PathBuf::from(packet_path);
-        let packet_path = if packet_path.is_absolute() {
-            packet_path
-        } else {
-            self.root().join(packet_path)
+        let Some(packet_path) = self.canonical_reconciled_pack_dispatch_packet_path(packet_path)?
+        else {
+            return Ok(None);
         };
-        let body = match std::fs::read_to_string(&packet_path) {
-            Ok(body) => body,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(StateStoreError::InvalidTaskRecord {
-                    reason: format!(
-                        "Failed to read materialized pack dispatch packet `{}`: {error}",
-                        packet_path.display()
-                    ),
-                });
+        let metadata = std::fs::metadata(&packet_path).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "Failed to inspect materialized pack dispatch packet `{}`: {error}",
+                    packet_path.display()
+                ),
             }
-        };
+        })?;
+        if !metadata.is_file() || metadata.len() > MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES {
+            return Ok(None);
+        }
+        let body = std::fs::read_to_string(&packet_path).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "Failed to read materialized pack dispatch packet `{}`: {error}",
+                    packet_path.display()
+                ),
+            }
+        })?;
         let packet = serde_json::from_str::<serde_json::Value>(&body).map_err(|error| {
             StateStoreError::InvalidTaskRecord {
                 reason: format!(
@@ -2700,6 +2707,46 @@ impl StateStore {
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         Ok(Some((role_selection, run_graph_bootstrap)))
+    }
+
+    fn canonical_reconciled_pack_dispatch_packet_path(
+        &self,
+        packet_path: &str,
+    ) -> Result<Option<std::path::PathBuf>, StateStoreError> {
+        let packet_path = packet_path.trim();
+        if packet_path.is_empty() {
+            return Ok(None);
+        }
+        let packet_path = std::path::PathBuf::from(packet_path);
+        let candidate = if packet_path.is_absolute() {
+            packet_path
+        } else {
+            self.root().join(packet_path)
+        };
+        let root = std::fs::canonicalize(self.root()).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "Failed to canonicalize VIDA state root `{}` while loading materialized pack dispatch packet: {error}",
+                    self.root().display()
+                ),
+            }
+        })?;
+        let candidate = match std::fs::canonicalize(&candidate) {
+            Ok(candidate) => candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "Failed to canonicalize materialized pack dispatch packet `{}`: {error}",
+                        candidate.display()
+                    ),
+                });
+            }
+        };
+        if !candidate.starts_with(&root) {
+            return Ok(None);
+        }
+        Ok(Some(candidate))
     }
 
     fn spec_first_dispatch_task_identity_from_tasks(
@@ -3915,6 +3962,118 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn reconciled_pack_receipt_for_packet(packet_path: String) -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: "run-materialized-pack-context".to_string(),
+            dispatch_target: "work-pool-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "tracked_flow_materialization".to_string(),
+            dispatch_surface: Some("vida task ensure".to_string()),
+            dispatch_command: Some("vida task ensure work-pool".to_string()),
+            dispatch_packet_path: Some(packet_path),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("dev-pack".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-06T00:00:00Z".to_string(),
+        }
+    }
+
+    fn write_reconciled_pack_packet(path: &std::path::Path, marker: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create packet parent");
+        }
+        fs::write(
+            path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "runtime",
+                    "fallback_role": "orchestrator",
+                    "request": marker,
+                    "selected_role": "pm",
+                    "conversational_mode": null,
+                    "single_task_only": true,
+                    "tracked_flow_entry": "work-pool-pack",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["work-pool-pack"],
+                    "compiled_bundle": null,
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {}
+                        },
+                        "orchestration_contract": {}
+                    },
+                    "reason": "test"
+                },
+                "run_graph_bootstrap": {
+                    "marker": marker
+                }
+            }))
+            .expect("packet json should encode"),
+        )
+        .expect("write reconciled pack packet");
+    }
+
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_rejects_absolute_packet_outside_state_root() {
+        let root = temp_run_graph_root("vida-reconciled-pack-external-packet");
+        let external_root = temp_run_graph_root("vida-reconciled-pack-attacker-packet");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let external_packet = external_root.join("outside-packet.json");
+        write_reconciled_pack_packet(&external_packet, "outside-state-root");
+
+        let receipt = reconciled_pack_receipt_for_packet(external_packet.display().to_string());
+        let context = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect("out-of-root packet should fail closed without read error");
+
+        assert!(
+            context.is_none(),
+            "materialized pack reconciliation must not read packet paths outside the VIDA state root"
+        );
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(external_root);
+    }
+
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_allows_absolute_packet_inside_state_root() {
+        let root = temp_run_graph_root("vida-reconciled-pack-state-packet");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let packet = root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("inside-packet.json");
+        write_reconciled_pack_packet(&packet, "inside-state-root");
+
+        let receipt = reconciled_pack_receipt_for_packet(packet.display().to_string());
+        let (_role_selection, run_graph_bootstrap) = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect("in-root packet should decode")
+            .expect("in-root packet should be accepted");
+
+        assert_eq!(run_graph_bootstrap["marker"], "inside-state-root");
+        let _ = fs::remove_dir_all(root);
     }
 
     fn sample_run_graph_status() -> RunGraphStatus {
