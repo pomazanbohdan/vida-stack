@@ -10509,6 +10509,54 @@ fn taskflow_run_graph_latest_reports_none_on_empty_booted_state() {
 }
 
 #[test]
+fn task_proof_target_cargo_filter_preservation() {
+    let (_project_root, state_dir) = bootstrap_project_runtime(
+        "task-proof-target-cargo-filter-preservation-project",
+        "Task Proof Target Cargo Filter Preservation Project",
+    );
+    let expected_boot_smoke = "cargo test -p vida --test boot_smoke task_proof_target_cargo_filter_preservation -- --nocapture";
+    let expected_task_smoke = "cargo test -p vida --test task_smoke task_attempt_implementation_artifact_validation -- --nocapture";
+    let mut create_command = vida();
+    create_command
+        .args([
+            "task",
+            "create",
+            "task-proof-target-cargo-filter-preservation",
+            "Task proof target cargo filter preservation",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--proof-target",
+            expected_task_smoke,
+            "--proof-target",
+            expected_boot_smoke,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir);
+    let created = command_output_via_files(
+        create_command,
+        &format!("{state_dir}/task-proof-target-create.stdout.json"),
+        &format!("{state_dir}/task-proof-target-create.stderr.txt"),
+    );
+    assert!(
+        created.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&created.stdout),
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let created_json: serde_json::Value =
+        serde_json::from_slice(&created.stdout).expect("task create json should parse");
+    assert_eq!(
+        created_json["task"]["planner_metadata"]["proof_targets"],
+        serde_json::json!([expected_boot_smoke, expected_task_smoke]),
+        "repeated proof targets with --test <target> <filter> must remain runnable command strings"
+    );
+}
+
+#[test]
 fn taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet() {
     let (project_root, state_dir) = bootstrap_project_runtime(
         "packet-latest-happy-path-project",
@@ -10524,20 +10572,20 @@ fn taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet() 
         None,
         None,
     );
+    let expected_proof_target = "cargo test -p vida --test boot_smoke task_proof_target_cargo_filter_preservation -- --nocapture";
     let mut metadata_command = vida();
-    metadata_command
-        .args([
-            "task",
-            "update",
-            "packet-latest-happy-path",
-            "--owned-path",
-            "crates/vida/src/taskflow_run_graph.rs",
-            "--proof-target",
-            "cargo test -p vida taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet --test boot_smoke -- --nocapture",
-            "--state-dir",
-            &state_dir,
-            "--json",
-        ]);
+    metadata_command.args([
+        "task",
+        "update",
+        "packet-latest-happy-path",
+        "--owned-path",
+        "crates/vida/src/taskflow_run_graph.rs",
+        "--proof-target",
+        expected_proof_target,
+        "--state-dir",
+        &state_dir,
+        "--json",
+    ]);
     let metadata = command_output_via_files(
         metadata_command,
         &format!("{state_dir}/packet-latest-metadata.stdout.json"),
@@ -10548,6 +10596,13 @@ fn taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet() 
         "{}{}",
         String::from_utf8_lossy(&metadata.stdout),
         String::from_utf8_lossy(&metadata.stderr)
+    );
+    let metadata_json: serde_json::Value =
+        serde_json::from_slice(&metadata.stdout).expect("task update metadata json should parse");
+    assert_eq!(
+        metadata_json["task"]["planner_metadata"]["proof_targets"],
+        serde_json::json!([expected_proof_target]),
+        "proof targets with --test <target> <filter> must remain one runnable command"
     );
     wait_for_state_unlock(&state_dir);
 

@@ -2585,6 +2585,10 @@ fn cargo_test_option_takes_value(option: &str) -> bool {
         "-p" | "--package"
             | "--exclude"
             | "--features"
+            | "--bin"
+            | "--bench"
+            | "--example"
+            | "--test"
             | "--target"
             | "--target-dir"
             | "--manifest-path"
@@ -13723,6 +13727,22 @@ mod tests {
                 "cargo test -p vida work_item_taxonomy -- --nocapture --test-threads=1",
                 "cargo test -p vida operator_contracts -- --nocapture --test-threads=1",
                 "cargo test -p vida development_flow_catalog -- --nocapture --test-threads=1",
+            ]
+        );
+    }
+
+    #[test]
+    fn proof_target_values_preserve_cargo_target_selector_and_filter_commands() {
+        let proof_targets = parse_proof_target_values(&[
+            "cargo test -p vida --test boot_smoke task_proof_target_cargo_filter_preservation -- --nocapture".to_string(),
+            "cargo test -p vida taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet --test boot_smoke -- --nocapture".to_string(),
+        ]);
+
+        assert_eq!(
+            proof_targets,
+            vec![
+                "cargo test -p vida --test boot_smoke task_proof_target_cargo_filter_preservation -- --nocapture",
+                "cargo test -p vida taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet --test boot_smoke -- --nocapture",
             ]
         );
     }
