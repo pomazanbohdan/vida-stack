@@ -384,7 +384,12 @@ fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
 
 fn resolved_development_flow_templates(
     compiled_bundle: &serde_json::Value,
+    selection: &crate::RuntimeConsumptionLaneSelection,
 ) -> Vec<serde_json::Value> {
+    let configured_templates = configured_dev_team_flow_templates(compiled_bundle, selection);
+    if !configured_templates.is_empty() {
+        return configured_templates;
+    }
     let flow_id = compiled_bundle["default_flow_set"]
         .as_str()
         .unwrap_or_default();
@@ -403,6 +408,98 @@ fn resolved_development_flow_templates(
         }
     }
     legacy_development_flow_templates()
+}
+
+fn configured_dev_team_flow_templates(
+    compiled_bundle: &serde_json::Value,
+    selection: &crate::RuntimeConsumptionLaneSelection,
+) -> Vec<serde_json::Value> {
+    let sequence = selection
+        .matched_terms
+        .iter()
+        .find_map(|term| term.strip_prefix("dev_team_flow_id:"))
+        .map(|flow_id| {
+            crate::dev_team_sequence_contract::dev_team_sequence_for_flow_id(
+                &compiled_bundle["dev_team_readiness"],
+                flow_id,
+            )
+        })
+        .filter(|sequence| !sequence.is_empty())
+        .unwrap_or_else(|| crate::dev_team_sequence_contract::dev_team_sequence(compiled_bundle));
+    if sequence.is_empty() {
+        return Vec::new();
+    }
+    sequence
+        .into_iter()
+        .filter(|step| step.requires_task)
+        .map(|step| {
+            let role_label = step.role_label;
+            let runtime_role = step.runtime_role;
+            let task_class = step.task_class;
+            serde_json::json!({
+                "lane_id": role_label.clone(),
+                "dispatch_target": role_label,
+                "dispatch_alias": "",
+                "task_class": task_class.clone(),
+                "runtime_role": runtime_role,
+                "packet_template_kind": packet_template_kind_for_dev_team_task_class(&task_class),
+                "closure_class": closure_class_for_dev_team_task_class(&task_class),
+                "stage": stage_for_dev_team_task_class(&task_class),
+                "inclusion_rule": "always",
+                "completion_blocker": completion_blocker_for_dev_team_task_class(&task_class),
+                "requires_user_approval": step.requires_user_approval,
+                "approval_policy": step.approval_policy,
+                "lifecycle_hook_templates": step.lifecycle_hook_templates,
+                "resume_transitions": step.resume_transitions,
+                "rework_transitions": step.rework_transitions,
+            })
+        })
+        .collect()
+}
+
+fn packet_template_kind_for_dev_team_task_class(task_class: &str) -> &'static str {
+    match task_class {
+        "coach" | "review" | "validation" => "coach_review_packet",
+        "verification" | "quality_gate" | "release_readiness" => "verifier_proof_packet",
+        "architecture" | "execution_preparation" => "escalation_packet",
+        _ => "delivery_task_packet",
+    }
+}
+
+fn closure_class_for_dev_team_task_class(task_class: &str) -> &'static str {
+    match task_class {
+        "coach" | "review" | "validation" | "verification" | "quality_gate"
+        | "release_readiness" => "proof",
+        "architecture" | "execution_preparation" => "refactor",
+        "specification" | "planning" => "law",
+        _ => "implementation",
+    }
+}
+
+fn stage_for_dev_team_task_class(task_class: &str) -> &'static str {
+    match task_class {
+        "specification" | "planning" => "design_gate",
+        _ => "execution",
+    }
+}
+
+fn completion_blocker_for_dev_team_task_class(task_class: &str) -> String {
+    let blocker = match task_class {
+        "specification" | "planning" => {
+            crate::release1_contracts::BlockerCode::PendingSpecificationEvidence
+        }
+        "architecture" | "execution_preparation" => {
+            crate::release1_contracts::BlockerCode::PendingExecutionPreparationEvidence
+        }
+        "coach" | "review" | "validation" => {
+            crate::release1_contracts::BlockerCode::PendingReviewCleanEvidence
+        }
+        "verification" | "quality_gate" | "release_readiness" => {
+            crate::release1_contracts::BlockerCode::PendingVerificationEvidence
+        }
+        _ => crate::release1_contracts::BlockerCode::PendingImplementationEvidence,
+    };
+    crate::blocker_code_str(blocker).to_string()
 }
 
 fn copy_non_empty_route_value(
@@ -493,7 +590,7 @@ fn build_resolved_development_dispatch_contract(
         .to_string();
     let requires_execution_preparation =
         request_requires_execution_preparation(compiled_bundle, selection);
-    let resolved_lanes = resolved_development_flow_templates(compiled_bundle)
+    let resolved_lanes = resolved_development_flow_templates(compiled_bundle, selection)
         .into_iter()
         .filter(|lane| {
             lane_template_included(lane, requires_design_gate, requires_execution_preparation)
@@ -524,12 +621,17 @@ fn build_resolved_development_dispatch_contract(
                     task_class,
                 )
             };
+            let runtime_role = activation["activation_runtime_role"]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| lane_template["runtime_role"].as_str())
+                .unwrap_or_default();
             serde_json::json!({
                 "lane_id": lane_template["lane_id"],
                 "dispatch_target": lane_template["dispatch_target"],
                 "dispatch_alias": dispatch_alias,
                 "task_class": task_class,
-                "runtime_role": activation["activation_runtime_role"],
+                "runtime_role": runtime_role,
                 "packet_template_kind": lane_template["packet_template_kind"],
                 "closure_class": lane_template["closure_class"],
                 "stage": lane_template["stage"],
@@ -978,8 +1080,9 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
 mod tests {
     use super::{
         apply_implementation_analysis_route_overrides, build_design_first_tracked_flow_bootstrap,
-        supported_autonomous_execution_settings,
+        build_resolved_development_dispatch_contract, supported_autonomous_execution_settings,
     };
+    use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
 
     #[test]
@@ -1058,6 +1161,95 @@ mod tests {
         assert_eq!(analysis["fanout_min_results"], 2);
         assert_eq!(analysis["fanout_subagents"], "hermes_cli,opencode_cli");
         assert_eq!(analysis["merge_policy"], "consensus_with_conflict_flag");
+    }
+
+    #[test]
+    fn dispatch_contract_uses_configured_dev_team_flow_lane_sequence() {
+        let bundle = json!({
+            "dev_team_readiness": {
+                "roles": [
+                    {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                    {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                    {"role_id": "reviewer", "runtime_role": "verifier", "task_classes": ["review"]}
+                ],
+                "flows": [
+                    {
+                        "flow_id": "configured_flow",
+                        "enabled": true,
+                        "ordered_steps": [
+                            {"role_id": "analyst"},
+                            {"role_id": "developer"},
+                            {"role_id": "reviewer"}
+                        ]
+                    }
+                ]
+            },
+            "carrier_runtime": {
+                "dispatch_aliases": []
+            }
+        });
+        let selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "configured".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "configured flow".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: vec!["dev_team_flow_id:configured_flow".to_string()],
+            compiled_bundle: bundle.clone(),
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        };
+
+        let contract = build_resolved_development_dispatch_contract(&bundle, &selection, true);
+
+        assert_eq!(
+            contract["lane_sequence"],
+            json!(["analyst", "developer", "reviewer"])
+        );
+        assert_eq!(
+            contract["execution_lane_sequence"],
+            json!(["developer", "reviewer"])
+        );
+        assert_eq!(
+            contract["lane_catalog"]["developer"]["runtime_role"],
+            "worker"
+        );
+        assert_eq!(contract["lane_catalog"]["reviewer"]["task_class"], "review");
+    }
+
+    #[test]
+    fn dispatch_contract_keeps_legacy_flow_when_dev_team_readiness_is_absent() {
+        let bundle = json!({});
+        let selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "legacy".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "legacy flow".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: bundle.clone(),
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        };
+
+        let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
+
+        assert_eq!(
+            contract["lane_sequence"],
+            json!(["implementer", "coach", "verification"])
+        );
     }
 
     #[test]

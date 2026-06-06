@@ -281,6 +281,10 @@ pub(crate) fn task_is_work_pool_pack_child(task: &TaskRecord) -> bool {
     task_has_label(task, "work-pool-pack")
 }
 
+pub(crate) fn task_is_dev_pack_child(task: &TaskRecord) -> bool {
+    task_has_label(task, "dev-pack")
+}
+
 pub fn task_work_item_kind(issue_type: &str) -> TaskWorkItemKind {
     let original = issue_type.trim().to_string();
     let normalized = normalize_work_item_issue_type(issue_type);

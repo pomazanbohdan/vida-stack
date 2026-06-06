@@ -5761,7 +5761,31 @@ fn receipt_waiting_on_implementer_evidence(
             .any(|value| value == blocker_code_str(BlockerCode::PendingImplementationEvidence))
 }
 
-fn receipt_waiting_on_specification_evidence(
+fn tracked_spec_first_dev_handoff_evidence_path(
+    store: &StateStore,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    gate: &crate::state_store::SpecFirstDevHandoffGate,
+) -> Result<String, String> {
+    let Some(packet_path) = receipt.dispatch_packet_path.as_deref() else {
+        return Err(
+            "Cannot record spec-first dev handoff evidence without a dispatch packet path"
+                .to_string(),
+        );
+    };
+    write_runtime_lane_completion_result_with_summary(
+        store.root(),
+        &receipt.run_id,
+        &receipt.dispatch_target,
+        &format!("taskflow-dev-ready-{}", gate.dev_task_id),
+        packet_path,
+        Some(&format!(
+            "TaskFlow child state proves dev-ready handoff: feature={}, spec={}, work_pool={}, dev={}",
+            gate.feature_id, gate.spec_task_id, gate.work_pool_task_id, gate.dev_task_id
+        )),
+    )
+}
+
+pub(crate) fn receipt_waiting_on_specification_evidence(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
     let specification_gate_blockers = [
@@ -5838,14 +5862,21 @@ pub(crate) async fn try_bridge_bounded_specification_completion_to_downstream_re
     run_graph_bootstrap: &serde_json::Value,
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<bool, String> {
-    if !receipt_waiting_on_specification_evidence(receipt) {
+    let taskflow_dev_ready = spec_first_dev_handoff_gate_from_taskflow(store, receipt).await;
+    if !receipt_waiting_on_specification_evidence(receipt) && taskflow_dev_ready.is_none() {
         return Ok(false);
     }
 
-    let Some(result_path) =
-        tracked_specification_gate_completion_evidence_path(store, role_selection, receipt).await?
-    else {
-        return Ok(false);
+    let result_path = if let Some(gate) = taskflow_dev_ready.as_ref() {
+        tracked_spec_first_dev_handoff_evidence_path(store, receipt, gate)?
+    } else {
+        let Some(result_path) =
+            tracked_specification_gate_completion_evidence_path(store, role_selection, receipt)
+                .await?
+        else {
+            return Ok(false);
+        };
+        result_path
     };
 
     receipt.dispatch_status = "executed".to_string();
@@ -6002,6 +6033,41 @@ async fn spec_first_work_pool_handoff_feature_from_taskflow(
         })
 }
 
+pub(crate) async fn spec_first_dev_handoff_gate_from_taskflow(
+    store: &StateStore,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<crate::state_store::SpecFirstDevHandoffGate> {
+    let tasks = store.list_tasks(None, true).await.ok()?;
+    let identity = store
+        .run_graph_dispatch_task_identity(&receipt.run_id)
+        .await
+        .ok()
+        .flatten();
+    let mut candidates = Vec::new();
+    if let Some(identity) = identity.as_ref() {
+        candidates.extend(
+            [
+                identity.dev_task_id.as_deref(),
+                identity.work_pool_task_id.as_deref(),
+                identity.spec_task_id.as_deref(),
+                identity.feature_epic_id.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(str::to_string),
+        );
+    }
+    candidates.push(receipt.run_id.clone());
+
+    let mut visited = BTreeSet::new();
+    candidates
+        .into_iter()
+        .filter(|candidate| visited.insert(candidate.clone()))
+        .find_map(|candidate| {
+            StateStore::spec_first_dev_handoff_gate_satisfied_for_task(&tasks, &candidate)
+        })
+}
+
 fn write_runtime_downstream_dispatch_trace(
     state_root: &Path,
     run_id: &str,
@@ -6102,6 +6168,22 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             Vec::new(),
         ),
         "spec-pack" => {
+            let taskflow_dev_ready = spec_first_dev_handoff_gate_from_taskflow(store, receipt).await;
+            if let Some(gate) = taskflow_dev_ready {
+                return (
+                    Some("dev-pack".to_string()),
+                    json_string(
+                        role_selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]
+                            .get("ensure_command"),
+                    ),
+                    Some(format!(
+                        "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}`; resume the tracked dev packet",
+                        gate.feature_id, gate.dev_task_id
+                    )),
+                    true,
+                    Vec::new(),
+                );
+            }
             let taskflow_feature_ready =
                 spec_first_work_pool_handoff_feature_from_taskflow(store, receipt).await;
             let design_doc_finalized =
@@ -6274,6 +6356,23 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                         .await;
                 let taskflow_feature_ready =
                     spec_first_work_pool_handoff_feature_from_taskflow(store, receipt).await;
+                let taskflow_dev_ready =
+                    spec_first_dev_handoff_gate_from_taskflow(store, receipt).await;
+                if let Some(gate) = taskflow_dev_ready {
+                    return (
+                        Some("dev-pack".to_string()),
+                        json_string(
+                            role_selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]
+                                .get("ensure_command"),
+                        ),
+                        Some(format!(
+                            "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}`; resume the tracked dev packet",
+                            gate.feature_id, gate.dev_task_id
+                        )),
+                        true,
+                        Vec::new(),
+                    );
+                }
                 let spec_task_closed = tracked_specification_task_closed(store, role_selection, receipt)
                     .await
                     || taskflow_feature_ready.is_some();
@@ -6656,6 +6755,21 @@ pub(crate) fn runtime_packet_handoff_task_class(
     }
 }
 
+pub(crate) fn runtime_packet_handoff_task_class_for_plan(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+    handoff_runtime_role: &str,
+) -> String {
+    dispatch_contract_lane(execution_plan, dispatch_target)
+        .and_then(|lane| lane["task_class"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            runtime_packet_handoff_task_class(dispatch_target, handoff_runtime_role).to_string()
+        })
+}
+
 fn packet_nonempty_string(value: Option<&serde_json::Value>) -> bool {
     value
         .and_then(serde_json::Value::as_str)
@@ -6738,7 +6852,9 @@ fn packet_requires_owned_write_scope(
         .get("handoff_task_class")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        == Some("implementation")
+        .is_some_and(
+            crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths,
+        )
 }
 
 fn dispatch_target_requires_owned_write_scope(
@@ -6750,7 +6866,14 @@ fn dispatch_target_requires_owned_write_scope(
     let handoff_runtime_role = activation_runtime_role
         .as_deref()
         .unwrap_or(role_selection.selected_role.as_str());
-    runtime_packet_handoff_task_class(dispatch_target, handoff_runtime_role) == "implementation"
+    let handoff_task_class = runtime_packet_handoff_task_class_for_plan(
+        &role_selection.execution_plan,
+        dispatch_target,
+        handoff_runtime_role,
+    );
+    crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths(
+        handoff_task_class.as_str(),
+    )
 }
 
 fn missing_owned_write_scope_blocker() -> String {
@@ -7405,8 +7528,11 @@ fn build_runtime_dispatch_packet_body(
         .activation_runtime_role
         .as_deref()
         .unwrap_or(ctx.role_selection.selected_role.as_str());
-    let handoff_task_class =
-        runtime_packet_handoff_task_class(&ctx.receipt.dispatch_target, handoff_runtime_role);
+    let handoff_task_class = runtime_packet_handoff_task_class_for_plan(
+        &ctx.role_selection.execution_plan,
+        &ctx.receipt.dispatch_target,
+        handoff_runtime_role,
+    );
     let closure_class = dispatch_contract_lane(
         &ctx.role_selection.execution_plan,
         &ctx.receipt.dispatch_target,
@@ -7446,21 +7572,21 @@ fn build_runtime_dispatch_packet_body(
         &ctx.receipt.run_id,
         &ctx.receipt.dispatch_target,
         handoff_runtime_role,
-        handoff_task_class,
+        handoff_task_class.as_str(),
         closure_class,
         &ctx.role_selection.request,
         design_doc_path.as_deref(),
     );
     let delivery_task_class_requires_owned_paths =
         crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths(
-            handoff_task_class,
+            handoff_task_class.as_str(),
         );
     if delivery_task_class_requires_owned_paths || !ctx.owned_paths_override.is_empty() {
         let mut owned_paths = ctx.owned_paths_override.clone();
         if owned_paths.is_empty() && delivery_task_class_requires_owned_paths {
             owned_paths = owned_paths_for_required_delivery_task_class(
                 ctx.role_selection,
-                handoff_task_class,
+                handoff_task_class.as_str(),
             );
         }
         if !apply_owned_paths_if_missing(&mut delivery_task_packet, &owned_paths) {
@@ -7471,7 +7597,7 @@ fn build_runtime_dispatch_packet_body(
         &ctx.receipt.run_id,
         &ctx.receipt.dispatch_target,
         handoff_runtime_role,
-        handoff_task_class,
+        handoff_task_class.as_str(),
         closure_class,
     );
     let mut packet = serde_json::json!({
@@ -7677,6 +7803,32 @@ mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn packet_handoff_task_class_prefers_configured_lane_task_class() {
+        let plan = json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "test_author": {
+                            "dispatch_target": "test_author",
+                            "runtime_role": "worker",
+                            "task_class": "test_authoring"
+                        }
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            runtime_packet_handoff_task_class_for_plan(&plan, "test_author", "worker"),
+            "test_authoring"
+        );
+        assert_eq!(
+            runtime_packet_handoff_task_class_for_plan(&json!({}), "writer", "worker"),
+            "implementation"
+        );
+    }
 
     trait StateStoreFixtureTaskExt {
         fn create_task_with_fixture_parent<'a>(

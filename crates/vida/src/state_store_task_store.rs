@@ -1,6 +1,7 @@
 use super::*;
 use crate::state_store::state_store_task_models::{
-    task_is_spec_first_feature_parent, task_is_spec_pack_child, task_is_work_pool_pack_child,
+    task_is_dev_pack_child, task_is_spec_first_feature_parent, task_is_spec_pack_child,
+    task_is_work_pool_pack_child,
 };
 use serde_json::Deserializer;
 #[cfg(unix)]
@@ -32,6 +33,14 @@ pub(crate) struct ClosedTaskRunReconciliationSkipped {
     pub(crate) status: String,
     pub(crate) reason: String,
     pub(crate) inspect_command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpecFirstDevHandoffGate {
+    pub(crate) feature_id: String,
+    pub(crate) spec_task_id: String,
+    pub(crate) work_pool_task_id: String,
+    pub(crate) dev_task_id: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -114,7 +123,9 @@ impl StateStore {
             if !visited.insert(task_id.clone()) {
                 return None;
             }
-            let task = tasks.iter().find(|task| task.id == task_id)?;
+            let Some(task) = tasks.iter().find(|task| task.id == task_id) else {
+                break;
+            };
             if task_is_spec_first_feature_parent(task)
                 && Self::spec_first_parent_has_closed_spec_before_finished_work_pool(tasks, task)
             {
@@ -155,6 +166,82 @@ impl StateStore {
         });
 
         has_closed_spec_pack_child && !has_closed_work_pool_child
+    }
+
+    pub(crate) fn spec_first_dev_handoff_gate_satisfied_for_task(
+        tasks: &[TaskRecord],
+        task_id: &str,
+    ) -> Option<SpecFirstDevHandoffGate> {
+        let mut current_task_id = Some(task_id.to_string());
+        let mut visited = BTreeSet::new();
+
+        while let Some(task_id) = current_task_id {
+            if !visited.insert(task_id.clone()) {
+                return None;
+            }
+            let Some(task) = tasks.iter().find(|task| task.id == task_id) else {
+                break;
+            };
+            if task_is_spec_first_feature_parent(task) {
+                if let Some(gate) = Self::spec_first_parent_dev_handoff_gate(tasks, task) {
+                    return Some(gate);
+                }
+            }
+            current_task_id = Self::parent_id_for_task(task);
+        }
+
+        let candidates = tasks
+            .iter()
+            .filter(|task| task_is_spec_first_feature_parent(task))
+            .filter_map(|task| Self::spec_first_parent_dev_handoff_gate(tasks, task))
+            .collect::<Vec<_>>();
+        match candidates.as_slice() {
+            [gate] => Some(gate.clone()),
+            _ => None,
+        }
+    }
+
+    fn spec_first_parent_dev_handoff_gate(
+        tasks: &[TaskRecord],
+        parent: &TaskRecord,
+    ) -> Option<SpecFirstDevHandoffGate> {
+        let children = tasks
+            .iter()
+            .filter(|task| Self::parent_id_for_task(task).as_deref() == Some(parent.id.as_str()))
+            .collect::<Vec<_>>();
+        let spec_task = children
+            .iter()
+            .filter(|task| {
+                task_is_spec_pack_child(task) && Self::task_status_is_closed_like(&task.status)
+            })
+            .min_by_key(|task| task.id.as_str())?;
+        let work_pool_task = children
+            .iter()
+            .filter(|task| {
+                task_is_work_pool_pack_child(task) && Self::task_status_is_closed_like(&task.status)
+            })
+            .min_by_key(|task| task.id.as_str())?;
+        let dev_task = children
+            .iter()
+            .filter(|task| {
+                task_is_dev_pack_child(task) && !Self::task_status_is_closed_like(&task.status)
+            })
+            .filter(|task| {
+                task.planner_metadata
+                    .owned_paths
+                    .iter()
+                    .any(|path| !path.trim().is_empty())
+                    || !task.planner_metadata.acceptance_targets.is_empty()
+                    || !task.planner_metadata.proof_targets.is_empty()
+            })
+            .min_by_key(|task| task.id.as_str())?;
+
+        Some(SpecFirstDevHandoffGate {
+            feature_id: parent.id.clone(),
+            spec_task_id: spec_task.id.clone(),
+            work_pool_task_id: work_pool_task.id.clone(),
+            dev_task_id: dev_task.id.clone(),
+        })
     }
 
     pub(crate) async fn repair_stale_spec_first_parent_auto_close_for_work_pool_handoff(

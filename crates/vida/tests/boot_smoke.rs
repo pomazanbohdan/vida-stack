@@ -10689,6 +10689,136 @@ fn taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet() 
 }
 
 #[test]
+fn taskflow_dispatch_init_uses_configured_dev_team_slice_for_owned_task() {
+    let state_dir = unique_state_dir();
+    let project_root = repo_root();
+    let boot = boot_with_retry(&state_dir);
+    assert!(
+        boot.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&boot.stdout),
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    sync_protocol_binding(&state_dir);
+    create_scheduler_smoke_task(
+        &state_dir,
+        "configured-dev-team-owned-task",
+        "Configured dev-team owned task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+    let expected_proof_target =
+        "cargo test -p vida --test boot_smoke taskflow_dispatch_init_uses_configured_dev_team_slice_for_owned_task -- --nocapture";
+    let mut metadata_command = vida();
+    metadata_command.args([
+        "task",
+        "update",
+        "configured-dev-team-owned-task",
+        "--owned-path",
+        "crates/vida/src/taskflow_run_graph.rs",
+        "--proof-target",
+        expected_proof_target,
+        "--state-dir",
+        &state_dir,
+        "--json",
+    ]);
+    let metadata = command_output_via_files(
+        metadata_command,
+        &format!("{state_dir}/configured-dev-team-owned-task-metadata.stdout.json"),
+        &format!("{state_dir}/configured-dev-team-owned-task-metadata.stderr.txt"),
+    );
+    assert!(
+        metadata.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&metadata.stdout),
+        String::from_utf8_lossy(&metadata.stderr)
+    );
+    wait_for_state_unlock(&state_dir);
+
+    let mut dispatch_command = vida();
+    dispatch_command
+        .args([
+            "taskflow",
+            "run-graph",
+            "dispatch-init",
+            "configured-dev-team-owned-task",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("PATH", "")
+        .env("VIDA_STATE_DIR", &state_dir);
+    let dispatch_init = command_output_via_files(
+        dispatch_command,
+        &format!("{state_dir}/configured-dev-team-owned-task-dispatch-init.stdout.json"),
+        &format!("{state_dir}/configured-dev-team-owned-task-dispatch-init.stderr.txt"),
+    );
+    assert!(
+        dispatch_init.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&dispatch_init.stdout),
+        String::from_utf8_lossy(&dispatch_init.stderr)
+    );
+    let dispatch: serde_json::Value =
+        serde_json::from_slice(&dispatch_init.stdout).expect("dispatch-init json should parse");
+
+    assert_eq!(
+        dispatch["run_graph_bootstrap"]["latest_status"]["next_node"],
+        "test_author"
+    );
+    assert_eq!(
+        dispatch["run_graph_bootstrap"]["latest_status"]["task_class"],
+        "test_authoring"
+    );
+    assert_eq!(
+        dispatch["dispatch_receipt"]["dispatch_target"],
+        "test_author"
+    );
+    assert_eq!(
+        dispatch["dispatch_receipt"]["activation_runtime_role"],
+        "worker"
+    );
+    let dispatch_packet_path = dispatch["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should render");
+    let dispatch_packet: serde_json::Value = serde_json::from_slice(
+        &fs::read(dispatch_packet_path).expect("dispatch packet should read"),
+    )
+    .expect("dispatch packet should parse");
+    assert_eq!(dispatch_packet["dispatch_target"], "test_author");
+    assert_eq!(
+        dispatch_packet["delivery_task_packet"]["handoff_task_class"],
+        "test_authoring"
+    );
+    assert_eq!(
+        dispatch_packet["delivery_task_packet"]["owned_paths"],
+        serde_json::json!(["crates/vida/src/taskflow_run_graph.rs"])
+    );
+
+    let run_graph_status =
+        taskflow_run_graph_status_with_timeout(&state_dir, "configured-dev-team-owned-task", true);
+    assert!(
+        run_graph_status.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&run_graph_status.stdout),
+        String::from_utf8_lossy(&run_graph_status.stderr)
+    );
+    let status: serde_json::Value = serde_json::from_slice(&run_graph_status.stdout)
+        .expect("run-graph status json should parse");
+    assert_eq!(status["run_graph_status"]["next_node"], "test_author");
+    assert_eq!(
+        status["projection_truth"]["dispatch_receipt"]["dispatch_target"],
+        "test_author"
+    );
+
+    fs::remove_dir_all(state_dir).expect("temp state dir should be removed");
+}
+
+#[test]
 fn taskflow_factual_sandbox_h6_h8_runtime_packet_runner() {
     let (project_root, state_dir) = bootstrap_project_runtime(
         "taskflow-sandbox-h6-h8-runtime-packet",

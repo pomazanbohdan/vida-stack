@@ -1112,6 +1112,17 @@ async fn active_receipt_allows_resume_gate(
     if dispatch_receipt_retry_eligible(active_receipt) {
         return true;
     }
+    if active_receipt.dispatch_target == "specification" {
+        if super::runtime_dispatch_state::spec_first_dev_handoff_gate_from_taskflow(
+            store,
+            active_receipt,
+        )
+        .await
+        .is_some()
+        {
+            return true;
+        }
+    }
     let Ok(Some(context)) = store.run_graph_dispatch_context(run_id).await else {
         return false;
     };
@@ -2533,6 +2544,9 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
             }
         }
     }
+    if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
+        return Ok(());
+    }
     if let Some((packet, packet_path)) = candidate_packet {
         if downstream_packet_candidate_has_receipt_backed_ready_evidence(
             packet,
@@ -3123,6 +3137,14 @@ async fn fast_deferred_agent_handoff_resume_inputs(
     };
     if !consume_continue_should_defer_agent_handoff(surface_name, &receipt) {
         return Ok(None);
+    }
+    if receipt.dispatch_target == "specification" {
+        if super::runtime_dispatch_state::spec_first_dev_handoff_gate_from_taskflow(store, &receipt)
+            .await
+            .is_some()
+        {
+            return Ok(None);
+        }
     }
     let packet_path = receipt
         .dispatch_packet_path
@@ -6125,6 +6147,9 @@ fn try_emit_cached_deferred_agent_handoff_projection(
     }
     let lane_id = projection["lane_id"].as_str().unwrap_or("agent_lane");
     let dispatch_target = lane_id.strip_suffix("_lane").unwrap_or(lane_id);
+    if dispatch_target == "specification" {
+        return Ok(None);
+    }
     let receipt = serde_json::json!({
         "run_id": run_id,
         "dispatch_target": dispatch_target,
@@ -7150,7 +7175,7 @@ mod tests {
         DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
-    use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
+    use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics, UpdateTaskRequest};
     use crate::taskflow_consume_resume_receipt;
     use crate::{RuntimeConsumptionLaneSelection, StateStore};
     use std::fs;
@@ -11190,6 +11215,392 @@ agent_system:
             .expect("spawn stack-heavy consume continue regression")
             .join()
             .expect("stack-heavy consume continue regression should complete");
+    }
+
+    #[test]
+    fn consume_continue_bridges_closed_spec_and_work_pool_into_dev_progress() {
+        std::thread::Builder::new()
+            .name("consume-continue-dev-bridge".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .thread_stack_size(8 * 1024 * 1024)
+                    .build()
+                    .expect("create runtime");
+                runtime.block_on(Box::pin(async {
+                    let nanos = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or(0);
+                    let root = std::env::temp_dir().join(format!(
+                        "vida-consume-resume-dev-bridge-{}-{}",
+                        std::process::id(),
+                        nanos
+                    ));
+                    let state_dir = root.join("state");
+                    let store = StateStore::open(state_dir.clone())
+                        .await
+                        .expect("open store");
+
+                    let run_id = "run-dev-ready-bridge";
+                    let feature_id = "feature-dev-ready-bridge";
+                    let spec_task_id = "feature-dev-ready-bridge-spec";
+                    let work_pool_task_id = "feature-dev-ready-bridge-work-pool";
+                    let dev_task_id = "feature-dev-ready-bridge-dev";
+                    let design_doc_path = root.join("docs/dev-ready-design.md");
+                    fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+                        .expect("create design doc directory");
+                    fs::write(&design_doc_path, "# Dev Ready\n\nStatus: `approved`\n")
+                        .expect("write approved design doc");
+
+                    let feature_labels =
+                        vec!["feature-request".to_string(), "spec-first".to_string()];
+                    store
+                        .create_task(CreateTaskRequest {
+                            task_id: feature_id,
+                            title: "Dev-ready feature",
+                            display_id: None,
+                            description: "",
+                            issue_type: "epic",
+                            status: "open",
+                            priority: 0,
+                            parent_id: None,
+                            labels: &feature_labels,
+                            execution_semantics: TaskExecutionSemantics::default(),
+                            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                            created_by: "test",
+                            source_repo: "",
+                        })
+                        .await
+                        .expect("create feature parent");
+
+                    let spec_labels = vec!["spec-pack".to_string()];
+                    store
+                        .create_task(CreateTaskRequest {
+                            task_id: spec_task_id,
+                            title: "Closed spec pack",
+                            display_id: None,
+                            description: "",
+                            issue_type: "task",
+                            status: "open",
+                            priority: 0,
+                            parent_id: Some(feature_id),
+                            labels: &spec_labels,
+                            execution_semantics: TaskExecutionSemantics::default(),
+                            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                            created_by: "test",
+                            source_repo: "",
+                        })
+                        .await
+                        .expect("create spec task");
+
+                    let work_pool_labels = vec!["work-pool-pack".to_string()];
+                    store
+                        .create_task(CreateTaskRequest {
+                            task_id: work_pool_task_id,
+                            title: "Closed work-pool pack",
+                            display_id: None,
+                            description: "",
+                            issue_type: "task",
+                            status: "open",
+                            priority: 0,
+                            parent_id: Some(feature_id),
+                            labels: &work_pool_labels,
+                            execution_semantics: TaskExecutionSemantics::default(),
+                            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                            created_by: "test",
+                            source_repo: "",
+                        })
+                        .await
+                        .expect("create work-pool task");
+
+                    let dev_labels = vec!["dev-pack".to_string()];
+                    store
+                        .create_task(CreateTaskRequest {
+                            task_id: dev_task_id,
+                            title: "Open dev pack",
+                            display_id: None,
+                            description: "",
+                            issue_type: "task",
+                            status: "open",
+                            priority: 0,
+                            parent_id: Some(feature_id),
+                            labels: &dev_labels,
+                            execution_semantics: TaskExecutionSemantics::default(),
+                            planner_metadata: crate::state_store::TaskPlannerMetadata {
+                                owned_paths: vec!["crates/vida/src/runtime_dispatch_state.rs"
+                                    .to_string()],
+                                acceptance_targets: vec!["consume resumes to dev".to_string()],
+                                proof_targets: vec!["consume continue regression".to_string()],
+                                risk: None,
+                                estimate: None,
+                                lane_hint: None,
+                            },
+                            created_by: "test",
+                            source_repo: "",
+                        })
+                        .await
+                        .expect("create open dev task");
+                    let empty_labels = Vec::<String>::new();
+                    store
+                        .update_task(UpdateTaskRequest {
+                            task_id: spec_task_id,
+                            title: None,
+                            status: Some("closed"),
+                            priority: None,
+                            notes: None,
+                            description: None,
+                            parent_id: None,
+                            add_labels: &empty_labels,
+                            remove_labels: &empty_labels,
+                            set_labels: None,
+                            execution_mode: None,
+                            order_bucket: None,
+                            parallel_group: None,
+                            conflict_domain: None,
+                            planner_metadata: None,
+                        })
+                        .await
+                        .expect("close spec task after dev child exists");
+                    store
+                        .update_task(UpdateTaskRequest {
+                            task_id: work_pool_task_id,
+                            title: None,
+                            status: Some("closed"),
+                            priority: None,
+                            notes: None,
+                            description: None,
+                            parent_id: None,
+                            add_labels: &empty_labels,
+                            remove_labels: &empty_labels,
+                            set_labels: None,
+                            execution_mode: None,
+                            order_bucket: None,
+                            parallel_group: None,
+                            conflict_domain: None,
+                            planner_metadata: None,
+                        })
+                        .await
+                        .expect("close work-pool task after dev child exists");
+                    let tasks = store
+                        .list_tasks(None, true)
+                        .await
+                        .expect("list dev-ready tasks");
+                    assert!(
+                        StateStore::spec_first_dev_handoff_gate_satisfied_for_task(
+                            &tasks, feature_id
+                        )
+                        .is_some(),
+                        "closed spec/work-pool plus open dev child should satisfy dev handoff gate"
+                    );
+
+                    let mut status = crate::taskflow_run_graph::default_run_graph_status(
+                        run_id,
+                        "specification",
+                        "spec-pack",
+                    );
+                    status.task_id = feature_id.to_string();
+                    status.active_node = "planning".to_string();
+                    status.next_node = Some("specification".to_string());
+                    status.status = "ready".to_string();
+                    status.lifecycle_stage = "specification_dispatch_ready".to_string();
+                    status.handoff_state = "awaiting_specification".to_string();
+                    status.resume_target = "dispatch.specification_lane".to_string();
+                    status.recovery_ready = true;
+                    store
+                        .record_run_graph_status(&status)
+                        .await
+                        .expect("persist stale planning/specification status");
+
+                    let packet_dir = state_dir.join("runtime-consumption/dispatch-packets");
+                    fs::create_dir_all(&packet_dir).expect("create packet directory");
+                    let packet_path = packet_dir.join(format!("{run_id}.json"));
+                    fs::write(
+                        &packet_path,
+                        serde_json::json!({
+                            "packet_template_kind": "delivery_task_packet",
+                            "run_id": run_id,
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst",
+                            "selected_backend": "middle",
+                            "delivery_task_packet": {
+                                "packet_id": format!("{run_id}::specification::delivery"),
+                                "goal": "Execute bounded specification handoff",
+                                "scope_in": ["dispatch_target:specification", "runtime_role:business_analyst"],
+                                "read_only_paths": ["docs/product/spec"],
+                                "owned_paths": [design_doc_path.display().to_string()],
+                                "definition_of_done": ["record bounded specification evidence"],
+                                "verification_command": format!("vida taskflow consume continue --run-id {run_id}"),
+                                "proof_target": "bounded specification proof",
+                                "stop_rules": ["stop after bounded evidence"],
+                                "blocking_question": "What is the next bounded action required for `specification`?"
+                            },
+                            "role_selection_full": {
+                                "ok": true,
+                                "activation_source": "test",
+                                "selection_mode": "fixed",
+                                "fallback_role": "orchestrator",
+                                "request": "continue specification",
+                                "selected_role": "pm",
+                                "conversational_mode": "development",
+                                "single_task_only": true,
+                                "tracked_flow_entry": "spec-pack",
+                                "allow_freeform_chat": false,
+                                "confidence": "high",
+                                "matched_terms": ["specification"],
+                                "compiled_bundle": null,
+                                "execution_plan": {
+                                    "tracked_flow_bootstrap": {
+                                        "spec_task": {
+                                            "task_id": spec_task_id
+                                        },
+                                        "design_doc_path": design_doc_path.display().to_string(),
+                                        "work_pool_task": {
+                                            "task_id": work_pool_task_id,
+                                            "title": "Work-pool pack",
+                                            "runtime": "task",
+                                            "inspect_command": format!("vida task show {work_pool_task_id}"),
+                                            "ensure_command": format!("vida task ensure {work_pool_task_id} \"Work-pool pack\" --type task --status open"),
+                                            "create_command": format!("vida task create {work_pool_task_id} \"Work-pool pack\" --type task --status open"),
+                                            "close_command": format!("vida task close {work_pool_task_id} --reason \"work-pool shaped\""),
+                                            "required": true
+                                        },
+                                        "dev_task": {
+                                            "task_id": dev_task_id,
+                                            "title": "Dev pack",
+                                            "runtime": "task",
+                                            "inspect_command": format!("vida task show {dev_task_id}"),
+                                            "ensure_command": format!("vida task ensure {dev_task_id} \"Dev pack\" --type task --status open"),
+                                            "create_command": format!("vida task create {dev_task_id} \"Dev pack\" --type task --status open"),
+                                            "close_command": format!("vida task close {dev_task_id} --reason \"dev complete\""),
+                                            "required": true
+                                        }
+                                    },
+                                    "development_flow": {
+                                        "dispatch_contract": {
+                                            "execution_lane_sequence": ["test_author", "developer", "coach"],
+                                            "lane_catalog": {
+                                                "test_author": {
+                                                    "stage": "execution",
+                                                    "task_class": "test_authoring",
+                                                    "packet_template_kind": "delivery_task_packet"
+                                                }
+                                            },
+                                            "specification_activation": {
+                                                "completion_blocker": "pending_specification_evidence",
+                                                "activation_agent_type": "middle",
+                                                "activation_runtime_role": "business_analyst"
+                                            }
+                                        }
+                                    },
+                                    "orchestration_contract": {}
+                                },
+                                "reason": "test"
+                            },
+                            "run_graph_bootstrap": {
+                                "run_id": run_id
+                            }
+                        })
+                        .to_string(),
+                    )
+                    .expect("write dispatch packet");
+
+                    store
+                        .record_run_graph_dispatch_receipt(
+                            &crate::state_store::RunGraphDispatchReceipt {
+                                run_id: run_id.to_string(),
+                                dispatch_target: "specification".to_string(),
+                                dispatch_status: "routed".to_string(),
+                                lane_status: "lane_open".to_string(),
+                                supersedes_receipt_id: None,
+                                exception_path_receipt_id: None,
+                                dispatch_kind: "agent_lane".to_string(),
+                                dispatch_surface: Some("cached_operator_projection".to_string()),
+                                dispatch_command: Some("vida agent-init".to_string()),
+                                dispatch_packet_path: Some(packet_path.display().to_string()),
+                                dispatch_result_path: None,
+                                blocker_code: None,
+                                downstream_dispatch_target: None,
+                                downstream_dispatch_command: None,
+                                downstream_dispatch_note: None,
+                                downstream_dispatch_ready: false,
+                                downstream_dispatch_blockers: Vec::new(),
+                                downstream_dispatch_packet_path: None,
+                                downstream_dispatch_status: None,
+                                downstream_dispatch_result_path: None,
+                                downstream_dispatch_trace_path: None,
+                                downstream_dispatch_executed_count: 0,
+                                downstream_dispatch_active_target: None,
+                                downstream_dispatch_last_target: Some(
+                                    "specification".to_string(),
+                                ),
+                                activation_agent_type: None,
+                                activation_runtime_role: Some("specification".to_string()),
+                                selected_backend: Some("internal_subagents".to_string()),
+                                recorded_at: "2026-04-17T00:00:00Z".to_string(),
+                            },
+                        )
+                        .await
+                        .expect("persist stale executing specification receipt");
+                    drop(store);
+
+                    let exit = super::run_taskflow_consume_resume_command(
+                        state_dir.clone(),
+                        true,
+                        Some(run_id.to_string()),
+                        None,
+                        None,
+                        "vida taskflow consume continue",
+                        false,
+                    )
+                    .await;
+                    assert_eq!(exit, ExitCode::SUCCESS);
+
+                    let store = fail_fast_state_store_open_read_only_with_timeout(
+                        state_dir.clone(),
+                        "reopen dev-ready bridged receipt",
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .expect("reopen store");
+                    let receipt = store
+                        .run_graph_dispatch_receipt(run_id)
+                        .await
+                        .expect("load bridged receipt")
+                        .expect("receipt should exist");
+                    assert_eq!(receipt.dispatch_status, "executed");
+                    assert_eq!(
+                        receipt.downstream_dispatch_target.as_deref(),
+                        Some("dev-pack")
+                    );
+                    assert!(receipt.downstream_dispatch_ready);
+                    assert!(
+                        receipt.downstream_dispatch_blockers.is_empty(),
+                        "dev-ready TaskFlow state should clear stale specification blockers: {:?}",
+                        receipt.downstream_dispatch_blockers
+                    );
+                    let status = store
+                        .run_graph_status(run_id)
+                        .await
+                        .expect("load reconciled run graph status");
+                    assert_eq!(status.status, "ready");
+                    assert_eq!(status.active_node, "specification");
+                    assert_eq!(status.next_node.as_deref(), Some("dev_pack"));
+                    assert_eq!(status.lifecycle_stage, "specification_complete");
+                    assert_eq!(status.handoff_state, "awaiting_dev_pack");
+                    assert_eq!(status.resume_target, "dispatch.dev_pack_lane");
+                    assert!(
+                        status.recovery_ready,
+                        "dev-ready receipt should make run graph recovery-ready"
+                    );
+
+                    let _ = fs::remove_dir_all(&root);
+                }));
+            })
+            .expect("spawn stack-heavy dev bridge regression")
+            .join()
+            .expect("stack-heavy dev bridge regression should complete");
     }
 
     #[test]

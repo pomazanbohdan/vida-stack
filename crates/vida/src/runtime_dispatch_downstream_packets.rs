@@ -98,10 +98,12 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     let activation_command = packet_path
         .and_then(|path| path.to_str())
         .map(crate::runtime_dispatch_state::agent_init_command_for_packet_path);
-    let handoff_task_class = crate::runtime_dispatch_state::runtime_packet_handoff_task_class(
-        downstream_target,
-        handoff_runtime_role,
-    );
+    let handoff_task_class =
+        crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
+            &role_selection.execution_plan,
+            downstream_target,
+            handoff_runtime_role,
+        );
     let closure_class = dispatch_contract_lane(&role_selection.execution_plan, downstream_target)
         .and_then(|lane| lane["closure_class"].as_str())
         .unwrap_or("implementation");
@@ -115,12 +117,12 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         &receipt.run_id,
         downstream_target,
         handoff_runtime_role,
-        handoff_task_class,
+        handoff_task_class.as_str(),
         closure_class,
         &role_selection.request,
         crate::runtime_dispatch_state::resolved_tracked_design_doc_path(role_selection).as_deref(),
     );
-    if delivery_packet_task_class_requires_owned_paths(handoff_task_class) {
+    if delivery_packet_task_class_requires_owned_paths(handoff_task_class.as_str()) {
         let owned_paths = if implementation_owned_paths_override.is_empty() {
             crate::runtime_dispatch_state::implementation_owned_paths_for_role_selection(
                 role_selection,
@@ -141,7 +143,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         &receipt.run_id,
         downstream_target,
         handoff_runtime_role,
-        handoff_task_class,
+        handoff_task_class.as_str(),
         closure_class,
     );
     let host_runtime =

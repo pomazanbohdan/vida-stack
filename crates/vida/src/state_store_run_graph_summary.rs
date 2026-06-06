@@ -186,9 +186,18 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
     {
+        let completed_target = receipt.dispatch_target.trim();
+        let lifecycle_target = completed_target.replace('-', "_");
+        let downstream_node = receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .expect("downstream target checked above")
+            .replace('-', "_");
         if status.status == "ready"
             && status.recovery_ready
             && status.active_node != receipt.dispatch_target
+            && (status.active_node == downstream_node
+                || status.next_node.as_deref() == Some(downstream_node.as_str()))
         {
             return Ok(status);
         }
@@ -200,13 +209,6 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         {
             status.selected_backend = selected_backend.to_string();
         }
-        let completed_target = receipt.dispatch_target.trim();
-        let lifecycle_target = completed_target.replace('-', "_");
-        let downstream_node = receipt
-            .downstream_dispatch_target
-            .as_deref()
-            .expect("downstream target checked above")
-            .replace('-', "_");
         status.active_node = completed_target.to_string();
         status.next_node = Some(downstream_node.clone());
         status.status = "ready".to_string();
@@ -2409,6 +2411,60 @@ impl StateStore {
         let identity = self
             .run_graph_dispatch_task_identity(&receipt.run_id)
             .await?;
+        let mut candidates = Vec::new();
+        if let Some(identity) = identity.as_ref() {
+            candidates.extend(
+                [
+                    identity.dev_task_id.as_deref(),
+                    identity.work_pool_task_id.as_deref(),
+                    identity.spec_task_id.as_deref(),
+                    identity.feature_epic_id.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .map(str::to_string),
+            );
+        }
+        candidates.push(receipt.run_id.clone());
+        let dev_gate = candidates.iter().find_map(|candidate| {
+            Self::spec_first_dev_handoff_gate_satisfied_for_task(&tasks, candidate)
+        });
+        if let Some(gate) = dev_gate {
+            let identity = Self::spec_first_dispatch_task_identity_from_tasks(
+                &tasks,
+                &receipt.run_id,
+                &gate.feature_id,
+                identity
+                    .as_ref()
+                    .map(|_| "spec_first_dev_handoff_identity_reconciliation")
+                    .unwrap_or("spec_first_dev_handoff_reconciliation"),
+            );
+            self.record_run_graph_dispatch_task_identity(&identity)
+                .await?;
+            receipt.downstream_dispatch_target = Some("dev-pack".to_string());
+            receipt.downstream_dispatch_command = None;
+            receipt.downstream_dispatch_blockers.retain(|blocker| {
+                !matches!(
+                    blocker.as_str(),
+                    "pending_design_finalize"
+                        | "pending_spec_task_close"
+                        | "pending_specification_evidence"
+                )
+            });
+            receipt.downstream_dispatch_ready = receipt.downstream_dispatch_blockers.is_empty();
+            receipt.downstream_dispatch_status = Some(if receipt.downstream_dispatch_ready {
+                "packet_ready".to_string()
+            } else {
+                "blocked".to_string()
+            });
+            receipt.downstream_dispatch_note = Some(format!(
+                "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}`; continue with dev handoff",
+                gate.feature_id, gate.dev_task_id
+            ));
+            receipt.downstream_dispatch_active_target = Some("specification".to_string());
+            receipt.downstream_dispatch_last_target = Some("specification".to_string());
+            return Ok(true);
+        }
         let feature_id = identity
             .as_ref()
             .and_then(|identity| identity.feature_epic_id.as_deref())

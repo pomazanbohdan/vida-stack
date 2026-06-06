@@ -134,6 +134,7 @@ pub use state_store_task_models::{
     TaskProgressSummary, TaskRecord, TaskRelease1ContractStep, TaskSchedulingCandidate,
     TaskSchedulingProjection, TaskStoreSummary, TaskWorkItemKind, UpdateTaskRequest,
 };
+pub(crate) use state_store_task_store::SpecFirstDevHandoffGate;
 #[cfg(test)]
 use state_store_taskflow_snapshot_codec::{
     canonical_issue_type_label, canonical_task_status_label, canonical_timestamp_label,

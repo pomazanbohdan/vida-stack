@@ -1,5 +1,10 @@
 use std::{path::Path, process::ExitCode};
 
+use crate::dev_team_sequence_contract::{
+    configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
+    dev_team_sequence_for_work_item, selected_dev_team_flow_for_task, task_flow_lookup_keys,
+    DevTeamSequenceStep,
+};
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
 use crate::operator_command_text::human_command;
 use crate::{
@@ -1066,446 +1071,12 @@ fn build_dev_team_flow_projection(
     })
 }
 
-#[derive(Debug, Clone)]
-struct DevTeamSequenceStep {
-    role_label: String,
-    runtime_role: String,
-    task_class: String,
-    requires_task: bool,
-    requires_user_approval: bool,
-    approval_policy: serde_json::Value,
-    lifecycle_hook_templates: serde_json::Value,
-    resume_transitions: serde_json::Value,
-    rework_transitions: serde_json::Value,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ConfiguredDevTeamTaskRoute {
-    pub(crate) flow_id: Option<String>,
-    pub(crate) role_label: String,
-    pub(crate) runtime_role: String,
-    pub(crate) task_class: String,
-    pub(crate) dispatch_target: String,
-}
-
-pub(crate) fn configured_dev_team_first_step_for_task(
-    activation_bundle: &serde_json::Value,
-    task: &state_store::TaskRecord,
-) -> Option<ConfiguredDevTeamTaskRoute> {
-    let readiness = &activation_bundle["dev_team_readiness"];
-    let flow_id = selected_dev_team_flow_for_task(readiness, task)
-        .and_then(|flow| flow["flow_id"].as_str())
-        .map(str::to_string);
-    let step = dev_team_sequence_for_task(activation_bundle, task)
-        .into_iter()
-        .find(|step| step.requires_task)?;
-    Some(ConfiguredDevTeamTaskRoute {
-        flow_id,
-        dispatch_target: dispatch_target_for_dev_team_task_class(&step.task_class).to_string(),
-        role_label: step.role_label,
-        runtime_role: step.runtime_role,
-        task_class: step.task_class,
-    })
-}
-
-fn flow_matches_work_item_type(flow: &serde_json::Value, work_item_type: &str) -> bool {
-    let lookup_keys = work_item_type_lookup_keys(work_item_type);
-    work_item_binding_values(&flow["work_item_bindings"]).any(|value| {
-        let binding_keys = work_item_type_lookup_keys(&value);
-        binding_keys
-            .iter()
-            .any(|binding_key| lookup_keys.iter().any(|key| key == binding_key))
-    })
-}
-
-fn flow_has_exact_work_item_binding(flow: &serde_json::Value, work_item_type: &str) -> bool {
-    let exact_key = work_item_type.trim().to_ascii_lowercase();
-    !exact_key.is_empty()
-        && work_item_binding_values(&flow["work_item_bindings"])
-            .any(|value| value.trim().eq_ignore_ascii_case(&exact_key))
-}
-
-fn work_item_binding_values(bindings: &serde_json::Value) -> impl Iterator<Item = String> + '_ {
-    match bindings {
-        serde_json::Value::String(value) => {
-            Box::new(split_work_item_binding_value(value)) as Box<dyn Iterator<Item = String>>
-        }
-        serde_json::Value::Array(values) => Box::new(
-            values
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .flat_map(split_work_item_binding_value),
-        ),
-        _ => Box::new(std::iter::empty()),
-    }
-}
-
-fn split_work_item_binding_value(value: &str) -> impl Iterator<Item = String> + '_ {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
 fn single_in_progress_task_id_from_rows(rows: &[state_store::TaskRecord]) -> Option<&str> {
     let mut candidates = rows
         .iter()
         .filter(|task| task.status == "in_progress" && task.issue_type != "epic");
     let candidate = candidates.next()?;
     candidates.next().is_none().then_some(candidate.id.as_str())
-}
-
-fn work_item_type_lookup_keys(work_item_type: &str) -> Vec<String> {
-    let mut keys = Vec::new();
-    let lower = work_item_type.trim().to_ascii_lowercase();
-    push_unique_lookup_key(&mut keys, lower);
-    let normalized = state_store::canonical_work_item_issue_type(work_item_type);
-    push_unique_lookup_key(&mut keys, normalized);
-    keys
-}
-
-fn push_unique_lookup_key(keys: &mut Vec<String>, value: impl Into<String>) {
-    let value = value.into();
-    let normalized = value.trim().to_ascii_lowercase();
-    if !normalized.is_empty() && !keys.iter().any(|key| key == &normalized) {
-        keys.push(normalized);
-    }
-}
-
-fn task_flow_lookup_keys(task: &state_store::TaskRecord) -> Vec<String> {
-    let mut keys = Vec::new();
-    let task_value = serde_json::to_value(task).unwrap_or(serde_json::Value::Null);
-    let inferred_task_class = crate::infer_task_class_from_task_payload(&task_value);
-    if inferred_task_class != "implementation" {
-        push_unique_lookup_key(&mut keys, inferred_task_class);
-    }
-    let work_item_kind = state_store::task_work_item_kind(&task.issue_type);
-    push_unique_lookup_key(&mut keys, work_item_kind.canonical_issue_type);
-    if let Some(provider_issue_type) = work_item_kind.provider_issue_type {
-        push_unique_lookup_key(&mut keys, provider_issue_type);
-    }
-    push_unique_lookup_key(&mut keys, &task.issue_type);
-    push_unique_lookup_key(&mut keys, work_item_kind.default_flow_binding);
-    keys
-}
-
-fn selected_dev_team_flow_for_task<'a>(
-    readiness: &'a serde_json::Value,
-    task: &state_store::TaskRecord,
-) -> Option<&'a serde_json::Value> {
-    for lookup_key in task_flow_lookup_keys(task) {
-        if let Some(flow) = selected_dev_team_flow_for_lookup_key(readiness, &lookup_key) {
-            return Some(flow);
-        }
-    }
-    selected_dev_team_flow_for_work_item(readiness, None)
-}
-
-fn selected_dev_team_flow_for_lookup_key<'a>(
-    readiness: &'a serde_json::Value,
-    work_item_type: &str,
-) -> Option<&'a serde_json::Value> {
-    let flows = readiness["flows"].as_array()?;
-    for lookup_key in work_item_type_lookup_keys(work_item_type) {
-        if let Some(flow_id) = readiness["work_item_flow_bindings"]
-            .get(&lookup_key)
-            .and_then(serde_json::Value::as_str)
-        {
-            if let Some(flow) = flows
-                .iter()
-                .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
-            {
-                return Some(flow);
-            }
-        }
-    }
-    flows
-        .iter()
-        .find(|flow| flow_has_exact_work_item_binding(flow, work_item_type))
-        .or_else(|| {
-            flows
-                .iter()
-                .find(|flow| flow_matches_work_item_type(flow, work_item_type))
-        })
-}
-
-fn selected_dev_team_flow_for_work_item<'a>(
-    readiness: &'a serde_json::Value,
-    work_item_type: Option<&str>,
-) -> Option<&'a serde_json::Value> {
-    let flows = readiness["flows"].as_array()?;
-    let normalized_type = work_item_type
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase);
-    if let Some(work_item_type) = normalized_type.as_deref() {
-        if let Some(flow) = selected_dev_team_flow_for_lookup_key(readiness, work_item_type) {
-            return Some(flow);
-        }
-    }
-    readiness["default_flow_id"]
-        .as_str()
-        .and_then(|flow_id| {
-            flows
-                .iter()
-                .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
-        })
-        .or_else(|| {
-            flows
-                .iter()
-                .find(|flow| flow["default"].as_bool().unwrap_or(false))
-        })
-}
-
-fn dev_team_sequence_from_readiness(
-    readiness: &serde_json::Value,
-    work_item_type: Option<&str>,
-) -> Vec<DevTeamSequenceStep> {
-    dev_team_sequence_from_readiness_with_default(readiness, work_item_type, true)
-}
-
-fn dev_team_sequence_from_readiness_lookup_key(
-    readiness: &serde_json::Value,
-    work_item_type: &str,
-) -> Vec<DevTeamSequenceStep> {
-    dev_team_sequence_from_readiness_with_default(readiness, Some(work_item_type), false)
-}
-
-fn dev_team_sequence_from_readiness_with_default(
-    readiness: &serde_json::Value,
-    work_item_type: Option<&str>,
-    default_on_miss: bool,
-) -> Vec<DevTeamSequenceStep> {
-    let roles = readiness["roles"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|role| {
-            let role_id = role["role_id"].as_str()?;
-            Some((role_id.to_string(), role))
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let selected_flow = match (work_item_type, default_on_miss) {
-        (Some(work_item_type), false) => {
-            selected_dev_team_flow_for_lookup_key(readiness, work_item_type)
-        }
-        _ => selected_dev_team_flow_for_work_item(readiness, work_item_type),
-    };
-    if selected_flow.is_none() && !default_on_miss {
-        return Vec::new();
-    }
-    if let Some(steps) = selected_flow
-        .and_then(|flow| flow["ordered_steps"].as_array())
-        .filter(|steps| !steps.is_empty())
-    {
-        return steps
-            .iter()
-            .filter_map(|step| {
-                let role_id = step["role_id"].as_str()?;
-                let role = roles.get(role_id)?;
-                let runtime_role = step["runtime_role"]
-                    .as_str()
-                    .or_else(|| role["runtime_role"].as_str())
-                    .filter(|value| !value.trim().is_empty())
-                    .map(str::to_string)?;
-                let task_class = step["task_class"]
-                    .as_str()
-                    .or_else(|| {
-                        role["task_classes"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(serde_json::Value::as_str)
-                            .find(|value| !value.trim().is_empty())
-                    })
-                    .map(str::to_string)?;
-                Some(DevTeamSequenceStep {
-                    role_label: role_id.to_string(),
-                    runtime_role,
-                    task_class,
-                    requires_task: role_id != "release_closure" && role_id != "terminal_closure",
-                    requires_user_approval: step["requires_user_approval"]
-                        .as_bool()
-                        .unwrap_or(false),
-                    approval_policy: step["approval_policy"].clone(),
-                    lifecycle_hook_templates: step["lifecycle_hook_templates"].clone(),
-                    resume_transitions: step["resume_transitions"].clone(),
-                    rework_transitions: step["rework_transitions"].clone(),
-                })
-            })
-            .collect();
-    }
-    let sequence = readiness["sequence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>();
-    if sequence.is_empty() || roles.is_empty() {
-        return Vec::new();
-    }
-    sequence
-        .into_iter()
-        .filter_map(|role_id| {
-            let role = roles.get(role_id)?;
-            let runtime_role = role["runtime_role"]
-                .as_str()
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_string)?;
-            let task_class = role["task_classes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .find(|value| !value.trim().is_empty())
-                .map(str::to_string)?;
-            Some(DevTeamSequenceStep {
-                role_label: role_id.to_string(),
-                runtime_role,
-                task_class,
-                requires_task: role_id != "release_closure" && role_id != "terminal_closure",
-                requires_user_approval: false,
-                approval_policy: serde_json::Value::Null,
-                lifecycle_hook_templates: serde_json::Value::Null,
-                resume_transitions: serde_json::Value::Null,
-                rework_transitions: serde_json::Value::Null,
-            })
-        })
-        .collect()
-}
-
-fn dev_team_sequence_from_carrier_runtime(
-    activation_bundle: &serde_json::Value,
-) -> Vec<DevTeamSequenceStep> {
-    activation_bundle["carrier_runtime"]["roles"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|role| {
-            let role_id = role["role_id"].as_str()?.trim();
-            if role_id.is_empty() {
-                return None;
-            }
-            let runtime_role = role["default_runtime_role"]
-                .as_str()
-                .or_else(|| {
-                    role["runtime_roles"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(serde_json::Value::as_str)
-                        .find(|value| !value.trim().is_empty())
-                })?
-                .trim()
-                .to_string();
-            let task_class = role["task_classes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .find(|value| !value.trim().is_empty())?
-                .trim()
-                .to_string();
-            Some(DevTeamSequenceStep {
-                role_label: role_id.to_string(),
-                runtime_role,
-                task_class,
-                requires_task: true,
-                requires_user_approval: false,
-                approval_policy: serde_json::Value::Null,
-                lifecycle_hook_templates: serde_json::Value::Null,
-                resume_transitions: serde_json::Value::Null,
-                rework_transitions: serde_json::Value::Null,
-            })
-        })
-        .collect()
-}
-
-fn dev_team_sequence(activation_bundle: &serde_json::Value) -> Vec<DevTeamSequenceStep> {
-    let readiness_sequence =
-        dev_team_sequence_from_readiness(&activation_bundle["dev_team_readiness"], None);
-    if !readiness_sequence.is_empty() {
-        return readiness_sequence;
-    }
-    let carrier_sequence = dev_team_sequence_from_carrier_runtime(activation_bundle);
-    if !carrier_sequence.is_empty() {
-        return carrier_sequence;
-    }
-    let Some(development_flow) = activation_bundle.get("development_flow") else {
-        return Vec::new();
-    };
-    let Some(dispatch_contract) = development_flow.get("dispatch_contract") else {
-        return Vec::new();
-    };
-    let execution_lane_sequence =
-        crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
-    if execution_lane_sequence.is_empty() {
-        return Vec::new();
-    }
-
-    let steps = execution_lane_sequence
-        .into_iter()
-        .filter_map(|dispatch_target| {
-            let route = crate::dispatch_contract_lane(activation_bundle, &dispatch_target)?;
-            let activation = crate::dispatch_contract_lane_activation(route);
-            let runtime_role = activation
-                .get("activation_runtime_role")
-                .or_else(|| route.get("runtime_role"))
-                .and_then(|value| value.as_str())
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_string)?;
-            let task_class = activation
-                .get("task_class")
-                .or_else(|| route.get("task_class"))
-                .and_then(|value| value.as_str())
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_string)?;
-            Some(DevTeamSequenceStep {
-                role_label: dispatch_target,
-                runtime_role,
-                task_class,
-                requires_task: true,
-                requires_user_approval: false,
-                approval_policy: serde_json::Value::Null,
-                lifecycle_hook_templates: serde_json::Value::Null,
-                resume_transitions: serde_json::Value::Null,
-                rework_transitions: serde_json::Value::Null,
-            })
-        })
-        .collect::<Vec<_>>();
-    steps
-}
-
-fn dev_team_sequence_for_work_item(
-    activation_bundle: &serde_json::Value,
-    work_item_type: &str,
-) -> Vec<DevTeamSequenceStep> {
-    let readiness_sequence = dev_team_sequence_from_readiness(
-        &activation_bundle["dev_team_readiness"],
-        Some(work_item_type),
-    );
-    if readiness_sequence.is_empty() {
-        dev_team_sequence(activation_bundle)
-    } else {
-        readiness_sequence
-    }
-}
-
-fn dev_team_sequence_for_task(
-    activation_bundle: &serde_json::Value,
-    task: &state_store::TaskRecord,
-) -> Vec<DevTeamSequenceStep> {
-    for lookup_key in task_flow_lookup_keys(task) {
-        let readiness_sequence = dev_team_sequence_from_readiness_lookup_key(
-            &activation_bundle["dev_team_readiness"],
-            &lookup_key,
-        );
-        if !readiness_sequence.is_empty() {
-            return readiness_sequence;
-        }
-    }
-    dev_team_sequence(activation_bundle)
 }
 
 fn configured_max_parallel_agents_from_activation_bundle(
@@ -4210,9 +3781,9 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 mod tests {
     use super::{
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
-        dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
-        host_bridge_adapter_payload, host_bridge_completion_lane_args,
-        host_bridge_request_provenance_blockers_for_state_root,
+        configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
+        dev_team_sequence_for_work_item, host_bridge_adapter_payload,
+        host_bridge_completion_lane_args, host_bridge_request_provenance_blockers_for_state_root,
         resolve_agent_dispatch_next_current_task_ids, single_in_progress_task_id_from_rows,
         state_store,
     };
@@ -5552,6 +5123,7 @@ mod tests {
                     },
                     "roles": [
                         {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                        {"role_id": "test_author", "runtime_role": "worker", "task_classes": ["test_authoring"]},
                         {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
                         {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
                     ],
@@ -5585,6 +5157,53 @@ mod tests {
         assert_eq!(sequence[0].task_class, "specification");
         assert_eq!(sequence[1].role_label, "tester");
         assert_eq!(sequence[1].task_class, "verification");
+    }
+
+    #[test]
+    fn configured_dev_team_route_selects_current_task_class_slice_for_generic_task() {
+        let mut task = task_with_labels(
+            "implementation-task",
+            "Implement design-backed configured feature",
+            &[],
+        );
+        task.planner_metadata.owned_paths = vec!["src/lib.rs".to_string()];
+        let route = configured_dev_team_first_step_for_task(
+            &serde_json::json!({
+                "dev_team_readiness": {
+                    "default_flow_id": "default_delivery",
+                    "work_item_flow_bindings": {
+                        "task": "default_delivery"
+                    },
+                    "roles": [
+                        {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                        {"role_id": "test_author", "runtime_role": "worker", "task_classes": ["test_authoring"]},
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+                    ],
+                    "flows": [
+                        {
+                            "flow_id": "default_delivery",
+                            "enabled": true,
+                            "default": true,
+                            "work_item_bindings": ["task"],
+                            "ordered_steps": [
+                                {"role_id": "analyst"},
+                                {"role_id": "test_author"},
+                                {"role_id": "developer"},
+                                {"role_id": "tester"}
+                            ]
+                        }
+                    ]
+                }
+            }),
+            &task,
+        )
+        .expect("configured generic implementation task should resolve a route");
+
+        assert_eq!(route.role_label, "test_author");
+        assert_eq!(route.dispatch_target, "test_author");
+        assert_eq!(route.runtime_role, "worker");
+        assert_eq!(route.task_class, "test_authoring");
     }
 
     #[test]

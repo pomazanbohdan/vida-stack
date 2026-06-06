@@ -6210,13 +6210,15 @@ async fn derive_seeded_run_graph_status_with_stage(
     let bounded_task = store.show_task(&bounded_task_id).await.ok();
     if let Some(task) = bounded_task
         .as_ref()
-        .filter(|task| task.issue_type.trim() != "task")
+        .filter(|task| task_has_configured_dev_team_dispatch_identity(task))
     {
         let activation_bundle = activation_bundle_with_dev_team_readiness(&snapshot);
-        if let Some(route) = crate::agent_dispatch_surface::configured_dev_team_first_step_for_task(
-            &activation_bundle,
-            task,
-        ) {
+        if let Some(route) =
+            crate::dev_team_sequence_contract::configured_dev_team_first_step_for_task(
+                &activation_bundle,
+                task,
+            )
+        {
             set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_selection");
             let mut selection = configured_dev_team_lane_selection_from_snapshot(
                 &snapshot,
@@ -6227,6 +6229,11 @@ async fn derive_seeded_run_graph_status_with_stage(
             selection.execution_plan =
                 build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
             inject_task_planner_metadata(&mut selection, &task.planner_metadata);
+            if let Some(path) =
+                existing_design_backed_task_design_doc_path(store, &bounded_task_id).await
+            {
+                inject_tracked_design_doc_path(&mut selection.execution_plan, &path);
+            }
             set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_status");
             let mut status = seeded_run_graph_status_from_role_selection(
                 requested_run_id,
@@ -7178,7 +7185,7 @@ fn configured_dev_team_lane_selection_from_snapshot(
     snapshot: &crate::state_store::LauncherActivationSnapshot,
     activation_bundle: serde_json::Value,
     request_text: &str,
-    route: &crate::agent_dispatch_surface::ConfiguredDevTeamTaskRoute,
+    route: &crate::dev_team_sequence_contract::ConfiguredDevTeamTaskRoute,
 ) -> RuntimeConsumptionLaneSelection {
     let fallback_role = snapshot
         .compiled_bundle
@@ -7215,11 +7222,24 @@ fn configured_dev_team_lane_selection_from_snapshot(
         ),
         allow_freeform_chat: false,
         confidence: "explicit_configured_dev_team_dispatch_init".to_string(),
-        matched_terms: vec![
-            route.role_label.clone(),
-            route.runtime_role.clone(),
-            route.task_class.clone(),
-        ],
+        matched_terms: route
+            .flow_id
+            .as_ref()
+            .map(|flow_id| {
+                vec![
+                    route.role_label.clone(),
+                    route.runtime_role.clone(),
+                    route.task_class.clone(),
+                    format!("dev_team_flow_id:{flow_id}"),
+                ]
+            })
+            .unwrap_or_else(|| {
+                vec![
+                    route.role_label.clone(),
+                    route.runtime_role.clone(),
+                    route.task_class.clone(),
+                ]
+            }),
         compiled_bundle: activation_bundle,
         execution_plan: serde_json::Value::Null,
         reason: "configured_dev_team_first_step_dispatch_init".to_string(),
@@ -7229,7 +7249,7 @@ fn configured_dev_team_lane_selection_from_snapshot(
 fn apply_configured_dev_team_route_to_status(
     status: &mut RunGraphStatus,
     selection: &RuntimeConsumptionLaneSelection,
-    route: &crate::agent_dispatch_surface::ConfiguredDevTeamTaskRoute,
+    route: &crate::dev_team_sequence_contract::ConfiguredDevTeamTaskRoute,
 ) {
     status.task_class = route.task_class.clone();
     status.route_task_class = route.task_class.clone();
@@ -7252,6 +7272,12 @@ fn apply_configured_dev_team_route_to_status(
     }
 }
 
+fn task_has_configured_dev_team_dispatch_identity(task: &crate::state_store::TaskRecord) -> bool {
+    task.issue_type.trim() != "task"
+        || !task.planner_metadata.owned_paths.is_empty()
+        || !task.labels.is_empty()
+}
+
 pub(crate) async fn run_graph_status_has_configured_dev_team_route_mismatch(
     store: &StateStore,
     status: &RunGraphStatus,
@@ -7260,12 +7286,12 @@ pub(crate) async fn run_graph_status_has_configured_dev_team_route_mismatch(
         Ok(task) => task,
         Err(_) => return Ok(false),
     };
-    if task.issue_type.trim() == "task" {
+    if !task_has_configured_dev_team_dispatch_identity(&task) {
         return Ok(false);
     }
     let snapshot = read_seed_launcher_activation_snapshot(store).await?;
     let activation_bundle = activation_bundle_with_dev_team_readiness(&snapshot);
-    let Some(route) = crate::agent_dispatch_surface::configured_dev_team_first_step_for_task(
+    let Some(route) = crate::dev_team_sequence_contract::configured_dev_team_first_step_for_task(
         &activation_bundle,
         &task,
     ) else {
@@ -12178,7 +12204,18 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec![
+                        "crates/vida/src/taskflow_run_graph.rs".to_string(),
+                        "crates/vida/src/taskflow_consume.rs".to_string(),
+                        "crates/vida/src/taskflow_consume_resume.rs".to_string(),
+                        "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+                    ],
+                    proof_targets: vec![
+                        "cargo test -p vida design_backed -- --nocapture".to_string()
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
                 created_by: "test",
                 source_repo: "",
             })
@@ -12206,18 +12243,16 @@ mod tests {
 
         assert_eq!(payload.role_selection.selected_role, "worker");
         assert!(payload.role_selection.conversational_mode.is_none());
-        // After removing label filter, design-backed tasks with implementation keywords
-        // go through the explicit_implementation_request path but still inject design doc
         assert_eq!(
             payload.role_selection.reason,
-            "auto_explicit_implementation_request"
+            "configured_dev_team_first_step_dispatch_init"
         );
         assert_eq!(
             payload.role_selection.tracked_flow_entry.as_deref(),
             Some("dev-pack")
         );
-        assert_eq!(payload.status.task_class, "implementation");
-        assert_eq!(payload.status.route_task_class, "implementation");
+        assert_eq!(payload.status.task_class, "test_authoring");
+        assert_eq!(payload.status.route_task_class, "test_authoring");
         // With design doc injected, execution plan status may differ
         let exec_status = payload.role_selection.execution_plan["status"].as_str();
         assert!(
@@ -12254,7 +12289,18 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec![
+                        "crates/vida/src/taskflow_run_graph.rs".to_string(),
+                        "crates/vida/src/taskflow_consume.rs".to_string(),
+                        "crates/vida/src/taskflow_consume_resume.rs".to_string(),
+                        "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+                    ],
+                    proof_targets: vec![
+                        "cargo test -p vida design_backed -- --nocapture".to_string()
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
                 created_by: "test",
                 source_repo: "",
             })
@@ -14145,7 +14191,18 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec![
+                        "crates/vida/src/taskflow_run_graph.rs".to_string(),
+                        "crates/vida/src/taskflow_consume.rs".to_string(),
+                        "crates/vida/src/taskflow_consume_resume.rs".to_string(),
+                        "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+                    ],
+                    proof_targets: vec![
+                        "cargo test -p vida design_backed -- --nocapture".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
                 created_by: "test",
                 source_repo: "",
             })
@@ -14171,7 +14228,7 @@ mod tests {
         assert_eq!(payload["run_id"], bound_task_id);
         assert_eq!(
             payload["run_graph_bootstrap"]["latest_status"]["task_class"].as_str(),
-            Some("implementation")
+            Some("test_authoring")
         );
         assert_eq!(
             payload["run_graph_bootstrap"]["latest_status"]["next_node"].as_str(),
@@ -14179,7 +14236,7 @@ mod tests {
         );
         assert_eq!(
             payload["run_graph_bootstrap"]["latest_status"]["route_task_class"].as_str(),
-            Some("implementation")
+            Some("test_authoring")
         );
         assert_eq!(
             payload["dispatch_receipt"]["dispatch_target"].as_str(),
@@ -14227,10 +14284,10 @@ mod tests {
         assert_eq!(
             dispatch_packet["delivery_task_packet"]["owned_paths"],
             serde_json::json!([
-                "crates/vida/src/taskflow_run_graph.rs",
+                "crates/vida/src/runtime_dispatch_state.rs",
                 "crates/vida/src/taskflow_consume.rs",
                 "crates/vida/src/taskflow_consume_resume.rs",
-                "crates/vida/src/runtime_dispatch_state.rs"
+                "crates/vida/src/taskflow_run_graph.rs"
             ])
         );
     }
