@@ -7,6 +7,7 @@ use crate::taskflow_run_graph::{
     approval_delegation_transition_kind, clear_run_graph_dispatch_init_fast_cache,
     is_dispatch_resume_handoff_complete,
 };
+use crate::RuntimeConsumptionLaneSelection;
 
 fn reconcile_run_graph_status_with_dispatch_receipt(
     mut status: RunGraphStatus,
@@ -284,8 +285,7 @@ fn tracked_flow_materialization_result(
     state_root: Option<&std::path::Path>,
     receipt: &RunGraphDispatchReceiptStored,
 ) -> Option<TrackedFlowMaterializationResult> {
-    if !crate::runtime_dispatch_receipt_helpers::stored_dispatch_is_materialization_only_blocked_task_ensure(receipt)
-    {
+    if !stored_receipt_can_reconcile_tracked_flow_materialization(receipt) {
         return None;
     }
     let mut candidate_paths = Vec::new();
@@ -322,6 +322,21 @@ fn tracked_flow_materialization_result(
         };
         tracked_flow_materialization_result_from_body(&result_body, receipt)
     })
+}
+
+fn stored_receipt_can_reconcile_tracked_flow_materialization(
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    matches!(receipt.dispatch_status.as_str(), "blocked" | "executed")
+        && receipt.dispatch_surface.as_deref() == Some("vida task ensure")
+        && matches!(
+            receipt.dispatch_target.as_str(),
+            "work-pool-pack" | "dev-pack"
+        )
+        && receipt
+            .blocker_code
+            .as_deref()
+            .is_none_or(|code| code == "internal_activation_view_only")
 }
 
 fn tracked_flow_materialization_result_body_passed(
@@ -2444,7 +2459,16 @@ impl StateStore {
         &self,
         receipt: &mut RunGraphDispatchReceipt,
     ) -> Result<bool, StateStoreError> {
-        if !crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
+        if !matches!(receipt.dispatch_status.as_str(), "blocked" | "executed")
+            || receipt.dispatch_surface.as_deref() != Some("vida task ensure")
+            || !matches!(
+                receipt.dispatch_target.as_str(),
+                "work-pool-pack" | "dev-pack"
+            )
+            || !receipt
+                .blocker_code
+                .as_deref()
+                .is_none_or(|code| code == "internal_activation_view_only")
         {
             return Ok(false);
         }
@@ -2548,7 +2572,134 @@ impl StateStore {
         });
         receipt.downstream_dispatch_active_target = Some(receipt.dispatch_target.clone());
         receipt.downstream_dispatch_last_target = Some(receipt.dispatch_target.clone());
+        if !self
+            .materialize_reconciled_pack_downstream_packet(receipt)
+            .await?
+        {
+            receipt.downstream_dispatch_ready = false;
+            receipt.downstream_dispatch_status = Some("blocked".to_string());
+            receipt.downstream_dispatch_blockers =
+                vec!["missing_downstream_dispatch_packet".to_string()];
+            receipt.downstream_dispatch_note = Some(format!(
+                "materialized `{}` packet is reconciled, but no executable downstream packet could be produced",
+                receipt.dispatch_target
+            ));
+        }
         Ok(true)
+    }
+
+    async fn materialize_reconciled_pack_downstream_packet(
+        &self,
+        receipt: &mut RunGraphDispatchReceipt,
+    ) -> Result<bool, StateStoreError> {
+        let Some(downstream_target) = receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        else {
+            return Ok(false);
+        };
+        if receipt.dispatch_target != "work-pool-pack" {
+            return Ok(true);
+        }
+        let Some((role_selection, run_graph_bootstrap)) =
+            self.reconciled_pack_dispatch_context(receipt)?
+        else {
+            return Ok(false);
+        };
+        receipt.downstream_dispatch_command =
+            crate::runtime_dispatch_state::runtime_dispatch_command_for_target(
+                &role_selection,
+                &downstream_target,
+            );
+        if let Some(packet_path) = receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            receipt.downstream_dispatch_command = Some(
+                crate::runtime_dispatch_state::agent_init_command_for_packet_path(packet_path),
+            );
+            return Ok(true);
+        }
+        receipt.downstream_dispatch_packet_path =
+            crate::runtime_dispatch_downstream_packets::write_runtime_downstream_dispatch_packet(
+                self.root(),
+                &role_selection,
+                &run_graph_bootstrap,
+                receipt,
+            )
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        if let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() {
+            receipt.downstream_dispatch_command = Some(
+                crate::runtime_dispatch_state::agent_init_command_for_packet_path(packet_path),
+            );
+        }
+        Ok(receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|path| !path.is_empty()))
+    }
+
+    fn reconciled_pack_dispatch_context(
+        &self,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> Result<Option<(RuntimeConsumptionLaneSelection, serde_json::Value)>, StateStoreError> {
+        let Some(packet_path) = receipt
+            .dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
+        let packet_path = std::path::PathBuf::from(packet_path);
+        let packet_path = if packet_path.is_absolute() {
+            packet_path
+        } else {
+            self.root().join(packet_path)
+        };
+        let body = match std::fs::read_to_string(&packet_path) {
+            Ok(body) => body,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "Failed to read materialized pack dispatch packet `{}`: {error}",
+                        packet_path.display()
+                    ),
+                });
+            }
+        };
+        let packet = serde_json::from_str::<serde_json::Value>(&body).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "Failed to parse materialized pack dispatch packet `{}`: {error}",
+                    packet_path.display()
+                ),
+            }
+        })?;
+        let role_selection = serde_json::from_value::<RuntimeConsumptionLaneSelection>(
+            packet
+                .get("role_selection_full")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .map_err(|error| StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "Failed to decode role_selection from materialized pack dispatch packet `{}`: {error}",
+                packet_path.display()
+            ),
+        })?;
+        let run_graph_bootstrap = packet
+            .get("run_graph_bootstrap")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        Ok(Some((role_selection, run_graph_bootstrap)))
     }
 
     fn spec_first_dispatch_task_identity_from_tasks(

@@ -6624,8 +6624,8 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
             "dispatch_kind": "tracked_flow_materialization",
             "dispatch_surface": "vida task ensure",
             "dispatch_command": "vida task ensure work-pool",
-            "dispatch_packet_path": packet_path,
-            "dispatch_result_path": result_path,
+            "dispatch_packet_path": &packet_path,
+            "dispatch_result_path": &result_path,
             "blocker_code": "internal_activation_view_only",
             "downstream_dispatch_ready": false,
             "downstream_dispatch_blockers": ["internal_activation_view_only"],
@@ -6671,6 +6671,31 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
     assert_eq!(
         run_graph["projection_truth"]["dispatch_receipt"]["downstream_dispatch_target"],
         "dev-pack"
+    );
+    let downstream_command = run_graph["projection_truth"]["dispatch_receipt"]
+        ["downstream_dispatch_command"]
+        .as_str()
+        .expect("resolved work-pool materialization should expose a dev-pack command");
+    assert!(
+        downstream_command.contains("vida agent-init --downstream-packet"),
+        "resolved work-pool materialization should expose executable downstream handoff command: {downstream_command}"
+    );
+    let downstream_packet_path = run_graph["projection_truth"]["dispatch_receipt"]
+        ["downstream_dispatch_packet_path"]
+        .as_str()
+        .expect("resolved work-pool materialization should expose a downstream packet path");
+    assert!(
+        std::path::Path::new(downstream_packet_path).exists(),
+        "resolved downstream packet path should exist: {downstream_packet_path}"
+    );
+    let downstream_packet: Value = serde_json::from_str(
+        &fs::read_to_string(downstream_packet_path).expect("read resolved downstream packet"),
+    )
+    .expect("resolved downstream packet should parse");
+    assert_eq!(downstream_packet["downstream_dispatch_target"], "dev-pack");
+    assert_eq!(
+        downstream_packet["downstream_dispatch_command"],
+        downstream_command
     );
     assert_eq!(
         run_graph["task_identity"]["work_pool_task_id"],
@@ -6744,22 +6769,96 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
     assert_eq!(identity["task_identity"]["spec_task_id"], spec_id);
     assert_eq!(identity["task_identity"]["work_pool_task_id"], work_pool_id);
 
-    let (consume, consume_success) = run_command_json_allow_failure(
+    let dev_id = format!("{feature_id}-dev");
+    run_command_json(
         &[
-            "taskflow", "consume", "continue", "--run-id", &run_id, "--json",
+            "task",
+            "create",
+            &dev_id,
+            "Dev pack",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            &feature_id,
+            "--labels",
+            "dev-pack",
+            "--json",
         ],
         &state_dir,
     );
-    assert!(
-        consume_success,
-        "consume continue should resume from resolved work-pool materialization"
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "work-pool-pack",
+            "dispatch_status": "executed",
+            "lane_status": "lane_completed",
+            "dispatch_kind": "tracked_flow_materialization",
+            "dispatch_surface": "vida task ensure",
+            "dispatch_command": "vida task ensure work-pool",
+            "dispatch_packet_path": &packet_path,
+            "dispatch_result_path": &result_path,
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-06T00:00:01Z"
+        });
+        let _: Option<Value> = db
+            .upsert(("run_graph_dispatch_receipt", run_id.as_str()))
+            .content(receipt)
+            .await
+            .expect("seed executed receipt with missing downstream packet lineage");
+        drop(db);
+    });
+
+    let repaired_run_graph = run_command_json(
+        &["taskflow", "run-graph", "status", &run_id, "--json"],
+        &state_dir,
     );
-    assert_eq!(consume["status"], "pass");
+    assert_eq!(repaired_run_graph["status"], "pass");
+    assert_eq!(
+        repaired_run_graph["run_graph_status"]["active_node"],
+        "work-pool-pack"
+    );
+    assert_eq!(
+        repaired_run_graph["run_graph_status"]["next_node"],
+        "dev_pack"
+    );
+    assert_eq!(
+        repaired_run_graph["run_graph_status"]["handoff_state"],
+        "awaiting_dev_pack"
+    );
+    assert_eq!(
+        repaired_run_graph["run_graph_status"]["resume_target"],
+        "dispatch.dev_pack_lane"
+    );
+    let repaired_command = repaired_run_graph["projection_truth"]["dispatch_receipt"]
+        ["downstream_dispatch_command"]
+        .as_str()
+        .expect("executed work-pool materialization should repair dev-pack command");
     assert!(
-        !consume
-            .to_string()
-            .contains("internal_activation_view_only"),
-        "consume continue should not retain resolved materialization blocker: {consume}"
+        repaired_command.contains("vida agent-init --downstream-packet"),
+        "executed work-pool materialization should repair executable downstream handoff command: {repaired_command}"
+    );
+    let repaired_packet_path = repaired_run_graph["projection_truth"]["dispatch_receipt"]
+        ["downstream_dispatch_packet_path"]
+        .as_str()
+        .expect("executed work-pool materialization should repair downstream packet path");
+    assert!(
+        std::path::Path::new(repaired_packet_path).exists(),
+        "executed work-pool materialization should repair a real downstream packet path: {repaired_packet_path}"
     );
 
     let _ = fs::remove_dir_all(&state_dir);

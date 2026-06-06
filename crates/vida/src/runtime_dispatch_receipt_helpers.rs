@@ -59,6 +59,23 @@ pub(crate) fn dispatch_summary_has_clean_ready_downstream_handoff(
                 .downstream_dispatch_status
                 .as_deref()
                 .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
+            && receipt
+                .downstream_dispatch_target
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|target| !target.is_empty())
+            && (receipt.downstream_dispatch_target.as_deref() == Some("closure")
+                || receipt
+                    .downstream_dispatch_packet_path
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|path| !path.is_empty()))
+            && (receipt.downstream_dispatch_target.as_deref() == Some("closure")
+                || receipt
+                    .downstream_dispatch_command
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|command| command.starts_with("vida agent-init")))
     })
 }
 
@@ -75,6 +92,23 @@ pub(crate) fn dispatch_receipt_has_clean_ready_downstream_handoff(
             .downstream_dispatch_status
             .as_deref()
             .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
+        && receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|target| !target.is_empty())
+        && (receipt.downstream_dispatch_target.as_deref() == Some("closure")
+            || receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|path| !path.is_empty()))
+        && (receipt.downstream_dispatch_target.as_deref() == Some("closure")
+            || receipt
+                .downstream_dispatch_command
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|command| command.starts_with("vida agent-init")))
 }
 
 pub(crate) fn dispatch_summary_has_clean_completed_lane(
