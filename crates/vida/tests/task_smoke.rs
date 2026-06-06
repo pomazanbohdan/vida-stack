@@ -5874,6 +5874,120 @@ fn task_attempt_consolidate_fails_closed_for_missing_or_malformed_artifacts() {
 }
 
 #[test]
+fn task_attempt_consolidate_rejects_oversized_artifact_refs() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-consolidate-oversized-artifact");
+    create_task_attempt_fixture(&state_dir, &task_id);
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+    let oversized_path = format!("{artifact_dir}/oversized.json");
+    fs::write(&oversized_path, vec![b' '; 1024 * 1024 + 1]).expect("write oversized artifact");
+
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-consolidate-oversized",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--isolation",
+            "readonly",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            &oversized_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "attempt",
+            "consolidate",
+            &task_id,
+            "--stage",
+            "analysis",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success);
+    assert_eq!(blocked["status"], "blocked");
+    let error = blocked["error"].as_str().expect("error should be string");
+    assert!(error.contains("attempt_artifact_validation_failed"));
+    assert!(error.contains("limit is 1048576 bytes"));
+    assert_eq!(blocked["canonical_task_notes_mutated"], false);
+}
+
+#[cfg(unix)]
+#[test]
+fn task_attempt_consolidate_rejects_symlinked_special_artifact_refs() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-consolidate-special-artifact");
+    create_task_attempt_fixture(&state_dir, &task_id);
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+    let symlink_path = format!("{artifact_dir}/zero.json");
+    std::os::unix::fs::symlink("/dev/zero", &symlink_path)
+        .expect("create /dev/zero artifact symlink");
+
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-consolidate-special",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--isolation",
+            "readonly",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            &symlink_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "attempt",
+            "consolidate",
+            &task_id,
+            "--stage",
+            "analysis",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success);
+    assert_eq!(blocked["status"], "blocked");
+    let error = blocked["error"].as_str().expect("error should be string");
+    assert!(error.contains("attempt_artifact_validation_failed"));
+    assert!(error.contains("must be inside the project or state directory"));
+    assert_eq!(blocked["canonical_task_notes_mutated"], false);
+}
+
+#[test]
 fn task_attempt_implementation_artifact_validation() {
     let state_dir = unique_state_dir();
     let task_id = unique_test_id("implementation-artifact-validation");

@@ -6497,6 +6497,8 @@ async fn latest_task_stage_attempt_id(
     })
 }
 
+const MAX_ATTEMPT_ARTIFACT_BYTES: u64 = 1024 * 1024;
+
 fn validate_attempt_artifact_refs(values: &[String]) -> Result<Vec<String>, String> {
     let refs = normalize_artifact_refs_for_attempt(values);
     if refs.is_empty() {
@@ -6539,11 +6541,10 @@ async fn task_attempt_consolidation_for_command(
         .await?;
     let task = store.show_task(&command.task_id).await?;
     let mut consolidated =
-        consolidate_attempt_artifacts(&attempts, &task.planner_metadata.owned_paths).map_err(
-            |reason| state_store::StateStoreError::InvalidTaskRecord {
+        consolidate_attempt_artifacts(&attempts, &task.planner_metadata.owned_paths, store.root())
+            .map_err(|reason| state_store::StateStoreError::InvalidTaskRecord {
                 reason: format!("attempt_artifact_validation_failed: {reason}"),
-            },
-        )?;
+            })?;
     merge_repeated_values(&mut consolidated.facts, &command.facts);
     merge_repeated_values(&mut consolidated.hypotheses, &command.hypotheses);
     merge_repeated_values(&mut consolidated.conflicts, &command.conflicts);
@@ -6585,10 +6586,12 @@ async fn task_attempt_consolidation_for_command(
 fn consolidate_attempt_artifacts(
     attempts: &[state_store::TaskAttemptRecord],
     owned_paths: &[String],
+    state_root: &std::path::Path,
 ) -> Result<TaskAttemptArtifactConsolidation, String> {
     let mut consolidated = TaskAttemptArtifactConsolidation::default();
     for attempt in attempts {
-        let artifacts = validate_attempt_artifacts(&attempt.artifact_refs, attempt, owned_paths)?;
+        let artifacts =
+            validate_attempt_artifacts(&attempt.artifact_refs, attempt, owned_paths, state_root)?;
         for (artifact_ref, json) in artifacts {
             if !consolidated.artifact_refs.contains(&artifact_ref) {
                 consolidated.artifact_refs.push(artifact_ref.clone());
@@ -6628,31 +6631,31 @@ async fn validate_attempt_artifacts_for_task(
         .show_task(&attempt.task_id)
         .await
         .map_err(|error| format!("failed to read task owned_paths: {error}"))?;
-    validate_attempt_artifacts(artifact_refs, attempt, &task.planner_metadata.owned_paths).map(
-        |artifacts| {
-            artifacts
-                .into_iter()
-                .map(|(artifact_ref, _)| artifact_ref)
-                .collect()
-        },
+    validate_attempt_artifacts(
+        artifact_refs,
+        attempt,
+        &task.planner_metadata.owned_paths,
+        store.root(),
     )
+    .map(|artifacts| {
+        artifacts
+            .into_iter()
+            .map(|(artifact_ref, _)| artifact_ref)
+            .collect()
+    })
 }
 
 fn validate_attempt_artifacts(
     values: &[String],
     attempt: &state_store::TaskAttemptRecord,
     owned_paths: &[String],
+    state_root: &std::path::Path,
 ) -> Result<Vec<(String, serde_json::Value)>, String> {
     let refs = validate_attempt_artifact_refs(values)?;
     refs.into_iter()
         .map(|artifact_ref| {
-            let path = std::path::Path::new(&artifact_ref);
-            if !path.exists() {
-                return Err(format!(
-                    "task attempt artifacts require local JSON artifact refs; `{artifact_ref}` does not exist"
-                ));
-            }
-            let raw = std::fs::read_to_string(path).map_err(|error| {
+            let path = validate_attempt_artifact_path(&artifact_ref, state_root)?;
+            let raw = std::fs::read_to_string(&path).map_err(|error| {
                 format!("failed to read attempt artifact `{artifact_ref}`: {error}")
             })?;
             let json: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
@@ -6663,6 +6666,56 @@ fn validate_attempt_artifacts(
             Ok((artifact_ref, json))
         })
         .collect()
+}
+
+fn validate_attempt_artifact_path(
+    artifact_ref: &str,
+    state_root: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(artifact_ref);
+    if !path.exists() {
+        return Err(format!(
+            "task attempt artifacts require local JSON artifact refs; `{artifact_ref}` does not exist"
+        ));
+    }
+
+    let canonical_path = path.canonicalize().map_err(|error| {
+        format!("failed to canonicalize attempt artifact `{artifact_ref}`: {error}")
+    })?;
+    let canonical_state_root = state_root.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize task state root `{}`: {error}",
+            state_root.display()
+        )
+    })?;
+    let canonical_project_root = project_root_for_task_state(state_root)
+        .and_then(|project_root| project_root.canonicalize().ok());
+    let is_contained = canonical_path.starts_with(&canonical_state_root)
+        || canonical_project_root
+            .as_ref()
+            .is_some_and(|project_root| canonical_path.starts_with(project_root));
+    if !is_contained {
+        return Err(format!(
+            "attempt artifact `{artifact_ref}` must be inside the project or state directory"
+        ));
+    }
+
+    let metadata = std::fs::metadata(&canonical_path)
+        .map_err(|error| format!("failed to inspect attempt artifact `{artifact_ref}`: {error}"))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "attempt artifact `{artifact_ref}` must be a regular file"
+        ));
+    }
+    if metadata.len() > MAX_ATTEMPT_ARTIFACT_BYTES {
+        return Err(format!(
+            "attempt artifact `{artifact_ref}` is {} bytes, limit is {} bytes",
+            metadata.len(),
+            MAX_ATTEMPT_ARTIFACT_BYTES
+        ));
+    }
+
+    Ok(canonical_path)
 }
 
 fn validate_stage_attempt_artifact_identity(
