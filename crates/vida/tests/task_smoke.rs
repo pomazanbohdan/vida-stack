@@ -262,6 +262,25 @@ fn run_and_assert_success_without_state_dir(args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+fn run_and_assert_success_with_explicit_state_dir(args: &[&str], state_dir: &str) -> String {
+    let output = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(args)
+            .args(["--state-dir", state_dir])
+            .env_remove("VIDA_STATE_DIR");
+        command
+    });
+    assert!(
+        output.status.success(),
+        "args: {args:?}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 fn run_command_capture(args: &[&str], state_dir: &str) -> std::process::Output {
     run_with_state_lock_retry(|| {
         let mut command = vida();
@@ -4864,6 +4883,22 @@ fn create_task_attempt_fixture(state_dir: &str, task_id: &str) {
     assert_eq!(task["status"], "pass");
 }
 
+fn create_task_attempt_fixture_with_notes(state_dir: &str, task_id: &str) {
+    create_task_attempt_fixture(state_dir, task_id);
+    let updated = run_command_json(
+        &[
+            "task",
+            "update",
+            task_id,
+            "--notes",
+            "canonical task notes stay owned by consolidation",
+            "--json",
+        ],
+        state_dir,
+    );
+    assert_eq!(updated["status"], "pass");
+}
+
 #[test]
 fn task_attempt_ledger_persists_backend_model_isolation_freshness_status_and_artifacts() {
     let state_dir = unique_state_dir();
@@ -5173,6 +5208,327 @@ fn task_attempt_transition_fails_closed_on_invalid_task_or_stage_binding() {
         !help_stdout.contains("--status completed"),
         "attempt help must not suggest non-canonical statuses: {help_stdout}"
     );
+}
+
+#[test]
+fn task_attempt_dispatch_status_collect_and_stage_status_help_document_output_modes() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let attempt_help = run_and_assert_success(&["task", "attempt", "--help"], &state_dir);
+    assert!(attempt_help.contains("dispatch"));
+    assert!(attempt_help.contains("status"));
+    assert!(attempt_help.contains("collect"));
+    assert!(attempt_help.contains("Default output is compact TOON"));
+    assert!(attempt_help.contains("--json"));
+
+    for subcommand in ["dispatch", "status", "collect"] {
+        let help = run_and_assert_success(&["task", "attempt", subcommand, "--help"], &state_dir);
+        assert!(help.contains("--stage-id <STAGE>"));
+        assert!(
+            help.contains("--stage"),
+            "{subcommand} should document the visible --stage alias"
+        );
+        assert!(help.contains("--json"));
+        assert!(help.contains("--state-dir"));
+        assert!(help.contains("compact TOON"));
+    }
+
+    let stage_help = run_and_assert_success(&["task", "stage", "status", "--help"], &state_dir);
+    assert!(stage_help.contains("--stage-id <STAGE>"));
+    assert!(stage_help.contains("--stage"));
+    assert!(stage_help.contains("--json"));
+    assert!(stage_help.contains("--state-dir"));
+    assert!(stage_help.contains("compact TOON"));
+}
+
+#[test]
+fn task_attempt_dispatch_and_status_report_operator_fields_in_json_and_default_output() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-dispatch-task");
+    create_task_attempt_fixture(&state_dir, &task_id);
+
+    let dispatch = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "dispatch",
+            &task_id,
+            "--stage",
+            "analysis",
+            "--policy",
+            "configured",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dispatch["surface"], "vida task attempt dispatch");
+    assert_eq!(dispatch["status"], "pass");
+    assert!(dispatch["attempts"].as_array().is_some());
+    assert!(dispatch["blocker_codes"].as_array().is_some());
+    assert!(dispatch["next_actions"].as_array().is_some());
+    assert!(dispatch["artifact_refs"].is_object());
+    assert_eq!(dispatch["shared_fields"]["status"], dispatch["status"]);
+    assert_eq!(
+        dispatch["shared_fields"]["blocker_codes"],
+        dispatch["blocker_codes"]
+    );
+    assert_eq!(
+        dispatch["shared_fields"]["next_actions"],
+        dispatch["next_actions"]
+    );
+    assert_eq!(
+        dispatch["shared_fields"]["artifact_refs"],
+        dispatch["artifact_refs"]
+    );
+
+    let default_dispatch_output = run_and_assert_success_with_explicit_state_dir(
+        &[
+            "task",
+            "attempt",
+            "dispatch",
+            &task_id,
+            "--stage",
+            "analysis",
+            "--policy",
+            "configured",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+        ],
+        &state_dir,
+    );
+    assert!(default_dispatch_output.starts_with("vida task attempt dispatch\n"));
+    assert!(default_dispatch_output.contains("status: pass"));
+    assert!(default_dispatch_output.contains("attempts"));
+    assert!(default_dispatch_output.contains("blocker_codes"));
+    assert!(default_dispatch_output.contains("next_actions"));
+    assert!(default_dispatch_output.contains("artifact_refs"));
+    assert!(!default_dispatch_output.trim_start().starts_with('{'));
+    assert!(!default_dispatch_output.contains("--json"));
+
+    let status = run_command_json(
+        &[
+            "task", "attempt", "status", &task_id, "--stage", "analysis", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(status["surface"], "vida task attempt status");
+    assert_eq!(status["status"], "pass");
+    assert_eq!(status["stage_summary"]["task_id"], task_id);
+    assert_eq!(status["stage_summary"]["stage_id"], "analysis");
+    assert!(
+        status["stage_summary"]["attempt_count"]
+            .as_u64()
+            .expect("attempt count should be numeric")
+            >= 1
+    );
+    assert!(status["blocker_codes"].as_array().is_some());
+    assert!(status["next_actions"].as_array().is_some());
+    assert!(status["artifact_refs"].is_object());
+
+    let default_output = run_and_assert_success(
+        &["task", "attempt", "status", &task_id, "--stage", "analysis"],
+        &state_dir,
+    );
+    assert!(default_output.starts_with("vida task attempt status\n"));
+    assert!(default_output.contains("status: pass"));
+    assert!(default_output.contains("blocker_codes"));
+    assert!(default_output.contains("next_actions"));
+    assert!(default_output.contains("artifact_refs"));
+    assert!(!default_output.trim_start().starts_with('{'));
+    assert!(!default_output.contains("--json"));
+}
+
+#[test]
+fn task_attempt_collect_validates_artifacts_without_mutating_canonical_task_notes() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-collect-task");
+    create_task_attempt_fixture_with_notes(&state_dir, &task_id);
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+    let artifact_path = format!("{artifact_dir}/analysis-a.json");
+    fs::write(
+        &artifact_path,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-collect-a",
+            "task_id": &task_id,
+            "stage_id": "analysis",
+            "observed_facts": ["tests can validate returned artifacts"],
+            "hypotheses": [],
+            "related_files": ["crates/vida/tests/task_smoke.rs"],
+            "changed_files": [],
+            "patch_ref": null,
+            "proof_commands": ["cargo test -p vida task_attempt_collect_validates_artifacts_without_mutating_canonical_task_notes"],
+            "proof_results": [],
+            "risks": [],
+            "confidence": "medium",
+            "notes_append_candidate": "candidate note must not be applied by collect",
+            "limitations": []
+        })
+        .to_string(),
+    )
+    .expect("write attempt artifact");
+
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-collect-a",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--isolation",
+            "readonly",
+            "--status",
+            "produced",
+            "--artifact-ref",
+            &artifact_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+    let before = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    let before_notes = before["task"]["notes"].clone();
+
+    let collect = run_command_json(
+        &[
+            "task", "attempt", "collect", &task_id, "--stage", "analysis", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(collect["surface"], "vida task attempt collect");
+    assert_eq!(collect["status"], "pass");
+    assert_eq!(collect["stage_summary"]["task_id"], task_id);
+    assert_eq!(collect["stage_summary"]["stage_id"], "analysis");
+    assert_eq!(
+        collect["artifact_refs"],
+        serde_json::json!({"validated": [artifact_path]})
+    );
+    assert_eq!(collect["blocker_codes"], serde_json::json!([]));
+    assert!(collect["next_actions"].as_array().is_some());
+
+    let default_collect_output = run_and_assert_success_with_explicit_state_dir(
+        &[
+            "task", "attempt", "collect", &task_id, "--stage", "analysis",
+        ],
+        &state_dir,
+    );
+    assert!(default_collect_output.starts_with("vida task attempt collect\n"));
+    assert!(default_collect_output.contains("status: pass"));
+    assert!(default_collect_output.contains("collected_artifacts"));
+    assert!(default_collect_output.contains("canonical_task_notes_mutated: false"));
+    assert!(default_collect_output.contains("blocker_codes"));
+    assert!(default_collect_output.contains("next_actions"));
+    assert!(default_collect_output.contains("artifact_refs"));
+    assert!(!default_collect_output.trim_start().starts_with('{'));
+    assert!(!default_collect_output.contains("--json"));
+
+    let after = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    assert_eq!(
+        after["task"]["notes"], before_notes,
+        "collect may validate attempt artifacts but must not mutate canonical task notes"
+    );
+}
+
+#[test]
+fn task_stage_status_reports_task_attempt_ledger_summary() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("stage-status-task");
+    create_task_attempt_fixture(&state_dir, &task_id);
+
+    let first = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "stage-status-rejected",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-low",
+            "--isolation",
+            "readonly",
+            "--status",
+            "rejected",
+            "--artifact-ref",
+            "reports/rejected.json",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(first["status"], "pass");
+
+    let second = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "stage-status-accepted",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "vibe_cli",
+            "--model-profile",
+            "critic",
+            "--isolation",
+            "readonly",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            "reports/accepted.json",
+            "--consolidation-receipt",
+            "receipt-analysis-accepted",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(second["status"], "pass");
+
+    let status = run_command_json(&["task", "stage", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(status["surface"], "vida task stage status");
+    assert_eq!(status["status"], "pass");
+    assert_eq!(status["task_id"], task_id);
+    assert_eq!(status["active_stage"], "analysis");
+    assert_eq!(status["stages"]["analysis"]["attempt_count"], 2);
+    assert_eq!(status["stages"]["analysis"]["status_counts"]["rejected"], 1);
+    assert_eq!(status["stages"]["analysis"]["status_counts"]["accepted"], 1);
+    assert_eq!(
+        status["stages"]["analysis"]["latest_consolidation_receipt_id"],
+        "receipt-analysis-accepted"
+    );
+    assert!(status["blocker_codes"].as_array().is_some());
+    assert!(status["next_actions"].as_array().is_some());
+    assert!(status["artifact_refs"].is_object());
+
+    let default_output = run_and_assert_success(&["task", "stage", "status", &task_id], &state_dir);
+    assert!(default_output.starts_with("vida task stage status\n"));
+    assert!(default_output.contains("status: pass"));
+    assert!(default_output.contains("active_stage: analysis"));
+    assert!(default_output.contains("blocker_codes"));
+    assert!(default_output.contains("next_actions"));
+    assert!(default_output.contains("artifact_refs"));
+    assert!(!default_output.trim_start().starts_with('{'));
+    assert!(!default_output.contains("--json"));
 }
 
 #[test]

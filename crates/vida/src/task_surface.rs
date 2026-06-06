@@ -6059,8 +6059,512 @@ fn path_is_explicitly_owned(path: &str, explicit_files: &[String]) -> bool {
     })
 }
 
+async fn run_task_attempt_dispatch(command: TaskAttemptDispatchArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    match StateStore::open_existing(state_dir).await {
+        Ok(store) => match task_attempt_dispatch_records(&store, &command).await {
+            Ok((attempts, stage_policy)) => {
+                let summary = store
+                    .task_stage_summary(&command.task_id, &command.stage_id)
+                    .await
+                    .ok();
+                print_task_attempt_payload(
+                    "vida task attempt dispatch",
+                    command.render,
+                    command.json,
+                    task_attempt_dispatch_payload(
+                        "vida task attempt dispatch",
+                        &command.task_id,
+                        &command.stage_id,
+                        attempts,
+                        summary,
+                        stage_policy,
+                    ),
+                )
+            }
+            Err(error) => print_task_attempt_payload(
+                "vida task attempt dispatch",
+                command.render,
+                command.json,
+                task_attempt_error_payload(
+                    "vida task attempt dispatch",
+                    Some(command.task_id.as_str()),
+                    Some(command.stage_id.as_str()),
+                    None,
+                    &error,
+                ),
+            ),
+        },
+        Err(error) => print_task_attempt_payload(
+            "vida task attempt dispatch",
+            command.render,
+            command.json,
+            task_attempt_store_error_payload("vida task attempt dispatch", &error),
+        ),
+    }
+}
+
+async fn run_task_attempt_status(command: TaskAttemptStatusArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    match StateStore::open_existing_read_only(state_dir).await {
+        Ok(store) => match store
+            .task_stage_summary(&command.task_id, &command.stage_id)
+            .await
+        {
+            Ok(summary) => print_task_attempt_payload(
+                "vida task attempt status",
+                command.render,
+                command.json,
+                task_attempt_summary_payload("vida task attempt status", summary),
+            ),
+            Err(error) => print_task_attempt_payload(
+                "vida task attempt status",
+                command.render,
+                command.json,
+                task_attempt_error_payload(
+                    "vida task attempt status",
+                    Some(command.task_id.as_str()),
+                    Some(command.stage_id.as_str()),
+                    None,
+                    &error,
+                ),
+            ),
+        },
+        Err(error) => print_task_attempt_payload(
+            "vida task attempt status",
+            command.render,
+            command.json,
+            task_attempt_store_error_payload("vida task attempt status", &error),
+        ),
+    }
+}
+
+async fn run_task_attempt_collect(command: TaskAttemptCollectArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    match StateStore::open_existing(state_dir).await {
+        Ok(store) => {
+            let attempt_id = match command.attempt_id.clone() {
+                Some(attempt_id) => attempt_id,
+                None => {
+                    match latest_task_stage_attempt_id(&store, &command.task_id, &command.stage_id)
+                        .await
+                    {
+                        Ok(attempt_id) => attempt_id,
+                        Err(error) => {
+                            return print_task_attempt_payload(
+                                "vida task attempt collect",
+                                command.render,
+                                command.json,
+                                task_attempt_error_payload(
+                                    "vida task attempt collect",
+                                    Some(command.task_id.as_str()),
+                                    Some(command.stage_id.as_str()),
+                                    None,
+                                    &error,
+                                ),
+                            );
+                        }
+                    }
+                }
+            };
+            let existing_attempt = match store.task_attempt(&attempt_id).await {
+                Ok(attempt) => attempt,
+                Err(error) => {
+                    return print_task_attempt_payload(
+                        "vida task attempt collect",
+                        command.render,
+                        command.json,
+                        task_attempt_error_payload(
+                            "vida task attempt collect",
+                            Some(command.task_id.as_str()),
+                            Some(command.stage_id.as_str()),
+                            Some(attempt_id.as_str()),
+                            &error,
+                        ),
+                    );
+                }
+            };
+            let artifact_refs =
+                if normalize_artifact_refs_for_attempt(&command.artifact_refs).is_empty() {
+                    existing_attempt.artifact_refs.clone()
+                } else {
+                    command.artifact_refs.clone()
+                };
+            let validated_artifacts = match validate_attempt_artifact_refs(&artifact_refs) {
+                Ok(values) => values,
+                Err(reason) => {
+                    return print_task_attempt_payload(
+                        "vida task attempt collect",
+                        command.render,
+                        command.json,
+                        task_attempt_operator_payload(
+                            "vida task attempt collect",
+                            vec!["attempt_artifact_validation_failed".to_string()],
+                            vec![
+                                "Provide non-empty artifact refs that exist when they point at local files."
+                                    .to_string(),
+                            ],
+                            serde_json::json!({
+                                "surface": "vida task attempt collect",
+                                "task_id": command.task_id,
+                                "stage_id": command.stage_id,
+                                "attempt_id": attempt_id,
+                            }),
+                            serde_json::json!({
+                                "attempt": serde_json::Value::Null,
+                                "stage_summary": serde_json::Value::Null,
+                                "error": reason,
+                                "canonical_task_notes_mutated": false,
+                            }),
+                        ),
+                    );
+                }
+            };
+            let request = state_store::TransitionTaskAttemptRequest {
+                attempt_id: attempt_id.clone(),
+                task_id: command.task_id.clone(),
+                stage_id: command.stage_id.clone(),
+                status: command.status,
+                artifact_refs,
+                consolidation_receipt_id: command.consolidation_receipt_id,
+            };
+            match store.transition_task_attempt(request).await {
+                Ok(attempt) => {
+                    let summary = store
+                        .task_stage_summary(&attempt.task_id, &attempt.stage_id)
+                        .await
+                        .ok();
+                    print_task_attempt_payload(
+                        "vida task attempt collect",
+                        command.render,
+                        command.json,
+                        task_attempt_collect_payload(
+                            "vida task attempt collect",
+                            &attempt,
+                            summary,
+                            validated_artifacts,
+                        ),
+                    )
+                }
+                Err(error) => print_task_attempt_payload(
+                    "vida task attempt collect",
+                    command.render,
+                    command.json,
+                    task_attempt_error_payload(
+                        "vida task attempt collect",
+                        Some(command.task_id.as_str()),
+                        Some(command.stage_id.as_str()),
+                        Some(attempt_id.as_str()),
+                        &error,
+                    ),
+                ),
+            }
+        }
+        Err(error) => print_task_attempt_payload(
+            "vida task attempt collect",
+            command.render,
+            command.json,
+            task_attempt_store_error_payload("vida task attempt collect", &error),
+        ),
+    }
+}
+
+async fn run_task_stage(command: TaskStageArgs) -> ExitCode {
+    match command.command {
+        TaskStageCommand::Status(command) => {
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing_read_only(state_dir).await {
+                Ok(store) => match task_stage_status_payload_for_command(&store, &command).await {
+                    Ok(payload) => print_task_attempt_payload(
+                        "vida task stage status",
+                        command.render,
+                        command.json,
+                        payload,
+                    ),
+                    Err(error) => print_task_attempt_payload(
+                        "vida task stage status",
+                        command.render,
+                        command.json,
+                        task_attempt_error_payload(
+                            "vida task stage status",
+                            Some(command.task_id.as_str()),
+                            command.stage_id.as_deref(),
+                            None,
+                            &error,
+                        ),
+                    ),
+                },
+                Err(error) => print_task_attempt_payload(
+                    "vida task stage status",
+                    command.render,
+                    command.json,
+                    task_attempt_store_error_payload("vida task stage status", &error),
+                ),
+            }
+        }
+    }
+}
+
+async fn latest_task_stage_attempt_id(
+    store: &StateStore,
+    task_id: &str,
+    stage_id: &str,
+) -> Result<String, state_store::StateStoreError> {
+    let summary = store.task_stage_summary(task_id, stage_id).await?;
+    summary.latest_attempt_id.ok_or_else(|| {
+        state_store::StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "task attempt collect requires an attempt id because task `{task_id}` stage `{stage_id}` has no attempts"
+            ),
+        }
+    })
+}
+
+fn validate_attempt_artifact_refs(values: &[String]) -> Result<Vec<String>, String> {
+    let refs = normalize_artifact_refs_for_attempt(values);
+    if refs.is_empty() {
+        return Err("attempt_artifact_refs_missing".to_string());
+    }
+    for value in &refs {
+        if value.contains('/') || value.contains('\\') {
+            let path = std::path::Path::new(value);
+            if path.is_absolute() && !path.exists() {
+                return Err(format!("attempt artifact ref does not exist: {value}"));
+            }
+        }
+    }
+    Ok(refs)
+}
+
+async fn task_stage_status_payload_for_command(
+    store: &StateStore,
+    command: &TaskStageStatusArgs,
+) -> Result<serde_json::Value, state_store::StateStoreError> {
+    if let Some(stage_id) = command.stage_id.as_deref() {
+        let summary = store.task_stage_summary(&command.task_id, stage_id).await?;
+        return Ok(task_stage_status_payload(
+            "vida task stage status",
+            &command.task_id,
+            Some(stage_id),
+            vec![summary],
+        ));
+    }
+    let attempts = store.task_attempts_for_task(&command.task_id).await?;
+    let mut stage_ids = attempts
+        .iter()
+        .map(|attempt| attempt.stage_id.clone())
+        .collect::<Vec<_>>();
+    stage_ids.sort();
+    stage_ids.dedup();
+    let mut summaries = Vec::new();
+    for stage_id in stage_ids {
+        summaries.push(
+            store
+                .task_stage_summary(&command.task_id, &stage_id)
+                .await?,
+        );
+    }
+    let active_stage = summaries.first().map(|summary| summary.stage_id.clone());
+    Ok(task_stage_status_payload(
+        "vida task stage status",
+        &command.task_id,
+        active_stage.as_deref(),
+        summaries,
+    ))
+}
+
+async fn task_attempt_dispatch_records(
+    store: &StateStore,
+    command: &TaskAttemptDispatchArgs,
+) -> Result<(Vec<state_store::TaskAttemptRecord>, serde_json::Value), state_store::StateStoreError>
+{
+    if command.backend.is_some() || command.model_profile.is_some() || command.isolation.is_some() {
+        let attempt = store
+            .record_task_attempt(state_store::RecordTaskAttemptRequest {
+                attempt_id: command.attempt_id.clone(),
+                task_id: command.task_id.clone(),
+                stage_id: command.stage_id.clone(),
+                backend: command
+                    .backend
+                    .clone()
+                    .unwrap_or_else(|| "manual_override".to_string()),
+                model_profile: command
+                    .model_profile
+                    .clone()
+                    .unwrap_or_else(|| "manual_override".to_string()),
+                isolation: command
+                    .isolation
+                    .clone()
+                    .unwrap_or_else(|| "readonly".to_string()),
+                freshness: None,
+                status: "submitted".to_string(),
+                artifact_refs: Vec::new(),
+                consolidation_receipt_id: None,
+                selected_model_profile_readiness_status: Some("manual_override".to_string()),
+                budget_posture: Some("manual_override".to_string()),
+                cap_posture: Some("manual_override".to_string()),
+                write_scope_classification: command.isolation.clone(),
+            })
+            .await?;
+        return Ok((
+            vec![attempt],
+            serde_json::json!({
+                "status": "pass",
+                "stage_id": command.stage_id,
+                "source": "manual_override",
+                "attempt_count": 1,
+            }),
+        ));
+    }
+
+    let snapshot = crate::read_or_sync_launcher_activation_snapshot(store)
+        .await
+        .map_err(|error| state_store::StateStoreError::InvalidTaskRecord {
+            reason: format!("stage_attempt_policy_load_failed: {error}"),
+        })?;
+    let stage_policy = crate::runtime_assignment_builder::build_stage_attempt_policy_from_config(
+        &snapshot.compiled_bundle,
+        &command.stage_id,
+    );
+    if stage_policy["status"].as_str() != Some("pass") {
+        return Err(state_store::StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "stage_attempt_policy_blocked: {}",
+                stage_policy["blocker_codes"]
+            ),
+        });
+    }
+
+    let mut attempts = Vec::new();
+    for assignment in stage_policy["attempts"].as_array().into_iter().flatten() {
+        if assignment["enabled"].as_bool() != Some(true) {
+            continue;
+        }
+        attempts.push(
+            store
+                .record_task_attempt(state_store::RecordTaskAttemptRequest {
+                    attempt_id: Some(task_attempt_policy_attempt_id(
+                        &command.task_id,
+                        &command.stage_id,
+                        assignment["attempt_id"].as_str().unwrap_or("attempt"),
+                    )),
+                    task_id: command.task_id.clone(),
+                    stage_id: command.stage_id.clone(),
+                    backend: json_string_field(
+                        assignment,
+                        &[
+                            "selected_dispatch_backend_id",
+                            "selected_backend_id",
+                            "selected_backend",
+                            "selected_carrier_id",
+                            "requested_carrier_id",
+                        ],
+                    )
+                    .unwrap_or_else(|| "unknown_backend".to_string()),
+                    model_profile: json_string_field(
+                        assignment,
+                        &[
+                            "selected_model_profile_id",
+                            "selected_model_profile",
+                            "requested_model_profile_id",
+                        ],
+                    )
+                    .unwrap_or_else(|| "unknown_model_profile".to_string()),
+                    isolation: json_string_field(assignment, &["isolation"])
+                        .unwrap_or_else(|| "readonly".to_string()),
+                    freshness: None,
+                    status: "submitted".to_string(),
+                    artifact_refs: Vec::new(),
+                    consolidation_receipt_id: None,
+                    selected_model_profile_readiness_status: json_string_field(
+                        assignment,
+                        &["selected_model_profile_readiness_status"],
+                    ),
+                    budget_posture: json_string_field(
+                        assignment,
+                        &["budget_verdict", "budget_policy"],
+                    ),
+                    cap_posture: stage_policy["fanout"]["cap_posture"]
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| Some("configured".to_string())),
+                    write_scope_classification: json_string_field(
+                        assignment,
+                        &["selected_write_scope", "write_scope"],
+                    ),
+                })
+                .await?,
+        );
+    }
+    Ok((attempts, stage_policy))
+}
+
+fn json_string_field(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value[*key]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn normalize_artifact_refs_for_attempt(values: &[String]) -> Vec<String> {
+    let mut refs = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if !value.is_empty() && !refs.iter().any(|existing| existing == value) {
+            refs.push(value.to_string());
+        }
+    }
+    refs
+}
+
+fn task_attempt_policy_attempt_id(task_id: &str, stage_id: &str, attempt_id: &str) -> String {
+    format!(
+        "{}--{}--{}",
+        task_attempt_record_component(task_id),
+        task_attempt_record_component(stage_id),
+        task_attempt_record_component(attempt_id)
+    )
+}
+
+fn task_attempt_record_component(value: &str) -> String {
+    let normalized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let normalized = normalized.trim_matches('-');
+    if normalized.is_empty() {
+        "attempt".to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
 async fn run_task_attempt(command: TaskAttemptArgs) -> ExitCode {
     match command.command {
+        TaskAttemptCommand::Dispatch(command) => run_task_attempt_dispatch(command).await,
+        TaskAttemptCommand::Status(command) => run_task_attempt_status(command).await,
+        TaskAttemptCommand::Collect(command) => run_task_attempt_collect(command).await,
         TaskAttemptCommand::Record(command) => {
             let state_dir = command
                 .state_dir
@@ -6079,6 +6583,10 @@ async fn run_task_attempt(command: TaskAttemptArgs) -> ExitCode {
                         status: command.status,
                         artifact_refs: command.artifact_refs,
                         consolidation_receipt_id: command.consolidation_receipt_id,
+                        selected_model_profile_readiness_status: None,
+                        budget_posture: None,
+                        cap_posture: None,
+                        write_scope_classification: None,
                     };
                     match store.record_task_attempt(request).await {
                         Ok(attempt) => {
@@ -6241,6 +6749,26 @@ fn print_task_attempt_payload(
                         payload["stage_summary"].clone(),
                     ),
                     crate::operator_toon_report::OperatorToonField::value(
+                        "attempts",
+                        payload["attempts"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "collected_artifacts",
+                        payload["collected_artifacts"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "canonical_task_notes_mutated",
+                        payload["canonical_task_notes_mutated"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "active_stage",
+                        payload["active_stage"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "stages",
+                        payload["stages"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
                         "blocker_codes",
                         payload["blocker_codes"].clone(),
                     ),
@@ -6304,6 +6832,83 @@ fn task_attempt_summary_payload(
         serde_json::json!({
             "attempt": serde_json::Value::Null,
             "stage_summary": summary,
+        }),
+    )
+}
+
+fn task_attempt_dispatch_payload(
+    surface: &str,
+    task_id: &str,
+    stage_id: &str,
+    attempts: Vec<state_store::TaskAttemptRecord>,
+    summary: Option<state_store::TaskStageSummary>,
+    stage_policy: serde_json::Value,
+) -> serde_json::Value {
+    let artifact_refs = serde_json::json!({
+        "surface": surface,
+        "task_id": task_id,
+        "stage_id": stage_id,
+        "attempt_ids": attempts
+            .iter()
+            .map(|attempt| attempt.attempt_id.clone())
+            .collect::<Vec<_>>(),
+    });
+    task_attempt_operator_payload(
+        surface,
+        Vec::new(),
+        Vec::new(),
+        artifact_refs,
+        serde_json::json!({
+            "attempt": serde_json::Value::Null,
+            "attempts": attempts,
+            "stage_summary": summary,
+            "stage_policy": stage_policy,
+            "canonical_task_notes_mutated": false,
+        }),
+    )
+}
+
+fn task_attempt_collect_payload(
+    surface: &str,
+    attempt: &state_store::TaskAttemptRecord,
+    summary: Option<state_store::TaskStageSummary>,
+    validated_artifacts: Vec<String>,
+) -> serde_json::Value {
+    let mut payload = task_attempt_success_payload(surface, attempt, summary);
+    payload["collected_artifacts"] = serde_json::json!(validated_artifacts);
+    payload["artifact_refs"] = serde_json::json!({
+        "validated": payload["collected_artifacts"].clone(),
+    });
+    payload["canonical_task_notes_mutated"] = serde_json::json!(false);
+    payload
+}
+
+fn task_stage_status_payload(
+    surface: &str,
+    task_id: &str,
+    active_stage: Option<&str>,
+    summaries: Vec<state_store::TaskStageSummary>,
+) -> serde_json::Value {
+    let stages = summaries
+        .iter()
+        .map(|summary| (summary.stage_id.clone(), serde_json::json!(summary)))
+        .collect::<serde_json::Map<_, _>>();
+    task_attempt_operator_payload(
+        surface,
+        Vec::new(),
+        Vec::new(),
+        serde_json::json!({
+            "surface": surface,
+            "task_id": task_id,
+            "active_stage": active_stage,
+            "stage_count": stages.len(),
+        }),
+        serde_json::json!({
+            "task_id": task_id,
+            "active_stage": active_stage,
+            "stages": stages,
+            "attempt": serde_json::Value::Null,
+            "stage_summary": summaries.first(),
         }),
     )
 }
@@ -6436,6 +7041,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 | "validate-graph"
                 | "dep"
                 | "handoff"
+                | "attempt"
+                | "stage"
                 | "next-lawful",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
@@ -8236,6 +8843,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             }
         }
         TaskCommand::Attempt(command) => run_task_attempt(command).await,
+        TaskCommand::Stage(command) => run_task_stage(command).await,
         TaskCommand::Split(command) => run_task_split_like(command, "vida task split").await,
         TaskCommand::SpawnBlocker(command) => {
             run_task_spawn_blocker_like(command, "vida task spawn-blocker").await

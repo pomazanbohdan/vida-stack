@@ -43,7 +43,7 @@ const TASK_VERIFY_ABOUT: &str =
     "record partial verification evidence on one task without closing it";
 const TASK_VERIFY_LONG_ABOUT: &str = "Record partial verification evidence on one task without closing it.\n\nUse this when source changes and tests are verified but browser, API, or external proof remains unavailable due to a runtime condition. The command leaves the task open, appends structured verification notes, updates proof-blocking labels, and emits source_fixed/tests_green/proof_blocked fields in JSON.";
 const TASK_VERIFY_AFTER_HELP: &str = "Examples:\n  vida task verify <task-id> --source-fixed --tests-green --proof-blocked --proof-blocker \"browser proof unavailable\" --evidence \"cargo test -p vida task_verify\" --json\n\nOptions:\n  --source-fixed          Record that the source fix is complete\n  --tests-green           Record that focused tests passed\n  --proof-blocked         Record that final proof is pending on runtime/external conditions\n  --proof-blocker <text>  Human-readable proof blocker reason\n  --evidence <text>       Evidence command, file, receipt, or observation; accepts repeated flags\n  --state-dir <path>      Override the TaskFlow state directory\n  --json                  Emit machine-readable JSON output";
-const TASK_ATTEMPT_AFTER_HELP: &str = "Examples:\n  vida task attempt record <task-id> --stage-id analysis --backend vibe --model-profile medium --isolation readonly --freshness snapshot-2026-06-05 --status submitted --artifact-ref report.json\n  vida task attempt transition <attempt-id> --task-id <task-id> --stage-id analysis --status accepted --consolidation-receipt receipt-1\n  vida task attempt summary <task-id> --stage-id analysis\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation.";
+const TASK_ATTEMPT_AFTER_HELP: &str = "Examples:\n  vida task attempt dispatch <task-id> --stage-id analysis\n  vida task attempt status <task-id> --stage-id analysis\n  vida task attempt collect <task-id> --stage-id analysis --attempt-id <attempt-id> --artifact-ref report.json --status produced\n  vida task attempt record <task-id> --stage-id analysis --backend vibe --model-profile medium --isolation readonly --freshness snapshot-2026-06-05 --status submitted --artifact-ref report.json\n  vida task attempt transition <attempt-id> --task-id <task-id> --stage-id analysis --status accepted --consolidation-receipt receipt-1\n  vida task attempt summary <task-id> --stage-id analysis\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation.";
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
 pub(crate) enum RenderMode {
@@ -741,6 +741,8 @@ pub(crate) enum TaskCommand {
         after_help = TASK_ATTEMPT_AFTER_HELP
     )]
     Attempt(TaskAttemptArgs),
+    #[command(about = "inspect per-stage task execution status over the task attempt ledger")]
+    Stage(TaskStageArgs),
     #[command(about = "inspect dirty git files against one task's owned paths")]
     OwnedStatus(TaskOwnedStatusArgs),
     #[command(about = "record delegated agent handoff receipts for a task")]
@@ -1747,12 +1749,158 @@ pub(crate) struct TaskAttemptArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum TaskAttemptCommand {
+    #[command(about = "create stage attempt ledger rows from configured stage policy")]
+    Dispatch(TaskAttemptDispatchArgs),
+    #[command(about = "report stage attempt ledger status for one task and stage")]
+    Status(TaskAttemptStatusArgs),
+    #[command(about = "collect attempt artifacts into the ledger without mutating task notes")]
+    Collect(TaskAttemptCollectArgs),
     #[command(about = "record one stage attempt for a task")]
     Record(TaskAttemptRecordArgs),
     #[command(about = "transition an existing stage attempt after validating task binding")]
     Transition(TaskAttemptTransitionArgs),
     #[command(about = "summarize stage attempt counts and latest consolidation evidence")]
     Summary(TaskAttemptSummaryArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskAttemptDispatchArgs {
+    #[arg(help = "Task id that owns the stage attempts")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "stage-id",
+        visible_alias = "stage",
+        value_name = "STAGE",
+        help = "Configured stage id to dispatch"
+    )]
+    pub(crate) stage_id: String,
+
+    #[arg(
+        long = "backend",
+        help = "Override backend or agent carrier for a single attempt"
+    )]
+    pub(crate) backend: Option<String>,
+
+    #[arg(
+        long = "model-profile",
+        help = "Override model profile for a single attempt"
+    )]
+    pub(crate) model_profile: Option<String>,
+
+    #[arg(
+        long = "isolation",
+        help = "Override isolation mode for a single attempt such as readonly or patch_proposal"
+    )]
+    pub(crate) isolation: Option<String>,
+
+    #[arg(long = "attempt-id", help = "Optional caller-supplied attempt id")]
+    pub(crate) attempt_id: Option<String>,
+
+    #[arg(
+        long = "policy",
+        default_value = "configured",
+        help = "Attempt dispatch policy source; configured uses agent_system.stage_attempt_policies"
+    )]
+    pub(crate) policy: String,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskAttemptStatusArgs {
+    #[arg(help = "Task id that owns the stage attempts")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "stage-id",
+        visible_alias = "stage",
+        value_name = "STAGE",
+        help = "Stage id to summarize"
+    )]
+    pub(crate) stage_id: String,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskAttemptCollectArgs {
+    #[arg(help = "Task id that owns the attempt")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "stage-id",
+        visible_alias = "stage",
+        value_name = "STAGE",
+        help = "Expected stage binding for the attempt"
+    )]
+    pub(crate) stage_id: String,
+
+    #[arg(long = "attempt-id", help = "Attempt id to collect artifacts for")]
+    pub(crate) attempt_id: Option<String>,
+
+    #[arg(
+        long = "artifact-ref",
+        help = "Artifact, receipt, report, or patch proposal reference; accepts repeated flags"
+    )]
+    pub(crate) artifact_refs: Vec<String>,
+
+    #[arg(
+        long = "status",
+        default_value = "produced",
+        help = "Collected attempt status: produced, validating, accepted, partially_accepted, rejected, stale, or failed"
+    )]
+    pub(crate) status: String,
+
+    #[arg(
+        long = "consolidation-receipt",
+        help = "Optional consolidation receipt id produced from this attempt"
+    )]
+    pub(crate) consolidation_receipt_id: Option<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1811,6 +1959,49 @@ pub(crate) struct TaskAttemptRecordArgs {
         help = "Optional consolidation receipt id produced from this attempt"
     )]
     pub(crate) consolidation_receipt_id: Option<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct TaskStageArgs {
+    #[command(subcommand)]
+    pub(crate) command: TaskStageCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum TaskStageCommand {
+    #[command(about = "report stage status for one task from the task attempt ledger")]
+    Status(TaskStageStatusArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskStageStatusArgs {
+    #[arg(help = "Task id that owns the stage")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "stage-id",
+        visible_alias = "stage",
+        value_name = "STAGE",
+        help = "Stage id to summarize; omitted reports all stages for the task"
+    )]
+    pub(crate) stage_id: Option<String>,
 
     #[arg(
         long = "state-dir",

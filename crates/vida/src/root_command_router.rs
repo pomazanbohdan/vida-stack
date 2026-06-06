@@ -162,9 +162,15 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         TaskCommand::Block(command) => command.state_dir.is_some(),
         TaskCommand::Verify(command) => command.state_dir.is_some(),
         TaskCommand::Attempt(command) => match &command.command {
+            super::TaskAttemptCommand::Dispatch(command) => command.state_dir.is_some(),
+            super::TaskAttemptCommand::Status(command) => command.state_dir.is_some(),
+            super::TaskAttemptCommand::Collect(command) => command.state_dir.is_some(),
             super::TaskAttemptCommand::Record(command) => command.state_dir.is_some(),
             super::TaskAttemptCommand::Transition(command) => command.state_dir.is_some(),
             super::TaskAttemptCommand::Summary(command) => command.state_dir.is_some(),
+        },
+        TaskCommand::Stage(command) => match &command.command {
+            super::TaskStageCommand::Status(command) => command.state_dir.is_some(),
         },
         TaskCommand::OwnedStatus(command) => command.state_dir.is_some(),
         TaskCommand::Close(command) => command.state_dir.is_some(),

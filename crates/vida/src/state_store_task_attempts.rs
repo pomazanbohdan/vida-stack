@@ -12,6 +12,14 @@ pub struct TaskAttemptRecord {
     pub status: String,
     pub artifact_refs: Vec<String>,
     pub consolidation_receipt_id: Option<String>,
+    #[serde(default)]
+    pub selected_model_profile_readiness_status: Option<String>,
+    #[serde(default)]
+    pub budget_posture: Option<String>,
+    #[serde(default)]
+    pub cap_posture: Option<String>,
+    #[serde(default)]
+    pub write_scope_classification: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -39,6 +47,10 @@ pub struct RecordTaskAttemptRequest {
     pub status: String,
     pub artifact_refs: Vec<String>,
     pub consolidation_receipt_id: Option<String>,
+    pub selected_model_profile_readiness_status: Option<String>,
+    pub budget_posture: Option<String>,
+    pub cap_posture: Option<String>,
+    pub write_scope_classification: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +122,12 @@ impl StateStore {
             status,
             artifact_refs: normalize_artifact_refs(request.artifact_refs),
             consolidation_receipt_id: normalize_optional(request.consolidation_receipt_id),
+            selected_model_profile_readiness_status: normalize_optional(
+                request.selected_model_profile_readiness_status,
+            ),
+            budget_posture: normalize_optional(request.budget_posture),
+            cap_posture: normalize_optional(request.cap_posture),
+            write_scope_classification: normalize_optional(request.write_scope_classification),
             created_at: now.clone(),
             updated_at: now,
         };
@@ -194,6 +212,23 @@ impl StateStore {
             .await?;
         let task_id = normalize_non_empty("task_id", task_id)?;
         let stage_id = normalize_non_empty("stage_id", stage_id)?;
+        let attempts = self.task_stage_attempts(&task_id, &stage_id).await?;
+        let stage = self.task_stage_record(&task_id, &stage_id).await?;
+        Ok(task_stage_summary_from_attempts(
+            task_id,
+            stage_id,
+            stage.as_ref(),
+            &attempts,
+        ))
+    }
+
+    pub async fn task_stage_attempts(
+        &self,
+        task_id: &str,
+        stage_id: &str,
+    ) -> Result<Vec<TaskAttemptRecord>, StateStoreError> {
+        let task_id = normalize_non_empty("task_id", task_id)?;
+        let stage_id = normalize_non_empty("stage_id", stage_id)?;
         let mut response = self
             .db
             .query(format!(
@@ -203,13 +238,24 @@ impl StateStore {
             ))
             .await?;
         let attempts: Vec<TaskAttemptRecord> = response.take(0)?;
-        let stage = self.task_stage_record(&task_id, &stage_id).await?;
-        Ok(task_stage_summary_from_attempts(
-            task_id,
-            stage_id,
-            stage.as_ref(),
-            &attempts,
-        ))
+        Ok(attempts)
+    }
+
+    pub async fn task_attempts_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskAttemptRecord>, StateStoreError> {
+        let task_id = normalize_non_empty("task_id", task_id)?;
+        self.show_task(&task_id).await?;
+        let mut response = self
+            .db
+            .query(format!(
+                "SELECT * FROM task_attempt WHERE task_id = '{}' ORDER BY stage_id ASC, updated_at ASC;",
+                escape_surql_literal(&task_id)
+            ))
+            .await?;
+        let attempts: Vec<TaskAttemptRecord> = response.take(0)?;
+        Ok(attempts)
     }
 
     async fn task_stage_record(
@@ -399,6 +445,10 @@ mod tests {
                 status: "rejected".to_string(),
                 artifact_refs: vec!["artifact-a".to_string()],
                 consolidation_receipt_id: None,
+                selected_model_profile_readiness_status: None,
+                budget_posture: None,
+                cap_posture: None,
+                write_scope_classification: None,
                 created_at: "2026-06-05T00:00:00Z".to_string(),
                 updated_at: "2026-06-05T00:00:00Z".to_string(),
             },
@@ -413,6 +463,10 @@ mod tests {
                 status: "accepted".to_string(),
                 artifact_refs: vec!["artifact-a".to_string(), "artifact-b".to_string()],
                 consolidation_receipt_id: Some("receipt-b".to_string()),
+                selected_model_profile_readiness_status: Some("ready".to_string()),
+                budget_posture: Some("in_budget".to_string()),
+                cap_posture: Some("cap_ready".to_string()),
+                write_scope_classification: Some("read-only".to_string()),
                 created_at: "2026-06-05T00:01:00Z".to_string(),
                 updated_at: "2026-06-05T00:01:00Z".to_string(),
             },
