@@ -1951,6 +1951,119 @@ fn task_progress_summary_for_basis(
     }
 }
 
+async fn task_stage_ensemble_operator_summary(
+    store: &StateStore,
+    task_id: &str,
+) -> Result<serde_json::Value, state_store::StateStoreError> {
+    let task = store.show_task(task_id).await?;
+    let attempts = store.task_attempts_for_task(task_id).await?;
+    Ok(task_stage_ensemble_operator_summary_value(&task, &attempts))
+}
+
+async fn task_stage_ensemble_operator_summary_from_state_dir(
+    state_dir: &std::path::Path,
+    task_id: &str,
+) -> Option<serde_json::Value> {
+    let store = StateStore::open_existing_read_only(state_dir.to_path_buf())
+        .await
+        .ok()?;
+    task_stage_ensemble_operator_summary(&store, task_id)
+        .await
+        .ok()
+}
+
+pub(crate) fn task_stage_ensemble_operator_summary_value(
+    task: &state_store::TaskRecord,
+    attempts: &[state_store::TaskAttemptRecord],
+) -> serde_json::Value {
+    let mut stage_ids = std::collections::BTreeSet::<String>::new();
+    let mut status_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut latest_attempt: Option<&state_store::TaskAttemptRecord> = None;
+    let mut latest_consolidation_receipt_id: Option<String> = None;
+    let mut stale_count = 0usize;
+
+    for attempt in attempts {
+        stage_ids.insert(attempt.stage_id.clone());
+        *status_counts.entry(attempt.status.clone()).or_insert(0) += 1;
+        if attempt.status == "stale" || attempt.freshness != task.updated_at {
+            stale_count += 1;
+        }
+        if latest_consolidation_receipt_id.is_none() {
+            latest_consolidation_receipt_id = attempt.consolidation_receipt_id.clone();
+        } else if attempt.consolidation_receipt_id.is_some()
+            && latest_attempt
+                .map(|latest| attempt.updated_at >= latest.updated_at)
+                .unwrap_or(true)
+        {
+            latest_consolidation_receipt_id = attempt.consolidation_receipt_id.clone();
+        }
+        if latest_attempt
+            .map(|latest| {
+                attempt
+                    .updated_at
+                    .cmp(&latest.updated_at)
+                    .then_with(|| attempt.attempt_id.cmp(&latest.attempt_id))
+                    .is_gt()
+            })
+            .unwrap_or(true)
+        {
+            latest_attempt = Some(attempt);
+        }
+    }
+
+    let active_stage = latest_attempt.map(|attempt| attempt.stage_id.clone());
+    let latest_attempt_status = latest_attempt.map(|attempt| attempt.status.clone());
+    let next_command = task_stage_ensemble_next_command(
+        &task.id,
+        active_stage.as_deref(),
+        latest_attempt_status.as_deref(),
+        latest_consolidation_receipt_id.as_deref(),
+        attempts.is_empty(),
+    );
+
+    serde_json::json!({
+        "task_id": task.id,
+        "active_stage": active_stage,
+        "configured_stage_count": stage_ids.len(),
+        "configured_attempt_count": attempts.len(),
+        "status_counts": status_counts,
+        "running_count": status_counts.get("running").copied().unwrap_or(0),
+        "produced_count": status_counts.get("produced").copied().unwrap_or(0),
+        "accepted_count": status_counts.get("accepted").copied().unwrap_or(0),
+        "rejected_count": status_counts.get("rejected").copied().unwrap_or(0),
+        "stale_count": stale_count,
+        "latest_attempt_id": latest_attempt.map(|attempt| attempt.attempt_id.clone()),
+        "latest_attempt_status": latest_attempt_status,
+        "latest_consolidation_receipt_id": latest_consolidation_receipt_id,
+        "next_command": next_command,
+    })
+}
+
+fn task_stage_ensemble_next_command(
+    task_id: &str,
+    active_stage: Option<&str>,
+    latest_attempt_status: Option<&str>,
+    latest_consolidation_receipt_id: Option<&str>,
+    no_attempts: bool,
+) -> String {
+    let quoted_task_id = crate::launcher_task_commands::shell_quote(task_id);
+    let stage = active_stage.unwrap_or("implementation");
+    let quoted_stage = crate::launcher_task_commands::shell_quote(stage);
+    if no_attempts {
+        return format!("vida task attempt dispatch {quoted_task_id} --stage {quoted_stage}");
+    }
+    if matches!(
+        latest_attempt_status,
+        Some("submitted" | "running" | "produced" | "validating")
+    ) {
+        return format!("vida task attempt collect {quoted_task_id} --stage {quoted_stage}");
+    }
+    if latest_consolidation_receipt_id.is_none() {
+        return format!("vida task attempt consolidate {quoted_task_id} --stage {quoted_stage}");
+    }
+    format!("vida task stage status {quoted_task_id} --stage {quoted_stage}")
+}
+
 fn task_direct_child_progress_summary_from_rows(
     rows: &[state_store::TaskRecord],
     task_id: &str,
@@ -8089,7 +8202,17 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         Ok((rows, _metadata)) => {
                             match task_progress_summary_for_basis(&rows, task_id, basis) {
                                 Ok(summary) => {
-                                    print_task_progress(command.render, &summary, command.json);
+                                    let stage_ensemble =
+                                        task_stage_ensemble_operator_summary_from_state_dir(
+                                            &state_dir, task_id,
+                                        )
+                                        .await;
+                                    crate::task_cli_render::print_task_progress_with_stage_ensemble(
+                                        command.render,
+                                        &summary,
+                                        stage_ensemble,
+                                        command.json,
+                                    );
                                     ExitCode::SUCCESS
                                 }
                                 Err(error) => {
@@ -8107,7 +8230,16 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     match StateStore::open_existing_read_only(state_dir.clone()).await {
                         Ok(store) => match store.task_progress_summary(task_id).await {
                             Ok(summary) => {
-                                print_task_progress(command.render, &summary, command.json);
+                                let stage_ensemble =
+                                    task_stage_ensemble_operator_summary(&store, task_id)
+                                        .await
+                                        .ok();
+                                crate::task_cli_render::print_task_progress_with_stage_ensemble(
+                                    command.render,
+                                    &summary,
+                                    stage_ensemble,
+                                    command.json,
+                                );
                                 ExitCode::SUCCESS
                             }
                             Err(error) => {
@@ -8127,7 +8259,17 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             };
                             match StateStore::task_progress_summary_from_rows(&rows, task_id) {
                                 Ok(summary) => {
-                                    print_task_progress(command.render, &summary, command.json);
+                                    let stage_ensemble =
+                                        task_stage_ensemble_operator_summary_from_state_dir(
+                                            &state_dir, task_id,
+                                        )
+                                        .await;
+                                    crate::task_cli_render::print_task_progress_with_stage_ensemble(
+                                        command.render,
+                                        &summary,
+                                        stage_ensemble,
+                                        command.json,
+                                    );
                                     ExitCode::SUCCESS
                                 }
                                 Err(error) => {

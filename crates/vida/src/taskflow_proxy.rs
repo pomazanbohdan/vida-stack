@@ -5618,6 +5618,24 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     };
     let (ready_parallel_safe, parallel_blockers, parallel_candidates_after_current) =
         graph_summary_parallel_contract_fields(&display_scheduling);
+    let stage_ensemble = if let Some(task_id) = canonical_current_task_id.as_deref() {
+        all_tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .map(|task| async {
+                let attempts = store
+                    .task_attempts_for_task(task_id)
+                    .await
+                    .unwrap_or_default();
+                crate::task_surface::task_stage_ensemble_operator_summary_value(task, &attempts)
+            })
+    } else {
+        None
+    };
+    let stage_ensemble = match stage_ensemble {
+        Some(summary) => Some(summary.await),
+        None => None,
+    };
 
     let mut blocker_codes = continuation_decision.blocker_codes.clone();
     blocker_codes.extend(graph_summary_runtime_gate_blocker_codes(
@@ -5702,6 +5720,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "ready_parallel_safe": ready_parallel_safe,
         "parallel_blockers": parallel_blockers,
         "parallel_candidates_after_current": parallel_candidates_after_current,
+        "stage_ensemble": stage_ensemble,
         "primary_ready_task": primary_ready_task,
         "primary_blocked_task": primary_blocked_task,
         "candidate_task_context": continuation_decision.candidate_task_context,
@@ -5768,6 +5787,26 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
         if let Some(task_id) = payload["current_task_id"].as_str() {
             crate::print_surface_line(RenderMode::Plain, "current_task_id", task_id);
+        }
+        if payload["stage_ensemble"].is_object() {
+            let stage = payload["stage_ensemble"]["active_stage"]
+                .as_str()
+                .unwrap_or("none");
+            let attempts = payload["stage_ensemble"]["configured_attempt_count"]
+                .as_u64()
+                .unwrap_or(0);
+            crate::print_surface_line(
+                RenderMode::Plain,
+                "stage_ensemble",
+                &format!("active_stage={stage} attempts={attempts}"),
+            );
+            if let Some(next_command) = payload["stage_ensemble"]["next_command"].as_str() {
+                crate::print_surface_line(
+                    RenderMode::Plain,
+                    "stage_ensemble_next_command",
+                    next_command,
+                );
+            }
         }
         if let Some(record) = blocked_tasks.first() {
             crate::print_surface_line(RenderMode::Plain, "primary_blocked_task", &record.task.id);

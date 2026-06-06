@@ -470,7 +470,27 @@ pub(crate) fn task_progress_payload(summary: &TaskProgressSummary) -> serde_json
     )
 }
 
+pub(crate) fn task_progress_payload_with_stage_ensemble(
+    summary: &TaskProgressSummary,
+    stage_ensemble: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut payload = task_progress_payload(summary);
+    if let Some(stage_ensemble) = stage_ensemble {
+        payload["progress"]["stage_ensemble"] = stage_ensemble.clone();
+        payload["stage_ensemble"] = stage_ensemble;
+    }
+    payload
+}
+
 pub(crate) fn task_progress_toon_text(surface: &str, summary: &TaskProgressSummary) -> String {
+    task_progress_toon_text_with_stage_ensemble(surface, summary, None)
+}
+
+pub(crate) fn task_progress_toon_text_with_stage_ensemble(
+    surface: &str,
+    summary: &TaskProgressSummary,
+    stage_ensemble: Option<&serde_json::Value>,
+) -> String {
     let toon_scalar = taskflow_format_toon::sanitize_toon_scalar;
     let mut lines = vec![
         format!("task: {}", toon_scalar(&summary.root_task.id)),
@@ -495,6 +515,29 @@ pub(crate) fn task_progress_toon_text(surface: &str, summary: &TaskProgressSumma
             toon_scalar(&summary.recommended_next_action)
         ));
     }
+    if let Some(stage_ensemble) = stage_ensemble {
+        let active_stage = stage_ensemble["active_stage"].as_str().unwrap_or("none");
+        let latest_receipt = stage_ensemble["latest_consolidation_receipt_id"]
+            .as_str()
+            .unwrap_or("none");
+        let next_command = stage_ensemble["next_command"].as_str().unwrap_or("none");
+        lines.push(format!(
+            "stage_ensemble: active_stage={} stages={} attempts={} running={} produced={} accepted={} rejected={} stale={}",
+            toon_scalar(active_stage),
+            stage_ensemble["configured_stage_count"].as_u64().unwrap_or(0),
+            stage_ensemble["configured_attempt_count"].as_u64().unwrap_or(0),
+            stage_ensemble["running_count"].as_u64().unwrap_or(0),
+            stage_ensemble["produced_count"].as_u64().unwrap_or(0),
+            stage_ensemble["accepted_count"].as_u64().unwrap_or(0),
+            stage_ensemble["rejected_count"].as_u64().unwrap_or(0),
+            stage_ensemble["stale_count"].as_u64().unwrap_or(0)
+        ));
+        lines.push(format!(
+            "latest_stage_receipt: {}",
+            toon_scalar(latest_receipt)
+        ));
+        lines.push(format!("stage_next: {}", toon_scalar(next_command)));
+    }
     taskflow_format_toon::render_section(surface, &lines.join("\n  "))
 }
 
@@ -503,7 +546,16 @@ pub(crate) fn print_task_progress(
     summary: &TaskProgressSummary,
     as_json: bool,
 ) {
-    let payload = task_progress_payload(summary);
+    print_task_progress_with_stage_ensemble(render, summary, None, as_json);
+}
+
+pub(crate) fn print_task_progress_with_stage_ensemble(
+    render: RenderMode,
+    summary: &TaskProgressSummary,
+    stage_ensemble: Option<serde_json::Value>,
+    as_json: bool,
+) {
+    let payload = task_progress_payload_with_stage_ensemble(summary, stage_ensemble.clone());
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -513,7 +565,14 @@ pub(crate) fn print_task_progress(
     }
 
     if matches!(render, RenderMode::Plain) {
-        println!("{}", task_progress_toon_text("vida task progress", summary));
+        println!(
+            "{}",
+            task_progress_toon_text_with_stage_ensemble(
+                "vida task progress",
+                summary,
+                stage_ensemble.as_ref()
+            )
+        );
         return;
     }
 
@@ -568,6 +627,21 @@ pub(crate) fn print_task_progress(
         summary.next_required_command.as_deref().unwrap_or("none"),
     );
     print_surface_line(render, "next action", &summary.recommended_next_action);
+    if let Some(stage_ensemble) = stage_ensemble.as_ref() {
+        print_surface_line(
+            render,
+            "stage ensemble active",
+            stage_ensemble["active_stage"].as_str().unwrap_or("none"),
+        );
+        print_surface_line(
+            render,
+            "stage ensemble attempts",
+            &stage_ensemble["configured_attempt_count"].to_string(),
+        );
+        if let Some(command) = stage_ensemble["next_command"].as_str() {
+            print_surface_line(render, "stage next", command);
+        }
+    }
     if summary.status_counts.is_empty() {
         print_surface_line(render, "status counts", "none");
         return;

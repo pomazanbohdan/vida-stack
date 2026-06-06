@@ -6148,6 +6148,151 @@ fn task_attempt_implementation_artifact_validation() {
 }
 
 #[test]
+fn stage_ensemble_operator_summary() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("stage-ensemble-summary");
+    create_task_attempt_fixture_with_owned_paths(
+        &state_dir,
+        &task_id,
+        &[
+            "crates/vida/src/task_surface.rs",
+            "crates/vida/src/task_cli_render.rs",
+        ],
+    );
+
+    for (attempt_id, stage, status, freshness, receipt) in [
+        ("analysis-running", "analysis", "running", None, None),
+        (
+            "implementation-produced",
+            "implementation",
+            "produced",
+            None,
+            None,
+        ),
+        (
+            "implementation-rejected",
+            "implementation",
+            "rejected",
+            None,
+            None,
+        ),
+        (
+            "implementation-accepted",
+            "implementation",
+            "accepted",
+            None,
+            Some("receipt-implementation-accepted"),
+        ),
+        (
+            "implementation-stale",
+            "implementation",
+            "stale",
+            Some("old-snapshot"),
+            None,
+        ),
+    ] {
+        let mut args = vec![
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            attempt_id,
+            "--stage-id",
+            stage,
+            "--backend",
+            "vibe",
+            "--model-profile",
+            "mistral-medium",
+            "--isolation",
+            "readonly",
+            "--status",
+            status,
+        ];
+        if let Some(freshness) = freshness {
+            args.push("--freshness");
+            args.push(freshness);
+        }
+        if let Some(receipt) = receipt {
+            args.push("--consolidation-receipt");
+            args.push(receipt);
+        }
+        args.push("--json");
+        let record = run_command_json(&args, &state_dir);
+        assert_eq!(record["status"], "pass");
+    }
+
+    let progress = run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(progress["surface"], "vida task progress");
+    assert_eq!(progress["status"], "pass");
+    let stage_ensemble = &progress["stage_ensemble"];
+    assert_eq!(stage_ensemble["task_id"], task_id);
+    assert_eq!(stage_ensemble["active_stage"], "implementation");
+    assert_eq!(stage_ensemble["configured_stage_count"], 2);
+    assert_eq!(stage_ensemble["configured_attempt_count"], 5);
+    assert_eq!(stage_ensemble["running_count"], 1);
+    assert_eq!(stage_ensemble["produced_count"], 1);
+    assert_eq!(stage_ensemble["accepted_count"], 1);
+    assert_eq!(stage_ensemble["rejected_count"], 1);
+    assert_eq!(stage_ensemble["stale_count"], 1);
+    assert_eq!(
+        stage_ensemble["latest_consolidation_receipt_id"],
+        "receipt-implementation-accepted"
+    );
+    assert_eq!(
+        progress["progress"]["stage_ensemble"],
+        progress["stage_ensemble"]
+    );
+    assert_eq!(
+        stage_ensemble["next_command"],
+        format!("vida task stage status {task_id} --stage implementation")
+    );
+
+    let default_output = run_and_assert_success(&["task", "progress", &task_id], &state_dir);
+    assert!(default_output.starts_with("vida task progress\n"));
+    assert!(default_output.contains("stage_ensemble: active_stage=implementation"));
+    assert!(default_output.contains("attempts=5"));
+    assert!(default_output.contains("running=1"));
+    assert!(default_output.contains("produced=1"));
+    assert!(default_output.contains("accepted=1"));
+    assert!(default_output.contains("rejected=1"));
+    assert!(default_output.contains("stale=1"));
+    assert!(default_output.contains("latest_stage_receipt: receipt-implementation-accepted"));
+    assert!(default_output.contains(&format!(
+        "stage_next: vida task stage status {task_id} --stage implementation"
+    )));
+    assert!(!default_output.trim_start().starts_with('{'));
+    assert!(!default_output.contains("--json"));
+
+    let graph_summary = run_command_json(
+        &["taskflow", "graph-summary", "--operator", "--json"],
+        &state_dir,
+    );
+    assert_eq!(graph_summary["surface"], "vida taskflow graph-summary");
+    assert_eq!(graph_summary["status"], "pass");
+    let graph_stage_ensemble = &graph_summary["stage_ensemble"];
+    assert_eq!(graph_stage_ensemble["task_id"], task_id);
+    assert_eq!(graph_stage_ensemble["active_stage"], "implementation");
+    assert_eq!(graph_stage_ensemble["configured_attempt_count"], 5);
+    assert_eq!(
+        graph_stage_ensemble["latest_consolidation_receipt_id"],
+        "receipt-implementation-accepted"
+    );
+    assert_eq!(
+        graph_stage_ensemble["next_command"],
+        format!("vida task stage status {task_id} --stage implementation")
+    );
+
+    let graph_plain =
+        run_and_assert_success(&["taskflow", "graph-summary", "--operator"], &state_dir);
+    assert!(graph_plain.contains("stage_ensemble: active_stage=implementation attempts=5"));
+    assert!(graph_plain.contains(&format!(
+        "stage_ensemble_next_command: vida task stage status {task_id} --stage implementation"
+    )));
+    assert!(!graph_plain.contains("--json"));
+}
+
+#[test]
 fn implementation_attempt_isolation() {
     let (project_root, state_dir) = project_bound_state_dir();
     init_git_repo(&project_root);
