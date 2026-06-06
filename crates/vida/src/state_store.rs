@@ -29,6 +29,8 @@ mod state_store_run_graph_summary;
 mod state_store_scheduler_reservation;
 #[path = "state_store_source_scan.rs"]
 mod state_store_source_scan;
+#[path = "state_store_task_attempts.rs"]
+mod state_store_task_attempts;
 #[path = "state_store_task_graph.rs"]
 mod state_store_task_graph;
 #[path = "state_store_task_models.rs"]
@@ -91,8 +93,8 @@ pub(crate) use state_store_run_graph_state::{
 #[allow(unused_imports)]
 pub use state_store_run_graph_state::{
     RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
-    RunGraphMemoryGovernanceProjection, RunGraphPrincipalDelegationProjection, RunGraphStatus,
-    RunGraphSummary,
+    RunGraphDispatchTaskIdentity, RunGraphMemoryGovernanceProjection,
+    RunGraphPrincipalDelegationProjection, RunGraphStatus, RunGraphSummary,
 };
 pub(crate) use state_store_run_graph_summary::{
     default_run_graph_lane_status, deserialize_run_graph_lane_status,
@@ -114,6 +116,10 @@ use state_store_source_scan::{
     artifact_id_from_path, collect_markdown_files, hierarchy_from_path, infer_artifact_kind,
     infer_mutability_class, infer_ownership_class, normalize_path, parse_source_metadata,
     record_id_for_slice_source,
+};
+pub use state_store_task_attempts::{
+    RecordTaskAttemptRequest, TaskAttemptRecord, TaskStageRecord, TaskStageSummary,
+    TransitionTaskAttemptRequest,
 };
 pub(crate) use state_store_task_models::{
     apply_provider_mapping_to_task_jsonl_record, provider_external_key, TaskContent,
@@ -189,6 +195,8 @@ DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
 DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
 DEFINE TABLE orchestrator_claim SCHEMALESS;
 DEFINE TABLE scheduler_dispatch_reservation SCHEMALESS;
+DEFINE TABLE task_stage SCHEMALESS;
+DEFINE TABLE task_attempt SCHEMALESS;
 "#;
 
 fn state_store_recovery_hint_for_message(message: &str) -> Option<&'static str> {
@@ -1123,7 +1131,7 @@ hierarchy: framework,contracts
         );
         assert_eq!(
             step.next_action,
-            "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
+            "Run `vida taskflow consume continue` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
         );
 
         let _ = fs::remove_dir_all(&root);

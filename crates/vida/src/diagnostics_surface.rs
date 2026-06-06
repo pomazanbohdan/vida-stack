@@ -165,7 +165,9 @@ fn post_commit_closed_task_active_run_projection_mismatch(
 ) -> bool {
     let latest_run_graph_task_closed = latest_run_graph_status.is_some_and(|status| {
         closed_task_ids.iter().any(|id| id == &status.task_id)
-            && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(status)
+            && !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                status,
+            )
     });
     (!latest_run_graph_terminal_closure_has_truth && latest_run_graph_task_closed)
         || latest_terminal_task_active_run_graph_status.is_some()
@@ -505,7 +507,9 @@ async fn build_post_commit_diagnostics(
     }
     let latest_run_graph_terminal_closure_has_truth = match latest_run_graph_status.as_ref() {
         Some(status)
-            if crate::state_store::StateStore::run_graph_status_is_terminal_closure(status) =>
+            if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                status,
+            ) =>
         {
             store
                 .run_graph_terminal_closure_has_task_close_truth(status)
@@ -518,7 +522,7 @@ async fn build_post_commit_diagnostics(
     };
     let latest_run_graph_terminal_closure_without_truth =
         latest_run_graph_status.as_ref().is_some_and(|status| {
-            crate::state_store::StateStore::run_graph_status_is_terminal_closure(status)
+            crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(status)
                 && !latest_run_graph_terminal_closure_has_truth
                 && closed_task_ids.iter().any(|id| id == &status.task_id)
         });

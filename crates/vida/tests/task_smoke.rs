@@ -84,10 +84,120 @@ fn project_bound_state_dir() -> (String, String) {
             "          readiness:\n",
             "            required: false\n",
             "            ready: true\n",
+            "    senior:\n",
+            "      enabled: true\n",
+            "      subagent_backend_class: internal\n",
+            "      rate: 2\n",
+            "      default_runtime_role: verifier\n",
+            "      runtime_roles:\n",
+            "        - verifier\n",
+            "      task_classes:\n",
+            "        - verification\n",
+            "      default_model_profile: test_verifier\n",
+            "      write_scope: scoped_only\n",
+            "      model_profiles:\n",
+            "        test_verifier:\n",
+            "          profile_id: test_verifier\n",
+            "          provider: test\n",
+            "          model_ref: test-model-verifier\n",
+            "          reasoning_effort: medium\n",
+            "          normalized_cost_units: 2\n",
+            "          sandbox_mode: workspace-write\n",
+            "          write_scope: scoped_only\n",
+            "          runtime_roles:\n",
+            "            - verifier\n",
+            "          task_classes:\n",
+            "            - verification\n",
+            "          readiness:\n",
+            "            required: false\n",
+            "            ready: true\n",
+            "    middle:\n",
+            "      enabled: true\n",
+            "      subagent_backend_class: internal\n",
+            "      rate: 2\n",
+            "      default_runtime_role: business_analyst\n",
+            "      runtime_roles:\n",
+            "        - business_analyst\n",
+            "        - worker\n",
+            "        - coach\n",
+            "      task_classes:\n",
+            "        - specification\n",
+            "        - regression_test\n",
+            "        - validation\n",
+            "        - coach\n",
+            "      default_model_profile: test_middle\n",
+            "      write_scope: scoped_only\n",
+            "      model_profiles:\n",
+            "        test_middle:\n",
+            "          profile_id: test_middle\n",
+            "          provider: test\n",
+            "          model_ref: test-model-middle\n",
+            "          reasoning_effort: medium\n",
+            "          normalized_cost_units: 2\n",
+            "          sandbox_mode: workspace-write\n",
+            "          write_scope: scoped_only\n",
+            "          runtime_roles:\n",
+            "            - business_analyst\n",
+            "            - worker\n",
+            "            - coach\n",
+            "          task_classes:\n",
+            "            - specification\n",
+            "            - regression_test\n",
+            "            - validation\n",
+            "            - coach\n",
+            "          readiness:\n",
+            "            required: false\n",
+            "            ready: true\n",
             "agent_extensions:\n",
             "  role_selection:\n",
             "    mode: default\n",
             "    fallback_role: orchestrator\n",
+            "dev_team:\n",
+            "  enabled: true\n",
+            "  default_flow_id: implementation_flow\n",
+            "  orchestrator_command_contract:\n",
+            "    canonical_surface: vida agent dispatch-next\n",
+            "    default_args: [--dev-team, --materialize-packets, --current-task-id, \"{{task_id}}\"]\n",
+            "    receipt_backed_packet_required: true\n",
+            "    first_packet_must_match_configured_first_step: true\n",
+            "  work_item_flow_bindings:\n",
+            "    task: implementation_flow\n",
+            "    runtime_defect: runtime_defect_remediation\n",
+            "  roles:\n",
+            "    analyst:\n",
+            "      runtime_role: business_analyst\n",
+            "      task_classes: [specification]\n",
+            "      default_carrier: middle\n",
+            "    autotester:\n",
+            "      runtime_role: worker\n",
+            "      task_classes: [regression_test]\n",
+            "      default_carrier: middle\n",
+            "    developer:\n",
+            "      runtime_role: worker\n",
+            "      task_classes: [implementation]\n",
+            "      default_carrier: junior\n",
+            "    coach_validator:\n",
+            "      runtime_role: coach\n",
+            "      task_classes: [validation]\n",
+            "      default_carrier: middle\n",
+            "    implementer:\n",
+            "      runtime_role: worker\n",
+            "      task_classes: [implementation]\n",
+            "      default_carrier: junior\n",
+            "    tester:\n",
+            "      runtime_role: verifier\n",
+            "      task_classes: [verification]\n",
+            "      default_carrier: senior\n",
+            "  flows:\n",
+            "    implementation_flow:\n",
+            "      enabled: true\n",
+            "      steps: [implementer, tester]\n",
+            "      sequential: true\n",
+            "    runtime_defect_remediation:\n",
+            "      enabled: true\n",
+            "      work_item_bindings: [runtime_defect]\n",
+            "      steps: [analyst, autotester, developer, coach_validator, tester]\n",
+            "      sequential: true\n",
         ),
     )
     .expect("write vida.config.yaml");
@@ -124,6 +234,22 @@ fn run_and_assert_success(args: &[&str], state_dir: &str) -> String {
     let output = run_with_state_lock_retry(|| {
         let mut command = vida();
         command.args(args).env("VIDA_STATE_DIR", state_dir);
+        command
+    });
+    assert!(
+        output.status.success(),
+        "args: {args:?}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn run_and_assert_success_without_state_dir(args: &[&str]) -> String {
+    let output = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command.args(args).env_remove("VIDA_STATE_DIR");
         command
     });
     assert!(
@@ -191,6 +317,286 @@ fn create_epic_parent(state_dir: &str, parent_id: &str, title: &str, status: &st
         state_dir,
     );
     assert_eq!(parent["status"], "pass");
+}
+
+fn init_git_repo(path: &str) {
+    fs::create_dir_all(path).expect("create git repo dir");
+    let output = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(path)
+        .output()
+        .expect("git init should run");
+    assert!(
+        output.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn quality_gate_prepush_help_documents_advisor_output_modes() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let help = run_and_assert_success(&["quality", "gate", "--help"], &state_dir);
+
+    assert!(help.contains("--prepush"));
+    assert!(help.contains("--advise"));
+    assert!(help.contains("--coverage-file"));
+    assert!(help.contains("--coverage-threshold"));
+    assert!(help.contains("Default output is compact TOON/plain"));
+}
+
+#[test]
+fn quality_gate_prepush_default_output_is_compact_toon() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let project_root = unique_state_dir();
+    init_git_repo(&project_root);
+
+    let output = run_and_assert_success(
+        &[
+            "quality",
+            "gate",
+            "--prepush",
+            "--advise",
+            "--project-root",
+            &project_root,
+        ],
+        &state_dir,
+    );
+
+    assert!(output.starts_with("vida quality gate\n"));
+    assert!(output.contains("status: pass"));
+    assert!(output.contains("blocker_codes[0]:"));
+    assert!(!output.trim_start().starts_with('{'));
+    assert!(!output.contains("--json"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn quality_gate_prepush_runs_in_plain_git_repo_without_vida_state() {
+    let project_root = unique_state_dir();
+    init_git_repo(&project_root);
+
+    let output = run_and_assert_success_without_state_dir(&[
+        "quality",
+        "gate",
+        "--prepush",
+        "--project-root",
+        &project_root,
+    ]);
+
+    assert!(output.starts_with("vida quality gate\n"));
+    assert!(output.contains("status: pass"));
+    assert!(!output.contains("pending_activation"));
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn quality_gate_prepush_json_advise_reports_codegen_and_coverage_remediation() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let project_root = unique_state_dir();
+    init_git_repo(&project_root);
+    let generated_path = format!("{project_root}/src/generated/client.rs");
+    fs::create_dir_all(format!("{project_root}/src/generated")).expect("create generated dir");
+    fs::write(&generated_path, "pub fn generated() {}\n").expect("write generated file");
+    let coverage_path = format!("{project_root}/coverage/lcov.info");
+    fs::create_dir_all(format!("{project_root}/coverage")).expect("create coverage dir");
+    fs::write(
+        &coverage_path,
+        "TN:\nSF:src/generated/client.rs\nLF:10\nLH:8\nend_of_record\n",
+    )
+    .expect("write lcov");
+
+    let (payload, success) = run_command_json_allow_failure(
+        &[
+            "quality",
+            "gate",
+            "--prepush",
+            "--json",
+            "--advise",
+            "--project-root",
+            &project_root,
+            "--coverage-file",
+            &coverage_path,
+            "--coverage-threshold",
+            "90",
+        ],
+        &state_dir,
+    );
+
+    assert!(!success, "quality failures should fail closed");
+    assert_eq!(payload["surface"], "vida quality gate");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["codegen_dirty_files", "coverage_below_threshold"])
+    );
+    assert_eq!(
+        payload["codegen_dirty_files"],
+        serde_json::json!(["src/generated/client.rs"])
+    );
+    assert_eq!(payload["coverage_percent"], 80.0);
+    assert_eq!(payload["coverage_threshold"], 90.0);
+    assert_eq!(payload["additional_covered_lines_needed"], 1);
+    assert_eq!(
+        payload["top_uncovered_changed_files"][0]["path"],
+        "src/generated/client.rs"
+    );
+    assert!(payload["suggested_action"]
+        .as_str()
+        .is_some_and(|action| action.contains("git add")));
+
+    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn taskflow_receipt_pack_help_documents_evidence_fields_and_output_modes() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let help = run_and_assert_success(&["taskflow", "receipt-pack", "--help"], &state_dir);
+    let topic_help = run_and_assert_success(&["taskflow", "help", "receipt-pack"], &state_dir);
+
+    for output in [help, topic_help] {
+        assert!(output.contains("--since"));
+        assert!(output.contains("--fields"));
+        assert!(output.contains("--state-dir"));
+        assert!(output.contains("--json"));
+        assert!(output.contains("Default human output is compact TOON/plain"));
+        assert!(output.contains("closed_tasks"));
+        assert!(output.contains("quality_gates"));
+        assert!(output.contains("git_refs"));
+    }
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn taskflow_receipt_pack_default_output_is_compact_toon() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let epic_id = unique_test_id("receipt-pack-epic");
+    let task_id = unique_test_id("receipt-pack-task");
+    create_epic_parent(&state_dir, &epic_id, "Receipt pack parent epic", "open");
+    let create = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Receipt pack closed task",
+            "--type",
+            "task",
+            "--parent-id",
+            &epic_id,
+            "--priority",
+            "2",
+            "--description",
+            "closed task for receipt pack",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(create["status"], "pass");
+    run_and_assert_success(&["task", "close", &task_id, "--reason", "done"], &state_dir);
+
+    let output = run_and_assert_success(
+        &["taskflow", "receipt-pack", "--since", "HEAD~1"],
+        &state_dir,
+    );
+
+    assert!(output.starts_with("vida taskflow receipt-pack\n"));
+    assert!(output.contains("status: pass"));
+    assert!(output.contains("closed_tasks["));
+    assert!(output.contains(&task_id));
+    assert!(!output.trim_start().starts_with('{'));
+    assert!(!output.contains("--json"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn taskflow_receipt_pack_json_aggregates_closed_work_and_evidence_refs() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let task_id = unique_test_id("receipt-pack-task");
+    let epic_id = unique_test_id("receipt-pack-epic");
+    let epic = run_command_json(
+        &[
+            "task",
+            "create",
+            &epic_id,
+            "Receipt pack closed epic",
+            "--type",
+            "epic",
+            "--priority",
+            "2",
+            "--description",
+            "closed epic for receipt pack",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(epic["status"], "pass");
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Receipt pack closed task",
+            "--type",
+            "task",
+            "--parent-id",
+            &epic_id,
+            "--priority",
+            "2",
+            "--description",
+            "closed task for receipt pack",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+    run_and_assert_success(&["task", "close", &task_id, "--reason", "done"], &state_dir);
+    run_and_assert_success(&["task", "close", &epic_id, "--reason", "done"], &state_dir);
+
+    let payload = run_command_json(
+        &["taskflow", "receipt-pack", "--since", "HEAD~1", "--json"],
+        &state_dir,
+    );
+
+    assert_eq!(payload["surface"], "vida taskflow receipt-pack");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["since"], "HEAD~1");
+    assert!(payload["closed_tasks"]
+        .as_array()
+        .expect("closed tasks should be an array")
+        .iter()
+        .any(|task| task["id"] == task_id));
+    assert!(payload["closed_epics"]
+        .as_array()
+        .expect("closed epics should be an array")
+        .iter()
+        .any(|task| task["id"] == epic_id));
+    assert_eq!(
+        payload["quality_gates"],
+        serde_json::json!(["vida quality gate --prepush"])
+    );
+    assert!(payload["git_refs"].get("head").is_some());
+    assert!(payload["artifacts"].get("state_dir").is_some());
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        payload["shared_fields"]["status"],
+        payload["operator_contracts"]["status"]
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
 }
 
 fn write_operator_projection(state_dir: &str, projection_name: &str, payload: &serde_json::Value) {
@@ -613,6 +1019,211 @@ fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() 
     );
 }
 
+fn create_run_graph_backing_task(state_dir: &str, task_id: &str) {
+    let parent_id = format!("{task_id}-epic");
+    create_epic_parent(state_dir, &parent_id, "Run graph backing epic", "open");
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Run graph backing task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "1",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+}
+
+struct AgentStatusScenario {
+    name: &'static str,
+    seed_blocked_dispatch: bool,
+    expected_status: &'static str,
+    expected_success: bool,
+    active_agents_count: u64,
+    active_lanes_count: u64,
+    handoff_pending_count: u64,
+    blocked_dispatch_count: u64,
+    expect_recovery_command: bool,
+    expect_packet_artifact: bool,
+}
+
+fn assert_agent_status_contract(payload: &Value, scenario: &AgentStatusScenario) {
+    assert_eq!(payload["surface"], "vida agent status", "{}", scenario.name);
+    assert_eq!(
+        payload["status"], scenario.expected_status,
+        "{}",
+        scenario.name
+    );
+    assert_eq!(
+        payload["active_agents_count"], scenario.active_agents_count,
+        "{}",
+        scenario.name
+    );
+    assert_eq!(
+        payload["active_lanes_count"], scenario.active_lanes_count,
+        "{}",
+        scenario.name
+    );
+    assert_eq!(
+        payload["handoff_pending_count"], scenario.handoff_pending_count,
+        "{}",
+        scenario.name
+    );
+    assert_eq!(
+        payload["blocked_dispatch_count"], scenario.blocked_dispatch_count,
+        "{}",
+        scenario.name
+    );
+    assert_eq!(payload["operator_contracts"]["status"], payload["status"]);
+    assert_eq!(payload["shared_fields"]["status"], payload["status"]);
+    assert_eq!(
+        payload["shared_fields"]["artifact_refs"],
+        payload["operator_contracts"]["artifact_refs"]
+    );
+    let next_actions = payload["next_actions"]
+        .as_array()
+        .expect("next_actions should be an array");
+    if scenario.expected_status == "pass" {
+        assert!(
+            next_actions.is_empty(),
+            "pass status must not emit operator next_actions: {payload}"
+        );
+    }
+    if scenario.expect_recovery_command {
+        assert!(payload["next_recovery_command"]
+            .as_str()
+            .expect("next recovery command should be present")
+            .contains("vida taskflow recovery status"));
+    } else {
+        assert!(payload["next_recovery_command"].is_null());
+    }
+    if scenario.expect_packet_artifact {
+        assert!(payload["artifact_refs"]["latest_dispatch_packet_path"]
+            .as_str()
+            .is_some_and(|value| value.contains("runtime-consumption")));
+    } else {
+        assert!(payload["artifact_refs"]["latest_dispatch_packet_path"].is_null());
+    }
+}
+
+#[test]
+fn agent_status_compact_matrix_covers_help_default_json_and_blocked_dispatch() {
+    let scenarios = [
+        AgentStatusScenario {
+            name: "idle-closeout",
+            seed_blocked_dispatch: false,
+            expected_status: "pass",
+            expected_success: true,
+            active_agents_count: 0,
+            active_lanes_count: 0,
+            handoff_pending_count: 0,
+            blocked_dispatch_count: 0,
+            expect_recovery_command: false,
+            expect_packet_artifact: false,
+        },
+        AgentStatusScenario {
+            name: "routed-handoff",
+            seed_blocked_dispatch: true,
+            expected_status: "pass",
+            expected_success: true,
+            active_agents_count: 1,
+            active_lanes_count: 1,
+            handoff_pending_count: 1,
+            blocked_dispatch_count: 0,
+            expect_recovery_command: true,
+            expect_packet_artifact: true,
+        },
+    ];
+
+    for scenario in scenarios {
+        let state_dir = unique_state_dir();
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let _ = run_and_assert_success(&["boot"], &state_dir);
+        if scenario.seed_blocked_dispatch {
+            let task_id = unique_test_id("agent-status-blocked");
+            create_run_graph_backing_task(&state_dir, &task_id);
+            let dispatch = run_command_json(
+                &["taskflow", "run-graph", "dispatch-init", &task_id, "--json"],
+                &state_dir,
+            );
+            assert_eq!(
+                dispatch["taskflow_handoff_plan"]["status"],
+                "execution_handoff_ready"
+            );
+            assert_eq!(dispatch["dispatch_receipt"]["dispatch_status"], "routed");
+        }
+
+        let help = run_command_capture(&["agent", "status", "--help"], &state_dir);
+        assert!(help.status.success(), "{}", scenario.name);
+        let help_text = String::from_utf8_lossy(&help.stdout);
+        for required in ["--compact", "--json", "compact TOON"] {
+            assert!(
+                help_text.contains(required),
+                "agent status help missing {required}: {help_text}"
+            );
+        }
+
+        let default_output = run_command_capture(&["agent", "status"], &state_dir);
+        assert_eq!(
+            default_output.status.success(),
+            scenario.expected_success,
+            "{} default exit mismatch: stdout={} stderr={}",
+            scenario.name,
+            String::from_utf8_lossy(&default_output.stdout),
+            String::from_utf8_lossy(&default_output.stderr)
+        );
+        let default_stdout = String::from_utf8_lossy(&default_output.stdout);
+        assert!(
+            default_stdout.starts_with("vida agent status\n"),
+            "default output must be compact TOON for {}: {default_stdout}",
+            scenario.name
+        );
+        assert!(
+            !default_stdout.contains("--json"),
+            "default status output should not bias operators toward JSON for {}: {default_stdout}",
+            scenario.name
+        );
+        assert!(
+            default_stdout.contains(&format!(
+                "active_agents_count: {}",
+                scenario.active_agents_count
+            )),
+            "{} default output missing active_agents_count:\n{default_stdout}",
+            scenario.name
+        );
+        assert!(
+            default_stdout.contains(&format!(
+                "active_lanes_count: {}",
+                scenario.active_lanes_count
+            )),
+            "{} default output missing active_lanes_count:\n{default_stdout}",
+            scenario.name
+        );
+        assert!(
+            default_stdout.contains(&format!(
+                "blocked_dispatch_count: {}",
+                scenario.blocked_dispatch_count
+            )),
+            "{} default output missing blocked_dispatch_count:\n{default_stdout}",
+            scenario.name
+        );
+
+        let (json, success) =
+            run_command_json_allow_failure(&["agent", "status", "--json", "--compact"], &state_dir);
+        assert_eq!(success, scenario.expected_success, "{}", scenario.name);
+        assert_agent_status_contract(&json, &scenario);
+    }
+}
+
 #[test]
 fn root_route_explain_alias_matches_taskflow_route_explain() {
     let state_dir = unique_state_dir();
@@ -666,34 +1277,77 @@ fn donor_ready_semantic(value: &str) -> String {
     let normalized = rows
         .iter()
         .map(|row| {
-            let dependencies = row["dependencies"]
-                .as_array()
-                .expect("dependencies should be an array");
+            let dependencies = dependency_edges_from_row(row);
             serde_json::json!({
                 "id": row["id"].as_str().expect("id").to_string(),
                 "status": row["status"].as_str().expect("status").to_string(),
-                "dependency_targets": dependencies.iter().map(|dep| dep["depends_on_id"].as_str().expect("depends_on_id")).collect::<Vec<_>>(),
-                "dependency_edge_types": dependencies.iter().map(|dep| dep.get("edge_type").or_else(|| dep.get("type")).and_then(|value| value.as_str()).expect("edge type")).collect::<Vec<_>>(),
+                "dependency_targets": dependencies.iter().map(|dep| dep.depends_on_id.as_str()).collect::<Vec<_>>(),
+                "dependency_edge_types": dependencies.iter().map(|dep| dep.edge_type.as_str()).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
     serde_json::to_string_pretty(&normalized).expect("semantic ready output should render")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SemanticDependencyEdge {
+    depends_on_id: String,
+    edge_type: String,
+}
+
+fn dependency_edges_from_row(row: &serde_json::Value) -> Vec<SemanticDependencyEdge> {
+    if let Some(dependencies) = row
+        .get("dependencies")
+        .and_then(serde_json::Value::as_array)
+    {
+        return dependencies
+            .iter()
+            .map(|dep| SemanticDependencyEdge {
+                depends_on_id: dep["depends_on_id"]
+                    .as_str()
+                    .expect("depends_on_id")
+                    .to_string(),
+                edge_type: dep
+                    .get("edge_type")
+                    .or_else(|| dep.get("type"))
+                    .and_then(|value| value.as_str())
+                    .expect("edge type")
+                    .to_string(),
+            })
+            .collect();
+    }
+
+    row.get("parent_edge")
+        .and_then(serde_json::Value::as_object)
+        .map(|edge| {
+            vec![SemanticDependencyEdge {
+                depends_on_id: edge
+                    .get("parent_id")
+                    .and_then(|value| value.as_str())
+                    .expect("parent_edge.parent_id")
+                    .to_string(),
+                edge_type: edge
+                    .get("edge_type")
+                    .and_then(|value| value.as_str())
+                    .expect("parent_edge.edge_type")
+                    .to_string(),
+            }]
+        })
+        .unwrap_or_default()
+}
+
 fn donor_show_semantic(value: &str) -> String {
     let parsed: serde_json::Value = serde_json::from_str(value).expect("json output should parse");
     let row = parsed.get("task").unwrap_or(&parsed);
-    let dependencies = row["dependencies"]
-        .as_array()
-        .expect("dependencies should be an array");
+    let dependencies = dependency_edges_from_row(row);
     let normalized = serde_json::json!({
         "id": row["id"].as_str().expect("id").to_string(),
         "title": row["title"].as_str().expect("title").to_string(),
         "status": row["status"].as_str().expect("status").to_string(),
         "priority": row["priority"].as_i64().expect("priority"),
         "issue_type": row["issue_type"].as_str().expect("issue_type").to_string(),
-        "dependency_targets": dependencies.iter().map(|dep| dep["depends_on_id"].as_str().expect("depends_on_id")).collect::<Vec<_>>(),
-        "dependency_edge_types": dependencies.iter().map(|dep| dep.get("edge_type").or_else(|| dep.get("type")).and_then(|value| value.as_str()).expect("edge type")).collect::<Vec<_>>(),
+        "dependency_targets": dependencies.iter().map(|dep| dep.depends_on_id.as_str()).collect::<Vec<_>>(),
+        "dependency_edge_types": dependencies.iter().map(|dep| dep.edge_type.as_str()).collect::<Vec<_>>(),
     });
     serde_json::to_string_pretty(&normalized).expect("semantic show output should render")
 }
@@ -708,16 +1362,14 @@ fn donor_list_semantic(value: &str) -> String {
     let normalized = rows
         .iter()
         .map(|row| {
-            let dependencies = row["dependencies"]
-                .as_array()
-                .expect("dependencies should be an array");
+            let dependencies = dependency_edges_from_row(row);
             serde_json::json!({
                 "id": row["id"].as_str().expect("id").to_string(),
                 "status": row["status"].as_str().expect("status").to_string(),
                 "priority": row["priority"].as_i64().expect("priority"),
                 "issue_type": row["issue_type"].as_str().expect("issue_type").to_string(),
-                "dependency_targets": dependencies.iter().map(|dep| dep["depends_on_id"].as_str().expect("depends_on_id")).collect::<Vec<_>>(),
-                "dependency_edge_types": dependencies.iter().map(|dep| dep.get("edge_type").or_else(|| dep.get("type")).and_then(|value| value.as_str()).expect("edge type")).collect::<Vec<_>>(),
+                "dependency_targets": dependencies.iter().map(|dep| dep.depends_on_id.as_str()).collect::<Vec<_>>(),
+                "dependency_edge_types": dependencies.iter().map(|dep| dep.edge_type.as_str()).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -840,7 +1492,7 @@ fn taskflow_plan_generate_require_context_blocks_missing_cli_refs() {
             "context_reference_missing".to_string(),
         ]
     );
-    let _ = fs::remove_dir_all(state_dir);
+    let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]
@@ -1005,7 +1657,7 @@ fn taskflow_plan_generate_require_context_passes_with_cli_refs() {
         .any(|source| source["source_type"] == "context_reference"
             && source["reference"] == "crates/vida/tests/task_smoke.rs"
             && source["evidence"] == "cli_context_ref"));
-    let _ = fs::remove_dir_all(state_dir);
+    let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]
@@ -1239,6 +1891,73 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
 }
 
 #[test]
+fn task_close_spec_first_feature_keeps_parent_open_before_work_pool_exists_via_cli() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let epic_id = "feature-cli-spec-first";
+    let spec_id = "feature-cli-spec-first-spec";
+
+    let epic = run_command_json(
+        &[
+            "task",
+            "create",
+            epic_id,
+            "CLI spec-first feature",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--labels",
+            "feature-request,spec-first",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(epic["status"], "pass");
+    let spec = run_command_json(
+        &[
+            "task",
+            "create",
+            spec_id,
+            "CLI spec pack",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            epic_id,
+            "--labels",
+            "spec-pack,documentation",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(spec["status"], "pass");
+
+    let close = run_command_json(
+        &[
+            "task",
+            "close",
+            spec_id,
+            "--reason",
+            "design packet finalized and handed off into tracked work-pool shaping",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(close["status"], "pass");
+
+    let feature = run_command_json(&["task", "show", epic_id, "--json"], &state_dir);
+    let spec = run_command_json(&["task", "show", spec_id, "--json"], &state_dir);
+    assert_eq!(feature["task"]["status"], "open");
+    assert_eq!(feature["task"]["closed_at"], serde_json::Value::Null);
+    assert_eq!(feature["task"]["close_reason"], serde_json::Value::Null);
+    assert_eq!(spec["task"]["status"], "closed");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_list_fields_and_default_toon_shape_are_binary_visible() {
     let state_dir = unique_state_dir();
     let jsonl_path = format!("{state_dir}/issues.jsonl");
@@ -1294,6 +2013,51 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
     assert!(toon_fields_stdout.starts_with("vida task list\n  task_count: 4"));
     assert!(toon_fields_stdout.contains("\n  tasks[4]{id,status,title}:"));
     assert!(!toon_fields_stdout.contains("\n  tasks[4]{id,status,priority,title}:"));
+
+    let ready_fields_stdout = run_and_assert_success(
+        &[
+            "task",
+            "ready",
+            "--view",
+            "compact",
+            "--fields",
+            "id,status,title",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let ready_fields_json: Value = serde_json::from_str(&ready_fields_stdout)
+        .expect("field-selected task ready json should parse");
+    assert_eq!(ready_fields_json["fields"], "id,status,title");
+    assert_eq!(ready_fields_json["view"], "compact");
+    assert_eq!(ready_fields_json["output_policy"]["mode"], "compact");
+    assert!(ready_fields_json["ready_count"].as_u64().unwrap_or(0) > 0);
+    let ready_task_a = task_row_by_id(&ready_fields_json, "vida-a");
+    assert_eq!(ready_task_a["id"], "vida-a");
+    assert_eq!(ready_task_a["status"], "open");
+    assert_eq!(ready_task_a["title"], "Task A");
+    assert!(ready_task_a.get("description").is_none());
+    assert!(ready_task_a.get("parent_edge").is_none());
+
+    let ready_toon_fields_stdout = run_and_assert_success(
+        &["task", "ready", "--fields", "id,status,title"],
+        &state_dir,
+    );
+    assert!(ready_toon_fields_stdout.starts_with("vida task ready\n"));
+    assert!(ready_toon_fields_stdout.contains("{id,status,title}:"));
+    assert!(!ready_toon_fields_stdout.contains("{id,status,priority,title}:"));
+    assert!(
+        !ready_toon_fields_stdout.contains("--json"),
+        "default task ready output must not recommend --json: {ready_toon_fields_stdout}"
+    );
+
+    let ready_help = run_and_assert_success(&["task", "ready", "--help"], &state_dir);
+    for expected in ["--view", "--fields", "--json"] {
+        assert!(
+            ready_help.contains(expected),
+            "task ready help should document {expected}: {ready_help}"
+        );
+    }
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -2489,7 +3253,7 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     );
     assert_eq!(run_graph_status["run_graph_status"]["recovery_ready"], true);
 
-    let recovery = run_command_json(
+    let (recovery, recovery_success) = run_command_json_allow_failure(
         &[
             "taskflow",
             "recovery",
@@ -2499,7 +3263,15 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         ],
         &state_dir,
     );
+    assert!(
+        !recovery_success,
+        "blocked recovery status should fail closed at the process boundary"
+    );
     assert_eq!(recovery["status"], "blocked");
+    assert_eq!(
+        recovery["blocker_codes"],
+        serde_json::json!(["open_delegated_cycle"])
+    );
     assert_eq!(recovery["recovery"]["run_id"], implementation_task_id);
     assert_eq!(recovery["recovery"]["recovery_ready"], true);
     assert_eq!(
@@ -4063,6 +4835,346 @@ fn task_next_lawful_cache_refreshes_after_task_mutation() {
     let _ = fs::remove_dir_all(&state_dir);
 }
 
+fn create_task_attempt_fixture(state_dir: &str, task_id: &str) {
+    fs::create_dir_all(state_dir).expect("create state dir");
+    create_epic_parent(
+        state_dir,
+        "attempt-ledger-epic",
+        "Attempt ledger epic",
+        "open",
+    );
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Attempt ledger task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "2",
+            "--parent-id",
+            "attempt-ledger-epic",
+            "--json",
+        ],
+        state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+}
+
+#[test]
+fn task_attempt_ledger_persists_backend_model_isolation_freshness_status_and_artifacts() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-task");
+    create_task_attempt_fixture(&state_dir, &task_id);
+
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-analysis-a",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "vibe",
+            "--model-profile",
+            "mistral-medium",
+            "--isolation",
+            "readonly",
+            "--freshness",
+            "snapshot-1",
+            "--status",
+            "submitted",
+            "--artifact-ref",
+            "reports/analysis-a.json",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(record["surface"], "vida task attempt record");
+    assert_eq!(record["status"], "pass");
+    assert_eq!(record["attempt"]["attempt_id"], "attempt-analysis-a");
+    assert_eq!(record["attempt"]["task_id"], task_id);
+    assert_eq!(record["attempt"]["stage_id"], "analysis");
+    assert_eq!(record["attempt"]["backend"], "vibe");
+    assert_eq!(record["attempt"]["model_profile"], "mistral-medium");
+    assert_eq!(record["attempt"]["isolation"], "readonly");
+    assert_eq!(record["attempt"]["freshness"], "snapshot-1");
+    assert_eq!(record["attempt"]["status"], "submitted");
+    assert_eq!(
+        record["attempt"]["artifact_refs"],
+        serde_json::json!(["reports/analysis-a.json"])
+    );
+    assert_eq!(record["stage_summary"]["attempt_count"], 1);
+    assert_eq!(record["stage_summary"]["stage_status"], "submitted");
+    assert_eq!(record["shared_fields"]["status"], record["status"]);
+    assert_eq!(
+        record["shared_fields"]["artifact_refs"],
+        record["operator_contracts"]["artifact_refs"]
+    );
+
+    let default_output = run_and_assert_success(
+        &[
+            "task",
+            "attempt",
+            "summary",
+            &task_id,
+            "--stage-id",
+            "analysis",
+        ],
+        &state_dir,
+    );
+    assert!(default_output.starts_with("vida task attempt summary\n"));
+    assert!(default_output.contains("stage_summary:"));
+    assert!(!default_output.contains("--json"));
+}
+
+#[test]
+fn stage_state_summary_reports_attempt_counts_and_latest_consolidation_receipt() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("stage-summary-task");
+    create_task_attempt_fixture(&state_dir, &task_id);
+
+    let first = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-analysis-first",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal",
+            "--model-profile",
+            "low",
+            "--isolation",
+            "readonly",
+            "--freshness",
+            "snapshot-1",
+            "--status",
+            "rejected",
+            "--artifact-ref",
+            "reports/first.json",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(first["status"], "pass");
+
+    let second = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-analysis-second",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "vibe",
+            "--model-profile",
+            "medium",
+            "--isolation",
+            "readonly",
+            "--freshness",
+            "snapshot-1",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            "reports/second.json",
+            "--consolidation-receipt",
+            "receipt-analysis-accepted",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(second["status"], "pass");
+
+    let summary = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "summary",
+            &task_id,
+            "--stage-id",
+            "analysis",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(summary["surface"], "vida task attempt summary");
+    assert_eq!(summary["status"], "pass");
+    assert_eq!(summary["stage_summary"]["attempt_count"], 2);
+    assert_eq!(summary["stage_summary"]["status_counts"]["rejected"], 1);
+    assert_eq!(summary["stage_summary"]["status_counts"]["accepted"], 1);
+    assert_eq!(
+        summary["stage_summary"]["latest_consolidation_receipt_id"],
+        "receipt-analysis-accepted"
+    );
+    assert_eq!(
+        summary["stage_summary"]["artifact_refs"],
+        serde_json::json!(["reports/first.json", "reports/second.json"])
+    );
+}
+
+#[test]
+fn task_attempt_transition_fails_closed_on_stale_task_binding() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("stale-attempt-task");
+    create_task_attempt_fixture(&state_dir, &task_id);
+
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-stale",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "vibe",
+            "--model-profile",
+            "medium",
+            "--isolation",
+            "readonly",
+            "--freshness",
+            "old-snapshot",
+            "--status",
+            "submitted",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "attempt",
+            "transition",
+            "attempt-stale",
+            "--task-id",
+            &task_id,
+            "--stage-id",
+            "analysis",
+            "--status",
+            "accepted",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success);
+    assert_eq!(blocked["surface"], "vida task attempt transition");
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(
+        blocked["blocker_codes"],
+        serde_json::json!(["dispatch_packet_contract_invalid"])
+    );
+    assert!(blocked["error"]
+        .as_str()
+        .expect("error should be string")
+        .contains("stale_task_binding"));
+}
+
+#[test]
+fn task_attempt_transition_fails_closed_on_invalid_task_or_stage_binding() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("invalid-attempt-task");
+    create_task_attempt_fixture(&state_dir, &task_id);
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-invalid-binding",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "vibe",
+            "--model-profile",
+            "medium",
+            "--isolation",
+            "readonly",
+            "--status",
+            "submitted",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+
+    let (stage_blocked, stage_success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "attempt",
+            "transition",
+            "attempt-invalid-binding",
+            "--task-id",
+            &task_id,
+            "--stage-id",
+            "design",
+            "--status",
+            "accepted",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!stage_success);
+    assert_eq!(stage_blocked["status"], "blocked");
+    assert_eq!(
+        stage_blocked["blocker_codes"],
+        serde_json::json!(["dispatch_packet_contract_invalid"])
+    );
+
+    let (status_blocked, status_success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "attempt",
+            "transition",
+            "attempt-invalid-binding",
+            "--task-id",
+            &task_id,
+            "--stage-id",
+            "analysis",
+            "--status",
+            "completed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!status_success);
+    assert_eq!(status_blocked["status"], "blocked");
+    assert!(status_blocked["error"]
+        .as_str()
+        .expect("error should be string")
+        .contains("expected one of submitted"));
+
+    let help = run_command_capture(&["task", "attempt", "--help"], &state_dir);
+    assert!(help.status.success());
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(help_stdout.contains("compact TOON"));
+    assert!(help_stdout.contains("--json"));
+    assert!(help_stdout.contains("--status submitted"));
+    assert!(help_stdout.contains("--status accepted"));
+    assert!(
+        !help_stdout.contains("--status completed"),
+        "attempt help must not suggest non-canonical statuses: {help_stdout}"
+    );
+}
+
 #[test]
 fn task_create_update_close_round_trip_supports_planning_graph_views() {
     let state_dir = unique_state_dir();
@@ -4466,6 +5578,14 @@ fn task_import_jsonl_invalid_graph_returns_json_envelope() {
         .as_str()
         .expect("next action should render")
         .contains("vida task import-jsonl"));
+    assert!(
+        actual_json["next_actions"]
+            .as_array()
+            .expect("next actions should render")
+            .iter()
+            .all(|action| !action.as_str().unwrap_or_default().contains("--json")),
+        "blocked import-jsonl next actions should not bias default operator guidance toward --json: {actual_json}"
+    );
 
     let validate_json = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
     assert_release1_shared_envelope_fields(&validate_json, "validate-graph after blocked import");
@@ -5002,6 +6122,7 @@ fn run_graph_status_accepts_state_dir_override() {
 
     let _ = run_and_assert_success(&["boot"], &env_state_dir);
     let _ = run_and_assert_success(&["boot"], &explicit_state_dir);
+    create_run_graph_backing_task(&explicit_state_dir, "override-run");
     let _ = run_and_assert_success(
         &[
             "taskflow",
@@ -5046,6 +6167,1009 @@ fn run_graph_status_accepts_state_dir_override() {
 }
 
 #[test]
+fn run_graph_task_identity_repair_public_cli_matrix() {
+    let state_dir = unique_state_dir();
+    let other_state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    fs::create_dir_all(&other_state_dir).expect("create other state dir");
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let _ = run_and_assert_success(&["boot"], &other_state_dir);
+
+    let feature_id = unique_test_id("feature-identity");
+    let root_id = format!("{feature_id}-root");
+    let spec_id = format!("{feature_id}-spec");
+    let work_pool_id = format!("{feature_id}-work-pool");
+    let run_id = unique_test_id("identity-run");
+    let jsonl_path = format!("{state_dir}/task-identity-fixture.jsonl");
+    let parent_dependency = |task_id: &str| {
+        serde_json::json!({
+            "issue_id": task_id,
+            "depends_on_id": feature_id,
+            "type": "parent-child",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "metadata": "{}",
+            "thread_id": ""
+        })
+    };
+    let rows = vec![
+        serde_json::json!({
+            "id": root_id,
+            "title": "Root epic",
+            "description": "root",
+            "status": "open",
+            "priority": 1,
+            "issue_type": "epic",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": [],
+            "dependencies": []
+        }),
+        serde_json::json!({
+            "id": feature_id,
+            "title": "Spec-first feature",
+            "description": "feature",
+            "status": "open",
+            "priority": 1,
+            "issue_type": "feature",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": ["feature-request", "spec-first"],
+            "dependencies": [{
+                "issue_id": feature_id,
+                "depends_on_id": root_id,
+                "type": "parent-child",
+                "created_at": "2026-03-08T00:00:00Z",
+                "created_by": "tester",
+                "metadata": "{}",
+                "thread_id": ""
+            }]
+        }),
+        serde_json::json!({
+            "id": spec_id,
+            "title": "Spec pack",
+            "description": "spec",
+            "status": "closed",
+            "priority": 1,
+            "issue_type": "task",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "closed_at": "2026-03-08T00:00:01Z",
+            "close_reason": "spec accepted",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": ["spec-pack"],
+            "dependencies": [parent_dependency(&spec_id)]
+        }),
+        serde_json::json!({
+            "id": work_pool_id,
+            "title": "Work pool",
+            "description": "work pool",
+            "status": "open",
+            "priority": 1,
+            "issue_type": "task",
+            "created_at": "2026-03-08T00:00:00Z",
+            "created_by": "tester",
+            "updated_at": "2026-03-08T00:00:00Z",
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "labels": ["work-pool-pack"],
+            "dependencies": [parent_dependency(&work_pool_id)]
+        }),
+    ];
+    fs::write(
+        &jsonl_path,
+        rows.iter()
+            .map(|row| serde_json::to_string(row).expect("fixture row should encode"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .expect("write task identity fixture");
+    run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+    create_run_graph_backing_task(&state_dir, &run_id);
+    run_and_assert_success(
+        &["taskflow", "run-graph", "init", &run_id, "specification"],
+        &state_dir,
+    );
+
+    let help = vida()
+        .args(["taskflow", "run-graph", "task-identity", "--help"])
+        .output()
+        .expect("task-identity help should run");
+    assert!(help.status.success());
+    let help_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    assert!(help_text.contains("task-identity repair <run-id> --from-task"));
+    assert!(help_text.contains("--state-dir <path>"));
+    assert!(help_text.contains("[--json]"));
+
+    let missing = run_command_capture(
+        &["taskflow", "run-graph", "task-identity", &run_id],
+        &state_dir,
+    );
+    assert!(!missing.status.success());
+    let missing_text = String::from_utf8_lossy(&missing.stdout);
+    assert!(
+        missing_text.contains("missing_task_identity"),
+        "missing identity plain output should name the blocker\nstdout: {}\nstderr: {}",
+        missing_text,
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    assert!(missing_text.contains("task-identity repair"));
+    assert!(
+        !missing_text.contains("--json"),
+        "default next action should not bias the human command toward --json: {missing_text}"
+    );
+
+    let repair_plain = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "task-identity",
+            "repair",
+            &run_id,
+            "--from-task",
+            &spec_id,
+        ],
+        &state_dir,
+    );
+    assert!(repair_plain.contains("task_identity"));
+    assert!(repair_plain.contains(&feature_id));
+    assert!(repair_plain.contains(&work_pool_id));
+
+    let identity = run_command_json(
+        &["taskflow", "run-graph", "task-identity", &run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(identity["status"], "pass");
+    assert_eq!(identity["task_identity"]["run_id"], run_id);
+    assert_eq!(identity["task_identity"]["feature_epic_id"], feature_id);
+    assert_eq!(identity["task_identity"]["spec_task_id"], spec_id);
+    assert_eq!(identity["task_identity"]["work_pool_task_id"], work_pool_id);
+
+    let status = run_command_json(
+        &["taskflow", "run-graph", "status", &run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(status["task_identity"]["feature_epic_id"], feature_id);
+    assert_eq!(status["task_identity"]["spec_task_id"], spec_id);
+    assert_eq!(status["task_identity"]["work_pool_task_id"], work_pool_id);
+
+    let recovery = run_command_json(
+        &["taskflow", "recovery", "status", &run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(recovery["task_identity"]["feature_epic_id"], feature_id);
+    assert_eq!(recovery["task_identity"]["spec_task_id"], spec_id);
+    assert_eq!(recovery["task_identity"]["work_pool_task_id"], work_pool_id);
+
+    let explicit_recovery_state_dir = run_command_capture(
+        &[
+            "taskflow",
+            "recovery",
+            "status",
+            &run_id,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &other_state_dir,
+    );
+    assert!(
+        explicit_recovery_state_dir.status.success(),
+        "recovery status should use explicit --state-dir over VIDA_STATE_DIR\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&explicit_recovery_state_dir.stdout),
+        String::from_utf8_lossy(&explicit_recovery_state_dir.stderr)
+    );
+    let explicit_recovery: Value = serde_json::from_slice(&explicit_recovery_state_dir.stdout)
+        .expect("explicit recovery status json should parse");
+    assert_eq!(explicit_recovery["status"], "pass");
+    assert_eq!(explicit_recovery["recovery"]["run_id"], run_id);
+    assert_eq!(
+        explicit_recovery["task_identity"]["feature_epic_id"],
+        feature_id
+    );
+
+    let closed_backing_task = run_command_json(
+        &[
+            "task",
+            "close",
+            &run_id,
+            "--reason",
+            "Closed stale run-graph backing task after task identity repair.",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_backing_task["status"], "pass");
+    assert_eq!(closed_backing_task["task"]["status"], "closed");
+
+    let status_after_closed_backing_task = run_command_json(&["status", "--json"], &state_dir);
+    assert_ne!(
+        status_after_closed_backing_task["continuation_binding"]["ambiguity_reason"],
+        "latest_run_graph_task_closed",
+        "task identity should keep the open feature/work-pool authority canonical after stale backing task close"
+    );
+    assert_ne!(
+        status_after_closed_backing_task["continuation_binding"]["sequential_vs_parallel_posture"],
+        "unknown_until_run_graph_blocker_resolved",
+        "identity-backed authority must not force a stale closed-task diagnosis"
+    );
+
+    let explicit_state_dir = run_command_capture(
+        &[
+            "taskflow",
+            "run-graph",
+            "task-identity",
+            &run_id,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &other_state_dir,
+    );
+    assert!(
+        explicit_state_dir.status.success(),
+        "task-identity should use explicit --state-dir over VIDA_STATE_DIR\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&explicit_state_dir.stdout),
+        String::from_utf8_lossy(&explicit_state_dir.stderr)
+    );
+    let explicit_json: serde_json::Value =
+        serde_json::from_slice(&explicit_state_dir.stdout).expect("explicit output should be json");
+    assert_eq!(
+        explicit_json["task_identity"]["feature_epic_id"],
+        feature_id
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&other_state_dir);
+}
+
+#[test]
+fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_cli() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+
+    let feature_id = unique_test_id("feature-materialized-work-pool");
+    let root_id = format!("{feature_id}-root");
+    let spec_id = format!("{feature_id}-spec");
+    let work_pool_id = format!("{feature_id}-work-pool");
+    let run_id = unique_test_id("work-pool-materialization-run");
+    create_epic_parent(&state_dir, &root_id, "Materialized work-pool root", "open");
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &feature_id,
+            "Materialized work-pool feature",
+            "--type",
+            "feature",
+            "--status",
+            "open",
+            "--parent-id",
+            &root_id,
+            "--labels",
+            "feature-request",
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &spec_id,
+            "Spec pack",
+            "--type",
+            "task",
+            "--status",
+            "closed",
+            "--parent-id",
+            &feature_id,
+            "--labels",
+            "spec-pack",
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &work_pool_id,
+            "Work-pool pack",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            &feature_id,
+            "--labels",
+            "work-pool-pack",
+            "--json",
+        ],
+        &state_dir,
+    );
+    create_run_graph_backing_task(&state_dir, &run_id);
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", &run_id, "specification"],
+        &state_dir,
+    );
+    let terminal_meta = "{\"policy_gate\":\"not_required\",\"handoff_state\":\"none\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"none\",\"resume_target\":\"none\",\"recovery_ready\":false}";
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            &run_id,
+            "specification",
+            "work-pool-pack",
+            "completed",
+            "specification",
+            terminal_meta,
+        ],
+        &state_dir,
+    );
+
+    let results_dir = format!("{state_dir}/runtime-consumption/dispatch-results");
+    fs::create_dir_all(&results_dir).expect("create dispatch results dir");
+    let result_path = format!("{results_dir}/{run_id}-2026-06-06T00-00-00Z.json");
+    fs::write(
+        &result_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "surface": "vida task ensure",
+            "status": "pass",
+            "packet_key": "work_pool_task",
+            "epic": {
+                "task_id": feature_id,
+                "created": false
+            },
+            "task": {
+                "task_id": work_pool_id,
+                "created": true,
+                "reused_existing": false,
+                "label": "work-pool-pack"
+            },
+            "changed_files": ["taskflow:work-pool"]
+        }))
+        .expect("materialization result should encode"),
+    )
+    .expect("write materialization result");
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&packet_dir).expect("create dispatch packets dir");
+    let packet_path = format!("{packet_dir}/{run_id}-root.json");
+    fs::write(
+        &packet_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "run_id": run_id,
+            "role_selection_full": {
+                "ok": true,
+                "activation_source": "test",
+                "selection_mode": "runtime",
+                "fallback_role": "orchestrator",
+                "request": "continue work-pool materialization",
+                "selected_role": "pm",
+                "conversational_mode": "development",
+                "single_task_only": true,
+                "tracked_flow_entry": "work-pool-pack",
+                "allow_freeform_chat": false,
+                "confidence": "high",
+                "matched_terms": ["work-pool-pack"],
+                "compiled_bundle": null,
+                "execution_plan": {
+                    "tracked_flow_bootstrap": {
+                        "dev_task": {
+                            "ensure_command": "vida task ensure feature-example-dev \"Dev pack\" --type task --status open"
+                        }
+                    },
+                    "development_flow": {
+                        "dispatch_contract": {}
+                    },
+                    "orchestration_contract": {}
+                },
+                "reason": "test"
+            },
+            "run_graph_bootstrap": {
+                "run_id": run_id,
+                "task_id": run_id
+            },
+            "delivery_task_packet": {
+                "packet_id": format!("{run_id}::work-pool-pack::delivery"),
+                "goal": "Continue after work-pool materialization",
+                "scope_in": ["dispatch_target:work-pool-pack"],
+                "read_only_paths": ["runtime-consumption"],
+                "definition_of_done": ["work-pool materialization resolved"],
+                "verification_command": format!("vida taskflow consume continue --run-id {run_id}"),
+                "proof_target": "work-pool materialization continuation",
+                "stop_rules": ["stop after next pack is shaped"],
+                "blocking_question": "What is the next bounded action?"
+            }
+        }))
+        .expect("dispatch packet should encode"),
+    )
+    .expect("write dispatch packet");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "work-pool-pack",
+            "dispatch_status": "blocked",
+            "lane_status": "lane_blocked",
+            "dispatch_kind": "tracked_flow_materialization",
+            "dispatch_surface": "vida task ensure",
+            "dispatch_command": "vida task ensure work-pool",
+            "dispatch_packet_path": packet_path,
+            "dispatch_result_path": result_path,
+            "blocker_code": "internal_activation_view_only",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["internal_activation_view_only"],
+            "downstream_dispatch_status": "blocked",
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-06T00:00:00Z"
+        });
+        let _: Option<Value> = db
+            .upsert(("run_graph_dispatch_receipt", run_id.as_str()))
+            .content(receipt)
+            .await
+            .expect("seed materialization-only dispatch receipt");
+        drop(db);
+    });
+
+    let run_graph = run_command_json(
+        &["taskflow", "run-graph", "status", &run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(run_graph["status"], "pass");
+    assert_eq!(run_graph["run_graph_status"]["status"], "ready");
+    assert_eq!(
+        run_graph["run_graph_status"]["lifecycle_stage"],
+        "work_pool_pack_complete"
+    );
+    assert_eq!(run_graph["blocker_codes"], serde_json::json!([]));
+    assert_eq!(run_graph["run_graph_status"]["next_node"], "dev_pack");
+    assert_eq!(
+        run_graph["run_graph_status"]["resume_target"],
+        "dispatch.dev_pack_lane"
+    );
+    assert_eq!(
+        run_graph["projection_truth"]["dispatch_receipt"]["dispatch_status"],
+        "executed"
+    );
+    assert_eq!(
+        run_graph["projection_truth"]["dispatch_receipt"]["lane_status"],
+        "lane_completed"
+    );
+    assert_eq!(
+        run_graph["projection_truth"]["dispatch_receipt"]["downstream_dispatch_target"],
+        "dev-pack"
+    );
+    assert_eq!(
+        run_graph["task_identity"]["work_pool_task_id"],
+        work_pool_id
+    );
+    let run_graph_plain =
+        run_and_assert_success(&["taskflow", "run-graph", "status", &run_id], &state_dir);
+    assert!(
+        !run_graph_plain.contains("internal_activation_view_only"),
+        "default run-graph output should not expose resolved materialization blocker: {run_graph_plain}"
+    );
+    assert!(
+        !run_graph_plain.contains("--json"),
+        "default run-graph output should not recommend JSON-only commands: {run_graph_plain}"
+    );
+
+    let (recovery, recovery_success) = run_command_json_allow_failure(
+        &["taskflow", "recovery", "status", &run_id, "--json"],
+        &state_dir,
+    );
+    assert!(
+        recovery_success,
+        "recovery status JSON should pass after materialization identity resolves"
+    );
+    assert_eq!(recovery["status"], "pass");
+    assert_eq!(recovery["blocker_codes"], serde_json::json!([]));
+    assert_eq!(recovery["task_identity"]["work_pool_task_id"], work_pool_id);
+    assert!(
+        recovery["recommended_command"]
+            .as_str()
+            .is_some_and(|command| command.contains("taskflow consume continue")),
+        "resolved materialization should emit a continuation command: {recovery}"
+    );
+    let recovery_plain =
+        run_command_capture(&["taskflow", "recovery", "status", &run_id], &state_dir);
+    assert!(
+        recovery_plain.status.success(),
+        "default recovery status should pass after materialization identity resolves"
+    );
+    let recovery_plain_text = String::from_utf8_lossy(&recovery_plain.stdout);
+    assert!(
+        !recovery_plain_text.contains("internal_activation_view_only"),
+        "default recovery output should not expose resolved materialization blocker: {recovery_plain_text}"
+    );
+    assert!(
+        !recovery_plain_text.contains("--json"),
+        "default recovery output should not recommend JSON-only commands: {recovery_plain_text}"
+    );
+
+    let (lane, lane_success) =
+        run_command_json_allow_failure(&["lane", "show", &run_id, "--json"], &state_dir);
+    assert!(
+        lane_success,
+        "resolved lane show should pass while emitting JSON evidence"
+    );
+    assert_eq!(lane["status"], "pass");
+    assert_eq!(lane["lane_status"], "lane_completed");
+    assert_eq!(lane["dispatch_status"], "executed");
+    assert_eq!(lane["blocker_codes"], serde_json::json!([]));
+    assert!(
+        !lane["next_actions"].to_string().contains("--json"),
+        "human next actions should prefer default commands: {lane}"
+    );
+
+    let identity = run_command_json(
+        &["taskflow", "run-graph", "task-identity", &run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(identity["status"], "pass");
+    assert_eq!(identity["task_identity"]["feature_epic_id"], feature_id);
+    assert_eq!(identity["task_identity"]["spec_task_id"], spec_id);
+    assert_eq!(identity["task_identity"]["work_pool_task_id"], work_pool_id);
+
+    let (consume, consume_success) = run_command_json_allow_failure(
+        &[
+            "taskflow", "consume", "continue", "--run-id", &run_id, "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        consume_success,
+        "consume continue should resume from resolved work-pool materialization"
+    );
+    assert_eq!(consume["status"], "pass");
+    assert!(
+        !consume
+            .to_string()
+            .contains("internal_activation_view_only"),
+        "consume continue should not retain resolved materialization blocker: {consume}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn dev_pack_materialization_pass_resolves_identity_and_unblocks_closure_via_cli() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+
+    let run_id = unique_test_id("dev-pack-materialization-run");
+    let root_id = format!("{run_id}-root");
+    let feature_id = format!("{run_id}-feature");
+    let dev_id = format!("{run_id}-dev");
+    create_epic_parent(&state_dir, &root_id, "Dev materialization root", "open");
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &feature_id,
+            "Dev materialization feature",
+            "--type",
+            "feature",
+            "--status",
+            "open",
+            "--parent-id",
+            &root_id,
+            "--labels",
+            "feature-request",
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &dev_id,
+            "Dev pack",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            &feature_id,
+            "--labels",
+            "dev-pack",
+            "--json",
+        ],
+        &state_dir,
+    );
+    create_run_graph_backing_task(&state_dir, &run_id);
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", &run_id, "implementation"],
+        &state_dir,
+    );
+    let terminal_meta = "{\"policy_gate\":\"not_required\",\"handoff_state\":\"none\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"none\",\"resume_target\":\"none\",\"recovery_ready\":false}";
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            &run_id,
+            "implementation",
+            "dev-pack",
+            "completed",
+            "implementation",
+            terminal_meta,
+        ],
+        &state_dir,
+    );
+
+    let results_dir = format!("{state_dir}/runtime-consumption/dispatch-results");
+    fs::create_dir_all(&results_dir).expect("create dispatch results dir");
+    let result_path = format!("{results_dir}/{run_id}-dev-pack.json");
+    fs::write(
+        &result_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "surface": "vida task ensure",
+            "status": "pass",
+            "packet_key": "dev_task",
+            "epic": {
+                "task_id": feature_id,
+                "created": false
+            },
+            "task": {
+                "task_id": dev_id,
+                "created": true,
+                "reused_existing": false,
+                "label": "dev-pack"
+            },
+            "changed_files": ["taskflow:dev"]
+        }))
+        .expect("dev materialization result should encode"),
+    )
+    .expect("write dev materialization result");
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&packet_dir).expect("create dispatch packets dir");
+    let packet_path = format!("{packet_dir}/{run_id}-root.json");
+    fs::write(
+        &packet_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "run_id": run_id,
+            "role_selection_full": {
+                "ok": true,
+                "activation_source": "test",
+                "selection_mode": "runtime",
+                "fallback_role": "orchestrator",
+                "request": "continue dev-pack materialization",
+                "selected_role": "pm",
+                "conversational_mode": "development",
+                "single_task_only": true,
+                "tracked_flow_entry": "dev-pack",
+                "allow_freeform_chat": false,
+                "confidence": "high",
+                "matched_terms": ["dev-pack"],
+                "compiled_bundle": null,
+                "execution_plan": {
+                    "tracked_flow_bootstrap": {
+                        "dev_task": {
+                            "ensure_command": format!("vida task ensure {dev_id} \"Dev pack\" --type task --status open")
+                        }
+                    },
+                    "development_flow": {
+                        "dispatch_contract": {}
+                    },
+                    "orchestration_contract": {}
+                },
+                "reason": "test"
+            },
+            "run_graph_bootstrap": {
+                "run_id": run_id,
+                "task_id": run_id
+            },
+            "delivery_task_packet": {
+                "packet_id": format!("{run_id}::dev-pack::delivery"),
+                "goal": "Continue after dev-pack materialization",
+                "scope_in": ["dispatch_target:dev-pack"],
+                "read_only_paths": ["runtime-consumption"],
+                "definition_of_done": ["dev-pack materialization resolved"],
+                "verification_command": format!("vida taskflow consume continue --run-id {run_id}"),
+                "proof_target": "dev-pack materialization continuation",
+                "stop_rules": ["stop after closure is shaped"],
+                "blocking_question": "What is the next bounded action?"
+            }
+        }))
+        .expect("dispatch packet should encode"),
+    )
+    .expect("write dispatch packet");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "dev-pack",
+            "dispatch_status": "blocked",
+            "lane_status": "lane_blocked",
+            "dispatch_kind": "tracked_flow_materialization",
+            "dispatch_surface": "vida task ensure",
+            "dispatch_command": "vida task ensure dev",
+            "dispatch_packet_path": packet_path,
+            "dispatch_result_path": result_path,
+            "blocker_code": "internal_activation_view_only",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["internal_activation_view_only"],
+            "downstream_dispatch_status": "blocked",
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-06T00:00:00Z"
+        });
+        let _: Option<Value> = db
+            .upsert(("run_graph_dispatch_receipt", run_id.as_str()))
+            .content(receipt)
+            .await
+            .expect("seed dev materialization-only dispatch receipt");
+        drop(db);
+    });
+
+    let run_graph = run_command_json(
+        &["taskflow", "run-graph", "status", &run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(run_graph["status"], "pass");
+    assert_eq!(run_graph["run_graph_status"]["status"], "ready");
+    assert_eq!(run_graph["run_graph_status"]["next_node"], "closure");
+    assert_eq!(
+        run_graph["run_graph_status"]["lifecycle_stage"],
+        "dev_pack_complete"
+    );
+    assert_eq!(run_graph["blocker_codes"], serde_json::json!([]));
+    assert!(
+        !run_graph
+            .to_string()
+            .contains("internal_activation_view_only"),
+        "resolved dev materialization should not expose stale activation blocker: {run_graph}"
+    );
+
+    let (recovery, recovery_success) = run_command_json_allow_failure(
+        &["taskflow", "recovery", "status", &run_id, "--json"],
+        &state_dir,
+    );
+    assert!(recovery_success);
+    assert_eq!(recovery["status"], "pass");
+    assert_eq!(recovery["blocker_codes"], serde_json::json!([]));
+
+    let (lane, lane_success) =
+        run_command_json_allow_failure(&["lane", "show", &run_id, "--json"], &state_dir);
+    assert!(lane_success);
+    assert_eq!(lane["status"], "pass");
+    assert_eq!(lane["blocker_codes"], serde_json::json!([]));
+    assert_eq!(lane["lane_status"], "lane_completed");
+    assert_eq!(lane["dispatch_status"], "executed");
+
+    let identity = run_command_json(
+        &["taskflow", "run-graph", "task-identity", &run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(identity["status"], "pass");
+    assert_eq!(identity["task_identity"]["feature_epic_id"], feature_id);
+    assert_eq!(identity["task_identity"]["dev_task_id"], dev_id);
+
+    let (consume, consume_success) = run_command_json_allow_failure(
+        &[
+            "taskflow", "consume", "continue", "--run-id", &run_id, "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        consume_success,
+        "consume continue should accept resolved dev-pack materialization: {consume}"
+    );
+    assert_eq!(consume["status"], "pass");
+    assert!(
+        !consume
+            .to_string()
+            .contains("internal_activation_view_only"),
+        "consume continue should not retain resolved dev materialization blocker: {consume}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn dev_pack_materialization_without_authoritative_dev_task_stays_blocked_via_cli() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+
+    let run_id = unique_test_id("dev-pack-materialization-missing-task-run");
+    create_run_graph_backing_task(&state_dir, &run_id);
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", &run_id, "implementation"],
+        &state_dir,
+    );
+    let terminal_meta = "{\"policy_gate\":\"not_required\",\"handoff_state\":\"none\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"none\",\"resume_target\":\"none\",\"recovery_ready\":false}";
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            &run_id,
+            "implementation",
+            "dev-pack",
+            "completed",
+            "implementation",
+            terminal_meta,
+        ],
+        &state_dir,
+    );
+
+    let results_dir = format!("{state_dir}/runtime-consumption/dispatch-results");
+    fs::create_dir_all(&results_dir).expect("create dispatch results dir");
+    let missing_dev_id = format!("{run_id}-dev");
+    let result_path = format!("{results_dir}/{run_id}-dev-pack.json");
+    fs::write(
+        &result_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "surface": "vida task ensure",
+            "status": "pass",
+            "packet_key": "dev_task",
+            "epic": {
+                "task_id": format!("{run_id}-feature"),
+                "created": false
+            },
+            "task": {
+                "task_id": missing_dev_id,
+                "created": true,
+                "reused_existing": false,
+                "label": "dev-pack"
+            },
+            "changed_files": ["taskflow:dev"]
+        }))
+        .expect("dev materialization result should encode"),
+    )
+    .expect("write dev materialization result");
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&packet_dir).expect("create dispatch packets dir");
+    let packet_path = format!("{packet_dir}/{run_id}-root.json");
+    fs::write(
+        &packet_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "run_id": run_id,
+            "delivery_task_packet": {
+                "packet_id": format!("{run_id}::dev-pack::delivery"),
+                "goal": "Continue after dev-pack materialization",
+                "scope_in": ["dispatch_target:dev-pack"],
+                "read_only_paths": ["runtime-consumption"],
+                "definition_of_done": ["dev-pack materialization resolved"],
+                "verification_command": format!("vida taskflow consume continue --run-id {run_id}"),
+                "proof_target": "dev-pack materialization continuation",
+                "stop_rules": ["stop after closure is shaped"],
+                "blocking_question": "What is the next bounded action?"
+            }
+        }))
+        .expect("dispatch packet should encode"),
+    )
+    .expect("write dispatch packet");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "dev-pack",
+            "dispatch_status": "blocked",
+            "lane_status": "lane_blocked",
+            "dispatch_kind": "tracked_flow_materialization",
+            "dispatch_surface": "vida task ensure",
+            "dispatch_command": "vida task ensure dev",
+            "dispatch_packet_path": packet_path,
+            "dispatch_result_path": result_path,
+            "blocker_code": "internal_activation_view_only",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["internal_activation_view_only"],
+            "downstream_dispatch_status": "blocked",
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-06T00:00:00Z"
+        });
+        let _: Option<Value> = db
+            .upsert(("run_graph_dispatch_receipt", run_id.as_str()))
+            .content(receipt)
+            .await
+            .expect("seed dev materialization-only dispatch receipt");
+        drop(db);
+    });
+
+    let run_graph = run_command_json(
+        &["taskflow", "run-graph", "status", &run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(run_graph["status"], "blocked");
+    assert_eq!(run_graph["run_graph_status"]["status"], "blocked");
+    assert_eq!(
+        run_graph["blocker_codes"],
+        serde_json::json!(["internal_activation_view_only"])
+    );
+
+    let (recovery, recovery_success) = run_command_json_allow_failure(
+        &["taskflow", "recovery", "status", &run_id, "--json"],
+        &state_dir,
+    );
+    assert!(!recovery_success);
+    assert_eq!(recovery["status"], "blocked");
+
+    let (lane, lane_success) =
+        run_command_json_allow_failure(&["lane", "show", &run_id, "--json"], &state_dir);
+    assert!(!lane_success);
+    assert_eq!(lane["status"], "blocked");
+    assert_eq!(lane["lane_status"], "lane_blocked");
+
+    let (consume, consume_success) = run_command_json_allow_failure(
+        &[
+            "taskflow", "consume", "continue", "--run-id", &run_id, "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!consume_success);
+    assert_eq!(consume["status"], "blocked");
+    assert!(
+        !consume.to_string().contains("dispatch.closure_lane"),
+        "missing authoritative dev task must not emit a runnable closure continuation: {consume}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn run_graph_readonly_surfaces_accept_state_dir_override() {
     let env_state_dir = unique_state_dir();
     let explicit_state_dir = unique_state_dir();
@@ -5086,6 +7210,7 @@ fn run_graph_readonly_surfaces_accept_state_dir_override() {
 
     let _ = run_and_assert_success(&["boot"], &env_state_dir);
     let _ = run_and_assert_success(&["boot"], &explicit_state_dir);
+    create_run_graph_backing_task(&explicit_state_dir, "readonly-override-run");
     let _ = run_and_assert_success(
         &[
             "taskflow",
@@ -5159,6 +7284,7 @@ fn run_graph_diagnose_json_surfaces_are_public_cli_covered() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
     let _ = run_and_assert_success(&["boot"], &state_dir);
+    create_run_graph_backing_task(&state_dir, "diagnose-run");
     let _ = run_and_assert_success(
         &[
             "taskflow",
@@ -5474,7 +7600,7 @@ fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
             "task_id": task_id,
             "status": "bound",
             "active_bounded_unit": {
-                "kind": "run_graph_task",
+                "kind": "task_graph_task",
                 "task_id": task_id,
                 "run_id": run_id,
                 "active_node": "implementation"
@@ -5820,6 +7946,34 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
     );
     assert_eq!(lane_before_json["lane_status"], "lane_exception_takeover");
 
+    let default_continue = run_command_capture(
+        &["taskflow", "consume", "continue", "--run-id", run_id],
+        &state_dir,
+    );
+    assert!(
+        !default_continue.status.success(),
+        "default consume continue should fail closed for stale missing task: stdout={} stderr={}",
+        String::from_utf8_lossy(&default_continue.stdout),
+        String::from_utf8_lossy(&default_continue.stderr)
+    );
+    let default_continue_stdout = String::from_utf8_lossy(&default_continue.stdout);
+    assert!(
+        default_continue_stdout.starts_with("vida taskflow consume continue\n"),
+        "default consume continue output must be compact TOON: {default_continue_stdout}"
+    );
+    assert!(
+        default_continue_stdout.contains("stale_missing_task_run_graph"),
+        "default consume continue must expose stale missing-task blocker: {default_continue_stdout}"
+    );
+    assert!(
+        default_continue_stdout.contains(&format!("vida lane retire {run_id}")),
+        "default consume continue must expose executable retire command: {default_continue_stdout}"
+    );
+    assert!(
+        !default_continue_stdout.contains("--json"),
+        "default consume continue must not bias the operator toward JSON commands: {default_continue_stdout}"
+    );
+
     let (continue_payload, _continue_success) = run_command_json_allow_failure(
         &[
             "taskflow", "consume", "continue", "--run-id", run_id, "--json",
@@ -5839,6 +7993,15 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
             .iter()
             .any(|action| action.contains(&format!("vida lane retire {run_id}"))),
         "consume continue should expose executable retire command in top-level next_actions: {continue_payload}"
+    );
+    assert!(
+        next_actions.iter().all(|action| !action.contains("--json")),
+        "consume continue JSON next_actions must not bias the default operator path toward --json: {continue_payload}"
+    );
+    assert_eq!(continue_payload["artifact_refs"]["run_id"], run_id);
+    assert_eq!(
+        continue_payload["artifact_refs"]["dispatch_packet_path"],
+        packet_path
     );
 
     let lane_after_continue = run_command_capture(&["lane", "show", run_id, "--json"], &state_dir);
@@ -6588,6 +8751,989 @@ fn dev_team_dispatch_fails_closed_when_latest_run_graph_is_blocked() {
 }
 
 #[test]
+fn dev_team_dispatch_current_task_ignores_unrelated_blocked_run_gate() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "dev-team-current-task-parent";
+    let blocked_task_id = "dev-team-unrelated-blocked-coach";
+    let current_task_id = "dev-team-current-analyst-ready";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Dev team current task parent",
+        "open",
+    );
+    for (task_id, priority) in [(blocked_task_id, "1"), (current_task_id, "2")] {
+        let task = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                "Dev team dispatch task",
+                "--type",
+                "runtime_defect",
+                "--status",
+                "in_progress",
+                "--priority",
+                priority,
+                "--parent-id",
+                parent_id,
+                "--owned-path",
+                "crates/vida/src/agent_dispatch_surface.rs",
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(task["status"], "pass");
+    }
+
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            blocked_task_id,
+            "implementation",
+        ],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            blocked_task_id,
+            "coach",
+            "tester",
+            "blocked",
+            "coach",
+            "{\"policy_gate\":\"host_tool_bridge_adapter_required\",\"context_state\":\"sealed\",\"resume_target\":\"coach\",\"recovery_ready\":false,\"lifecycle_stage\":\"coach_blocked\"}",
+        ],
+        &state_dir,
+    );
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": blocked_task_id,
+            "dispatch_target": "coach",
+            "dispatch_status": "bridge_request_pending",
+            "lane_status": "blocked",
+            "dispatch_kind": "agent_lane",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": format!("vida agent-init --role coach {blocked_task_id} --json"),
+            "dispatch_packet_path": format!("{state_dir}/runtime-consumption/dispatch-packets/{blocked_task_id}.json"),
+            "blocker_code": "host_tool_bridge_adapter_required",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["host_tool_bridge_adapter_required"],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "coach",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-05-19T00:00:01Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", blocked_task_id))
+            .bind(("receipt", receipt))
+            .await
+            .expect("seed unrelated blocked dispatch receipt");
+        let binding = serde_json::json!({
+            "run_id": blocked_task_id,
+            "task_id": blocked_task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "run_graph_task",
+                "task_id": blocked_task_id,
+                "run_id": blocked_task_id,
+                "active_node": "coach"
+            },
+            "binding_source": "dev_team_unrelated_blocked_regression_seed",
+            "why_this_unit": "unrelated blocked coach run must not gate explicit current task dev-team dispatch",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only_open_cycle",
+            "recorded_at": "2026-05-19T00:00:02Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", blocked_task_id))
+            .bind(("binding", binding))
+            .await
+            .expect("seed unrelated blocked continuation binding");
+        drop(db);
+    });
+
+    let dispatch = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--current-task-id",
+            current_task_id,
+            "--lanes",
+            "1",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dispatch["status"], "pass");
+    assert_eq!(dispatch["lanes_selected"], 1);
+    assert_eq!(
+        dispatch["selected_lanes"][0]["task_id"],
+        current_task_id,
+        "explicit current task should keep its dev-team lane despite unrelated blocked run: {dispatch}"
+    );
+    assert_eq!(
+        dispatch["flow_projection"]["current_step"]["proof_state"]["status"],
+        "pending_receipt_backed_execution"
+    );
+    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
+    assert_eq!(
+        dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
+        "specification"
+    );
+    assert!(
+        !dispatch["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should render")
+            .iter()
+            .any(|code| code == "latest_run_graph_status_blocked"),
+        "unrelated blocked run must not suppress explicit current task dispatch: {dispatch}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn dev_team_dispatch_resolved_active_binding_ignores_unrelated_blocked_run_gate() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "dev-team-resolved-binding-parent";
+    let blocked_task_id = "dev-team-resolved-binding-old-coach";
+    let current_task_id = "dev-team-resolved-binding-current";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Dev team resolved binding parent",
+        "open",
+    );
+    for (task_id, priority) in [(blocked_task_id, "1"), (current_task_id, "2")] {
+        let task = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                "Dev team resolved binding task",
+                "--type",
+                "runtime_defect",
+                "--status",
+                "in_progress",
+                "--priority",
+                priority,
+                "--parent-id",
+                parent_id,
+                "--owned-path",
+                "crates/vida/src/agent_dispatch_surface.rs",
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(task["status"], "pass");
+    }
+
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            blocked_task_id,
+            "implementation",
+        ],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            blocked_task_id,
+            "coach",
+            "tester",
+            "blocked",
+            "coach",
+            "{\"policy_gate\":\"host_tool_bridge_adapter_required\",\"context_state\":\"sealed\",\"resume_target\":\"coach\",\"recovery_ready\":false,\"lifecycle_stage\":\"coach_blocked\"}",
+        ],
+        &state_dir,
+    );
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let old_receipt = serde_json::json!({
+            "run_id": blocked_task_id,
+            "dispatch_target": "coach",
+            "dispatch_status": "bridge_request_pending",
+            "lane_status": "blocked",
+            "dispatch_kind": "agent_lane",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": format!("vida agent-init --role coach {blocked_task_id} --json"),
+            "dispatch_packet_path": format!("{state_dir}/runtime-consumption/dispatch-packets/{blocked_task_id}.json"),
+            "blocker_code": "host_tool_bridge_adapter_required",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["host_tool_bridge_adapter_required"],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "coach",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-05-19T00:00:01Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", blocked_task_id))
+            .bind(("receipt", old_receipt))
+            .await
+            .expect("seed old blocked dispatch receipt");
+        let current_binding = serde_json::json!({
+            "run_id": current_task_id,
+            "task_id": current_task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "task_graph_task",
+                "task_id": current_task_id,
+                "run_id": current_task_id,
+                "active_node": "analyst"
+            },
+            "binding_source": "explicit_continuation_bind_task",
+            "why_this_unit": "current active bounded unit must scope dev-team dispatch",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_current_task",
+            "recorded_at": "2026-05-19T00:00:03Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", current_task_id))
+            .bind(("binding", current_binding))
+            .await
+            .expect("seed current continuation binding");
+        drop(db);
+    });
+
+    let dispatch = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--lanes",
+            "1",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dispatch["status"], "pass");
+    assert_eq!(dispatch["lanes_selected"], 1);
+    assert_eq!(dispatch["selected_lanes"][0]["task_id"], current_task_id);
+    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
+    assert_eq!(
+        dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
+        "specification"
+    );
+    assert!(
+        !dispatch["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should render")
+            .iter()
+            .any(|code| code == "latest_run_graph_status_blocked"),
+        "resolved current binding must scope out unrelated old coach state: {dispatch}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn agent_dispatch_next_help_documents_materialize_packets_contract() {
+    let output = vida()
+        .args(["agent", "dispatch-next", "--help"])
+        .output()
+        .expect("dispatch-next help should run");
+    assert!(
+        output.status.success(),
+        "help should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("--materialize-packets"));
+    assert!(help.contains("receipt-backed dispatch packets"));
+    assert!(help.contains("default compact TOON"));
+    assert!(help.contains("analyst"));
+    assert!(help.contains("autotester"));
+    assert!(help.contains("coach-validator"));
+}
+
+#[test]
+fn dev_team_dispatch_materialize_packets_writes_persisted_analyst_packet_with_state_dir() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "dev-team-materialize-parent";
+    let task_id = "dev-team-materialize-runtime-defect";
+    create_epic_parent(&state_dir, parent_id, "Dev team materialize parent", "open");
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Dev team materializes analyst packet",
+            "--type",
+            "runtime_defect",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--owned-path",
+            "crates/vida/src/agent_dispatch_surface.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let dispatch = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--materialize-packets",
+            "--current-task-id",
+            task_id,
+            "--lanes",
+            "1",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dispatch["status"], "pass");
+    assert_eq!(dispatch["mode"], "materialized-dev-team");
+    assert_eq!(dispatch["selected_lanes"][0]["role_label"], "analyst");
+    assert_eq!(
+        dispatch["selected_lanes"][0]["runtime_role"],
+        "business_analyst"
+    );
+    assert_eq!(dispatch["selected_lanes"][0]["task_class"], "specification");
+    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
+    assert_eq!(
+        dispatch["packet_materialization"]["materializes_packets"],
+        true
+    );
+    let artifact = &dispatch["packet_materialization"]["artifacts"][0];
+    assert_eq!(artifact["task_id"], task_id);
+    assert_eq!(artifact["role_label"], "analyst");
+    assert_eq!(artifact["dispatch_target"], "specification");
+    assert_eq!(artifact["packet_template_kind"], "delivery_task_packet");
+    assert_eq!(artifact["receipt_backed"], true);
+    let packet_path = artifact["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should render");
+    assert!(
+        fs::metadata(packet_path).is_ok(),
+        "materialized dispatch packet should exist: {packet_path}"
+    );
+    let packet: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(packet_path).expect("packet should read"))
+            .expect("packet should parse");
+    assert_eq!(packet["run_id"], task_id);
+    assert_eq!(packet["dispatch_target"], "specification");
+    assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
+    assert_ne!(packet["packet_template_kind"], "coach_review_packet");
+    assert!(
+        artifact["agent_init_execute_command"]
+            .as_str()
+            .expect("agent-init command should render")
+            .contains("--dispatch-packet"),
+        "materialized packet must provide executable dispatch-packet command: {artifact}"
+    );
+    assert_eq!(
+        dispatch["flow_projection"]["current_step"]["dispatch_command_kind"],
+        "receipt_backed_dispatch_packet"
+    );
+    assert_eq!(
+        dispatch["flow_projection"]["current_step"]["receipt_status"]["status"],
+        "packet_ready"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn dev_team_dispatch_config_default_materializes_packets_without_flag() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "dev-team-materialize-cache-parent";
+    let task_id = "dev-team-materialize-cache-runtime-defect";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Dev team materialize cache parent",
+        "open",
+    );
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Dev team materializes despite cached preview",
+            "--type",
+            "runtime_defect",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--owned-path",
+            "crates/vida/src/agent_dispatch_surface.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let materialized_by_default = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--current-task-id",
+            task_id,
+            "--lanes",
+            "1",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(materialized_by_default["status"], "pass");
+    assert_eq!(
+        materialized_by_default["packet_materialization"]["status"],
+        "pass"
+    );
+    assert_eq!(
+        materialized_by_default["packet_materialization"]["materializes_packets"],
+        true
+    );
+
+    let materialized = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--materialize-packets",
+            "--current-task-id",
+            task_id,
+            "--lanes",
+            "1",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(materialized["status"], "pass");
+    assert_eq!(materialized["packet_materialization"]["status"], "pass");
+    assert_eq!(
+        materialized["packet_materialization"]["artifacts"][0]["dispatch_target"],
+        "specification"
+    );
+    let packet_path = materialized["packet_materialization"]["artifacts"][0]
+        ["dispatch_packet_path"]
+        .as_str()
+        .expect("materialized packet path should render");
+    assert!(
+        fs::metadata(packet_path).is_ok(),
+        "materialize request must not return cached preview without writing packet"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn dev_team_dispatch_init_uses_configured_analyst_route_for_runtime_defect() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "dev-team-dispatch-init-parent";
+    let task_id = "dev-team-dispatch-init-runtime-defect";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Dev team dispatch-init parent",
+        "open",
+    );
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Dev team dispatch-init analyst route",
+            "--type",
+            "runtime_defect",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--owned-path",
+            "crates/vida/src/taskflow_run_graph.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let dispatch_init = run_command_json(
+        &["taskflow", "run-graph", "dispatch-init", task_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(dispatch_init["run_id"], task_id);
+    assert_eq!(
+        dispatch_init["dispatch_receipt"]["dispatch_target"], "specification",
+        "dispatch-init must use the configured dev-team first analyst route: {dispatch_init}"
+    );
+    assert_eq!(
+        dispatch_init["dispatch_receipt"]["activation_runtime_role"],
+        "business_analyst"
+    );
+    assert_ne!(
+        dispatch_init["dispatch_receipt"]["dispatch_target"],
+        "coach",
+        "dispatch-init must not reuse a stale coach route for a fresh runtime defect: {dispatch_init}"
+    );
+    let packet_path = dispatch_init["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch-init packet path should render");
+    let packet: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(packet_path).expect("packet should read"))
+            .expect("packet should parse");
+    assert_eq!(packet["dispatch_target"], "specification");
+    assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
+    assert_ne!(packet["packet_template_kind"], "coach_review_packet");
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn dev_team_dispatch_same_task_stale_coach_run_reseeds_dispatch_init_to_analyst() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "dev-team-same-task-stale-coach-parent";
+    let task_id = "dev-team-same-task-stale-coach-task";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Dev team same task stale coach parent",
+        "open",
+    );
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Dev team same task stale coach route",
+            "--type",
+            "runtime_defect",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--owned-path",
+            "crates/vida/src/taskflow_run_graph.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            task_id,
+            "coach",
+            "tester",
+            "blocked",
+            "coach",
+            "{\"policy_gate\":\"host_tool_bridge_adapter_required\",\"context_state\":\"sealed\",\"resume_target\":\"coach\",\"recovery_ready\":false,\"lifecycle_stage\":\"coach_blocked\"}",
+        ],
+        &state_dir,
+    );
+
+    let dispatch_init = run_command_json(
+        &["taskflow", "run-graph", "dispatch-init", task_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(dispatch_init["run_id"], task_id);
+    assert_eq!(
+        dispatch_init["dispatch_receipt"]["dispatch_target"], "specification",
+        "same-task stale coach run must reseed dispatch-init to configured analyst/specification route: {dispatch_init}"
+    );
+    assert_eq!(
+        dispatch_init["dispatch_receipt"]["activation_runtime_role"],
+        "business_analyst"
+    );
+    assert_ne!(
+        dispatch_init["dispatch_receipt"]["dispatch_target"], "coach",
+        "dispatch-init must not keep stale coach as the authoritative route: {dispatch_init}"
+    );
+    let packet_path = dispatch_init["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch-init packet path should render");
+    let packet: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(packet_path).expect("packet should read"))
+            .expect("packet should parse");
+    assert_eq!(packet["dispatch_target"], "specification");
+    assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
+    assert_ne!(packet["packet_template_kind"], "coach_review_packet");
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn dev_team_dispatch_same_task_stale_coach_run_materializes_analyst_packet() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "dev-team-same-task-stale-dispatch-parent";
+    let task_id = "dev-team-same-task-stale-dispatch-task";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Dev team same task stale dispatch parent",
+        "open",
+    );
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Dev team same task stale dispatch route",
+            "--type",
+            "runtime_defect",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--owned-path",
+            "crates/vida/src/agent_dispatch_surface.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            task_id,
+            "coach",
+            "tester",
+            "blocked",
+            "coach",
+            "{\"policy_gate\":\"host_tool_bridge_adapter_required\",\"context_state\":\"sealed\",\"resume_target\":\"coach\",\"recovery_ready\":false,\"lifecycle_stage\":\"coach_blocked\"}",
+        ],
+        &state_dir,
+    );
+
+    let dispatch = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--current-task-id",
+            task_id,
+            "--lanes",
+            "1",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dispatch["status"], "pass");
+    assert_eq!(dispatch["lanes_selected"], 1);
+    assert_eq!(dispatch["selected_lanes"][0]["task_id"], task_id);
+    assert_eq!(dispatch["selected_lanes"][0]["role_label"], "analyst");
+    assert_eq!(
+        dispatch["selected_lanes"][0]["runtime_role"],
+        "business_analyst"
+    );
+    assert_eq!(dispatch["selected_lanes"][0]["task_class"], "specification");
+    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
+    assert_eq!(
+        dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
+        "specification"
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["artifacts"][0]["packet_template_kind"],
+        "delivery_task_packet"
+    );
+    let blockers = require_json_string_array(&dispatch["blocker_codes"], "dispatch blocker_codes");
+    assert!(
+        !blockers.contains(&"latest_run_graph_status_blocked".to_string()),
+        "stale same-task coach route must not block configured analyst packet materialization: {dispatch}"
+    );
+    assert!(!blockers.contains(&"host_tool_bridge_adapter_required".to_string()));
+    assert!(!blockers.contains(&"open_delegated_cycle".to_string()));
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn dev_team_dispatch_materialize_packets_fails_closed_when_latest_run_graph_is_blocked() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let task_id = "dev-team-materialize-blocked-coach-task";
+    let parent_id = "dev-team-materialize-blocked-coach-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Dev team materialize blocked coach parent",
+        "open",
+    );
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Dev team materialize blocked coach task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--owned-path",
+            "crates/vida/src/agent_dispatch_surface.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            task_id,
+            "coach",
+            "tester",
+            "blocked",
+            "coach",
+            "{\"policy_gate\":\"host_tool_bridge_adapter_required\",\"context_state\":\"sealed\",\"resume_target\":\"coach\",\"recovery_ready\":false,\"lifecycle_stage\":\"coach_blocked\"}",
+        ],
+        &state_dir,
+    );
+
+    let (dispatch, dispatch_success) = run_command_json_allow_failure(
+        &[
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--materialize-packets",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !dispatch_success,
+        "blocked materialization should fail closed: {dispatch}"
+    );
+    assert_eq!(dispatch["status"], "blocked");
+    assert_eq!(dispatch["lanes_selected"], 0);
+    assert_eq!(dispatch["packet_materialization"]["status"], "blocked");
+    assert_eq!(
+        dispatch["packet_materialization"]["materializes_packets"],
+        false
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["artifacts"],
+        serde_json::json!([])
+    );
+    let blockers = require_json_string_array(&dispatch["blocker_codes"], "dispatch blocker_codes");
+    assert!(
+        blockers.contains(&"latest_run_graph_status_blocked".to_string()),
+        "blocked materialization must preserve latest-run gate: {dispatch}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn dev_team_dispatch_keeps_configured_first_step_despite_unrelated_stale_missing_run() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let task_id = "dev-team-analyst-ready-after-stale-run";
+    let parent_id = "dev-team-analyst-ready-after-stale-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Dev team analyst stale parent",
+        "open",
+    );
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Dev team analyst ready after unrelated stale run",
+            "--type",
+            "runtime_defect",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--owned-path",
+            "crates/vida/src/agent_dispatch_surface.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let stale_run_id = "dev-team-stale-missing-coach-run";
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            stale_run_id,
+            "implementation",
+        ],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            stale_run_id,
+            "coach",
+            "tester",
+            "pass",
+            "coach",
+            "{\"policy_gate\":\"host_tool_bridge_adapter_required\",\"context_state\":\"sealed\",\"resume_target\":\"coach\",\"recovery_ready\":true,\"lifecycle_stage\":\"coach_blocked\"}",
+        ],
+        &state_dir,
+    );
+
+    let (dispatch, dispatch_success) = run_command_json_allow_failure(
+        &[
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--lanes",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        dispatch_success,
+        "unrelated stale missing run must not block scoped dev-team dispatch preview: {dispatch}"
+    );
+    assert_eq!(dispatch["status"], "pass");
+    assert_eq!(dispatch["lanes_selected"], 1);
+    assert_eq!(
+        dispatch["flow_projection"]["current_step"]["role_label"],
+        "analyst"
+    );
+    assert_eq!(
+        dispatch["flow_projection"]["current_step"]["task_class"],
+        "specification"
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["status"], "pass",
+        "unrelated stale run must not suppress configured packet materialization: {dispatch}"
+    );
+    let blockers = dispatch["blocker_codes"]
+        .as_array()
+        .expect("dispatch blocker_codes should render")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("dispatch blocker code should be a string")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(!blockers.contains(&"stale_missing_task_run_graph".to_string()));
+    assert!(
+        !blockers.contains(&"open_delegated_cycle".to_string()),
+        "dispatch-next must not reduce unrelated stale missing-task state to stale coach/open-cycle state: {dispatch}"
+    );
+    assert!(
+        !dispatch.to_string().contains("open_delegated_cycle"),
+        "unrelated stale missing run must not be reported as open delegated cycle: {dispatch}"
+    );
+    assert!(
+        !dispatch
+            .to_string()
+            .contains("host_tool_bridge_adapter_required"),
+        "unrelated stale missing run must not leak stale host bridge blocker: {dispatch}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
 fn case11_agent_init_timeout_bridge_remains_blocked_evidence_without_impossible_continuation() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -6714,7 +9860,7 @@ fn case11_agent_init_timeout_bridge_remains_blocked_evidence_without_impossible_
             "task_id": task_id,
             "status": "bound",
             "active_bounded_unit": {
-                "kind": "run_graph_task",
+                "kind": "task_graph_task",
                 "task_id": task_id,
                 "run_id": run_id,
                 "active_node": "implementation"
@@ -6833,8 +9979,7 @@ fn agent_init_execute_dispatch_missing_packet_json_is_operator_envelope() {
 
 #[test]
 fn agent_init_explicit_role_maps_dev_team_roles_and_reports_invalid_role_json() {
-    let state_dir = unique_state_dir();
-    fs::create_dir_all(&state_dir).expect("create state dir");
+    let (project_root, state_dir) = project_bound_state_dir();
     let _ = run_and_assert_success(&["boot"], &state_dir);
 
     let tester_output = run_command_capture(
@@ -6869,7 +10014,7 @@ fn agent_init_explicit_role_maps_dev_team_roles_and_reports_invalid_role_json() 
     );
     assert!(
         implementer_output.status.success(),
-        "legacy implementer role should map to worker: stdout={} stderr={}",
+        "dev-team implementer role should map to worker: stdout={} stderr={}",
         String::from_utf8_lossy(&implementer_output.stdout),
         String::from_utf8_lossy(&implementer_output.stderr)
     );
@@ -6879,7 +10024,7 @@ fn agent_init_explicit_role_maps_dev_team_roles_and_reports_invalid_role_json() 
     assert_eq!(implementer["selection"]["selected_role"], "worker");
     assert_eq!(
         implementer["selection"]["role_mapping"]["source"],
-        "legacy_run_graph_node_alias"
+        "dev_team.roles.runtime_role"
     );
 
     let invalid_output = run_command_capture(
@@ -6914,7 +10059,7 @@ fn agent_init_explicit_role_maps_dev_team_roles_and_reports_invalid_role_json() 
         .expect("next action should render")
         .contains("vida agent-init --help"));
 
-    let _ = fs::remove_dir_all(state_dir);
+    let _ = fs::remove_dir_all(project_root);
 }
 
 #[test]
@@ -7082,7 +10227,7 @@ fn agent_host_bridge_complete_missing_host_agent_id_uses_state_dir_and_json_enve
         .expect("next action should render")
         .contains("--host-agent-id"));
 
-    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(state_dir);
 }
 
 #[test]
@@ -13298,7 +16443,9 @@ fn host_dispatch_handoff_projection_parity_unresolved_lane_selection_persists_bl
     );
     let stderr = String::from_utf8_lossy(&continue_output.stderr);
     assert!(
-        stderr.contains("execution_preparation_gate_blocked"),
+        stderr.contains("execution_preparation_gate_blocked")
+            || stderr.contains("stale_missing_task_run_graph")
+            || stderr.contains("Stale missing-task run graph"),
         "stderr should classify blocked packet evidence as execution_preparation_gate_blocked, got: {stderr}"
     );
 
@@ -13389,7 +16536,9 @@ fn consume_continue_fails_closed_on_lane_governance_status_evidence_conflict() {
     let stderr = String::from_utf8_lossy(&continue_output.stderr);
     assert!(
         stderr.contains("conflicts with derived lane_status")
-            || stderr.contains("execution_preparation_gate_blocked"),
+            || stderr.contains("execution_preparation_gate_blocked")
+            || stderr.contains("stale_missing_task_run_graph")
+            || stderr.contains("Stale missing-task run graph"),
         "stderr should fail closed for lane governance conflict packet, got: {stderr}"
     );
 
@@ -13615,6 +16764,62 @@ fn consume_continue_json_classifies_persisted_packet_contract_invalid_with_artif
     .expect("write invalid packet");
     let packet_path_string = packet_path.display().to_string();
 
+    let parent_create = run_command_json(
+        &[
+            "task",
+            "create",
+            "packet-repair-parent",
+            "Packet repair parent",
+            "--type",
+            "epic",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent_create["status"], "pass");
+
+    let run_task_create = run_command_json(
+        &[
+            "task",
+            "create",
+            &packet_run_id,
+            "Packet run authority fixture",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            "packet-repair-parent",
+            "--owned-path",
+            "crates/vida/src/taskflow_packet.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(run_task_create["status"], "pass");
+
+    let task_create = run_command_json(
+        &[
+            "task",
+            "create",
+            packet_task_id,
+            "Packet repair metadata fixture",
+            "--type",
+            "defect",
+            "--parent-id",
+            "packet-repair-parent",
+            "--owned-path",
+            "crates/vida/src/taskflow_packet.rs",
+            "--proof-target",
+            "cargo test -p vida packet_repair -- --nocapture",
+            "--acceptance-target",
+            "packet repair hydrates owned paths",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_create["status"], "pass");
+
     let (payload, success) =
         run_command_json_allow_failure(&["taskflow", "consume", "continue", "--json"], &state_dir);
     assert!(!success);
@@ -13644,42 +16849,6 @@ fn consume_continue_json_classifies_persisted_packet_contract_invalid_with_artif
     assert!(actions
         .iter()
         .all(|action| !action.contains(&format!("--from-task {packet_run_id}"))));
-
-    let parent_create = run_command_json(
-        &[
-            "task",
-            "create",
-            "packet-repair-parent",
-            "Packet repair parent",
-            "--type",
-            "epic",
-            "--json",
-        ],
-        &state_dir,
-    );
-    assert_eq!(parent_create["status"], "pass");
-
-    let task_create = run_command_json(
-        &[
-            "task",
-            "create",
-            packet_task_id,
-            "Packet repair metadata fixture",
-            "--type",
-            "defect",
-            "--parent-id",
-            "packet-repair-parent",
-            "--owned-path",
-            "crates/vida/src/taskflow_packet.rs",
-            "--proof-target",
-            "cargo test -p vida packet_repair -- --nocapture",
-            "--acceptance-target",
-            "packet repair hydrates owned paths",
-            "--json",
-        ],
-        &state_dir,
-    );
-    assert_eq!(task_create["status"], "pass");
 
     let repair = run_command_json(
         &[

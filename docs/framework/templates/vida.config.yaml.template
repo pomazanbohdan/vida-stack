@@ -1121,6 +1121,108 @@ agent_system:
           enforced: false
   scoring:
     rule: capability_first_then_score_guard_then_cheapest_tier
+  stage_attempt_policies:
+    analysis:
+      fanout:
+        mode: parallel
+        max_attempts: 2
+      attempts:
+        - attempt_id: analysis-internal-medium
+          carrier_id: internal_subagents
+          model_profile_id: codex_gpt55_medium_write
+          conversation_role: analyst
+          runtime_role: business_analyst
+          task_class: analysis
+          isolation: external_readonly_complete
+        - attempt_id: analysis-pi-medium
+          carrier_id: pi_cli
+          model_profile_id: pi_gpt55_medium_guarded
+          conversation_role: analyst
+          runtime_role: business_analyst
+          task_class: analysis
+          isolation: external_readonly_complete
+      consolidator:
+        attempt_id: analysis-root-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_gpt55_medium_write
+        conversation_role: analyst
+        runtime_role: business_analyst
+        task_class: analysis
+        isolation: root_validate_only
+    specification:
+      fanout:
+        mode: parallel
+        max_attempts: 2
+      attempts:
+        - attempt_id: specification-internal-medium
+          carrier_id: internal_subagents
+          model_profile_id: codex_gpt55_medium_write
+          conversation_role: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          isolation: external_readonly_complete
+        - attempt_id: specification-pi-medium
+          carrier_id: pi_cli
+          model_profile_id: pi_gpt55_medium_guarded
+          conversation_role: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          isolation: external_readonly_complete
+      consolidator:
+        attempt_id: specification-coach-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_gpt55_high_readonly
+        conversation_role: coach
+        runtime_role: coach
+        task_class: review
+        isolation: root_validate_only
+    implementation:
+      fanout:
+        mode: single
+        max_attempts: 1
+      attempts:
+        - attempt_id: implementation-internal-low-write
+          carrier_id: internal_subagents
+          model_profile_id: codex_gpt55_low_write
+          conversation_role: developer
+          runtime_role: worker
+          task_class: implementation
+          isolation: delegated_write_or_patch_proposal
+      consolidator:
+        attempt_id: implementation-coach-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_gpt55_high_readonly
+        conversation_role: coach
+        runtime_role: coach
+        task_class: review
+        isolation: root_validate_only
+    review:
+      fanout:
+        mode: parallel
+        max_attempts: 2
+      attempts:
+        - attempt_id: review-pi-readonly
+          carrier_id: pi_cli
+          model_profile_id: pi_gpt55_high_readonly
+          conversation_role: coach
+          runtime_role: coach
+          task_class: review
+          isolation: external_readonly_complete
+        - attempt_id: review-internal-high
+          carrier_id: internal_subagents
+          model_profile_id: codex_gpt55_high_readonly
+          conversation_role: reviewer
+          runtime_role: verifier
+          task_class: verification
+          isolation: external_readonly_complete
+      consolidator:
+        attempt_id: review-root-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_gpt55_high_readonly
+        conversation_role: coach
+        runtime_role: coach
+        task_class: review
+        isolation: root_validate_only
   subagents:
     internal_subagents:
       enabled: true
@@ -1465,6 +1567,131 @@ agent_system:
         model_catalog:
           mode: pi_rpc_get_available_models
           required: true
+        write_scope_guard:
+          mode: adapter_feature_required
+          required_for_write_profiles: true
+          fail_closed_until_available: true
+    vida_coder:
+      enabled: false
+      subagent_backend_class: service_executor
+      detect_command: vida-coder
+      provider_command: vida-coder
+      role: service_mode_executor
+      orchestration_tier: service_write_guarded
+      cost_priority: preferred_when_ready_and_reserved
+      budget_cost_units: 4
+      default_model: vida-coder/provider-configured
+      default_model_profile: vida_coder_medium_guarded
+      default_runtime_role: worker
+      capability_band: implementation_guarded,review_safe,verification_safe
+      write_scope: guard_required_packet_owned_paths
+      write_readiness: guard_required_fail_closed_until_service_guard
+      max_runtime_seconds: 420
+      billing_tier: service_account
+      speed_tier: medium
+      quality_tier: high
+      runtime_roles:
+        - worker
+        - coach
+        - verifier
+      task_classes:
+        - implementation
+        - delivery_task
+        - execution_block
+        - implementation_medium
+        - review
+        - coach
+        - verification
+      model_profiles:
+        vida_coder_low_guarded:
+          provider: vida-coder
+          model_ref: vida-coder/provider-configured
+          reasoning_effort: low
+          normalized_cost_units: 1
+          speed_tier: fast
+          quality_tier: medium_high
+          write_scope: guard_required_packet_owned_paths
+          write_readiness: guard_required_fail_closed_until_service_guard
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+            - delivery_task
+            - execution_block
+          readiness:
+            mode: service_executor_profile
+            required: true
+            adapter_command_required: vida-coder
+            provider_command_required: vida-coder
+            write_scope_guard_required: true
+            fail_closed_until_write_guard: true
+        vida_coder_medium_guarded:
+          provider: vida-coder
+          model_ref: vida-coder/provider-configured
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          speed_tier: medium
+          quality_tier: high
+          write_scope: guard_required_packet_owned_paths
+          write_readiness: guard_required_fail_closed_until_service_guard
+          runtime_roles:
+            - worker
+            - coach
+          task_classes:
+            - implementation
+            - delivery_task
+            - execution_block
+            - implementation_medium
+            - coach
+          readiness:
+            mode: service_executor_profile
+            required: true
+            adapter_command_required: vida-coder
+            provider_command_required: vida-coder
+            write_scope_guard_required: true
+            fail_closed_until_write_guard: true
+        vida_coder_high_readonly:
+          provider: vida-coder
+          model_ref: vida-coder/provider-configured
+          reasoning_effort: high
+          normalized_cost_units: 8
+          speed_tier: medium
+          quality_tier: high
+          write_scope: none
+          runtime_roles:
+            - coach
+            - verifier
+          task_classes:
+            - review
+            - verification
+            - coach
+          readiness:
+            mode: service_executor_profile
+            required: true
+            adapter_command_required: vida-coder
+            provider_command_required: vida-coder
+            write_scope_guard_required: false
+      dispatch:
+        command: vida-coder
+        static_args:
+          - --service
+          - dispatch
+        model_flag: --model
+        reasoning_effort_flag: --reasoning-effort
+        reservation_id_flag: --reservation-id
+        packet_flag: --packet
+        workdir_flag: --workdir
+        output_mode: vida_result_json
+        prompt_mode: stdin
+        one_process_per_dispatch: false
+        raw_provider_dispatch_forbidden: true
+      readiness:
+        adapter:
+          mode: command_found
+          command: vida-coder
+        provider:
+          mode: command_found
+          command: vida-coder
         write_scope_guard:
           mode: adapter_feature_required
           required_for_write_profiles: true

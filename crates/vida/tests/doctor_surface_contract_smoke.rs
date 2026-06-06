@@ -1,5 +1,5 @@
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn vida() -> Command {
     vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
@@ -23,7 +23,17 @@ fn project_bound_state_dir() -> (String, String) {
     std::fs::write(format!("{project_root}/AGENTS.md"), "project").expect("write AGENTS.md");
     std::fs::write(
         format!("{project_root}/vida.config.yaml"),
-        "project:\n  id: test\n",
+        concat!(
+            "project:\n",
+            "  id: test\n",
+            "agent_extensions:\n",
+            "  role_selection:\n",
+            "    mode: auto\n",
+            "    fallback_role: orchestrator\n",
+            "agent_system:\n",
+            "  mode: native\n",
+            "  state_owner: orchestrator_only\n",
+        ),
     )
     .expect("write vida.config.yaml");
     for relative in [".vida/config", ".vida/db", ".vida/project"] {
@@ -37,6 +47,22 @@ fn is_canonical_operator_status(value: &str) -> bool {
     matches!(value, "pass" | "blocked")
 }
 
+fn assert_not_json_output(surface: &str, stdout: &str) {
+    assert!(
+        serde_json::from_str::<serde_json::Value>(stdout).is_err(),
+        "{surface} default human output must not be JSON: {stdout}"
+    );
+}
+
+fn assert_no_raw_terminal_controls(surface: &str, stdout: &str) {
+    assert!(
+        !stdout.chars().any(|character| {
+            character.is_control() && !matches!(character, '\n' | '\r' | '\t')
+        }),
+        "{surface} default human output must not contain raw terminal controls: {stdout:?}"
+    );
+}
+
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
     "unsupported_architecture_reserved_workflow_boundary";
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
@@ -44,7 +70,7 @@ const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
+    "run `vida taskflow consume continue` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
 
 fn sync_protocol_binding(state_dir: &str) {
     let output = vida()
@@ -355,13 +381,13 @@ fn doctor_json_emits_operator_contract_fields() {
     let has_retrieval_trust_next_action = next_actions.iter().any(|action| {
             action.as_str()
             == Some(
-                "run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.",
+                "run `vida taskflow consume bundle check` to record retrieval-trust operator evidence.",
             )
     });
     let has_retrieval_trust_signal_next_action = next_actions.iter().any(|action| {
             action.as_str()
             == Some(
-                "run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/acl signal.",
+                "run `vida taskflow protocol-binding sync` and `vida taskflow consume bundle check` to materialize retrieval-trust citation/freshness/acl signal.",
             )
     });
     let has_retrieval_trust_source_blocker = blocker_codes
@@ -370,7 +396,7 @@ fn doctor_json_emits_operator_contract_fields() {
     let has_retrieval_trust_source_next_action = next_actions.iter().any(|action| {
             action.as_str()
             == Some(
-                "run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.",
+                "run `vida taskflow consume bundle check` so runtime consumption snapshots publish retrieval-trust source evidence.",
             )
     });
     let has_recovery_readiness_blocker = blocker_codes
@@ -379,7 +405,7 @@ fn doctor_json_emits_operator_contract_fields() {
     let has_recovery_readiness_next_action = next_actions.iter().any(|action| {
             action.as_str()
             == Some(
-                "inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.",
+                "inspect `vida taskflow recovery latest`, then run `vida taskflow consume continue` after `recovery_ready=true` is proven for resume/rollback handoff.",
             )
     });
     let has_unsupported_architecture_reserved_boundary_blocker = blocker_codes.iter().any(|code| {
@@ -867,6 +893,1104 @@ fn canonical_operator_contract_status_is_shared_across_surfaces() {
         .as_str()
         .expect("status operator_contracts.status should exist");
     assert!(is_canonical_operator_status(status_operator_status));
+}
+
+#[test]
+fn status_and_doctor_default_human_output_is_compact_toon_with_explicit_json_parity() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let status_plain = vida()
+        .arg("status")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status default should run");
+    assert!(
+        status_plain.status.success(),
+        "status default should succeed: stderr={}",
+        String::from_utf8_lossy(&status_plain.stderr)
+    );
+    let status_stdout = String::from_utf8_lossy(&status_plain.stdout);
+    assert!(
+        status_stdout.starts_with("vida status\n"),
+        "status default should start with TOON section title: {status_stdout}"
+    );
+    assert!(
+        status_stdout.contains("  state_dir:"),
+        "status default should expose compact TOON field names: {status_stdout}"
+    );
+    assert!(
+        status_stdout.contains("  runtime_consumption:"),
+        "status default should expose compact runtime evidence: {status_stdout}"
+    );
+    assert!(
+        !status_stdout.contains("--json"),
+        "status default human output should not suggest explicit JSON commands: {status_stdout}"
+    );
+    assert_not_json_output("vida status", &status_stdout);
+    assert_no_raw_terminal_controls("vida status", &status_stdout);
+
+    let status_json = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status json should run");
+    assert!(
+        status_json.status.success(),
+        "status json should succeed: stderr={}",
+        String::from_utf8_lossy(&status_json.stderr)
+    );
+    let status_payload: serde_json::Value =
+        serde_json::from_slice(&status_json.stdout).expect("status json should parse");
+    assert_eq!(status_payload["surface"], "vida status");
+    assert!(status_payload.get("operator_contracts").is_some());
+    assert!(status_payload.get("blocker_codes").is_some());
+    assert!(status_payload.get("next_actions").is_some());
+    assert!(status_payload.get("artifact_refs").is_some());
+
+    let doctor_plain = vida()
+        .arg("doctor")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor default should run");
+    assert!(
+        doctor_plain.status.success(),
+        "doctor default should succeed: stderr={}",
+        String::from_utf8_lossy(&doctor_plain.stderr)
+    );
+    let doctor_stdout = String::from_utf8_lossy(&doctor_plain.stdout);
+    assert!(
+        doctor_stdout.starts_with("vida doctor\n"),
+        "doctor default should start with TOON section title: {doctor_stdout}"
+    );
+    assert!(
+        doctor_stdout.contains("  storage_metadata:"),
+        "doctor default should expose compact TOON field names: {doctor_stdout}"
+    );
+    assert!(
+        doctor_stdout.contains("  runtime_consumption:"),
+        "doctor default should expose compact runtime evidence: {doctor_stdout}"
+    );
+    assert_not_json_output("vida doctor", &doctor_stdout);
+    assert_no_raw_terminal_controls("vida doctor", &doctor_stdout);
+
+    let doctor_json = vida()
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor json should run");
+    assert!(
+        doctor_json.status.success(),
+        "doctor json should succeed: stderr={}",
+        String::from_utf8_lossy(&doctor_json.stderr)
+    );
+    let doctor_payload: serde_json::Value =
+        serde_json::from_slice(&doctor_json.stdout).expect("doctor json should parse");
+    assert_eq!(doctor_payload["surface"], "vida doctor");
+    assert!(doctor_payload.get("operator_contracts").is_some());
+    assert!(doctor_payload.get("blocker_codes").is_some());
+    assert!(doctor_payload.get("next_actions").is_some());
+    assert!(doctor_payload.get("artifact_refs").is_some());
+}
+
+#[test]
+fn status_and_orchestrator_init_support_compact_field_selection_output() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let status_json = vida()
+        .args([
+            "status",
+            "--json",
+            "--view",
+            "compact",
+            "--fields",
+            "status,blocker_codes,next_actions",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status compact json fields should run");
+    assert!(
+        status_json.status.success(),
+        "status compact json fields should succeed: stderr={}",
+        String::from_utf8_lossy(&status_json.stderr)
+    );
+    let status_payload: serde_json::Value =
+        serde_json::from_slice(&status_json.stdout).expect("status compact json should parse");
+    let status_object = status_payload
+        .as_object()
+        .expect("status selected payload should be an object");
+    assert_eq!(status_object.len(), 3);
+    assert!(status_object.get("status").is_some());
+    assert!(status_object.get("blocker_codes").is_some());
+    assert!(status_object.get("next_actions").is_some());
+    assert!(status_object.get("runtime_consumption").is_none());
+
+    let status_plain = vida()
+        .args([
+            "status",
+            "--view",
+            "compact",
+            "--fields",
+            "status,blocker_codes,next_actions",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status compact fields default output should run");
+    assert!(
+        status_plain.status.success(),
+        "status compact fields default output should succeed: stderr={}",
+        String::from_utf8_lossy(&status_plain.stderr)
+    );
+    let status_stdout = String::from_utf8_lossy(&status_plain.stdout);
+    assert!(status_stdout.starts_with("vida status\n"));
+    assert!(status_stdout.contains("status:"));
+    assert!(status_stdout.contains("blocker_codes"));
+    assert!(status_stdout.contains("next_actions"));
+    assert!(!status_stdout.contains("runtime_consumption"));
+    assert!(!status_stdout.contains("--json"));
+    assert_not_json_output("vida status --fields", &status_stdout);
+    assert_no_raw_terminal_controls("vida status --fields", &status_stdout);
+
+    let (_, project_state_dir) = project_bound_state_dir();
+    let boot_project = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &project_state_dir)
+        .output()
+        .expect("project-bound boot should run");
+    assert!(
+        boot_project.status.success(),
+        "project-bound boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot_project.stderr)
+    );
+
+    let orchestrator_json = vida()
+        .args([
+            "orchestrator-init",
+            "--json",
+            "--view",
+            "compact",
+            "--fields",
+            "status,active_bounded_unit,next_actions",
+        ])
+        .env("VIDA_STATE_DIR", &project_state_dir)
+        .output()
+        .expect("orchestrator-init compact json fields should run");
+    assert!(
+        orchestrator_json.status.success(),
+        "orchestrator-init compact json fields should succeed: stderr={}",
+        String::from_utf8_lossy(&orchestrator_json.stderr)
+    );
+    let orchestrator_payload: serde_json::Value = serde_json::from_slice(&orchestrator_json.stdout)
+        .expect("orchestrator-init compact json should parse");
+    let orchestrator_object = orchestrator_payload
+        .as_object()
+        .expect("orchestrator selected payload should be an object");
+    assert_eq!(orchestrator_object.len(), 3);
+    assert!(orchestrator_object.get("status").is_some());
+    assert!(orchestrator_object.get("active_bounded_unit").is_some());
+    assert!(orchestrator_object.get("next_actions").is_some());
+    assert!(orchestrator_object.get("runtime_bundle_summary").is_none());
+
+    let orchestrator_plain = vida()
+        .args([
+            "orchestrator-init",
+            "--view",
+            "compact",
+            "--fields",
+            "status,active_bounded_unit,next_actions",
+        ])
+        .env("VIDA_STATE_DIR", &project_state_dir)
+        .output()
+        .expect("orchestrator-init compact fields default output should run");
+    assert!(
+        orchestrator_plain.status.success(),
+        "orchestrator-init compact fields default output should succeed: stderr={}",
+        String::from_utf8_lossy(&orchestrator_plain.stderr)
+    );
+    let orchestrator_stdout = String::from_utf8_lossy(&orchestrator_plain.stdout);
+    assert!(orchestrator_stdout.starts_with("vida orchestrator-init\n"));
+    assert!(orchestrator_stdout.contains("status:"));
+    assert!(orchestrator_stdout.contains("active_bounded_unit"));
+    assert!(orchestrator_stdout.contains("next_actions"));
+    assert!(!orchestrator_stdout.contains("runtime_bundle_summary"));
+    assert!(!orchestrator_stdout.contains("--json"));
+    assert_not_json_output("vida orchestrator-init --fields", &orchestrator_stdout);
+    assert_no_raw_terminal_controls("vida orchestrator-init --fields", &orchestrator_stdout);
+}
+
+#[test]
+fn status_and_doctor_help_describe_default_toon_and_explicit_json() {
+    for (args, surface) in [
+        (&["status", "--help"][..], "vida status"),
+        (&["doctor", "--help"][..], "vida doctor"),
+    ] {
+        let output = vida()
+            .args(args)
+            .output()
+            .unwrap_or_else(|error| panic!("{surface} help should execute: {error}"));
+        assert!(
+            output.status.success(),
+            "{surface} help should succeed: stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("compact TOON"),
+            "{surface} help should document default compact TOON output: {stdout}"
+        );
+        assert!(
+            stdout.contains("--json"),
+            "{surface} help should document explicit JSON output: {stdout}"
+        );
+        assert!(
+            stdout.contains("machine-readable JSON"),
+            "{surface} help should describe JSON as machine-readable and explicit: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn status_and_orchestrator_init_help_describe_view_fields_and_json_options() {
+    for (args, surface) in [
+        (&["status", "--help"][..], "vida status"),
+        (
+            &["orchestrator-init", "--help"][..],
+            "vida orchestrator-init",
+        ),
+    ] {
+        let output = vida()
+            .args(args)
+            .output()
+            .unwrap_or_else(|error| panic!("{surface} help should execute: {error}"));
+        assert!(
+            output.status.success(),
+            "{surface} help should succeed: stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("--view"),
+            "{surface} help should document compact/full view selection: {stdout}"
+        );
+        assert!(
+            stdout.contains("--fields"),
+            "{surface} help should document field selection: {stdout}"
+        );
+        assert!(
+            stdout.contains("--json"),
+            "{surface} help should document explicit JSON output: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn agent_host_bridge_outputs_default_toon_json_and_help_contracts() {
+    let request_dir = unique_state_dir();
+    std::fs::create_dir_all(&request_dir).expect("host bridge request dir should exist");
+    let request_path = format!("{request_dir}/host-bridge-request.json");
+    std::fs::write(
+        &request_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-1",
+            "run_id": "run-1",
+            "dispatch_target": "implementer",
+            "packet_path": "packet.json",
+            "runtime_role": "worker",
+            "task_class": "implementation",
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": "request.json",
+            "result_path": "result.json",
+            "receipt_path": "receipt.json"
+        })
+        .to_string(),
+    )
+    .expect("host bridge request should be written");
+
+    let default_output = vida()
+        .args(["agent", "host-bridge", "--request", &request_path])
+        .output()
+        .expect("agent host-bridge default output should run");
+    assert!(
+        !default_output.status.success(),
+        "agent host-bridge default output should fail closed for untrusted request path"
+    );
+    let stdout = String::from_utf8_lossy(&default_output.stdout);
+    assert_not_json_output("vida agent host-bridge", &stdout);
+    assert_no_raw_terminal_controls("vida agent host-bridge", &stdout);
+    assert!(
+        stdout.starts_with("vida agent host-bridge\n"),
+        "agent host-bridge default output should be compact TOON: {stdout}"
+    );
+    assert!(stdout.contains("status: blocked"));
+    assert!(stdout.contains("blocker_codes[1]:"));
+    assert!(stdout.contains("host_bridge_request_untrusted_path"));
+    assert!(
+        !stdout.contains("completion:"),
+        "blocked default output must not advertise completion: {stdout}"
+    );
+    assert!(
+        !stdout.contains("--json"),
+        "default completion guidance should not force JSON: {stdout}"
+    );
+
+    let json_output = vida()
+        .args(["agent", "host-bridge", "--request", &request_path, "--json"])
+        .output()
+        .expect("agent host-bridge json output should run");
+    assert!(
+        !json_output.status.success(),
+        "agent host-bridge json output should fail closed for untrusted request path"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&json_output.stdout).expect("host-bridge json should parse");
+    assert_eq!(payload["surface"], "vida agent host-bridge");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["host_bridge_request_untrusted_path"])
+    );
+    assert_eq!(payload["shared_fields"]["status"], payload["status"]);
+    assert_eq!(
+        payload["shared_fields"]["blocker_codes"],
+        payload["operator_contracts"]["blocker_codes"]
+    );
+    assert_eq!(
+        payload["shared_fields"]["next_actions"],
+        payload["operator_contracts"]["next_actions"]
+    );
+    assert_eq!(
+        payload["shared_fields"]["artifact_refs"],
+        payload["operator_contracts"]["artifact_refs"]
+    );
+    assert_eq!(
+        payload["operator_contracts"]["contract_id"],
+        "host-agent-bridge-adapter-v1"
+    );
+
+    let help = vida()
+        .args(["agent", "host-bridge", "--help"])
+        .output()
+        .expect("agent host-bridge help should run");
+    assert!(
+        help.status.success(),
+        "agent host-bridge help should succeed: stderr={}",
+        String::from_utf8_lossy(&help.stderr)
+    );
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(help_stdout.contains("--json"));
+    assert!(help_stdout.contains("--state-dir"));
+    assert!(
+        help_stdout.contains("default compact TOON"),
+        "agent host-bridge help should document default compact TOON: {help_stdout}"
+    );
+}
+
+#[test]
+fn agent_host_bridge_trusted_missing_receipt_fails_closed_within_latency_budget() {
+    let state_dir = unique_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    let bridge_dir = format!("{state_dir}/runtime-consumption/host-tool-bridge");
+    std::fs::create_dir_all(&packet_dir).expect("dispatch packet dir should exist");
+    std::fs::create_dir_all(&bridge_dir).expect("host bridge dir should exist");
+    let packet_path = format!("{packet_dir}/run-host-bridge.json");
+    let request_path = format!("{bridge_dir}/request.json");
+    let result_path = format!("{bridge_dir}/result.json");
+    let receipt_path = format!("{bridge_dir}/receipt.json");
+    std::fs::write(&packet_path, "{}").expect("dispatch packet should be written");
+    std::fs::write(
+        &request_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-host-bridge",
+            "run_id": "run-host-bridge",
+            "dispatch_target": "implementation",
+            "packet_path": packet_path,
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": receipt_path
+        })
+        .to_string(),
+    )
+    .expect("host bridge request should be written");
+
+    let started = Instant::now();
+    let output = vida()
+        .args([
+            "agent",
+            "host-bridge",
+            "--request",
+            &request_path,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("host bridge json should run");
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "trusted missing-receipt host bridge should fail closed inside operator latency budget; elapsed={elapsed:?}"
+    );
+    assert!(
+        !output.status.success(),
+        "missing dispatch receipt should fail closed"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("host bridge json should parse");
+    assert_eq!(payload["surface"], "vida agent host-bridge");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["host_bridge_dispatch_receipt_missing"])
+    );
+    assert_eq!(
+        payload["shared_fields"]["blocker_codes"],
+        payload["operator_contracts"]["blocker_codes"]
+    );
+    assert_eq!(
+        payload["shared_fields"]["artifact_refs"],
+        payload["operator_contracts"]["artifact_refs"]
+    );
+}
+
+#[test]
+fn taskflow_next_outputs_default_toon_json_and_help_contracts() {
+    let state_dir = unique_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let default_output = vida()
+        .args(["taskflow", "next"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow next default output should run");
+    assert!(
+        !default_output.status.success(),
+        "taskflow next should fail closed when no ready task exists"
+    );
+    let stdout = String::from_utf8_lossy(&default_output.stdout);
+    assert_not_json_output("vida taskflow next", &stdout);
+    assert_no_raw_terminal_controls("vida taskflow next", &stdout);
+    assert!(
+        stdout.starts_with("vida taskflow next\n"),
+        "taskflow next default output should be compact TOON: {stdout}"
+    );
+    assert!(stdout.contains("status: blocked"));
+    assert!(stdout.contains("blocker_codes[1]:"));
+    assert!(stdout.contains("no_ready_tasks"));
+    assert!(stdout.contains("recommended_command: vida task ready"));
+    assert!(stdout.contains("recommended_surface: vida task ready"));
+    assert!(
+        !stdout.contains("--json"),
+        "taskflow next default human output should not suggest explicit JSON commands: {stdout}"
+    );
+
+    let json_output = vida()
+        .args(["taskflow", "next", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow next json output should run");
+    assert!(
+        !json_output.status.success(),
+        "taskflow next json should fail closed when no ready task exists"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&json_output.stdout).expect("taskflow next json should parse");
+    assert_eq!(payload["surface"], "vida taskflow next");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["no_ready_tasks"])
+    );
+    assert_eq!(payload["recommended_surface"], "vida task ready");
+    assert_eq!(payload["shared_fields"]["status"], payload["status"]);
+    assert_eq!(
+        payload["shared_fields"]["blocker_codes"],
+        payload["operator_contracts"]["blocker_codes"]
+    );
+    assert_eq!(
+        payload["shared_fields"]["next_actions"],
+        payload["operator_contracts"]["next_actions"]
+    );
+    assert_eq!(
+        payload["shared_fields"]["artifact_refs"],
+        payload["operator_contracts"]["artifact_refs"]
+    );
+    assert_eq!(
+        payload["operator_contracts"]["contract_id"],
+        "release-1-operator-contracts"
+    );
+
+    let help = vida()
+        .args(["taskflow", "next", "--help"])
+        .output()
+        .expect("taskflow next help should run");
+    assert!(
+        help.status.success(),
+        "taskflow next help should succeed: stderr={}",
+        String::from_utf8_lossy(&help.stderr)
+    );
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(help_stdout.contains("vida taskflow next"));
+    assert!(help_stdout.contains("--json"));
+    assert!(
+        help_stdout.contains("compact TOON"),
+        "taskflow next help should document default compact TOON: {help_stdout}"
+    );
+    assert!(
+        help_stdout.contains("machine-readable JSON"),
+        "taskflow next help should document explicit machine-readable JSON: {help_stdout}"
+    );
+}
+
+#[test]
+fn taskflow_closeout_outputs_default_toon_json_compact_and_help_contracts() {
+    let state_dir = unique_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let default_output = vida()
+        .args(["taskflow", "closeout"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow closeout default output should run");
+    assert!(
+        default_output.status.success(),
+        "taskflow closeout default should succeed: stderr={}",
+        String::from_utf8_lossy(&default_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&default_output.stdout);
+    assert_not_json_output("vida taskflow closeout", &stdout);
+    assert_no_raw_terminal_controls("vida taskflow closeout", &stdout);
+    assert!(
+        stdout.starts_with("vida taskflow closeout\n"),
+        "taskflow closeout default output should be compact TOON: {stdout}"
+    );
+    for field in [
+        "ready_count",
+        "open_count",
+        "active_agents_count",
+        "active_lanes_count",
+        "active_bounded_unit",
+        "continuation_required_now",
+        "stale_run_graph_present",
+        "root_local_write_allowed",
+        "all_epics_closed",
+        "next_action",
+    ] {
+        assert!(
+            stdout.contains(field),
+            "taskflow closeout default output should include {field}: {stdout}"
+        );
+    }
+    assert!(
+        !stdout.contains("--json"),
+        "taskflow closeout default human output should not suggest explicit JSON commands: {stdout}"
+    );
+
+    let fields_output = vida()
+        .args([
+            "taskflow",
+            "closeout",
+            "--view",
+            "compact",
+            "--fields",
+            "status,next_action,open_count",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow closeout fields output should run");
+    assert!(
+        fields_output.status.success(),
+        "taskflow closeout fields output should succeed: stderr={}",
+        String::from_utf8_lossy(&fields_output.stderr)
+    );
+    let fields_stdout = String::from_utf8_lossy(&fields_output.stdout);
+    assert_not_json_output("vida taskflow closeout --fields", &fields_stdout);
+    assert!(fields_stdout.contains("status:"));
+    assert!(fields_stdout.contains("next_action:"));
+    assert!(fields_stdout.contains("open_count:"));
+    assert!(
+        !fields_stdout.contains("ready_count:"),
+        "--fields should omit unrequested fields: {fields_stdout}"
+    );
+
+    let json_output = vida()
+        .args(["taskflow", "closeout", "--json", "--compact"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow closeout json compact output should run");
+    assert!(
+        json_output.status.success(),
+        "taskflow closeout json compact should succeed: stderr={}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&json_output.stdout).expect("taskflow closeout json should parse");
+    assert_eq!(payload["surface"], "vida taskflow closeout");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["view"], "compact");
+    for field in [
+        "ready_count",
+        "open_count",
+        "active_agents_count",
+        "active_lanes_count",
+        "active_bounded_unit",
+        "continuation_required_now",
+        "stale_run_graph_present",
+        "root_local_write_allowed",
+        "all_epics_closed",
+        "next_action",
+    ] {
+        assert!(
+            payload.get(field).is_some(),
+            "taskflow closeout json should include {field}: {payload}"
+        );
+    }
+    assert!(
+        matches!(
+            payload["next_action"].as_str(),
+            Some("none" | "close_epic" | "reconcile" | "recover_lane" | "run_gate")
+        ),
+        "next_action must be a compact enum: {payload}"
+    );
+
+    let fields_json_output = vida()
+        .args([
+            "taskflow",
+            "closeout",
+            "--json",
+            "--fields",
+            "status,next_action,open_count",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow closeout fields json output should run");
+    assert!(
+        fields_json_output.status.success(),
+        "taskflow closeout fields json should succeed: stderr={}",
+        String::from_utf8_lossy(&fields_json_output.stderr)
+    );
+    let fields_payload: serde_json::Value = serde_json::from_slice(&fields_json_output.stdout)
+        .expect("taskflow closeout fields json should parse");
+    let fields_object = fields_payload
+        .as_object()
+        .expect("fields payload should be an object");
+    assert_eq!(fields_object.len(), 3);
+    for expected in ["status", "next_action", "open_count"] {
+        assert!(
+            fields_object.contains_key(expected),
+            "fields payload should contain {expected}: {fields_payload}"
+        );
+    }
+    assert!(!fields_object.contains_key("ready_count"));
+
+    let help = vida()
+        .args(["taskflow", "closeout", "--help"])
+        .output()
+        .expect("taskflow closeout help should run");
+    assert!(
+        help.status.success(),
+        "taskflow closeout help should succeed: stderr={}",
+        String::from_utf8_lossy(&help.stderr)
+    );
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(help_stdout.contains("vida taskflow closeout"));
+    assert!(help_stdout.contains("--compact"));
+    assert!(help_stdout.contains("--view"));
+    assert!(help_stdout.contains("--fields"));
+    assert!(help_stdout.contains("--json"));
+    assert!(help_stdout.contains("compact TOON"));
+    assert!(help_stdout.contains("machine-readable JSON"));
+    assert!(help_stdout.contains("next_action enum"));
+    for field in [
+        "ready_count",
+        "open_count",
+        "active_agents_count",
+        "active_lanes_count",
+        "active_bounded_unit",
+        "continuation_required_now",
+        "stale_run_graph_present",
+        "root_local_write_allowed",
+        "all_epics_closed",
+        "next_action",
+    ] {
+        assert!(
+            help_stdout.contains(field),
+            "taskflow closeout help should document {field}: {help_stdout}"
+        );
+    }
+    for variant in [
+        "none",
+        "close_epic",
+        "reconcile",
+        "recover_lane",
+        "run_gate",
+    ] {
+        assert!(
+            help_stdout.contains(variant),
+            "taskflow closeout help should document next_action variant {variant}: {help_stdout}"
+        );
+    }
+}
+
+fn boot_session_triage_state() -> String {
+    let state_dir = unique_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    state_dir
+}
+
+fn create_session_triage_task(
+    state_dir: &str,
+    task_id: &str,
+    title: &str,
+    issue_type: &str,
+    status: &str,
+    priority: &str,
+    parent_id: Option<&str>,
+) {
+    let mut args = vec![
+        "task",
+        "create",
+        task_id,
+        title,
+        "--type",
+        issue_type,
+        "--status",
+        status,
+        "--priority",
+        priority,
+    ];
+    if let Some(parent_id) = parent_id {
+        args.extend(["--parent-id", parent_id]);
+    }
+    args.push("--json");
+
+    let output = vida()
+        .args(args)
+        .env("VIDA_STATE_DIR", state_dir)
+        .output()
+        .expect("session triage task create should run");
+    assert!(
+        output.status.success(),
+        "session triage task create should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn session_triage_outputs_default_toon_json_and_help_contracts() {
+    let state_dir = boot_session_triage_state();
+    create_session_triage_task(
+        &state_dir,
+        "session-triage-epic",
+        "Session triage epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        "session-triage-active-task",
+        "Session triage active task",
+        "task",
+        "in_progress",
+        "1",
+        Some("session-triage-epic"),
+    );
+
+    let default_output = vida()
+        .args(["session", "triage"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("session triage default output should run");
+    assert!(
+        default_output.status.success(),
+        "session triage default output should pass: stderr={}",
+        String::from_utf8_lossy(&default_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&default_output.stdout);
+    assert_not_json_output("vida session triage", &stdout);
+    assert_no_raw_terminal_controls("vida session triage", &stdout);
+    assert!(
+        stdout.starts_with("vida session triage\n"),
+        "session triage default output should be compact TOON: {stdout}"
+    );
+    assert!(stdout.contains("status: pass"));
+    assert!(stdout.contains("active_bounded_unit:"));
+    assert!(stdout.contains("session-triage-active-task"));
+    assert!(stdout.contains("current_epic:"));
+    assert!(stdout.contains("session-triage-epic"));
+    assert!(stdout.contains("graph_validation:"));
+    assert!(stdout.contains("valid: true"));
+    assert!(
+        !stdout.contains("--json"),
+        "session triage default human output should not suggest explicit JSON commands: {stdout}"
+    );
+
+    let json_output = vida()
+        .args([
+            "session",
+            "triage",
+            "--task",
+            "session-triage-active-task",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("session triage json output should run");
+    assert!(
+        json_output.status.success(),
+        "session triage json output should pass: stderr={}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&json_output.stdout).expect("session triage json should parse");
+    assert_eq!(payload["surface"], "vida session triage");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(
+        payload["active_bounded_unit"]["id"],
+        "session-triage-active-task"
+    );
+    assert_eq!(payload["current_epic"]["id"], "session-triage-epic");
+    assert_eq!(payload["graph_validation"]["valid"], true);
+    assert_eq!(payload["graph_validation"]["issue_count"], 0);
+    assert_eq!(
+        payload["vida_owned_evidence"]["state_store_shared_inputs"],
+        true
+    );
+    assert_eq!(
+        payload["external_evidence"]["github"],
+        "not_read_by_default"
+    );
+    assert_eq!(payload["shared_fields"]["status"], payload["status"]);
+    assert_eq!(
+        payload["shared_fields"]["blocker_codes"],
+        payload["operator_contracts"]["blocker_codes"]
+    );
+    assert_eq!(
+        payload["shared_fields"]["artifact_refs"],
+        payload["operator_contracts"]["artifact_refs"]
+    );
+
+    let help = vida()
+        .args(["session", "triage", "--help"])
+        .output()
+        .expect("session triage help should run");
+    assert!(
+        help.status.success(),
+        "session triage help should succeed: stderr={}",
+        String::from_utf8_lossy(&help.stderr)
+    );
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(help_stdout.contains("vida session triage"));
+    assert!(help_stdout.contains("--json"));
+    assert!(
+        help_stdout.contains("compact TOON"),
+        "session triage help should document default compact TOON: {help_stdout}"
+    );
+    assert!(
+        help_stdout.contains("machine-readable"),
+        "session triage help should document explicit machine-readable JSON: {help_stdout}"
+    );
+}
+
+#[test]
+fn session_triage_fails_closed_for_missing_explicit_task() {
+    let state_dir = boot_session_triage_state();
+    let output = vida()
+        .args([
+            "session",
+            "triage",
+            "--task",
+            "missing-session-task",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("session triage missing task json output should run");
+    assert!(
+        !output.status.success(),
+        "session triage should fail closed for missing explicit task"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("session triage json should parse");
+    assert_eq!(payload["surface"], "vida session triage");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["next_action_target_missing"])
+    );
+    assert_eq!(payload["target_task"], serde_json::Value::Null);
+    assert_eq!(payload["graph_validation"]["valid"], true);
+    assert_eq!(
+        payload["artifact_refs"]["target_task_id"],
+        "missing-session-task"
+    );
+}
+
+#[test]
+fn session_triage_fails_closed_for_multiple_active_tasks_without_explicit_binding() {
+    let state_dir = boot_session_triage_state();
+    create_session_triage_task(
+        &state_dir,
+        "session-triage-multiple-active-epic",
+        "Session triage multiple active epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        "session-triage-active-a",
+        "Session triage active A",
+        "task",
+        "in_progress",
+        "1",
+        Some("session-triage-multiple-active-epic"),
+    );
+    create_session_triage_task(
+        &state_dir,
+        "session-triage-active-b",
+        "Session triage active B",
+        "task",
+        "in_progress",
+        "2",
+        Some("session-triage-multiple-active-epic"),
+    );
+
+    let blocked = vida()
+        .args(["session", "triage", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("session triage multiple active json output should run");
+    assert!(
+        !blocked.status.success(),
+        "session triage should fail closed for multiple active tasks without explicit binding"
+    );
+    let blocked_payload: serde_json::Value =
+        serde_json::from_slice(&blocked.stdout).expect("session triage json should parse");
+    assert_eq!(blocked_payload["surface"], "vida session triage");
+    assert_eq!(blocked_payload["status"], "blocked");
+    assert_eq!(
+        blocked_payload["blocker_codes"],
+        serde_json::json!(["foreign_claim_conflict_blocked"])
+    );
+    assert_eq!(
+        blocked_payload["active_bounded_unit"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        blocked_payload["sequential_vs_parallel_posture"],
+        "ambiguous_until_explicit_binding"
+    );
+    assert_eq!(
+        blocked_payload["active_bounded_unit_candidates"]
+            .as_array()
+            .expect("active candidates should be array")
+            .len(),
+        2
+    );
+
+    let explicit = vida()
+        .args([
+            "session",
+            "triage",
+            "--task",
+            "session-triage-active-b",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("session triage explicit active json output should run");
+    assert!(
+        explicit.status.success(),
+        "explicit session triage should pass for selected active task: stderr={}",
+        String::from_utf8_lossy(&explicit.stderr)
+    );
+    let explicit_payload: serde_json::Value =
+        serde_json::from_slice(&explicit.stdout).expect("session triage json should parse");
+    assert_eq!(explicit_payload["status"], "pass");
+    assert_eq!(
+        explicit_payload["active_bounded_unit"]["id"],
+        "session-triage-active-b"
+    );
 }
 
 #[test]
@@ -1690,4 +2814,446 @@ fn status_and_doctor_quarantine_missing_task_orphan_run_graph() {
     assert!(!doctor_blockers
         .iter()
         .any(|code| code == "recovery_readiness_blocked"));
+}
+
+#[test]
+fn projection_surfaces_fail_closed_for_ready_missing_task_run_host_bridge() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let run_id = "zzzz-run-host-bridge";
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    sync_protocol_binding(&state_dir);
+
+    let init = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "init",
+            run_id,
+            "host_bridge",
+            "planning",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-host-bridge run graph should init");
+    assert!(
+        init.status.success(),
+        "run graph init should succeed: stderr={}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let update = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            run_id,
+            "host_bridge",
+            "host_bridge",
+            "ready",
+            "planning",
+            "{\"next_node\":\"implementer\",\"selected_backend\":\"internal_subagents\",\"lane_id\":\"host_bridge_lane\",\"lifecycle_stage\":\"implementation_dispatch_ready\",\"policy_gate\":\"host_tool_bridge_adapter_required\",\"handoff_state\":\"handoff_pending\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.implementer\",\"recovery_ready\":true}",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-host-bridge run graph should update");
+    assert!(
+        update.status.success(),
+        "run graph update should succeed: stderr={}",
+        String::from_utf8_lossy(&update.stderr)
+    );
+
+    let missing_task = vida()
+        .args(["task", "show", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("task show should run");
+    assert!(!missing_task.status.success());
+
+    let orchestrator = vida()
+        .args(["orchestrator-init", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("orchestrator-init should run");
+    assert!(
+        orchestrator.status.success(),
+        "orchestrator-init should succeed: stderr={}",
+        String::from_utf8_lossy(&orchestrator.stderr)
+    );
+    let orchestrator_json: serde_json::Value =
+        serde_json::from_slice(&orchestrator.stdout).expect("orchestrator-init json should parse");
+    assert_ne!(
+        orchestrator_json["continuation_binding"]["active_bounded_unit"]["task_id"],
+        run_id
+    );
+
+    let status = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status should run");
+    assert!(
+        status.status.success(),
+        "status should succeed: stderr={}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json should parse");
+    assert_ne!(
+        status_json["continuation_binding"]["active_bounded_unit"]["task_id"],
+        run_id
+    );
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph status should run");
+    assert!(
+        run_graph.status.success(),
+        "run-graph status should succeed: stderr={}",
+        String::from_utf8_lossy(&run_graph.stderr)
+    );
+    let run_graph_json: serde_json::Value =
+        serde_json::from_slice(&run_graph.stdout).expect("run-graph json should parse");
+    assert_eq!(
+        run_graph_json["projection_truth"]["stale_state_suspected"],
+        true
+    );
+    assert_eq!(
+        run_graph_json["projection_truth"]["next_lawful_operator_action"],
+        format!(
+            "vida lane retire {run_id} --receipt-id {run_id} --reason \"missing TaskFlow task stale run\""
+        )
+    );
+
+    let recovery = vida()
+        .args(["taskflow", "recovery", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("recovery latest should run");
+    assert!(
+        recovery.status.success(),
+        "recovery latest should succeed: stderr={}",
+        String::from_utf8_lossy(&recovery.stderr)
+    );
+    let recovery_json: serde_json::Value =
+        serde_json::from_slice(&recovery.stdout).expect("recovery json should parse");
+    assert_eq!(recovery_json["status"], "blocked");
+    assert!(
+        recovery_json["blocker_codes"]
+            .as_array()
+            .expect("recovery blocker codes")
+            .iter()
+            .any(|code| code == "stale_missing_task_run_graph"),
+        "recovery status should expose missing-task blocker: {recovery_json}"
+    );
+
+    let consume = vida()
+        .args([
+            "taskflow", "consume", "continue", "--run-id", run_id, "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("consume continue should run");
+    assert!(
+        !consume.status.success(),
+        "consume continue should fail closed for missing task authority"
+    );
+    let consume_json: serde_json::Value =
+        serde_json::from_slice(&consume.stdout).expect("consume json should parse");
+    assert_eq!(consume_json["status"], "blocked");
+    assert_eq!(
+        consume_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
+
+    let ready_parent_id = "analyst-ready-after-stale-pass-parent";
+    create_session_triage_task(
+        &state_dir,
+        ready_parent_id,
+        "Analyst ready after stale pass parent",
+        "epic",
+        "open",
+        "1",
+        None,
+    );
+    let ready_task_id = "analyst-ready-after-stale-pass-run";
+    create_session_triage_task(
+        &state_dir,
+        ready_task_id,
+        "Analyst ready after stale pass run",
+        "task",
+        "in_progress",
+        "1",
+        Some(ready_parent_id),
+    );
+    let dispatch = vida()
+        .args(["agent", "dispatch-next", "--dev-team", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("dispatch preview should run");
+    assert!(
+        !dispatch.status.success(),
+        "dispatch should fail closed while latest run references missing task authority: {}",
+        String::from_utf8_lossy(&dispatch.stdout)
+    );
+    let dispatch_json: serde_json::Value =
+        serde_json::from_slice(&dispatch.stdout).expect("dispatch-next json should parse");
+    assert_eq!(dispatch_json["status"], "blocked");
+    assert_eq!(dispatch_json["lanes_selected"], 0);
+    assert_eq!(
+        dispatch_json["parallelization_planner"]["materializes_packets"],
+        false
+    );
+    assert_eq!(dispatch_json["flow_projection"]["status"], "blocked");
+    assert!(dispatch_json["blocker_codes"].as_array().is_some());
+    assert!(
+        !dispatch_json.to_string().contains("open_delegated_cycle"),
+        "dev-team dispatch must not misclassify missing-task stale runs as open delegated cycles: {dispatch_json}"
+    );
+    assert!(
+        !dispatch_json
+            .to_string()
+            .contains("dispatch_packet_contract_invalid"),
+        "dev-team dispatch must fail before stale packet repair/validation noise: {dispatch_json}"
+    );
+    let _ = std::fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let run_id = "zzzz-run-host-bridge-pass";
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    sync_protocol_binding(&state_dir);
+
+    let init = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "init",
+            run_id,
+            "host_bridge",
+            "planning",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("pass missing-task run graph should init");
+    assert!(
+        init.status.success(),
+        "run graph init should succeed: stderr={}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let update = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            run_id,
+            "host_bridge",
+            "host_bridge",
+            "pass",
+            "planning",
+            "{\"next_node\":\"implementer\",\"selected_backend\":\"internal_subagents\",\"lane_id\":\"host_bridge_lane\",\"lifecycle_stage\":\"implementation_dispatch_ready\",\"policy_gate\":\"host_tool_bridge_adapter_required\",\"handoff_state\":\"handoff_pending\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.implementer\",\"recovery_ready\":true}",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("pass missing-task run graph should update");
+    assert!(
+        update.status.success(),
+        "run graph update should succeed: stderr={}",
+        String::from_utf8_lossy(&update.stderr)
+    );
+
+    let missing_task = vida()
+        .args(["task", "show", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("task show should run");
+    assert!(!missing_task.status.success());
+
+    let orchestrator = vida()
+        .args(["orchestrator-init", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("orchestrator-init should run");
+    assert!(
+        orchestrator.status.success(),
+        "orchestrator-init should succeed: stderr={}",
+        String::from_utf8_lossy(&orchestrator.stderr)
+    );
+    let orchestrator_json: serde_json::Value =
+        serde_json::from_slice(&orchestrator.stdout).expect("orchestrator-init json should parse");
+    assert_ne!(
+        orchestrator_json["continuation_binding"]["active_bounded_unit"]["task_id"],
+        run_id
+    );
+
+    let status = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status should run");
+    assert!(
+        status.status.success(),
+        "status should succeed: stderr={}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json should parse");
+    assert_ne!(
+        status_json["continuation_binding"]["active_bounded_unit"]["task_id"],
+        run_id
+    );
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph status should run");
+    assert!(
+        run_graph.status.success(),
+        "run-graph status should succeed: stderr={}",
+        String::from_utf8_lossy(&run_graph.stderr)
+    );
+    let run_graph_json: serde_json::Value =
+        serde_json::from_slice(&run_graph.stdout).expect("run-graph json should parse");
+    assert_eq!(
+        run_graph_json["projection_truth"]["stale_state_suspected"],
+        true
+    );
+    assert_eq!(
+        run_graph_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
+    assert_eq!(
+        run_graph_json["projection_truth"]["next_lawful_operator_action"],
+        format!(
+            "vida lane retire {run_id} --receipt-id {run_id} --reason \"missing TaskFlow task stale run\""
+        )
+    );
+
+    let recovery = vida()
+        .args(["taskflow", "recovery", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("recovery status should run");
+    assert!(recovery.status.success());
+    let recovery_json: serde_json::Value =
+        serde_json::from_slice(&recovery.stdout).expect("recovery json should parse");
+    assert_eq!(recovery_json["status"], "blocked");
+    assert_eq!(
+        recovery_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    std::fs::create_dir_all(&packet_dir).expect("dispatch packet dir should exist");
+    std::fs::write(
+        format!("{packet_dir}/zzzz-malformed-latest-packet.json"),
+        serde_json::json!({
+            "packet_kind": "runtime_dispatch_packet",
+            "packet_template_kind": "delivery_task_packet",
+            "run_id": "zzzz-malformed-latest-packet",
+            "dispatch_target": "implementer",
+            "delivery_task_packet": {
+                "task_id": "zzzz-malformed-latest-packet",
+                "request_text": "Implement only crates/vida/src/taskflow_consume_resume.rs"
+            }
+        })
+        .to_string(),
+    )
+    .expect("malformed dispatch packet should be written");
+
+    let default_consume = vida()
+        .args(["taskflow", "consume", "continue", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("default consume continue should run");
+    assert!(
+        !default_consume.status.success(),
+        "default consume continue should fail closed for latest missing task authority"
+    );
+    let default_consume_json: serde_json::Value =
+        serde_json::from_slice(&default_consume.stdout).expect("default consume json should parse");
+    assert_eq!(default_consume_json["status"], "blocked");
+    assert_eq!(
+        default_consume_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
+    assert_ne!(
+        default_consume_json["blocker_codes"],
+        serde_json::json!(["dispatch_packet_contract_invalid"])
+    );
+
+    let consume = vida()
+        .args([
+            "taskflow", "consume", "continue", "--run-id", run_id, "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("consume continue should run");
+    assert!(
+        !consume.status.success(),
+        "consume continue should fail closed for pass missing task authority"
+    );
+    let consume_json: serde_json::Value =
+        serde_json::from_slice(&consume.stdout).expect("consume json should parse");
+    assert_eq!(consume_json["status"], "blocked");
+    assert_eq!(
+        consume_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
+    let retire = vida()
+        .args([
+            "lane",
+            "retire",
+            run_id,
+            "--receipt-id",
+            run_id,
+            "--reason",
+            "missing TaskFlow task stale run",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("lane retire should run");
+    assert!(
+        retire.status.success(),
+        "lane retire should clean missing-task stale run without an existing receipt: stderr={}",
+        String::from_utf8_lossy(&retire.stderr)
+    );
+    let default_after_retire = vida()
+        .args(["taskflow", "consume", "continue", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("default consume continue after retire should run");
+    let default_after_retire_json: serde_json::Value =
+        serde_json::from_slice(&default_after_retire.stdout)
+            .expect("default consume after retire json should parse");
+    assert_ne!(
+        default_after_retire_json["blocker_codes"],
+        serde_json::json!(["dispatch_packet_contract_invalid"]),
+        "retired stale run must not let unrelated malformed packet files block default consume"
+    );
+    let _ = std::fs::remove_dir_all(project_root);
 }

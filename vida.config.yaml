@@ -536,6 +536,27 @@ dev_team:
   preserve_existing_agent_extensions: true
   preserve_existing_flow_sets: true
   default_flow_id: default_delivery
+  orchestrator_command_contract:
+    canonical_surface: vida agent dispatch-next
+    default_args:
+      - --dev-team
+      - --materialize-packets
+      - --current-task-id
+      - "{{task_id}}"
+    human_default_output: compact_toon
+    machine_output_arg: --json
+    receipt_backed_packet_required: true
+    first_packet_must_match_configured_first_step: true
+    stale_downstream_packet_policy: fail_closed_do_not_resume
+    host_bridge_policy: materialize_packet_before_execute_dispatch
+    root_orchestrator_role: orchestrator
+    role_sequence_for_runtime_defect:
+      - analyst
+      - autotester
+      - developer
+      - coach_validator
+      - tester
+      - prover
   work_item_flow_bindings:
     epic: default_delivery
     defect: defect_repair_verified
@@ -614,6 +635,26 @@ dev_team:
           - implementation_handoff_notes
           - explicit_blockers
         fail_closed_on_missing_handoff: true
+    autotester:
+      runtime_role: worker
+      task_classes:
+        - test_authoring
+        - regression_test
+        - verification_test_design
+      default_carrier: middle
+      cost_policy:
+        budget_units: 4
+        selection_rule: cheapest_eligible_autotest_authoring_carrier_with_middle_quality_floor
+      handoff:
+        next_role: developer
+        required_outputs:
+          - failing_regression_test
+          - integration_test_matrix
+          - fixture_rationale
+          - proof_command
+          - expected_behavior_reference
+          - explicit_blockers
+        fail_closed_on_missing_handoff: true
     coach_test_gate:
       runtime_role: coach
       task_classes:
@@ -667,6 +708,25 @@ dev_team:
           - spec_conformance_review
           - rework_or_approve_decision
           - unresolved_risks
+        fail_closed_on_missing_handoff: true
+    coach_validator:
+      runtime_role: coach
+      task_classes:
+        - coach
+        - review
+        - validation
+      default_carrier: middle
+      cost_policy:
+        budget_units: 4
+        selection_rule: configured_coach_carrier_for_root_cause_validation
+      handoff:
+        next_role: tester
+        required_outputs:
+          - root_cause_validation
+          - false_green_risk_review
+          - receipt_backed_execution_review
+          - rework_or_approve_decision
+          - explicit_blockers
         fail_closed_on_missing_handoff: true
     duplication_reviewer:
       runtime_role: verifier
@@ -927,7 +987,7 @@ dev_team:
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [runtime_surface_matrix, blocker_contract]
-        - role_id: test_author
+        - role_id: autotester
           runtime_role: worker
           task_class: regression_test
           command_template:
@@ -935,7 +995,7 @@ dev_team:
             args: [--role, worker, "{{task_id}}", --json]
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
-            required_outputs: [failing_runtime_regression, proof_command]
+            required_outputs: [failing_runtime_regression, integration_test_matrix, proof_command]
         - role_id: developer
           runtime_role: worker
           task_class: implementation
@@ -945,6 +1005,15 @@ dev_team:
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, runtime_recovery_evidence]
+        - role_id: coach_validator
+          runtime_role: coach
+          task_class: validation
+          command_template:
+            surface: vida agent-init
+            args: [--role, coach, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [root_cause_validation, false_green_risk_review, rework_or_approve_decision]
         - role_id: tester
           runtime_role: verifier
           task_class: verification
@@ -1545,6 +1614,129 @@ agent_system:
     budget_policy:
       enforce_max_budget_units: true
       allow_escalation_over_budget_with_blocker: true
+
+  stage_attempt_policies:
+    analysis:
+      fanout:
+        mode: parallel
+        max_attempts: 2
+      attempts:
+        - attempt_id: analysis-vibe-readonly
+          carrier_id: vibe_cli
+          model_profile_id: vibe_mistral_medium35_review
+          conversation_role: analyst
+          runtime_role: business_analyst
+          task_class: analysis
+          isolation: external_readonly_complete
+        - attempt_id: analysis-jcode-readonly
+          carrier_id: jcode_nim_cli
+          model_profile_id: jcode_nim_mistral_medium35_review
+          conversation_role: analyst
+          runtime_role: business_analyst
+          task_class: analysis
+          isolation: external_readonly_complete
+      consolidator:
+        attempt_id: analysis-root-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_gpt55_medium_write
+        conversation_role: analyst
+        runtime_role: business_analyst
+        task_class: analysis
+        isolation: root_validate_only
+    specification:
+      fanout:
+        mode: parallel
+        max_attempts: 2
+      attempts:
+        - attempt_id: specification-vibe-readonly
+          carrier_id: vibe_cli
+          model_profile_id: vibe_mistral_medium35_review
+          conversation_role: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          isolation: external_readonly_complete
+        - attempt_id: specification-jcode-readonly
+          carrier_id: jcode_nim_cli
+          model_profile_id: jcode_nim_mistral_medium35_review
+          conversation_role: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          isolation: external_readonly_complete
+      consolidator:
+        attempt_id: specification-coach-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_gpt55_high_readonly
+        conversation_role: coach
+        runtime_role: coach
+        task_class: review
+        isolation: root_validate_only
+    implementation:
+      fanout:
+        mode: single
+        max_attempts: 1
+      attempts:
+        - attempt_id: implementation-internal-low-write
+          carrier_id: internal_subagents
+          model_profile_id: codex_gpt55_low_write
+          conversation_role: developer
+          runtime_role: worker
+          task_class: implementation
+          isolation: delegated_write_or_patch_proposal
+      consolidator:
+        attempt_id: implementation-coach-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_gpt55_high_readonly
+        conversation_role: coach
+        runtime_role: coach
+        task_class: review
+        isolation: root_validate_only
+    regression_test:
+      fanout:
+        mode: single
+        max_attempts: 1
+      attempts:
+        - attempt_id: regression-test-internal-medium
+          carrier_id: internal_subagents
+          model_profile_id: codex_gpt55_medium_write
+          conversation_role: autotester
+          runtime_role: worker
+          task_class: regression_test
+          isolation: delegated_write_or_patch_proposal
+      consolidator:
+        attempt_id: regression-test-coach-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_gpt55_high_readonly
+        conversation_role: coach
+        runtime_role: coach
+        task_class: review
+        isolation: root_validate_only
+    review:
+      fanout:
+        mode: parallel
+        max_attempts: 2
+      attempts:
+        - attempt_id: review-vibe-readonly
+          carrier_id: vibe_cli
+          model_profile_id: vibe_mistral_medium35_review
+          conversation_role: coach
+          runtime_role: coach
+          task_class: review
+          isolation: external_readonly_complete
+        - attempt_id: review-internal-high
+          carrier_id: internal_subagents
+          model_profile_id: codex_gpt55_high_readonly
+          conversation_role: reviewer
+          runtime_role: verifier
+          task_class: verification
+          isolation: external_readonly_complete
+      consolidator:
+        attempt_id: review-root-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_gpt55_high_readonly
+        conversation_role: coach
+        runtime_role: coach
+        task_class: review
+        isolation: root_validate_only
 
   subagents:
     internal_subagents:
@@ -2270,6 +2462,138 @@ agent_system:
         model_catalog:
           mode: pi_rpc_get_available_models
           required: true
+        write_scope_guard:
+          mode: adapter_feature_required
+          required_for_write_profiles: true
+          fail_closed_until_available: true
+    vida_coder:
+      enabled: false
+      subagent_backend_class: service_executor
+      detect_command: vida-coder
+      provider_command: vida-coder
+      role: service_mode_executor
+      orchestration_tier: service_write_guarded
+      cost_priority: preferred_when_ready_and_reserved
+      budget_cost_units: 4
+      models_hint: vida-coder/provider-configured
+      default_model: vida-coder/provider-configured
+      default_model_profile: vida_coder_medium_guarded
+      capability_band: implementation_guarded,review_safe,verification_safe
+      default_runtime_role: worker
+      write_scope: guard_required_packet_owned_paths
+      write_readiness: guard_required_fail_closed_until_service_guard
+      max_runtime_seconds: 420
+      min_output_bytes: 260
+      billing_tier: service_account
+      speed_tier: medium
+      quality_tier: high
+      runtime_roles:
+        - worker
+        - coach
+        - verifier
+      task_classes:
+        - implementation
+        - delivery_task
+        - execution_block
+        - implementation_medium
+        - review
+        - coach
+        - verification
+      model_profiles:
+        vida_coder_low_guarded:
+          provider: vida-coder
+          model_ref: vida-coder/provider-configured
+          reasoning_effort: low
+          normalized_cost_units: 1
+          speed_tier: fast
+          quality_tier: medium_high
+          write_scope: guard_required_packet_owned_paths
+          write_readiness: guard_required_fail_closed_until_service_guard
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+            - delivery_task
+            - execution_block
+          readiness:
+            mode: service_executor_profile
+            required: true
+            adapter_command_required: vida-coder
+            provider_command_required: vida-coder
+            write_scope_guard_required: true
+            fail_closed_until_write_guard: true
+        vida_coder_medium_guarded:
+          provider: vida-coder
+          model_ref: vida-coder/provider-configured
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          speed_tier: medium
+          quality_tier: high
+          write_scope: guard_required_packet_owned_paths
+          write_readiness: guard_required_fail_closed_until_service_guard
+          runtime_roles:
+            - worker
+            - coach
+          task_classes:
+            - implementation
+            - delivery_task
+            - execution_block
+            - implementation_medium
+            - coach
+          readiness:
+            mode: service_executor_profile
+            required: true
+            adapter_command_required: vida-coder
+            provider_command_required: vida-coder
+            write_scope_guard_required: true
+            fail_closed_until_write_guard: true
+        vida_coder_high_readonly:
+          provider: vida-coder
+          model_ref: vida-coder/provider-configured
+          reasoning_effort: high
+          normalized_cost_units: 8
+          speed_tier: medium
+          quality_tier: high
+          write_scope: none
+          runtime_roles:
+            - coach
+            - verifier
+          task_classes:
+            - review
+            - verification
+            - coach
+          readiness:
+            mode: service_executor_profile
+            required: true
+            adapter_command_required: vida-coder
+            provider_command_required: vida-coder
+            write_scope_guard_required: false
+      specialties: implementation,review,verification
+      dispatch:
+        command: vida-coder
+        static_args:
+          - --service
+          - dispatch
+        model_flag: --model
+        reasoning_effort_flag: --reasoning-effort
+        reservation_id_flag: --reservation-id
+        packet_flag: --packet
+        workdir_flag: --workdir
+        output_mode: vida_result_json
+        prompt_mode: stdin
+        startup_timeout_seconds: 60
+        no_output_timeout_seconds: 180
+        progress_idle_timeout_seconds: 105
+        max_runtime_extension_seconds: 120
+        one_process_per_dispatch: false
+        raw_provider_dispatch_forbidden: true
+      readiness:
+        adapter:
+          mode: command_found
+          command: vida-coder
+        provider:
+          mode: command_found
+          command: vida-coder
         write_scope_guard:
           mode: adapter_feature_required
           required_for_write_profiles: true

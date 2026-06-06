@@ -159,6 +159,7 @@ fn build_taskflow_packet_render_payload(
     requested_run_id: &str,
     run_id: &str,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
+    task_identity: Option<crate::state_store::RunGraphDispatchTaskIdentity>,
     dispatch_packet_path: &str,
     dispatch_packet_body: serde_json::Value,
     downstream_packet: Option<serde_json::Value>,
@@ -168,6 +169,7 @@ fn build_taskflow_packet_render_payload(
         "requested_run_id": requested_run_id,
         "run_id": run_id,
         "dispatch_receipt": receipt,
+        "task_identity": task_identity,
         "dispatch_packet": {
             "path": dispatch_packet_path,
             "body": dispatch_packet_body,
@@ -225,6 +227,38 @@ fn hydrate_dispatch_packet_owned_paths_from_task(
     hydrated
 }
 
+fn repair_delivery_task_packet_identity(dispatch_packet_body: &mut serde_json::Value) -> bool {
+    let Some(delivery_task_packet) = dispatch_packet_body
+        .get_mut("delivery_task_packet")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return false;
+    };
+    let backlog_id = delivery_task_packet
+        .get("backlog_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let Some(backlog_id) = backlog_id else {
+        return false;
+    };
+    let mut repaired = false;
+    for key in ["task_id", "id"] {
+        let mismatched = delivery_task_packet
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|value| value != backlog_id);
+        if mismatched {
+            delivery_task_packet.remove(key);
+            repaired = true;
+        }
+    }
+    repaired
+}
+
 struct PacketRepairMutation {
     dispatch_packet_path: String,
     repaired: bool,
@@ -256,7 +290,8 @@ async fn repair_persisted_dispatch_packet_from_task(
     let resolved_path = canonicalize_packet_path(dispatch_packet_path)?;
     let display_path = resolved_path.display().to_string();
     let mut packet = read_packet_body(dispatch_packet_path)?;
-    let repaired = hydrate_dispatch_packet_owned_paths_from_task(&mut packet, task);
+    let mut repaired = repair_delivery_task_packet_identity(&mut packet);
+    repaired |= hydrate_dispatch_packet_owned_paths_from_task(&mut packet, task);
     if repaired {
         std::fs::write(
             &resolved_path,
@@ -686,7 +721,28 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    if let Ok(task) = load_task_for_packet_repair(&store, &effective_run_id).await {
+    let task_identity = match store
+        .run_graph_dispatch_task_identity(&effective_run_id)
+        .await
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            eprintln!("Failed to read dispatch task identity for `{effective_run_id}`: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let metadata_task_id = task_identity
+        .as_ref()
+        .and_then(|identity| {
+            identity
+                .dev_task_id
+                .as_deref()
+                .or(identity.work_pool_task_id.as_deref())
+                .or(identity.spec_task_id.as_deref())
+                .or(identity.feature_epic_id.as_deref())
+        })
+        .unwrap_or(&effective_run_id);
+    if let Ok(task) = load_task_for_packet_repair(&store, metadata_task_id).await {
         hydrate_dispatch_packet_owned_paths_from_task(&mut dispatch_packet_body, &task);
     }
     let downstream_packet = match receipt.downstream_dispatch_packet_path.as_deref() {
@@ -707,6 +763,7 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         &requested_run_id,
         &effective_run_id,
         &receipt,
+        task_identity,
         dispatch_packet_path,
         dispatch_packet_body.clone(),
         downstream_packet,
@@ -793,10 +850,7 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         print_surface_line(
             RenderMode::Plain,
             "continue_command",
-            &format!(
-                "vida taskflow consume continue --run-id {} --json",
-                receipt.run_id
-            ),
+            &format!("vida taskflow consume continue --run-id {}", receipt.run_id),
         );
     }
 
@@ -808,7 +862,8 @@ mod tests {
     use super::{
         build_taskflow_packet_render_payload, build_taskflow_packet_repair_payload,
         hydrate_dispatch_packet_owned_paths_from_task, parse_packet_repair_args,
-        resolve_latest_packet_run_id, resolve_packet_render_run_id,
+        repair_delivery_task_packet_identity, resolve_latest_packet_run_id,
+        resolve_packet_render_run_id,
     };
     use crate::state_store::{StateStore, TaskPlannerMetadata, TaskRecord};
     use std::fs;
@@ -851,6 +906,7 @@ mod tests {
             "run-impl",
             "run-impl",
             &receipt,
+            None,
             "/tmp/dispatch-packet.json",
             serde_json::json!({
                 "dispatch_target": "implementer",
@@ -906,6 +962,7 @@ mod tests {
             "run-prep",
             "run-prep",
             &receipt,
+            None,
             "/tmp/dispatch-packet.json",
             serde_json::json!({
                 "run_graph_bootstrap": {
@@ -1029,6 +1086,44 @@ mod tests {
             packet["delivery_task_packet"]["owned_paths"],
             serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
         );
+    }
+
+    #[test]
+    fn packet_repair_canonicalizes_stale_delivery_task_identity_before_validation() {
+        let task = packet_repair_task_with_metadata();
+        let mut packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": [],
+            "delivery_task_packet": {
+                "packet_id": "run-1::orchestrator::delivery",
+                "backlog_id": "run-1",
+                "task_id": "task-with-metadata",
+                "id": "task-with-metadata",
+                "goal": "Execute bounded orchestrator handoff",
+                "scope_in": ["dispatch_target:orchestrator", "runtime_role:worker"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "definition_of_done": ["bounded runtime result artifact"],
+                "verification_command": "vida taskflow consume continue --run-id run-1",
+                "proof_target": "runtime dispatch result artifact plus updated dispatch receipt",
+                "stop_rules": ["stop after writing bounded dispatch result or explicit blocker"],
+                "blocking_question": "What is the next bounded action required for orchestrator?"
+            }
+        });
+
+        assert!(repair_delivery_task_packet_identity(&mut packet));
+        assert!(hydrate_dispatch_packet_owned_paths_from_task(
+            &mut packet,
+            &task
+        ));
+        assert!(packet["delivery_task_packet"].get("task_id").is_none());
+        assert!(packet["delivery_task_packet"].get("id").is_none());
+        assert_eq!(packet["delivery_task_packet"]["backlog_id"], "run-1");
+        assert_eq!(
+            packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+        );
+        crate::validate_runtime_dispatch_packet_contract(&packet, "test packet")
+            .expect("canonicalized repair packet should validate");
     }
 
     #[test]

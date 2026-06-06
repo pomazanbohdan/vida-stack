@@ -4,7 +4,6 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::display_lane_label;
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
-use crate::surface_render::sanitize_terminal_value;
 use crate::BlockerCode;
 
 const CONSUME_FINAL_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -105,8 +104,24 @@ fn parse_taskflow_consume_final_args(request: &[String]) -> Result<ConsumeFinalA
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--json" => as_json = true,
-            "--preview" => mode = ConsumeFinalMode::Preview,
-            "--validate-only" => mode = ConsumeFinalMode::ValidateOnly,
+            "--preview" => {
+                if mode == ConsumeFinalMode::ValidateOnly {
+                    return Err(format!(
+                        "--preview conflicts with --validate-only. {}",
+                        consume_final_usage()
+                    ));
+                }
+                mode = ConsumeFinalMode::Preview;
+            }
+            "--validate-only" => {
+                if mode == ConsumeFinalMode::Preview {
+                    return Err(format!(
+                        "--validate-only conflicts with --preview. {}",
+                        consume_final_usage()
+                    ));
+                }
+                mode = ConsumeFinalMode::ValidateOnly;
+            }
             "--task-id" => task_id = Some(parse_consume_final_value(&mut iter, "--task-id")?),
             "--owned-path" => {
                 let value = parse_consume_final_value(&mut iter, "--owned-path")?;
@@ -150,6 +165,10 @@ fn print_consume_final_help() {
     println!("Usage:");
     println!("  {}", consume_final_command_usage());
     println!("  vida taskflow consume final --task-id <task-id> --from-task-metadata [--json]");
+    println!();
+    println!("Output:");
+    println!("  default                  Emit compact TOON operator output.");
+    println!("  --json                   Emit machine-readable JSON output.");
     println!();
     println!("Options:");
     println!("  --task-id <id>          Use a canonical TaskFlow task id as the bounded request.");
@@ -216,18 +235,14 @@ fn print_consume_advance_help() {
 }
 
 fn consume_final_operator_command_text(command: &str) -> String {
-    command
-        .replace(" --json", "")
-        .replace("--json ", "")
-        .trim()
-        .to_string()
+    crate::operator_command_text::human_command(command)
 }
 
 fn consume_final_toon_line(label: &str, value: &str) -> String {
     format!(
         "{}: {}",
-        sanitize_terminal_value(label),
-        sanitize_terminal_value(value)
+        taskflow_format_toon::sanitize_toon_scalar(label),
+        taskflow_format_toon::sanitize_toon_scalar(value)
     )
 }
 
@@ -2039,10 +2054,11 @@ mod tests {
     use super::{
         build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
         build_retrieval_policy_decision_gate, build_runtime_consumption_dispatch_receipt,
-        fail_fast_state_store_open_with_timeout, normalize_runtime_consumption_statuses,
-        parse_taskflow_consume_final_args, should_record_blocked_dispatch_receipt,
-        try_print_taskflow_consume_nested_help, ApprovalDelegationEvidenceGate, ConsumeFinalMode,
-        ExecutionPreparationEvidenceGate, RetrievalPolicyDecisionGate,
+        consume_final_command_usage, fail_fast_state_store_open_with_timeout,
+        normalize_runtime_consumption_statuses, parse_taskflow_consume_final_args,
+        should_record_blocked_dispatch_receipt, try_print_taskflow_consume_nested_help,
+        ApprovalDelegationEvidenceGate, ConsumeFinalMode, ExecutionPreparationEvidenceGate,
+        RetrievalPolicyDecisionGate,
     };
     use std::time::Duration;
 
@@ -2072,6 +2088,30 @@ mod tests {
         assert!(!validate.as_json);
         assert_eq!(validate.mode, ConsumeFinalMode::ValidateOnly);
         assert_eq!(validate.request_text, "ship this");
+    }
+
+    #[test]
+    fn parse_taskflow_consume_final_args_rejects_conflicting_readonly_modes() {
+        let preview_then_validate = vec![
+            "ship".to_string(),
+            "--preview".to_string(),
+            "--validate-only".to_string(),
+        ];
+        let validate_then_preview = vec![
+            "ship".to_string(),
+            "--validate-only".to_string(),
+            "--preview".to_string(),
+        ];
+
+        let preview_error = parse_taskflow_consume_final_args(&preview_then_validate)
+            .expect_err("preview plus validate-only should be rejected");
+        let validate_error = parse_taskflow_consume_final_args(&validate_then_preview)
+            .expect_err("validate-only plus preview should be rejected");
+
+        assert!(preview_error.contains("--validate-only conflicts with --preview"));
+        assert!(validate_error.contains("--preview conflicts with --validate-only"));
+        assert!(preview_error.contains(consume_final_command_usage()));
+        assert!(validate_error.contains(consume_final_command_usage()));
     }
 
     #[test]

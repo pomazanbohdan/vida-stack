@@ -8,7 +8,7 @@ use crate::{
     shell_quote,
     state_store::{
         RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
-        RunGraphStatus, StateStore, StateStoreError,
+        RunGraphDispatchTaskIdentity, RunGraphStatus, StateStore, StateStoreError,
     },
     taskflow_layer4::print_taskflow_proxy_help,
     taskflow_task_bridge::proxy_state_dir,
@@ -228,6 +228,12 @@ fn normalize_run_graph_blocker_codes(
 ) -> Vec<String> {
     if blocker_codes
         .iter()
+        .any(|code| code.trim() == "stale_missing_task_run_graph")
+    {
+        return vec!["stale_missing_task_run_graph".to_string()];
+    }
+    if blocker_codes
+        .iter()
         .any(|code| code.trim() == "missing_owned_write_scope")
     {
         return vec!["missing_owned_write_scope".to_string()];
@@ -237,6 +243,12 @@ fn normalize_run_graph_blocker_codes(
         .any(|code| code.trim() == "host_tool_bridge_adapter_required")
     {
         return vec!["host_tool_bridge_adapter_required".to_string()];
+    }
+    if blocker_codes
+        .iter()
+        .any(|code| code.trim() == "internal_activation_view_only")
+    {
+        return vec!["internal_activation_view_only".to_string()];
     }
     let normalized = crate::operator_contracts::normalize_blocker_codes(
         blocker_codes,
@@ -286,10 +298,11 @@ fn build_run_graph_operator_surface_payload(
     Ok(payload)
 }
 
-fn build_recovery_json_payload(
+fn build_recovery_json_payload_with_task_identity(
     surface: &str,
     summary: &crate::state_store::RunGraphRecoverySummary,
     projection_truth: &RunGraphProjectionTruth,
+    task_identity: Option<&RunGraphDispatchTaskIdentity>,
     blocker_codes: Vec<String>,
     why_not_now: Option<RecoveryWhyNotNow>,
     next_action: Option<RecoveryNextAction>,
@@ -318,14 +331,47 @@ fn build_recovery_json_payload(
             "recommended_surface": recommended_surface,
             "recovery": summary,
             "projection_truth": projection_truth,
+            "task_identity": task_identity,
         }),
     )
 }
 
-fn build_recovery_explain_json_payload(
+fn build_recovery_json_payload(
     surface: &str,
     summary: &crate::state_store::RunGraphRecoverySummary,
     projection_truth: &RunGraphProjectionTruth,
+    blocker_codes: Vec<String>,
+    why_not_now: Option<RecoveryWhyNotNow>,
+    next_action: Option<RecoveryNextAction>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+) -> Result<serde_json::Value, String> {
+    build_recovery_json_payload_with_task_identity(
+        surface,
+        summary,
+        projection_truth,
+        None,
+        blocker_codes,
+        why_not_now,
+        next_action,
+        recommended_command,
+        recommended_surface,
+    )
+}
+
+fn exit_code_for_operator_payload(payload: &serde_json::Value) -> ExitCode {
+    if payload["status"].as_str() == Some("blocked") {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn build_recovery_explain_json_payload_with_task_identity(
+    surface: &str,
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+    task_identity: Option<&RunGraphDispatchTaskIdentity>,
     blocker_codes: Vec<String>,
     why_not_now: Option<RecoveryWhyNotNow>,
     next_action: Option<RecoveryNextAction>,
@@ -381,7 +427,31 @@ fn build_recovery_explain_json_payload(
             "recommended_surface": recommended_surface,
             "recovery": summary,
             "projection_truth": projection_truth,
+            "task_identity": task_identity,
         }),
+    )
+}
+
+fn build_recovery_explain_json_payload(
+    surface: &str,
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+    blocker_codes: Vec<String>,
+    why_not_now: Option<RecoveryWhyNotNow>,
+    next_action: Option<RecoveryNextAction>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+) -> Result<serde_json::Value, String> {
+    build_recovery_explain_json_payload_with_task_identity(
+        surface,
+        summary,
+        projection_truth,
+        None,
+        blocker_codes,
+        why_not_now,
+        next_action,
+        recommended_command,
+        recommended_surface,
     )
 }
 
@@ -411,6 +481,29 @@ fn build_run_graph_diagnosis_json_payload_for_surface(
     )
 }
 
+fn build_recovery_latest_json_payload_with_task_identity(
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+    task_identity: Option<&RunGraphDispatchTaskIdentity>,
+    blocker_codes: Vec<String>,
+    why_not_now: Option<RecoveryWhyNotNow>,
+    next_action: Option<RecoveryNextAction>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+) -> Result<serde_json::Value, String> {
+    build_recovery_json_payload_with_task_identity(
+        "vida taskflow recovery latest",
+        summary,
+        projection_truth,
+        task_identity,
+        blocker_codes,
+        why_not_now,
+        next_action,
+        recommended_command,
+        recommended_surface,
+    )
+}
+
 fn build_recovery_latest_json_payload(
     summary: &crate::state_store::RunGraphRecoverySummary,
     projection_truth: &RunGraphProjectionTruth,
@@ -420,10 +513,10 @@ fn build_recovery_latest_json_payload(
     recommended_command: Option<String>,
     recommended_surface: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    build_recovery_json_payload(
-        "vida taskflow recovery latest",
+    build_recovery_latest_json_payload_with_task_identity(
         summary,
         projection_truth,
+        None,
         blocker_codes,
         why_not_now,
         next_action,
@@ -486,6 +579,19 @@ async fn render_latest_recovery_json_payload(surface: &'static str) -> ExitCode 
                     Some(summary) => recovery_owned_write_scope_for_summary(&store, summary).await,
                     None => Vec::new(),
                 };
+                let task_identity = match summary.as_ref() {
+                    Some(summary) => match store
+                        .run_graph_dispatch_task_identity(&summary.run_id)
+                        .await
+                    {
+                        Ok(identity) => identity,
+                        Err(error) => {
+                            eprintln!("Failed to read run-graph task identity: {error}");
+                            return ExitCode::from(1);
+                        }
+                    },
+                    None => None,
+                };
                 let contract = summary.as_ref().zip(projection_truth.as_ref()).map(
                     |(summary, projection_truth)| {
                         recovery_surface_contract_with_owned_scope(
@@ -497,10 +603,11 @@ async fn render_latest_recovery_json_payload(surface: &'static str) -> ExitCode 
                 );
                 let payload = match (summary.as_ref(), projection_truth.as_ref(), contract) {
                     (Some(summary), Some(projection_truth), Some(contract)) => {
-                        build_recovery_json_payload(
+                        build_recovery_json_payload_with_task_identity(
                             surface,
                             summary,
                             projection_truth,
+                            task_identity.as_ref(),
                             contract.0,
                             contract.1,
                             contract.2,
@@ -515,12 +622,13 @@ async fn render_latest_recovery_json_payload(surface: &'static str) -> ExitCode 
                 };
                 match payload {
                     Ok(payload) => {
+                        let exit_code = exit_code_for_operator_payload(&payload);
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&payload)
                                 .expect("latest recovery summary should render as json")
                         );
-                        ExitCode::SUCCESS
+                        exit_code
                     }
                     Err(error) => {
                         eprintln!("Failed to render normalized recovery latest payload: {error}");
@@ -562,10 +670,11 @@ fn build_run_graph_diagnosis_json_payload(
     )
 }
 
-fn build_run_graph_status_json_payload(
+fn build_run_graph_status_json_payload_with_task_identity(
     surface: &str,
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
+    task_identity: Option<&RunGraphDispatchTaskIdentity>,
 ) -> Result<serde_json::Value, String> {
     let blocker_codes = run_graph_status_surface_blocker_codes(status, projection_truth);
     let next_actions = operator_next_actions_for_operator_surface(
@@ -584,8 +693,478 @@ fn build_run_graph_status_json_payload(
             "run_graph_status": status,
             "delegation_gate": status.delegation_gate(),
             "projection_truth": projection_truth,
+            "task_identity": task_identity,
         }),
     )
+}
+
+fn build_run_graph_status_json_payload(
+    surface: &str,
+    status: &RunGraphStatus,
+    projection_truth: &RunGraphProjectionTruth,
+) -> Result<serde_json::Value, String> {
+    build_run_graph_status_json_payload_with_task_identity(surface, status, projection_truth, None)
+}
+
+fn run_graph_task_identity_compact(identity: &RunGraphDispatchTaskIdentity) -> String {
+    format!(
+        "run={} feature={} spec={} work_pool={} source={}",
+        identity.run_id,
+        identity.feature_epic_id.as_deref().unwrap_or("none"),
+        identity.spec_task_id.as_deref().unwrap_or("none"),
+        identity.work_pool_task_id.as_deref().unwrap_or("none"),
+        identity.source
+    )
+}
+
+fn run_graph_task_identity_payload(
+    surface: &str,
+    run_id: &str,
+    identity: Option<&RunGraphDispatchTaskIdentity>,
+) -> Result<serde_json::Value, String> {
+    let blocker_codes = if identity.is_some() {
+        Vec::new()
+    } else {
+        vec!["missing_run_graph_task_identity".to_string()]
+    };
+    let next_actions = if identity.is_some() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "Run `vida taskflow run-graph task-identity repair {run_id} --from-task <feature-or-spec-task>`."
+        )]
+    };
+    build_run_graph_operator_surface_payload(
+        surface,
+        run_id,
+        blocker_codes,
+        next_actions,
+        serde_json::json!({
+            "task_identity": identity,
+        }),
+    )
+}
+
+fn print_run_graph_task_identity(
+    surface: &str,
+    run_id: &str,
+    identity: Option<&RunGraphDispatchTaskIdentity>,
+) {
+    print_surface_header(RenderMode::Plain, surface);
+    print_surface_line(RenderMode::Plain, "run", run_id);
+    match identity {
+        Some(identity) => {
+            print_surface_line(
+                RenderMode::Plain,
+                "task_identity",
+                &run_graph_task_identity_compact(identity),
+            );
+        }
+        None => {
+            print_surface_line(RenderMode::Plain, "status", "missing_task_identity");
+            print_surface_line(
+                RenderMode::Plain,
+                "next_action",
+                &format!(
+                    "vida taskflow run-graph task-identity repair {run_id} --from-task <feature-or-spec-task>"
+                ),
+            );
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct RunGraphTaskIdentityCommand {
+    action: String,
+    run_id: Option<String>,
+    feature_epic_id: Option<String>,
+    spec_task_id: Option<String>,
+    work_pool_task_id: Option<String>,
+    from_task_id: Option<String>,
+    state_dir: Option<PathBuf>,
+    as_json: bool,
+    help: bool,
+}
+
+fn parse_run_graph_task_identity_command(
+    args: &[String],
+) -> Result<RunGraphTaskIdentityCommand, String> {
+    let mut command = RunGraphTaskIdentityCommand {
+        action: "show".to_string(),
+        ..RunGraphTaskIdentityCommand::default()
+    };
+    let mut index = 0;
+    if args
+        .first()
+        .is_some_and(|value| value == "--help" || value == "-h")
+    {
+        command.help = true;
+        return Ok(command);
+    }
+    if let Some(action) = args
+        .first()
+        .filter(|value| matches!(value.as_str(), "show" | "seed" | "repair"))
+    {
+        command.action = action.clone();
+        index = 1;
+    }
+    if let Some(run_id) = args.get(index).filter(|value| !value.starts_with("--")) {
+        command.run_id = Some(run_id.clone());
+        index += 1;
+    }
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                command.as_json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                command.help = true;
+                index += 1;
+            }
+            "--state-dir" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "--state-dir requires a path".to_string())?;
+                command.state_dir = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--feature-epic" | "--feature-task" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| format!("{} requires a task id", args[index]))?;
+                command.feature_epic_id = Some(value.clone());
+                index += 2;
+            }
+            "--spec-task" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "--spec-task requires a task id".to_string())?;
+                command.spec_task_id = Some(value.clone());
+                index += 2;
+            }
+            "--work-pool-task" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "--work-pool-task requires a task id".to_string())?;
+                command.work_pool_task_id = Some(value.clone());
+                index += 2;
+            }
+            "--from-task" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "--from-task requires a task id".to_string())?;
+                command.from_task_id = Some(value.clone());
+                index += 2;
+            }
+            value => {
+                return Err(format!("unsupported task-identity option `{value}`"));
+            }
+        }
+    }
+    Ok(command)
+}
+
+fn print_run_graph_task_identity_help() {
+    println!("Usage:");
+    println!("  vida taskflow run-graph task-identity <run-id> [--state-dir <path>] [--json]");
+    println!("  vida taskflow run-graph task-identity show <run-id> [--state-dir <path>] [--json]");
+    println!("  vida taskflow run-graph task-identity repair <run-id> --from-task <feature-or-spec-task> [--state-dir <path>] [--json]");
+    println!("  vida taskflow run-graph task-identity seed <run-id> --feature-epic <id> --spec-task <id> [--work-pool-task <id>] [--state-dir <path>] [--json]");
+}
+
+fn task_has_label(task: &crate::state_store::TaskRecord, label: &str) -> bool {
+    task.labels.iter().any(|value| value.trim() == label)
+}
+
+fn task_is_spec_first_feature_parent(task: &crate::state_store::TaskRecord) -> bool {
+    task_has_label(task, "feature-request") && task_has_label(task, "spec-first")
+}
+
+fn task_is_spec_pack_child(task: &crate::state_store::TaskRecord) -> bool {
+    task_has_label(task, "spec-pack")
+}
+
+fn task_is_work_pool_pack_child(task: &crate::state_store::TaskRecord) -> bool {
+    task_has_label(task, "work-pool-pack")
+}
+
+fn task_is_dev_pack_child(task: &crate::state_store::TaskRecord) -> bool {
+    task_has_label(task, "dev-pack")
+}
+
+fn parent_id_for_task(task: &crate::state_store::TaskRecord) -> Option<String> {
+    StateStore::parent_id_for_task(task)
+}
+
+fn derive_run_graph_task_identity_from_feature(
+    tasks: &[crate::state_store::TaskRecord],
+    run_id: &str,
+    feature_epic_id: &str,
+    source: &str,
+) -> Result<RunGraphDispatchTaskIdentity, String> {
+    let feature = tasks
+        .iter()
+        .find(|task| task.id == feature_epic_id)
+        .ok_or_else(|| format!("feature task `{feature_epic_id}` is missing"))?;
+    if !task_is_spec_first_feature_parent(feature) {
+        return Err(format!(
+            "feature task `{feature_epic_id}` is not a spec-first feature parent"
+        ));
+    }
+    let children = tasks
+        .iter()
+        .filter(|task| parent_id_for_task(task).as_deref() == Some(feature_epic_id))
+        .collect::<Vec<_>>();
+    let spec_task_id = children
+        .iter()
+        .filter(|task| task_is_spec_pack_child(task))
+        .map(|task| task.id.clone())
+        .min()
+        .ok_or_else(|| format!("feature task `{feature_epic_id}` has no spec-pack child"))?;
+    let work_pool_task_id = children
+        .iter()
+        .filter(|task| task_is_work_pool_pack_child(task))
+        .map(|task| task.id.clone())
+        .min();
+    let dev_task_id = children
+        .iter()
+        .filter(|task| task_is_dev_pack_child(task))
+        .map(|task| task.id.clone())
+        .min();
+    Ok(RunGraphDispatchTaskIdentity {
+        run_id: run_id.to_string(),
+        feature_epic_id: Some(feature_epic_id.to_string()),
+        spec_task_id: Some(spec_task_id),
+        work_pool_task_id,
+        dev_task_id,
+        source: source.to_string(),
+        updated_at: time::OffsetDateTime::now_utc()
+            .unix_timestamp_nanos()
+            .to_string(),
+    })
+}
+
+fn derive_run_graph_task_identity_from_task(
+    tasks: &[crate::state_store::TaskRecord],
+    run_id: &str,
+    from_task_id: &str,
+) -> Result<RunGraphDispatchTaskIdentity, String> {
+    let task = tasks
+        .iter()
+        .find(|task| task.id == from_task_id)
+        .ok_or_else(|| format!("source task `{from_task_id}` is missing"))?;
+    let feature_id = if task_is_spec_first_feature_parent(task) {
+        task.id.clone()
+    } else if task_is_spec_pack_child(task) || task_is_work_pool_pack_child(task) {
+        parent_id_for_task(task).ok_or_else(|| {
+            format!("source task `{from_task_id}` has no parent feature relationship")
+        })?
+    } else {
+        return Err(format!(
+            "source task `{from_task_id}` is not a spec-first feature, spec-pack, or work-pool-pack task"
+        ));
+    };
+    derive_run_graph_task_identity_from_feature(
+        tasks,
+        run_id,
+        &feature_id,
+        "operator_task_identity_repair",
+    )
+}
+
+fn seed_run_graph_task_identity_from_options(
+    tasks: &[crate::state_store::TaskRecord],
+    run_id: &str,
+    feature_epic_id: &str,
+    spec_task_id: &str,
+    work_pool_task_id: Option<&str>,
+) -> Result<RunGraphDispatchTaskIdentity, String> {
+    let feature = tasks
+        .iter()
+        .find(|task| task.id == feature_epic_id)
+        .ok_or_else(|| format!("feature task `{feature_epic_id}` is missing"))?;
+    if !task_is_spec_first_feature_parent(feature) {
+        return Err(format!(
+            "feature task `{feature_epic_id}` is not a spec-first feature parent"
+        ));
+    }
+    let spec = tasks
+        .iter()
+        .find(|task| task.id == spec_task_id)
+        .ok_or_else(|| format!("spec task `{spec_task_id}` is missing"))?;
+    if !task_is_spec_pack_child(spec)
+        || parent_id_for_task(spec).as_deref() != Some(feature_epic_id)
+    {
+        return Err(format!(
+            "spec task `{spec_task_id}` is not a spec-pack child of `{feature_epic_id}`"
+        ));
+    }
+    if let Some(work_pool_task_id) = work_pool_task_id {
+        let work_pool = tasks
+            .iter()
+            .find(|task| task.id == work_pool_task_id)
+            .ok_or_else(|| format!("work-pool task `{work_pool_task_id}` is missing"))?;
+        if !task_is_work_pool_pack_child(work_pool)
+            || parent_id_for_task(work_pool).as_deref() != Some(feature_epic_id)
+        {
+            return Err(format!(
+                "work-pool task `{work_pool_task_id}` is not a work-pool-pack child of `{feature_epic_id}`"
+            ));
+        }
+    }
+    Ok(RunGraphDispatchTaskIdentity {
+        run_id: run_id.to_string(),
+        feature_epic_id: Some(feature_epic_id.to_string()),
+        spec_task_id: Some(spec_task_id.to_string()),
+        work_pool_task_id: work_pool_task_id.map(str::to_string),
+        dev_task_id: None,
+        source: "operator_task_identity_seed".to_string(),
+        updated_at: time::OffsetDateTime::now_utc()
+            .unix_timestamp_nanos()
+            .to_string(),
+    })
+}
+
+async fn run_taskflow_run_graph_task_identity(args: &[String]) -> ExitCode {
+    let command = match parse_run_graph_task_identity_command(args) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("{error}");
+            print_run_graph_task_identity_help();
+            return ExitCode::from(2);
+        }
+    };
+    if command.help {
+        print_run_graph_task_identity_help();
+        return ExitCode::SUCCESS;
+    }
+    let Some(run_id) = command.run_id.as_deref() else {
+        eprintln!("Missing required <run-id>.");
+        print_run_graph_task_identity_help();
+        return ExitCode::from(2);
+    };
+    let state_dir = command.state_dir.unwrap_or_else(proxy_state_dir);
+    match command.action.as_str() {
+        "show" => match StateStore::open_existing_read_only(state_dir).await {
+            Ok(store) => match store.run_graph_dispatch_task_identity(run_id).await {
+                Ok(identity) => {
+                    if command.as_json {
+                        match run_graph_task_identity_payload(
+                            "vida taskflow run-graph task-identity",
+                            run_id,
+                            identity.as_ref(),
+                        ) {
+                            Ok(payload) => crate::print_json_pretty(&payload),
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to render normalized run-graph task identity payload: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    } else {
+                        print_run_graph_task_identity(
+                            "vida taskflow run-graph task-identity",
+                            run_id,
+                            identity.as_ref(),
+                        );
+                    }
+                    if identity.is_some() {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to read run-graph task identity: {error}");
+                    ExitCode::from(1)
+                }
+            },
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                ExitCode::from(1)
+            }
+        },
+        "repair" | "seed" => match StateStore::open_existing(state_dir).await {
+            Ok(store) => {
+                let tasks = match store.list_tasks(None, true).await {
+                    Ok(tasks) => tasks,
+                    Err(error) => {
+                        eprintln!("Failed to read tasks for task identity repair: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let identity = if command.action == "repair" {
+                    let Some(from_task_id) = command.from_task_id.as_deref() else {
+                        eprintln!("repair requires --from-task <task-id>.");
+                        return ExitCode::from(2);
+                    };
+                    derive_run_graph_task_identity_from_task(&tasks, run_id, from_task_id)
+                } else {
+                    let Some(feature_epic_id) = command.feature_epic_id.as_deref() else {
+                        eprintln!("seed requires --feature-epic <task-id>.");
+                        return ExitCode::from(2);
+                    };
+                    let Some(spec_task_id) = command.spec_task_id.as_deref() else {
+                        eprintln!("seed requires --spec-task <task-id>.");
+                        return ExitCode::from(2);
+                    };
+                    seed_run_graph_task_identity_from_options(
+                        &tasks,
+                        run_id,
+                        feature_epic_id,
+                        spec_task_id,
+                        command.work_pool_task_id.as_deref(),
+                    )
+                };
+                let identity = match identity {
+                    Ok(identity) => identity,
+                    Err(error) => {
+                        eprintln!("Failed to build run-graph task identity: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                if let Err(error) = store
+                    .record_run_graph_dispatch_task_identity(&identity)
+                    .await
+                {
+                    eprintln!("Failed to persist run-graph task identity: {error}");
+                    return ExitCode::from(1);
+                }
+                if command.as_json {
+                    match run_graph_task_identity_payload(
+                        "vida taskflow run-graph task-identity",
+                        run_id,
+                        Some(&identity),
+                    ) {
+                        Ok(payload) => crate::print_json_pretty(&payload),
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to render normalized run-graph task identity payload: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    }
+                } else {
+                    print_run_graph_task_identity(
+                        "vida taskflow run-graph task-identity",
+                        run_id,
+                        Some(&identity),
+                    );
+                }
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                ExitCode::from(1)
+            }
+        },
+        _ => {
+            print_run_graph_task_identity_help();
+            ExitCode::from(2)
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -760,7 +1339,7 @@ fn sanitize_placeholder_continuation_bind_next_action(
         .expect("sanitized continuation command should remain present");
         next_action.surface = recommended_surface_for_command(&next_action.command);
         if next_action.command.starts_with("vida taskflow run-graph status")
-            || next_action.command == "vida status --json"
+            || next_action.command == "vida status"
         {
             next_action.reason = crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(run_id);
         }
@@ -885,14 +1464,9 @@ fn next_lawful_operator_action_for_dispatch_resolution(
 }
 
 fn dispatch_receipt_has_clean_ready_downstream_handoff(receipt: &RunGraphDispatchReceipt) -> bool {
-    receipt.dispatch_status == "executed"
-        && receipt.blocker_code.is_none()
-        && receipt.downstream_dispatch_ready
-        && receipt.downstream_dispatch_blockers.is_empty()
-        && receipt
-            .downstream_dispatch_status
-            .as_deref()
-            .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
+    crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_clean_ready_downstream_handoff(
+        receipt, None,
+    )
 }
 
 fn downstream_dispatch_command_for_receipt(receipt: &RunGraphDispatchReceipt) -> Option<String> {
@@ -966,7 +1540,7 @@ fn next_lawful_operator_action_for_projection(
     terminal_consume_continue_run_id: Option<&str>,
     task_missing: bool,
 ) -> Option<String> {
-    if task_missing && status.status == "blocked" {
+    if task_missing {
         return Some(format!(
             "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"",
             status.run_id, status.run_id
@@ -1016,6 +1590,18 @@ fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida task show") {
         return "vida task show".to_string();
     }
+    if command.starts_with("vida task ready") {
+        return "vida task ready".to_string();
+    }
+    if command.starts_with("vida task deps") {
+        return "vida task deps".to_string();
+    }
+    if command.starts_with("vida task critical-path") {
+        return "vida task critical-path".to_string();
+    }
+    if command.starts_with("vida orchestrator-session show") {
+        return "vida orchestrator-session show".to_string();
+    }
     if command.starts_with("vida taskflow continuation bind") {
         return "vida taskflow continuation bind".to_string();
     }
@@ -1031,7 +1617,7 @@ fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida lane supersede") {
         return "vida lane supersede".to_string();
     }
-    command
+    crate::operator_command_text::human_command(command)
         .split_whitespace()
         .take(4)
         .collect::<Vec<_>>()
@@ -1313,6 +1899,27 @@ fn recovery_surface_contract_with_owned_scope(
     Option<String>,
     Option<String>,
 ) {
+    if projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
+        })
+    {
+        let blocker_codes = vec!["internal_activation_view_only".to_string()];
+        return (
+            blocker_codes.clone(),
+            Some(RecoveryWhyNotNow {
+                category: "run_graph_blocked_state".to_string(),
+                summary: "The persisted dispatch receipt is only a task-materialization result and remains blocked by internal activation view-only evidence.".to_string(),
+                blocker_codes,
+                blocking_surface: Some("vida taskflow recovery latest".to_string()),
+            }),
+            None,
+            None,
+            None,
+        );
+    }
     if terminal_recovery_summary_resolved(summary) {
         return (Vec::new(), None, None, None, None);
     }
@@ -1429,18 +2036,23 @@ fn recovery_projection_resolves_persisted_open_cycle(
         .dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
-            let ready_downstream_handoff = receipt.downstream_dispatch_ready
-                && receipt
-                    .downstream_dispatch_status
-                    .as_deref()
-                    .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
-            let upstream_lane_completed = receipt.dispatch_status == "executed"
-                && receipt.lane_status == "lane_completed"
-                && receipt.blocker_code.is_none();
-            let ready_running_handoff = receipt.dispatch_status == "executed"
-                && receipt.lane_status == "lane_running"
-                && ready_downstream_handoff
-                && receipt.blocker_code.is_none();
+            let upstream_lane_completed =
+                crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_clean_completed_lane(
+                    receipt, Some(&summary.run_id),
+                )
+                    || crate::runtime_dispatch_receipt_helpers::dispatch_receipt_downstream_blockers_superseded_by_ready_handoff_fields(
+                        &summary.run_id,
+                        &summary.active_node,
+                        &summary.resume_status,
+                        summary.recovery_ready,
+                        &summary.resume_target,
+                        receipt,
+                    );
+            let ready_running_handoff = receipt.lane_status == "lane_running"
+                && crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_clean_ready_downstream_handoff(
+                    receipt,
+                    Some(&summary.run_id),
+                );
             upstream_lane_completed || ready_running_handoff
         })
 }
@@ -1871,6 +2483,10 @@ fn dispatch_blocker_codes_from_status_surface(
             || blocked_status_signal(&summary.resume_status);
     }
     if let Some(summary) = receipt {
+        if crate::runtime_dispatch_receipt_helpers::dispatch_summary_is_materialization_only_blocked_task_ensure(summary)
+        {
+            blocker_codes.push("internal_activation_view_only".to_string());
+        }
         if let Some(blocker_code) = summary
             .blocker_code
             .as_deref()
@@ -1879,14 +2495,18 @@ fn dispatch_blocker_codes_from_status_surface(
         {
             blocker_codes.push(blocker_code.to_string());
         }
-        blocker_codes.extend(
-            summary
-                .downstream_dispatch_blockers
-                .iter()
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .map(str::to_string),
-        );
+        if !recovery.is_some_and(|recovery| {
+            downstream_summary_blockers_are_superseded_by_ready_handoff(recovery, summary)
+        }) {
+            blocker_codes.extend(
+                summary
+                    .downstream_dispatch_blockers
+                    .iter()
+                    .map(|value| value.trim())
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+            );
+        }
         blocked_evidence_present |= blocked_status_signal(&summary.dispatch_status)
             || blocked_status_signal(&summary.lane_status)
             || summary
@@ -1904,6 +2524,10 @@ fn dispatch_receipt_blocker_codes(
     blocked_evidence_present: &mut bool,
 ) -> Vec<String> {
     let mut blocker_codes = Vec::new();
+    if crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
+    {
+        blocker_codes.push("internal_activation_view_only".to_string());
+    }
     if let Some(blocker_code) = receipt
         .blocker_code
         .as_deref()
@@ -1932,6 +2556,17 @@ fn dispatch_receipt_blocker_codes(
 fn projection_truth_blocker_codes(projection_truth: &RunGraphProjectionTruth) -> Vec<String> {
     let mut blocked_evidence_present = projection_truth.stale_state_suspected;
     let mut blocker_codes = Vec::new();
+    if projection_truth.stale_state_suspected
+        && projection_truth
+            .next_lawful_operator_action
+            .as_deref()
+            .is_some_and(|action| {
+                action.starts_with("vida lane retire")
+                    && action.contains("missing TaskFlow task stale run")
+            })
+    {
+        blocker_codes.push("stale_missing_task_run_graph".to_string());
+    }
     if let Some(receipt) = projection_truth.dispatch_receipt.as_ref() {
         blocker_codes.extend(dispatch_receipt_blocker_codes(
             receipt,
@@ -1989,14 +2624,76 @@ fn projection_truth_blocker_codes_for_ready_handoff(
     {
         return normalize_run_graph_blocker_codes(&[], projection_truth.stale_state_suspected);
     }
+    if projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            downstream_receipt_blockers_are_superseded_by_ready_handoff(
+                active_node,
+                status,
+                recovery_ready,
+                resume_target,
+                receipt,
+            )
+        })
+    {
+        return normalize_run_graph_blocker_codes(&[], projection_truth.stale_state_suspected);
+    }
     projection_truth_blocker_codes(projection_truth)
+}
+
+fn downstream_receipt_blockers_are_superseded_by_ready_handoff(
+    active_node: &str,
+    status: &str,
+    recovery_ready: bool,
+    resume_target: &str,
+    receipt: &RunGraphDispatchReceipt,
+) -> bool {
+    if status != "ready"
+        || !recovery_ready
+        || !resume_target.starts_with("dispatch.")
+        || active_node != receipt.dispatch_target
+        || receipt.dispatch_status != "executed"
+        || receipt
+            .blocker_code
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || matches!(
+            receipt.lane_status.as_str(),
+            "lane_blocked" | "lane_failed" | "lane_exception_recorded" | "lane_exception_takeover"
+        )
+    {
+        return false;
+    }
+    if receipt
+        .downstream_dispatch_blockers
+        .iter()
+        .map(|value| value.trim())
+        .any(|value| !value.is_empty() && value == "missing_owned_write_scope")
+    {
+        return false;
+    }
+    let Some(downstream_target) = receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let downstream_node = downstream_target.replace('-', "_");
+    resume_target == format!("dispatch.{downstream_node}_lane")
 }
 
 fn run_graph_status_surface_blocker_codes(
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
 ) -> Vec<String> {
-    if terminal_run_graph_status_resolved(status) {
+    if terminal_run_graph_status_resolved(status)
+        && !projection_truth.dispatch_receipt.as_ref().is_some_and(|receipt| {
+            crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
+        })
+    {
         return Vec::new();
     }
 
@@ -2021,6 +2718,15 @@ fn run_graph_status_surface_blocker_codes(
                 receipt,
             )
         })
+        .filter(|receipt| {
+            !downstream_receipt_blockers_are_superseded_by_ready_handoff(
+                &status.active_node,
+                &status.status,
+                status.recovery_ready,
+                &status.resume_target,
+                receipt,
+            )
+        })
     {
         blocker_codes.extend(dispatch_receipt_blocker_codes(
             receipt,
@@ -2030,6 +2736,38 @@ fn run_graph_status_surface_blocker_codes(
     blocker_codes.sort_unstable();
     blocker_codes.dedup();
     normalize_run_graph_blocker_codes(&blocker_codes, blocked_evidence_present)
+}
+
+fn downstream_summary_blockers_are_superseded_by_ready_handoff(
+    recovery: &crate::state_store::RunGraphRecoverySummary,
+    receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> bool {
+    if recovery.resume_status != "ready"
+        || !recovery.recovery_ready
+        || !recovery.resume_target.starts_with("dispatch.")
+        || recovery.active_node != receipt.dispatch_target
+        || receipt.dispatch_status != "executed"
+        || receipt
+            .blocker_code
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || matches!(
+            receipt.lane_status.as_str(),
+            "lane_blocked" | "lane_failed" | "lane_exception_recorded" | "lane_exception_takeover"
+        )
+    {
+        return false;
+    }
+    let Some(downstream_target) = receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let downstream_node = downstream_target.replace('-', "_");
+    recovery.resume_target == format!("dispatch.{downstream_node}_lane")
 }
 
 fn projection_truth_from_status_surface(
@@ -2248,17 +2986,6 @@ fn projection_stale_state_suspected(
     age_seconds > stale_after_seconds
 }
 
-async fn run_graph_task_missing(
-    store: &StateStore,
-    status: &RunGraphStatus,
-) -> Result<bool, StateStoreError> {
-    match store.show_task(&status.task_id).await {
-        Ok(_) => Ok(false),
-        Err(StateStoreError::MissingTask { .. }) => Ok(true),
-        Err(error) => Err(error),
-    }
-}
-
 pub(crate) async fn run_graph_projection_truth(
     store: &StateStore,
     status: &RunGraphStatus,
@@ -2266,8 +2993,10 @@ pub(crate) async fn run_graph_projection_truth(
     let dispatch_receipt = store.run_graph_dispatch_receipt(&status.run_id).await?;
     let persisted_continuation_binding =
         store.run_graph_continuation_binding(&status.run_id).await?;
-    let task_missing = run_graph_task_missing(store, status).await?;
-    let continuation_binding = if task_missing {
+    let task_authority =
+        crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(store, status)
+            .await?;
+    let continuation_binding = if task_authority.stale_for_active_projection() {
         None
     } else {
         effective_projection_continuation_binding(
@@ -2290,7 +3019,7 @@ pub(crate) async fn run_graph_projection_truth(
     } else {
         None
     };
-    let stale_state_suspected = (task_missing && status.status == "blocked")
+    let stale_state_suspected = task_authority.stale_for_active_projection()
         || projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
     Ok(RunGraphProjectionTruth {
         projection_source: if dispatch_receipt.is_some() {
@@ -2314,7 +3043,7 @@ pub(crate) async fn run_graph_projection_truth(
             status,
             dispatch_receipt.as_ref(),
             terminal_consume_continue_run_id.as_deref(),
-            task_missing,
+            task_authority.task_missing(),
         ),
         dispatch_receipt,
         continuation_binding,
@@ -2460,11 +3189,20 @@ async fn run_taskflow_run_graph_status(
                         return ExitCode::from(1);
                     }
                 };
+                let task_identity =
+                    match store.run_graph_dispatch_task_identity(&status.run_id).await {
+                        Ok(identity) => identity,
+                        Err(error) => {
+                            eprintln!("Failed to read run-graph task identity: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
                 if as_json {
-                    match build_run_graph_status_json_payload(
+                    match build_run_graph_status_json_payload_with_task_identity(
                         "vida taskflow run-graph status",
                         &status,
                         &projection_truth,
+                        task_identity.as_ref(),
                     ) {
                         Ok(payload) => {
                             println!(
@@ -2482,6 +3220,8 @@ async fn run_taskflow_run_graph_status(
                         }
                     }
                 } else {
+                    let blocker_codes =
+                        run_graph_status_surface_blocker_codes(&status, &projection_truth);
                     print_surface_header(RenderMode::Plain, "vida taskflow run-graph status");
                     print_surface_line(RenderMode::Plain, "run", &status.run_id);
                     print_surface_line(RenderMode::Plain, "status", &status.as_display());
@@ -2495,6 +3235,20 @@ async fn run_taskflow_run_graph_status(
                         "projection",
                         &projection_truth.projection_reason,
                     );
+                    if !blocker_codes.is_empty() {
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "blocker_codes",
+                            &blocker_codes.join(", "),
+                        );
+                    }
+                    if let Some(identity) = task_identity.as_ref() {
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "task_identity",
+                            &run_graph_task_identity_compact(identity),
+                        );
+                    }
                     if let Some(next_action) =
                         projection_truth.next_lawful_operator_action.as_deref()
                     {
@@ -2766,6 +3520,196 @@ async fn run_taskflow_run_graph_diagnose_latest(
                     &error.to_string(),
                 );
             }
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+async fn run_taskflow_recovery_status_from_state_dir(
+    state_dir: PathBuf,
+    run_id: &str,
+    as_json: bool,
+) -> ExitCode {
+    if as_json {
+        let projection_name = recovery_status_projection_name(run_id);
+        if let Some(cached) = read_recovery_status_projection(&state_dir, &projection_name, run_id)
+        {
+            let exit_code = serde_json::from_str::<serde_json::Value>(&cached)
+                .ok()
+                .as_ref()
+                .map(exit_code_for_operator_payload)
+                .unwrap_or(ExitCode::SUCCESS);
+            println!("{cached}");
+            return exit_code;
+        }
+        return match StateStore::open_existing_read_only(state_dir.clone()).await {
+            Ok(store) => match store.run_graph_recovery_summary(run_id).await {
+                Ok(summary) => {
+                    let projection_truth = match store.run_graph_status(&summary.run_id).await {
+                        Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                            Ok(truth) => truth,
+                            Err(error) => {
+                                eprintln!("Failed to build recovery projection truth: {error}");
+                                return ExitCode::from(1);
+                            }
+                        },
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read run-graph status for projection truth: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let (
+                        blocker_codes,
+                        why_not_now,
+                        next_action,
+                        recommended_command,
+                        recommended_surface,
+                    ) = recovery_surface_contract_with_owned_scope(
+                        &summary,
+                        &projection_truth,
+                        &recovery_owned_write_scope_for_summary(&store, &summary).await,
+                    );
+                    let task_identity = match store
+                        .run_graph_dispatch_task_identity(&summary.run_id)
+                        .await
+                    {
+                        Ok(identity) => identity,
+                        Err(error) => {
+                            eprintln!("Failed to read run-graph task identity: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    match build_recovery_json_payload_with_task_identity(
+                        "vida taskflow recovery status",
+                        &summary,
+                        &projection_truth,
+                        task_identity.as_ref(),
+                        blocker_codes,
+                        why_not_now,
+                        next_action,
+                        recommended_command,
+                        recommended_surface,
+                    ) {
+                        Ok(payload) => {
+                            let exit_code = exit_code_for_operator_payload(&payload);
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&payload)
+                                    .expect("recovery summary should render as json")
+                            );
+                            crate::operator_projection_cache::write_json_projection(
+                                &state_dir,
+                                &projection_name,
+                                &payload,
+                            );
+                            exit_code
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to render normalized recovery status payload: {error}"
+                            );
+                            ExitCode::from(1)
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to read recovery status: {error}");
+                    ExitCode::from(1)
+                }
+            },
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                ExitCode::from(1)
+            }
+        };
+    }
+
+    match StateStore::open_existing_read_only(state_dir).await {
+        Ok(store) => match store.run_graph_recovery_summary(run_id).await {
+            Ok(summary) => {
+                let projection_truth = match store.run_graph_status(&summary.run_id).await {
+                    Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                        Ok(truth) => truth,
+                        Err(error) => {
+                            eprintln!("Failed to build recovery projection truth: {error}");
+                            return ExitCode::from(1);
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!("Failed to read run-graph status for projection truth: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let (
+                    blocker_codes,
+                    why_not_now,
+                    next_action,
+                    recommended_command,
+                    recommended_surface,
+                ) = recovery_surface_contract_with_owned_scope(
+                    &summary,
+                    &projection_truth,
+                    &recovery_owned_write_scope_for_summary(&store, &summary).await,
+                );
+                let task_identity = match store
+                    .run_graph_dispatch_task_identity(&summary.run_id)
+                    .await
+                {
+                    Ok(identity) => identity,
+                    Err(error) => {
+                        eprintln!("Failed to read run-graph task identity: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                print_surface_header(RenderMode::Plain, "vida taskflow recovery status");
+                print_surface_line(RenderMode::Plain, "run", &summary.run_id);
+                print_surface_line(RenderMode::Plain, "recovery", &summary.as_display());
+                print_surface_line(
+                    RenderMode::Plain,
+                    "projection",
+                    &projection_truth.projection_reason,
+                );
+                if let Some(identity) = task_identity.as_ref() {
+                    print_surface_line(
+                        RenderMode::Plain,
+                        "task_identity",
+                        &run_graph_task_identity_compact(identity),
+                    );
+                }
+                if !blocker_codes.is_empty() {
+                    print_surface_line(
+                        RenderMode::Plain,
+                        "blocker_codes",
+                        &blocker_codes.join(", "),
+                    );
+                }
+                if let Some(summary) = why_not_now.as_ref().map(|value| value.summary.as_str()) {
+                    print_surface_line(RenderMode::Plain, "why_not_now", summary);
+                }
+                if let Some(next_action) = next_action.as_ref() {
+                    print_surface_line(RenderMode::Plain, "next action", &next_action.reason);
+                }
+                if let Some(command) = recommended_command.as_deref() {
+                    print_surface_line(RenderMode::Plain, "recommended_command", command);
+                }
+                if let Some(surface) = recommended_surface.as_deref() {
+                    print_surface_line(RenderMode::Plain, "recommended_surface", surface);
+                }
+                if blocker_codes.is_empty() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(1)
+                }
+            }
+            Err(error) => {
+                eprintln!("Failed to read recovery status: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
@@ -3260,163 +4204,36 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             }
         }
         [head, subcommand, run_id] if head == "recovery" && subcommand == "status" => {
-            let state_dir = proxy_state_dir();
-            match StateStore::open_existing_read_only(state_dir).await {
-                Ok(store) => match store.run_graph_recovery_summary(run_id).await {
-                    Ok(summary) => {
-                        let projection_truth = match store.run_graph_status(&summary.run_id).await {
-                            Ok(status) => match run_graph_projection_truth(&store, &status).await {
-                                Ok(truth) => truth,
-                                Err(error) => {
-                                    eprintln!("Failed to build recovery projection truth: {error}");
-                                    return ExitCode::from(1);
-                                }
-                            },
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to read run-graph status for projection truth: {error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        };
-                        let (
-                            blocker_codes,
-                            why_not_now,
-                            next_action,
-                            recommended_command,
-                            recommended_surface,
-                        ) = recovery_surface_contract_with_owned_scope(
-                            &summary,
-                            &projection_truth,
-                            &recovery_owned_write_scope_for_summary(&store, &summary).await,
-                        );
-                        print_surface_header(RenderMode::Plain, "vida taskflow recovery status");
-                        print_surface_line(RenderMode::Plain, "run", &summary.run_id);
-                        print_surface_line(RenderMode::Plain, "recovery", &summary.as_display());
-                        print_surface_line(
-                            RenderMode::Plain,
-                            "projection",
-                            &projection_truth.projection_reason,
-                        );
-                        if !blocker_codes.is_empty() {
-                            print_surface_line(
-                                RenderMode::Plain,
-                                "blocker_codes",
-                                &blocker_codes.join(", "),
-                            );
-                        }
-                        if let Some(summary) =
-                            why_not_now.as_ref().map(|value| value.summary.as_str())
-                        {
-                            print_surface_line(RenderMode::Plain, "why_not_now", summary);
-                        }
-                        if let Some(next_action) = next_action.as_ref() {
-                            print_surface_line(
-                                RenderMode::Plain,
-                                "next action",
-                                &next_action.reason,
-                            );
-                        }
-                        if let Some(command) = recommended_command.as_deref() {
-                            print_surface_line(RenderMode::Plain, "recommended_command", command);
-                        }
-                        if let Some(surface) = recommended_surface.as_deref() {
-                            print_surface_line(RenderMode::Plain, "recommended_surface", surface);
-                        }
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to read recovery status: {error}");
-                        ExitCode::from(1)
-                    }
-                },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
+            run_taskflow_recovery_status_from_state_dir(proxy_state_dir(), run_id, false).await
+        }
+        [head, subcommand, run_id, state_flag, state_value]
+            if head == "recovery" && subcommand == "status" && state_flag == "--state-dir" =>
+        {
+            run_taskflow_recovery_status_from_state_dir(PathBuf::from(state_value), run_id, false)
+                .await
         }
         [head, subcommand, run_id, flag]
             if head == "recovery" && subcommand == "status" && flag == "--json" =>
         {
-            let state_dir = proxy_state_dir();
-            let projection_name = recovery_status_projection_name(run_id);
-            if let Some(cached) =
-                read_recovery_status_projection(&state_dir, &projection_name, run_id)
-            {
-                println!("{cached}");
-                return ExitCode::SUCCESS;
-            }
-            match StateStore::open_existing_read_only(state_dir).await {
-                Ok(store) => match store.run_graph_recovery_summary(run_id).await {
-                    Ok(summary) => {
-                        let projection_truth = match store.run_graph_status(&summary.run_id).await {
-                            Ok(status) => match run_graph_projection_truth(&store, &status).await {
-                                Ok(truth) => truth,
-                                Err(error) => {
-                                    eprintln!("Failed to build recovery projection truth: {error}");
-                                    return ExitCode::from(1);
-                                }
-                            },
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to read run-graph status for projection truth: {error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        };
-                        let (
-                            blocker_codes,
-                            why_not_now,
-                            next_action,
-                            recommended_command,
-                            recommended_surface,
-                        ) = recovery_surface_contract_with_owned_scope(
-                            &summary,
-                            &projection_truth,
-                            &recovery_owned_write_scope_for_summary(&store, &summary).await,
-                        );
-                        match build_recovery_json_payload(
-                            "vida taskflow recovery status",
-                            &summary,
-                            &projection_truth,
-                            blocker_codes,
-                            why_not_now,
-                            next_action,
-                            recommended_command,
-                            recommended_surface,
-                        ) {
-                            Ok(payload) => {
-                                println!(
-                                    "{}",
-                                    serde_json::to_string_pretty(&payload)
-                                        .expect("recovery summary should render as json")
-                                );
-                                crate::operator_projection_cache::write_json_projection(
-                                    &proxy_state_dir(),
-                                    &projection_name,
-                                    &payload,
-                                );
-                                ExitCode::SUCCESS
-                            }
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to render normalized recovery status payload: {error}"
-                                );
-                                ExitCode::from(1)
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to read recovery status: {error}");
-                        ExitCode::from(1)
-                    }
-                },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
+            run_taskflow_recovery_status_from_state_dir(proxy_state_dir(), run_id, true).await
+        }
+        [head, subcommand, run_id, state_flag, state_value, flag]
+            if head == "recovery"
+                && subcommand == "status"
+                && state_flag == "--state-dir"
+                && flag == "--json" =>
+        {
+            run_taskflow_recovery_status_from_state_dir(PathBuf::from(state_value), run_id, true)
+                .await
+        }
+        [head, subcommand, run_id, flag, state_flag, state_value]
+            if head == "recovery"
+                && subcommand == "status"
+                && flag == "--json"
+                && state_flag == "--state-dir" =>
+        {
+            run_taskflow_recovery_status_from_state_dir(PathBuf::from(state_value), run_id, true)
+                .await
         }
         [head, subcommand, ..] if head == "recovery" && subcommand == "gate-latest" => {
             eprintln!("Usage: vida taskflow recovery gate-latest [--json]");
@@ -3443,7 +4260,9 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             ExitCode::from(2)
         }
         [head, subcommand, ..] if head == "recovery" && subcommand == "status" => {
-            eprintln!("Usage: vida taskflow recovery status <run-id> [--json]");
+            eprintln!(
+                "Usage: vida taskflow recovery status <run-id> [--state-dir <path>] [--json]"
+            );
             ExitCode::from(2)
         }
         _ => ExitCode::from(2),
@@ -3455,6 +4274,9 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         [head, flag] if head == "run-graph" && matches!(flag.as_str(), "--help" | "-h") => {
             print_taskflow_proxy_help(Some("run-graph"));
             ExitCode::SUCCESS
+        }
+        [head, subcommand, tail @ ..] if head == "run-graph" && subcommand == "task-identity" => {
+            run_taskflow_run_graph_task_identity(tail).await
         }
         [head, subcommand, flag]
             if head == "run-graph"
@@ -5385,6 +6207,41 @@ async fn derive_seeded_run_graph_status_with_stage(
         resolve_seed_task_id_for_runtime_run(store, requested_run_id, request_text).await?;
     set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_read_launcher_snapshot");
     let snapshot = read_seed_launcher_activation_snapshot(store).await?;
+    let bounded_task = store.show_task(&bounded_task_id).await.ok();
+    if let Some(task) = bounded_task
+        .as_ref()
+        .filter(|task| task.issue_type.trim() != "task")
+    {
+        let activation_bundle = activation_bundle_with_dev_team_readiness(&snapshot);
+        if let Some(route) = crate::agent_dispatch_surface::configured_dev_team_first_step_for_task(
+            &activation_bundle,
+            task,
+        ) {
+            set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_selection");
+            let mut selection = configured_dev_team_lane_selection_from_snapshot(
+                &snapshot,
+                activation_bundle,
+                request_text,
+                &route,
+            );
+            selection.execution_plan =
+                build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
+            inject_task_planner_metadata(&mut selection, &task.planner_metadata);
+            set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_status");
+            let mut status = seeded_run_graph_status_from_role_selection(
+                requested_run_id,
+                &bounded_task_id,
+                &selection,
+                &snapshot,
+            )?;
+            apply_configured_dev_team_route_to_status(&mut status, &selection, &route);
+            return Ok(TaskflowRunGraphSeedPayload {
+                request_text: request_text.to_string(),
+                role_selection: selection,
+                status,
+            });
+        }
+    }
     if skip_design_override {
         set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_selection");
         let mut selection =
@@ -5392,7 +6249,7 @@ async fn derive_seeded_run_graph_status_with_stage(
         set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_execution_plan");
         selection.execution_plan =
             build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
-        if let Ok(task) = store.show_task(&bounded_task_id).await {
+        if let Some(task) = bounded_task.as_ref() {
             inject_task_planner_metadata(&mut selection, &task.planner_metadata);
         }
         set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_status");
@@ -6041,6 +6898,16 @@ fn dispatch_init_packet_selected_backend(packet_path: &str) -> Option<String> {
     })
 }
 
+fn dispatch_init_packet_template_kind(packet_path: &str) -> Option<String> {
+    let packet = crate::read_json_file_if_present(std::path::Path::new(packet_path))?;
+    packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 async fn existing_dispatch_receipt_matches_current_seed(
     store: &StateStore,
     run_id: &str,
@@ -6060,11 +6927,35 @@ async fn existing_dispatch_receipt_matches_current_seed(
     else {
         return Ok(true);
     };
+    let current_bootstrap = run_graph_dispatch_bootstrap_from_status(&current_seed.status)?;
+    let current_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
+        &current_seed.role_selection,
+        &current_bootstrap,
+    );
+    if receipt.dispatch_target != current_receipt.dispatch_target {
+        return Ok(false);
+    }
+    if receipt.activation_runtime_role != current_receipt.activation_runtime_role {
+        return Ok(false);
+    }
+    if receipt.activation_agent_type != current_receipt.activation_agent_type {
+        return Ok(false);
+    }
+    let current_packet_kind = crate::runtime_dispatch_state::runtime_dispatch_packet_kind(
+        &current_seed.role_selection.execution_plan,
+        &current_receipt.dispatch_target,
+        &current_receipt.dispatch_kind,
+    );
+    if dispatch_init_packet_template_kind(packet_path).as_deref()
+        != Some(current_packet_kind.as_str())
+    {
+        return Ok(false);
+    }
     let current_backend =
         crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
             &current_seed.role_selection.execution_plan,
-            &receipt.dispatch_target,
-            receipt.activation_agent_type.as_deref(),
+            &current_receipt.dispatch_target,
+            current_receipt.activation_agent_type.as_deref(),
             None,
         );
     let packet_backend = dispatch_init_packet_selected_backend(packet_path);
@@ -6267,6 +7158,128 @@ fn task_record_dispatch_seed_request_text(task: &crate::state_store::TaskRecord)
 
 fn taskflow_task_status_is_terminal_for_dispatch_init(status: &str) -> bool {
     matches!(status.trim(), "closed" | "completed")
+}
+
+fn activation_bundle_with_dev_team_readiness(
+    snapshot: &crate::state_store::LauncherActivationSnapshot,
+) -> serde_json::Value {
+    let mut activation_bundle = snapshot.compiled_bundle.clone();
+    let readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
+        &snapshot.source_config_path,
+        &activation_bundle,
+    );
+    if let Some(object) = activation_bundle.as_object_mut() {
+        object.insert("dev_team_readiness".to_string(), readiness);
+    }
+    activation_bundle
+}
+
+fn configured_dev_team_lane_selection_from_snapshot(
+    snapshot: &crate::state_store::LauncherActivationSnapshot,
+    activation_bundle: serde_json::Value,
+    request_text: &str,
+    route: &crate::agent_dispatch_surface::ConfiguredDevTeamTaskRoute,
+) -> RuntimeConsumptionLaneSelection {
+    let fallback_role = snapshot
+        .compiled_bundle
+        .get("role_selection")
+        .and_then(|value| value.get("fallback_role"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("orchestrator")
+        .to_string();
+    let selection_mode = snapshot
+        .compiled_bundle
+        .get("role_selection")
+        .and_then(|value| value.get("mode"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("auto")
+        .to_string();
+    RuntimeConsumptionLaneSelection {
+        ok: true,
+        activation_source: snapshot.source.clone(),
+        selection_mode,
+        fallback_role,
+        request: request_text.to_string(),
+        selected_role: route.runtime_role.clone(),
+        conversational_mode: None,
+        single_task_only: true,
+        tracked_flow_entry: Some(
+            match route.dispatch_target.as_str() {
+                "specification" => "spec-pack",
+                "coach" => "coach-pack",
+                "verification" => "verification-pack",
+                "execution_preparation" => "execution-preparation-pack",
+                _ => "dev-pack",
+            }
+            .to_string(),
+        ),
+        allow_freeform_chat: false,
+        confidence: "explicit_configured_dev_team_dispatch_init".to_string(),
+        matched_terms: vec![
+            route.role_label.clone(),
+            route.runtime_role.clone(),
+            route.task_class.clone(),
+        ],
+        compiled_bundle: activation_bundle,
+        execution_plan: serde_json::Value::Null,
+        reason: "configured_dev_team_first_step_dispatch_init".to_string(),
+    }
+}
+
+fn apply_configured_dev_team_route_to_status(
+    status: &mut RunGraphStatus,
+    selection: &RuntimeConsumptionLaneSelection,
+    route: &crate::agent_dispatch_surface::ConfiguredDevTeamTaskRoute,
+) {
+    status.task_class = route.task_class.clone();
+    status.route_task_class = route.task_class.clone();
+    status.next_node = Some(route.dispatch_target.clone());
+    status.lane_id = format!("{}_lane", route.dispatch_target);
+    status.lifecycle_stage = format!("{}_dispatch_ready", route.dispatch_target);
+    status.policy_gate = "not_required".to_string();
+    status.handoff_state = format!("awaiting_{}", route.dispatch_target);
+    status.resume_target = format!("dispatch.{}", route.dispatch_target);
+    status.recovery_ready = true;
+    if let Some(selected_backend) =
+        crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
+            &selection.execution_plan,
+            &route.dispatch_target,
+            None,
+            None,
+        )
+    {
+        status.selected_backend = selected_backend;
+    }
+}
+
+pub(crate) async fn run_graph_status_has_configured_dev_team_route_mismatch(
+    store: &StateStore,
+    status: &RunGraphStatus,
+) -> Result<bool, String> {
+    let task = match store.show_task(&status.task_id).await {
+        Ok(task) => task,
+        Err(_) => return Ok(false),
+    };
+    if task.issue_type.trim() == "task" {
+        return Ok(false);
+    }
+    let snapshot = read_seed_launcher_activation_snapshot(store).await?;
+    let activation_bundle = activation_bundle_with_dev_team_readiness(&snapshot);
+    let Some(route) = crate::agent_dispatch_surface::configured_dev_team_first_step_for_task(
+        &activation_bundle,
+        &task,
+    ) else {
+        return Ok(false);
+    };
+    let current_dispatch_target = status
+        .next_node
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(status.active_node.trim());
+    Ok(current_dispatch_target != route.dispatch_target
+        || status.task_class != route.task_class
+        || status.route_task_class != route.task_class)
 }
 
 fn bounded_implementation_lane_selection_from_snapshot(
@@ -6538,6 +7551,18 @@ async fn preview_run_graph_dispatch_init_artifacts(
     };
     set_dispatch_init_timeout_stage(timeout_stage, "reconcile_active_exception_status");
     let mut status = reconcile_dispatch_init_status_for_active_exception(store, status).await?;
+    if run_graph_status_has_configured_dev_team_route_mismatch(store, &status).await? {
+        set_dispatch_init_timeout_stage(timeout_stage, "reseed_configured_dev_team_route_mismatch");
+        if let Some(payload) =
+            seed_existing_task_payload_for_dispatch_init(store, &effective_run_id, timeout_stage)
+                .await?
+        {
+            status =
+                reconcile_dispatch_init_status_for_active_exception(store, payload.status.clone())
+                    .await?;
+            seed_payload = Some(payload);
+        }
+    }
 
     let context = if let Some(payload) = seed_payload.as_ref() {
         run_graph_dispatch_context_from_seed_payload(payload)
@@ -6853,7 +7878,7 @@ pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
     }
 }
 
-async fn run_graph_dispatch_init_from_state_dir(
+pub(crate) async fn run_graph_dispatch_init_from_state_dir(
     state_dir: &std::path::Path,
     run_id: &str,
 ) -> Result<serde_json::Value, String> {
@@ -7947,6 +8972,26 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recommended_surface_for_command_uses_default_human_surface_without_json_bias() {
+        assert_eq!(
+            recommended_surface_for_command("vida task ready --json"),
+            "vida task ready"
+        );
+        assert_eq!(
+            recommended_surface_for_command("vida task ready --scope epic-1 --json"),
+            "vida task ready"
+        );
+        assert_eq!(
+            recommended_surface_for_command("vida task show task-1 --json"),
+            "vida task show"
+        );
+        assert_eq!(
+            recommended_surface_for_command("vida custom surface --json --details"),
+            "vida custom surface --details"
+        );
+    }
 
     trait StateStoreFixtureTaskExt {
         fn create_task_with_fixture_parent<'a>(
@@ -9359,7 +10404,7 @@ mod tests {
 
         assert_eq!(
             command.as_deref(),
-            Some("vida lane show run-internal-activation-view-only --json")
+            Some("vida lane show run-internal-activation-view-only")
         );
     }
 
@@ -9557,7 +10602,14 @@ mod tests {
             .expect("next_actions should be an array")
             .iter()
             .any(|value| value.as_str().is_some_and(|action| action
-                .contains("vida taskflow packet render run-status-missing-owned-scope --json"))));
+                .contains("vida taskflow packet render run-status-missing-owned-scope"))));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .all(|value| value
+                .as_str()
+                .is_some_and(|action| !action.contains("--json"))));
     }
 
     #[test]
@@ -14092,7 +15144,8 @@ mod tests {
     }
 
     #[test]
-    fn recovery_surface_contract_suppresses_stale_receipt_blocker_after_terminal_completion() {
+    fn recovery_surface_contract_keeps_materialization_only_receipt_blocked_after_terminal_completion(
+    ) {
         let summary = crate::state_store::RunGraphRecoverySummary {
             run_id: "run-terminal-materialization".to_string(),
             task_id: "run-terminal-materialization".to_string(),
@@ -14120,6 +15173,7 @@ mod tests {
         receipt.dispatch_target = "work-pool-pack".to_string();
         receipt.dispatch_status = "blocked".to_string();
         receipt.lane_status = "lane_blocked".to_string();
+        receipt.dispatch_surface = Some("vida task ensure".to_string());
         receipt.blocker_code = Some("internal_activation_view_only".to_string());
         receipt.downstream_dispatch_ready = false;
         receipt.downstream_dispatch_blockers = vec!["internal_activation_view_only".to_string()];
@@ -14142,15 +15196,16 @@ mod tests {
         let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
             recovery_surface_contract(&summary, &projection_truth);
 
-        assert!(blocker_codes.is_empty());
-        assert!(why_not_now.is_none());
+        assert!(blocker_codes.contains(&"internal_activation_view_only".to_string()));
+        assert!(why_not_now.is_some());
         assert!(next_action.is_none());
         assert!(recommended_command.is_none());
         assert!(recommended_surface.is_none());
     }
 
     #[test]
-    fn run_graph_status_surface_suppresses_stale_receipt_blocker_after_terminal_completion() {
+    fn run_graph_status_surface_keeps_materialization_only_receipt_blocked_after_terminal_completion(
+    ) {
         let mut status = default_run_graph_status(
             "run-terminal-materialization-status",
             "implementation",
@@ -14171,6 +15226,7 @@ mod tests {
         receipt.dispatch_target = "work-pool-pack".to_string();
         receipt.dispatch_status = "blocked".to_string();
         receipt.lane_status = "lane_blocked".to_string();
+        receipt.dispatch_surface = Some("vida task ensure".to_string());
         receipt.blocker_code = Some("internal_activation_view_only".to_string());
         receipt.downstream_dispatch_ready = false;
         receipt.downstream_dispatch_blockers = vec!["internal_activation_view_only".to_string()];
@@ -14193,7 +15249,7 @@ mod tests {
 
         let blocker_codes = run_graph_status_surface_blocker_codes(&status, &projection_truth);
 
-        assert!(blocker_codes.is_empty());
+        assert!(blocker_codes.contains(&"internal_activation_view_only".to_string()));
     }
 
     #[test]
@@ -14720,7 +15776,7 @@ mod tests {
 
         assert_eq!(
             next_action.command,
-            "vida taskflow run-graph status run-terminal-bind --json"
+            "vida taskflow run-graph status run-terminal-bind"
         );
         assert_eq!(next_action.surface, "vida taskflow run-graph status");
         assert!(next_action
@@ -14741,7 +15797,7 @@ mod tests {
             sanitize_placeholder_continuation_bind_next_action(None, Some(next_action))
                 .expect("next action should remain present");
 
-        assert_eq!(next_action.command, "vida status --json");
+        assert_eq!(next_action.command, "vida status");
         assert_eq!(next_action.surface, "vida status");
         assert!(next_action
             .reason
@@ -14763,7 +15819,7 @@ mod tests {
 
         assert_eq!(
             next_action.command,
-            "vida taskflow run-graph status run-open --json"
+            "vida taskflow run-graph status run-open"
         );
         assert_eq!(next_action.surface, "vida taskflow run-graph status");
         assert!(next_action

@@ -3,6 +3,25 @@ use crate::runtime_consumption_surface::{
     DOCFLOW_PROOF_CURRENT_PATH, DOCFLOW_READINESS_CURRENT_PATH,
 };
 
+pub(crate) fn runtime_blocker_codes_for_docflow_closeout(
+    verdict: &docflow_contracts::DocflowCloseoutVerdict,
+) -> Vec<String> {
+    verdict
+        .blocker_codes
+        .iter()
+        .filter_map(|code| crate::release1_contracts::canonical_blocker_code_str(code))
+        .map(str::to_string)
+        .collect()
+}
+
+pub(crate) fn docflow_runtime_verdict_next_actions(status: &str) -> Vec<String> {
+    if matches!(status.trim(), "block" | "blocked" | "fail" | "failed") {
+        vec!["Run `vida docflow proofcheck --profile active-canon` and clear blockers.".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
 pub(crate) fn build_docflow_runtime_verdict(
     registry: &crate::RuntimeConsumptionEvidence,
     check: &crate::RuntimeConsumptionEvidence,
@@ -129,7 +148,10 @@ pub(crate) fn blocking_docflow_activation(
 
 #[cfg(test)]
 mod tests {
-    use super::build_docflow_runtime_verdict;
+    use super::{
+        build_docflow_runtime_verdict, docflow_runtime_verdict_next_actions,
+        runtime_blocker_codes_for_docflow_closeout,
+    };
     use crate::runtime_consumption_surface::{
         DOCFLOW_PROOF_CURRENT_PATH, DOCFLOW_READINESS_CURRENT_PATH,
     };
@@ -232,6 +254,45 @@ mod tests {
             verdict.proof_surfaces,
             vec!["registry", "check", "readiness", "proof"]
         );
+    }
+
+    #[test]
+    fn docflow_closeout_adapter_preserves_shared_closeout_blocker_codes() {
+        let closeout = docflow_contracts::build_docflow_closeout_verdict(
+            docflow_contracts::DocflowCloseoutVerdictInput {
+                command: "docflow closeout",
+                mode: "task",
+                task_id: Some("TASK-PROTOCOL"),
+                root: Some("C:/repo"),
+                profile: "",
+                changed_docs: vec!["docs/process/task.md".to_string()],
+                fastcheck_rows: 0,
+                protocol_coverage_rows: 1,
+                readiness_rows: 0,
+                doctor_error_rows: 1,
+                doctor_warning_rows: 0,
+            },
+        );
+
+        assert_eq!(
+            runtime_blocker_codes_for_docflow_closeout(&closeout),
+            vec![
+                "docflow_protocol_coverage_blocking".to_string(),
+                "docflow_doctor_error".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn docflow_runtime_verdict_next_actions_use_single_default_command() {
+        let actions = docflow_runtime_verdict_next_actions("block");
+
+        assert_eq!(
+            actions,
+            vec!["Run `vida docflow proofcheck --profile active-canon` and clear blockers."]
+        );
+        assert!(actions.iter().all(|action| !action.contains("--json")));
+        assert!(docflow_runtime_verdict_next_actions("pass").is_empty());
     }
 
     #[test]

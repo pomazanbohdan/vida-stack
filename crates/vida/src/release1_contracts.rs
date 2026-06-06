@@ -1083,6 +1083,7 @@ pub(crate) enum BlockerCode {
     ProviderAuthFailed,
     ModelNotPinned,
     ToolExecutionFailed,
+    InternalActivationViewOnly,
     ToolResultUnusable,
     CitationMissing,
     SourceUnregistered,
@@ -1127,6 +1128,7 @@ pub(crate) enum BlockerCode {
     HostToolBridgeAdapterRequired,
     MissingRunGraphDispatchReceiptOperatorEvidence,
     ClosedTaskActiveRunProjectionMismatch,
+    StaleMissingTaskRunGraph,
     RunGraphLatestSnapshotInconsistent,
     LatestRunGraphStatusBlocked,
     RunGraphLatestDispatchReceiptSignalAmbiguous,
@@ -1226,6 +1228,7 @@ impl BlockerCode {
             Self::ProviderAuthFailed => "provider_auth_failed",
             Self::ModelNotPinned => "model_not_pinned",
             Self::ToolExecutionFailed => "tool_execution_failed",
+            Self::InternalActivationViewOnly => "internal_activation_view_only",
             Self::ToolResultUnusable => "tool_result_unusable",
             Self::CitationMissing => "citation_missing",
             Self::SourceUnregistered => "source_unregistered",
@@ -1280,6 +1283,7 @@ impl BlockerCode {
             Self::ClosedTaskActiveRunProjectionMismatch => {
                 "closed_task_active_run_projection_mismatch"
             }
+            Self::StaleMissingTaskRunGraph => "stale_missing_task_run_graph",
             Self::RunGraphLatestSnapshotInconsistent => "run_graph_latest_snapshot_inconsistent",
             Self::LatestRunGraphStatusBlocked => "latest_run_graph_status_blocked",
             Self::RunGraphLatestDispatchReceiptSignalAmbiguous => {
@@ -1417,6 +1421,7 @@ impl BlockerCode {
             "provider_auth_failed" => Some(Self::ProviderAuthFailed),
             "model_not_pinned" => Some(Self::ModelNotPinned),
             "tool_execution_failed" => Some(Self::ToolExecutionFailed),
+            "internal_activation_view_only" => Some(Self::InternalActivationViewOnly),
             "tool_result_unusable" => Some(Self::ToolResultUnusable),
             "citation_missing" => Some(Self::CitationMissing),
             "source_unregistered" => Some(Self::SourceUnregistered),
@@ -1471,6 +1476,7 @@ impl BlockerCode {
             "closed_task_active_run_projection_mismatch" => {
                 Some(Self::ClosedTaskActiveRunProjectionMismatch)
             }
+            "stale_missing_task_run_graph" => Some(Self::StaleMissingTaskRunGraph),
             "run_graph_latest_snapshot_inconsistent" => {
                 Some(Self::RunGraphLatestSnapshotInconsistent)
             }
@@ -1618,6 +1624,7 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "invalid_lanes_requested",
     "missing_acceptance_targets",
     "missing_dependency",
+    "missing_docflow_task_evidence",
     "missing_dev_team_roles",
     "missing_dev_team_sequence",
     "missing_edge_source",
@@ -1632,6 +1639,7 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "missing_proof_targets",
     "missing_title",
     "model_selection_disabled",
+    "no_changed_docflow_docs",
     "no_dispatch_lanes_selected",
     "no_ready_task_candidates",
     "optional_task_worktree_assignment_projection_unavailable",
@@ -1652,7 +1660,10 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "selected_model_profile_missing",
     "selected_model_profile_not_ready",
     "self_dependency",
+    "state_store_read_lock_contention",
     "task_not_in_graph_projection",
+    "docflow_doctor_error",
+    "docflow_protocol_coverage_blocking",
 ];
 
 pub(crate) fn canonical_blocker_code_str(value: &str) -> Option<&'static str> {
@@ -2024,7 +2035,7 @@ pub(crate) fn cli_probe_incident_baseline_summary(
                     .to_string(),
             rollback_or_restore_actions: vec![
                 "Repair the selected host CLI runtime/tool contract.".to_string(),
-                "Rerun `vida status --json` to refresh the bounded preflight baseline.".to_string(),
+                "Rerun `vida status` to refresh the bounded preflight baseline.".to_string(),
             ],
             recovery_outcome: if blocker_code.is_some() {
                 "pending_remediation".to_string()

@@ -46,16 +46,16 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida task list --all --json");
-            println!("  vida task ready --json");
+            println!("  vida task list --all");
+            println!("  vida task ready");
             println!("  vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
-            println!("  vida task ready --scope <task-id> --json");
-            println!("  vida task show <task-id> --json");
-            println!("  vida task deps <task-id> --json");
-            println!("  vida task reverse-deps <task-id> --json");
-            println!("  vida task blocked --json");
-            println!("  vida task tree <task-id> --json");
-            println!("  vida task children <task-id> --json");
+            println!("  vida task ready --scope <task-id>");
+            println!("  vida task show <task-id>");
+            println!("  vida task deps <task-id>");
+            println!("  vida task reverse-deps <task-id>");
+            println!("  vida task blocked");
+            println!("  vida task tree <task-id>");
+            println!("  vida task children <task-id>");
             println!("  vida task reparent-children <from-parent-id> <to-parent-id> --json");
             println!("  vida task critical-path --json");
             println!("  vida task next-display-id <parent-display-id> --json");
@@ -96,26 +96,22 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Operator recipes:");
-            println!("  Check the next lawful slice: vida task ready --json");
+            println!("  Check the next lawful slice: vida task ready");
             println!(
-                "  Read the aggregate next operator step: vida task next [--scope <task-id>] [--state-dir <path>] [--json]"
+                "  Read the aggregate next operator step: vida task next [--scope <task-id>] [--state-dir <path>]"
             );
             println!(
-                "  Check the next lawful slice within one subtree: vida task ready --scope <task-id> --json"
+                "  Check the next lawful slice within one subtree: vida task ready --scope <task-id>"
             );
-            println!("  Inspect one task before mutation: vida task show <task-id> --json");
+            println!("  Inspect one task before mutation: vida task show <task-id>");
+            println!("  Inspect direct dependencies before resequencing: vida task deps <task-id>");
             println!(
-                "  Inspect direct dependencies before resequencing: vida task deps <task-id> --json"
+                "  Inspect reverse dependencies before closure: vida task reverse-deps <task-id>"
             );
+            println!("  Inspect the currently blocked set: vida task blocked");
+            println!("  Inspect one subtree when sequencing nested work: vida task tree <task-id>");
             println!(
-                "  Inspect reverse dependencies before closure: vida task reverse-deps <task-id> --json"
-            );
-            println!("  Inspect the currently blocked set: vida task blocked --json");
-            println!(
-                "  Inspect one subtree when sequencing nested work: vida task tree <task-id> --json"
-            );
-            println!(
-                "  Inspect the same subtree through explicit child wording: vida task children <task-id> --json"
+                "  Inspect the same subtree through explicit child wording: vida task children <task-id>"
             );
             println!(
                 "  Inspect the current critical path before parallelizing: vida task critical-path --json"
@@ -241,7 +237,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical command:");
-            println!("  vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
+            println!("  vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
+            println!("  Default human output is compact TOON; --json emits machine-readable JSON.");
             println!();
             println!("Returned semantics:");
             println!(
@@ -253,6 +250,61 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Unknown scoped task ids fail closed from the authoritative task graph.");
             println!(
                 "  `next` is an inspection/planning surface and must not be treated as a mutation or dispatch command by itself."
+            );
+            return;
+        }
+        Some("closeout") => {
+            println!("VIDA TaskFlow help: closeout");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Summarize session and epic closeout readiness from authoritative TaskFlow runtime state."
+            );
+            println!(
+                "  This is a read-only operator surface; it never settles, reconciles, closes, or dispatches work."
+            );
+            println!();
+            println!("Canonical command:");
+            println!(
+                "  vida taskflow closeout [--compact] [--view compact|summary|full] [--fields <field,...>] [--state-dir <path>] [--json]"
+            );
+            println!("  Default human output is compact TOON; --json emits machine-readable JSON.");
+            println!(
+                "  Use --view compact or --view summary for the compact closeout field family."
+            );
+            println!("  Use --fields to select a smaller top-level field set.");
+            println!();
+            println!("Returned fields:");
+            println!(
+                "  ready_count, open_count, active_agents_count, active_lanes_count, active_bounded_unit, continuation_required_now, stale_run_graph_present, root_local_write_allowed, all_epics_closed, next_action"
+            );
+            println!();
+            println!("next_action enum:");
+            println!("  none | close_epic | reconcile | recover_lane | run_gate");
+            println!();
+            println!("Failure modes:");
+            println!("  Missing or unreadable authoritative state fails closed with next_action=reconcile.");
+            return;
+        }
+        Some("receipt-pack") => {
+            println!("VIDA TaskFlow help: receipt-pack");
+            println!();
+            println!("Purpose:");
+            println!("  Build a compact read-only evidence pack for final operator reports.");
+            println!(
+                "  It aggregates closed tasks, closure receipts, verification counts, quality gate command refs, artifacts, and git refs."
+            );
+            println!();
+            println!("Canonical command:");
+            println!(
+                "  vida taskflow receipt-pack --since <commit-or-time> [--fields <field,...>] [--state-dir <path>] [--json]"
+            );
+            println!("  Default human output is compact TOON/plain.");
+            println!("  Use --json only when a machine-readable payload is required.");
+            println!();
+            println!("Returned fields:");
+            println!(
+                "  closed_tasks, closed_epics, exception_receipts, verification_receipts, quality_gates, artifacts, git_refs"
             );
             return;
         }
@@ -570,11 +622,11 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida task ready --json");
-            println!("  vida task blocked --json");
-            println!("  vida task next --json");
-            println!("  vida taskflow graph-summary --json");
-            println!("  vida taskflow status --summary --json");
+            println!("  vida task ready");
+            println!("  vida task blocked");
+            println!("  vida task next");
+            println!("  vida taskflow graph-summary");
+            println!("  vida taskflow status --summary");
             println!();
             println!("Failure modes:");
             println!(
@@ -800,6 +852,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  vida taskflow run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]"
             );
             println!("  vida taskflow run-graph status <run-id> [--state-dir <path>] [--json]");
+            println!(
+                "  vida taskflow run-graph task-identity <run-id> [--state-dir <path>] [--json]"
+            );
+            println!(
+                "  vida taskflow run-graph task-identity repair <run-id> --from-task <feature-or-spec-task> [--state-dir <path>] [--json]"
+            );
             println!("  vida taskflow run-graph latest [--state-dir <path>] [--json]");
             println!("  vida taskflow run-graph diagnose <run-id> [--state-dir <path>] [--json]");
             println!("  vida taskflow run-graph diagnose-latest [--state-dir <path>] [--json]");
@@ -832,7 +890,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Recovery status is a read-only launcher-owned inspection surface.");
             println!();
             println!("Canonical commands:");
-            println!("  vida taskflow recovery status <run-id> [--json]");
+            println!("  vida taskflow recovery status <run-id> [--state-dir <path>] [--json]");
             println!("  vida taskflow recovery explain <run-id> [--json]");
             println!("  vida taskflow recovery latest [--json]");
             println!("  vida taskflow recovery checkpoint <run-id> [--json]");
@@ -965,7 +1023,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|scheduling|config-actuation|route|validate-routing|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|pricing|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|closeout|receipt-pack|graph|graph-summary|plan|replan|scheduler|scheduling|config-actuation|route|validate-routing|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|pricing|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -998,6 +1056,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  dependencies  graph structure, subtree, and critical-path inspection");
     println!("  queue       ready/blocked/next-step queue posture");
     println!("  next        aggregate next lawful step across backlog and recovery state");
+    println!("  receipt-pack final evidence pack for operator reports");
     println!("  graph       explain one task's ready/blocked/parallel-safe posture");
     println!("  graph-summary  ready/blocked pressure plus critical-path summary");
     println!("  plan       deterministic PlanGraph draft generation and materialization");
@@ -1021,12 +1080,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  protocol-binding  bounded protocol/runtime bridge receipts");
     println!();
     println!("Canonical examples:");
-    println!("  vida task ready --json");
-    println!("  vida task next --json");
-    println!("  vida task tree <task-id> --json");
-    println!("  vida task deps <task-id> --json");
-    println!("  vida taskflow graph-summary --json");
-    println!("  vida taskflow graph explain <task-id> --json");
+    println!("  vida task ready");
+    println!("  vida task next");
+    println!("  vida task tree <task-id>");
+    println!("  vida task deps <task-id>");
+    println!("  vida taskflow graph-summary");
+    println!("  vida taskflow graph explain <task-id>");
     println!(
         "  vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x --json"
     );

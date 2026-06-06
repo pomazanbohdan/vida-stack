@@ -374,6 +374,18 @@ fn build_approval_envelope(
     }
 }
 
+async fn dispatch_summary_for_status_run(
+    store: &StateStore,
+    run_id: &str,
+) -> Option<crate::state_store::RunGraphDispatchReceiptSummary> {
+    store
+        .run_graph_dispatch_receipt(run_id)
+        .await
+        .ok()
+        .flatten()
+        .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt)
+}
+
 fn emit_approval_envelope(envelope: &ApprovalEnvelope, as_json: bool) -> ExitCode {
     if crate::surface_render::print_surface_json(
         envelope,
@@ -466,11 +478,7 @@ pub(crate) async fn run_approval(args: ProxyArgs) -> ExitCode {
                 eprintln!("No approval evidence found.");
                 return ExitCode::from(2);
             };
-            let dispatch_summary = store
-                .latest_run_graph_dispatch_receipt_summary()
-                .await
-                .ok()
-                .flatten();
+            let dispatch_summary = dispatch_summary_for_status_run(&store, &status.run_id).await;
             let approval_receipt = store
                 .run_graph_approval_delegation_receipt(&status.run_id)
                 .await
@@ -487,12 +495,7 @@ pub(crate) async fn run_approval(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let dispatch_summary = store
-                .run_graph_dispatch_receipt(run_id)
-                .await
-                .ok()
-                .flatten()
-                .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt);
+            let dispatch_summary = dispatch_summary_for_status_run(&store, run_id).await;
             let approval_receipt = store
                 .run_graph_approval_delegation_receipt(run_id)
                 .await
@@ -550,6 +553,42 @@ mod tests {
             checkpoint_kind: "conversation_cursor".to_string(),
             resume_target: "dispatch.approval".to_string(),
             recovery_ready: true,
+        }
+    }
+
+    fn sample_dispatch_receipt(
+        run_id: &str,
+        packet_path: &str,
+    ) -> crate::state_store::RunGraphDispatchReceipt {
+        crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "verification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+            dispatch_packet_path: Some(packet_path.to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-05T00:00:00Z".to_string(),
         }
     }
 
@@ -622,6 +661,59 @@ mod tests {
             "run-approval-test"
         );
         assert!(envelope.artifact_refs["dispatch_packet_path"].is_null());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn approval_latest_dispatch_summary_joins_only_status_run_id() {
+        let _guard = approval_surface_test_lock()
+            .lock()
+            .expect("approval surface test lock should acquire");
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-approval-join-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let status = sample_run_graph_status();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist approval wait run graph status");
+        store
+            .record_run_graph_dispatch_receipt(&sample_dispatch_receipt(
+                "other-run",
+                "wrong-packet.json",
+            ))
+            .await
+            .expect("persist unrelated dispatch receipt");
+
+        let unrelated = dispatch_summary_for_status_run(&store, &status.run_id).await;
+        assert!(
+            unrelated.is_none(),
+            "approval latest must not join global latest receipt from another run"
+        );
+
+        store
+            .record_run_graph_dispatch_receipt(&sample_dispatch_receipt(
+                &status.run_id,
+                "matching-packet.json",
+            ))
+            .await
+            .expect("persist matching dispatch receipt");
+        let matching = dispatch_summary_for_status_run(&store, &status.run_id)
+            .await
+            .expect("matching dispatch receipt should load");
+
+        assert_eq!(
+            matching.dispatch_packet_path.as_deref(),
+            Some("matching-packet.json")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

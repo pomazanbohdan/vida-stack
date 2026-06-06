@@ -3,7 +3,8 @@ use crate::contract_profile_adapter::{
     render_operator_contract_envelope, BlockerCode,
 };
 use crate::operator_contracts::{
-    finalize_release1_operator_truth, render_vida_gate_result_from_operator_contracts,
+    build_release1_operator_output_payload, render_vida_gate_result_from_operator_contracts,
+    replace_release1_operator_output_artifact_refs,
 };
 
 pub(crate) fn emit_taskflow_consume_final_json(
@@ -63,9 +64,10 @@ pub(crate) fn emit_taskflow_consume_final_json(
     });
     let snapshot_path =
         crate::write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
-    let finalized = finalize_release1_operator_truth(
-        consume_final_blocker_codes.clone(),
-        consume_final_next_actions.clone(),
+    let mut snapshot_with_operator_contracts = build_release1_operator_output_payload(
+        "vida taskflow consume final",
+        consume_final_blocker_codes,
+        consume_final_next_actions,
         serde_json::json!({
             "runtime_consumption_latest_snapshot_path": snapshot_path,
             "latest_run_graph_dispatch_receipt_id": payload_json["dispatch_receipt"]["run_id"].as_str(),
@@ -73,26 +75,20 @@ pub(crate) fn emit_taskflow_consume_final_json(
             "retrieval_trust_signal": serde_json::json!({}),
             "consume_final_surface": "vida taskflow consume final",
         }),
+        serde_json::json!({
+            "failure_control_evidence": failure_control_evidence.clone(),
+            "payload": payload_json.clone(),
+        }),
     )?;
-    let consume_final_status = finalized.status;
-    let consume_final_blocker_codes = finalized.blocker_codes.clone();
-    let consume_final_next_actions = finalized.next_actions.clone();
-    let mut operator_contracts = finalized.operator_contracts;
-    let mut shared_fields = finalized.shared_fields;
-    let mut snapshot_with_operator_contracts = serde_json::json!({
-        "surface": "vida taskflow consume final",
-        "trace_id": operator_contracts["trace_id"].clone(),
-        "workflow_class": operator_contracts["workflow_class"].clone(),
-        "risk_tier": operator_contracts["risk_tier"].clone(),
-        "status": consume_final_status,
-        "blocker_codes": consume_final_blocker_codes,
-        "next_actions": consume_final_next_actions,
-        "artifact_refs": operator_contracts["artifact_refs"].clone(),
-        "shared_fields": shared_fields.clone(),
-        "operator_contracts": operator_contracts.clone(),
-        "failure_control_evidence": failure_control_evidence.clone(),
-        "payload": payload_json,
-    });
+    let consume_final_next_actions = snapshot_with_operator_contracts["next_actions"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut operator_contracts = snapshot_with_operator_contracts["operator_contracts"].clone();
     let mut vida_gate_result = consume_final_vida_gate_result(
         &operator_contracts,
         &consume_final_next_actions,
@@ -120,12 +116,12 @@ pub(crate) fn emit_taskflow_consume_final_json(
         protocol_binding_latest_receipt_id.as_deref(),
     )
     .unwrap_or_else(|| serde_json::json!({}));
-    operator_contracts["artifact_refs"]["retrieval_trust_signal"] = retrieval_trust_signal.clone();
-    operator_contracts["artifact_refs"]["protocol_binding_latest_receipt_id"] =
-        protocol_binding_latest_receipt_id
-            .clone()
-            .map(serde_json::Value::String)
-            .unwrap_or(serde_json::Value::Null);
+    let mut artifact_refs = snapshot_with_operator_contracts["artifact_refs"].clone();
+    artifact_refs["retrieval_trust_signal"] = retrieval_trust_signal.clone();
+    artifact_refs["protocol_binding_latest_receipt_id"] = protocol_binding_latest_receipt_id
+        .clone()
+        .map(serde_json::Value::String)
+        .unwrap_or(serde_json::Value::Null);
     if let Some(runtime_bundle) = payload_json
         .get_mut("runtime_bundle")
         .and_then(serde_json::Value::as_object_mut)
@@ -144,10 +140,11 @@ pub(crate) fn emit_taskflow_consume_final_json(
             );
         }
     }
-    shared_fields["artifact_refs"] = operator_contracts["artifact_refs"].clone();
-    snapshot_with_operator_contracts["artifact_refs"] = operator_contracts["artifact_refs"].clone();
-    snapshot_with_operator_contracts["shared_fields"] = shared_fields.clone();
-    snapshot_with_operator_contracts["operator_contracts"] = operator_contracts.clone();
+    replace_release1_operator_output_artifact_refs(
+        &mut snapshot_with_operator_contracts,
+        artifact_refs,
+    )?;
+    operator_contracts = snapshot_with_operator_contracts["operator_contracts"].clone();
     snapshot_with_operator_contracts["payload"] = payload_json.clone();
     vida_gate_result = consume_final_vida_gate_result(
         &operator_contracts,
@@ -168,14 +165,14 @@ pub(crate) fn emit_taskflow_consume_final_json(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "surface": "vida taskflow consume final",
-            "trace_id": operator_contracts["trace_id"].clone(),
-            "workflow_class": operator_contracts["workflow_class"].clone(),
-            "risk_tier": operator_contracts["risk_tier"].clone(),
-            "status": consume_final_status,
-            "blocker_codes": consume_final_blocker_codes,
+            "trace_id": snapshot_with_operator_contracts["trace_id"].clone(),
+            "workflow_class": snapshot_with_operator_contracts["workflow_class"].clone(),
+            "risk_tier": snapshot_with_operator_contracts["risk_tier"].clone(),
+            "status": snapshot_with_operator_contracts["status"].clone(),
+            "blocker_codes": snapshot_with_operator_contracts["blocker_codes"].clone(),
             "next_actions": consume_final_next_actions,
             "artifact_refs": operator_contracts["artifact_refs"].clone(),
-            "shared_fields": shared_fields,
+            "shared_fields": snapshot_with_operator_contracts["shared_fields"].clone(),
             "operator_contracts": operator_contracts,
             "vida_gate_result": vida_gate_result,
             "docflow_vida_gate_result": docflow_vida_gate_result,
@@ -242,11 +239,9 @@ fn docflow_verdict_vida_gate_result(docflow_verdict: &serde_json::Value) -> serd
         })
         .unwrap_or_default();
     let status_is_blocked = operator_contract_status_is_blocked(&docflow_verdict["status"]);
-    let next_actions = if status_is_blocked {
-        vec!["Run `vida docflow proofcheck --profile active-canon` and clear blockers.".to_string()]
-    } else {
-        Vec::new()
-    };
+    let next_actions = crate::docflow_runtime_verdict_next_actions(
+        docflow_verdict["status"].as_str().unwrap_or_default(),
+    );
     crate::operator_contracts::render_vida_gate_result_with_status(
         "docflow.runtime_verdict",
         if status_is_blocked { "blocked" } else { "pass" },
@@ -304,15 +299,19 @@ fn consume_final_operator_next_actions(payload: &serde_json::Value) -> Vec<Strin
         next_actions.push("Resolve activation blockers before consume-final handoff.".to_string());
     }
     if operator_contract_status_is_blocked(&payload["docflow_verdict"]["status"]) {
-        next_actions.push(
-            "Run `vida docflow proofcheck --profile active-canon` and clear blockers.".to_string(),
-        );
+        next_actions.extend(crate::docflow_runtime_verdict_next_actions(
+            payload["docflow_verdict"]["status"]
+                .as_str()
+                .unwrap_or_default(),
+        ));
     }
     if operator_contract_status_is_blocked(&payload["closure_admission"]["status"]) {
-        next_actions.push(
-            "Run `vida taskflow consume bundle check --json` and resolve closure blockers."
-                .to_string(),
-        );
+        next_actions.push(format!(
+            "Run `{}` and resolve closure blockers.",
+            crate::operator_command_text::human_command(
+                "vida taskflow consume bundle check --json"
+            )
+        ));
     }
     if payload["dispatch_packet_preview"]["status"].as_str() == Some("blocked") {
         let missing_fields = payload["dispatch_packet_preview"]["packet_contract_missing_fields"]
@@ -390,6 +389,31 @@ mod tests {
         assert!(next_actions
             .iter()
             .any(|action| action.contains("proof_target")));
+    }
+
+    #[test]
+    fn consume_final_operator_surface_uses_default_command_in_human_next_action() {
+        let payload = serde_json::json!({
+            "bundle_check": {
+                "activation_status": "ready_enough_for_normal_work"
+            },
+            "docflow_verdict": {
+                "status": "pass"
+            },
+            "closure_admission": {
+                "status": "blocked"
+            },
+            "dispatch_packet_preview": {
+                "status": "pass"
+            }
+        });
+
+        let next_actions = consume_final_operator_next_actions(&payload);
+
+        assert!(next_actions.iter().any(|action| {
+            action.contains("vida taskflow consume bundle check")
+                && !action.contains("bundle check --json")
+        }));
     }
 
     #[test]

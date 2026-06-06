@@ -328,28 +328,26 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
             };
             let blocker_codes = normalize_consume_bundle_blocker_codes(&effective_blockers);
             let next_actions = consume_bundle_check_next_actions(&blocker_codes);
+            let bundle_check_ok = blocker_codes.is_empty();
             let artifact_refs = serde_json::json!({
                 "root_artifact_id": check.root_artifact_id,
                 "bundle_artifact_name": payload.artifact_name,
                 "surface": "vida taskflow consume bundle check"
             });
-            let operator_status = consume_bundle_operator_contract_status(&blocker_codes);
-            if let Some(error) = bundle_check_operator_contracts_consistency_error(
-                operator_status,
-                &blocker_codes,
-                &next_actions,
-            ) {
-                eprintln!("consume bundle check: failed ({error})");
-                return ExitCode::from(1);
-            }
-            let operator_contracts = serde_json::json!({
-                "contract_id": "release-1-operator-contracts",
-                "schema_version": "release-1-v1",
-                "status": operator_status,
-                "blocker_codes": blocker_codes,
-                "next_actions": next_actions,
-                "artifact_refs": artifact_refs,
-            });
+            let operator_output =
+                match crate::operator_contracts::build_release1_operator_output_payload(
+                    "vida taskflow consume bundle check",
+                    blocker_codes,
+                    next_actions,
+                    artifact_refs,
+                    serde_json::json!({}),
+                ) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        eprintln!("consume bundle check: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                };
             let snapshot_path = match super::write_runtime_consumption_snapshot(
                 store.root(),
                 "bundle-check",
@@ -359,10 +357,11 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                     "seam_closure_admission_receipt_check": &seam_closure_admission_receipt_check,
                     "db_first_activation_truth": &db_first_activation_truth,
                     "effective_blockers": &effective_blockers,
-                    "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                    "next_actions": operator_contracts["next_actions"].clone(),
-                    "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                    "operator_contracts": &operator_contracts,
+                    "blocker_codes": operator_output["blocker_codes"].clone(),
+                    "next_actions": operator_output["next_actions"].clone(),
+                    "artifact_refs": operator_output["artifact_refs"].clone(),
+                    "shared_fields": operator_output["shared_fields"].clone(),
+                    "operator_contracts": operator_output["operator_contracts"].clone(),
                     "bundle": &payload,
                 }),
             ) {
@@ -381,10 +380,11 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                         "seam_closure_admission_receipt_check": &seam_closure_admission_receipt_check,
                         "db_first_activation_truth": &db_first_activation_truth,
                         "effective_blockers": &effective_blockers,
-                        "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                        "next_actions": operator_contracts["next_actions"].clone(),
-                        "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                        "operator_contracts": &operator_contracts,
+                        "blocker_codes": operator_output["blocker_codes"].clone(),
+                        "next_actions": operator_output["next_actions"].clone(),
+                        "artifact_refs": operator_output["artifact_refs"].clone(),
+                        "shared_fields": operator_output["shared_fields"].clone(),
+                        "operator_contracts": operator_output["operator_contracts"].clone(),
                         "snapshot_path": snapshot_path,
                     }))
                     .expect("consume bundle check should render as json")
@@ -397,11 +397,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                 super::print_surface_line(
                     super::RenderMode::Plain,
                     "ok",
-                    if blocker_codes.is_empty() {
-                        "true"
-                    } else {
-                        "false"
-                    },
+                    if bundle_check_ok { "true" } else { "false" },
                 );
                 super::print_surface_line(
                     super::RenderMode::Plain,
@@ -419,7 +415,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                         "blockers",
                         &effective_blockers.join(", "),
                     );
-                    let actions = operator_contracts["next_actions"]
+                    let actions = operator_output["next_actions"]
                         .as_array()
                         .into_iter()
                         .flatten()
@@ -440,7 +436,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                     &snapshot_path,
                 );
             }
-            if blocker_codes.is_empty() {
+            if bundle_check_ok {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(1)
@@ -896,6 +892,12 @@ pub(crate) fn build_dev_team_readiness(
     let configured_hook_templates = configured_lifecycle_hook_templates(&overlay);
     let roles = dev_team_roles(dev_team, &carrier_catalog, pricing_catalog, &mut blockers);
     let flows = dev_team_flows(dev_team, &roles, &configured_hook_templates, &mut blockers);
+    let orchestrator_command_contract = serde_json::to_value(
+        crate::yaml_lookup(dev_team, &["orchestrator_command_contract"])
+            .cloned()
+            .unwrap_or(serde_yaml::Value::Null),
+    )
+    .unwrap_or(serde_json::Value::Null);
     let default_flow_id = crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow_id"]))
         .or_else(|| crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow"])));
     let work_item_flow_bindings = dev_team_work_item_flow_bindings(dev_team, &flows, &mut blockers);
@@ -924,6 +926,7 @@ pub(crate) fn build_dev_team_readiness(
         "configured": true,
         "enabled": enabled,
         "default_flow_id": default_flow_id,
+        "orchestrator_command_contract": orchestrator_command_contract,
         "work_item_flow_bindings": work_item_flow_bindings,
         "roles": roles,
         "sequence": sequence,

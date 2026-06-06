@@ -1,4 +1,7 @@
 use super::*;
+use crate::state_store::state_store_task_models::{
+    task_is_spec_first_feature_parent, task_is_spec_pack_child, task_is_work_pool_pack_child,
+};
 use serde_json::Deserializer;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -93,11 +96,112 @@ impl StateStore {
                 .is_some_and(|value| !value.is_empty())
     }
 
-    fn parent_id_for_task(task: &TaskRecord) -> Option<String> {
+    pub(crate) fn parent_id_for_task(task: &TaskRecord) -> Option<String> {
         task.dependencies
             .iter()
             .find(|dependency| dependency.edge_type == "parent-child")
             .map(|dependency| dependency.depends_on_id.clone())
+    }
+
+    pub(crate) fn spec_first_work_pool_handoff_gate_satisfied_for_task(
+        tasks: &[TaskRecord],
+        task_id: &str,
+    ) -> Option<String> {
+        let mut current_task_id = Some(task_id.to_string());
+        let mut visited = BTreeSet::new();
+
+        while let Some(task_id) = current_task_id {
+            if !visited.insert(task_id.clone()) {
+                return None;
+            }
+            let task = tasks.iter().find(|task| task.id == task_id)?;
+            if task_is_spec_first_feature_parent(task)
+                && Self::spec_first_parent_has_closed_spec_before_finished_work_pool(tasks, task)
+            {
+                return Some(task.id.clone());
+            }
+            current_task_id = Self::parent_id_for_task(task);
+        }
+
+        let candidates = tasks
+            .iter()
+            .filter(|task| {
+                task_is_spec_first_feature_parent(task)
+                    && Self::spec_first_parent_has_closed_spec_before_finished_work_pool(
+                        tasks, task,
+                    )
+            })
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+        match candidates.as_slice() {
+            [feature_id] => Some(feature_id.clone()),
+            _ => None,
+        }
+    }
+
+    fn spec_first_parent_has_closed_spec_before_finished_work_pool(
+        tasks: &[TaskRecord],
+        parent: &TaskRecord,
+    ) -> bool {
+        let children = tasks
+            .iter()
+            .filter(|task| Self::parent_id_for_task(task).as_deref() == Some(parent.id.as_str()))
+            .collect::<Vec<_>>();
+        let has_closed_spec_pack_child = children.iter().any(|task| {
+            task_is_spec_pack_child(task) && Self::task_status_is_closed_like(&task.status)
+        });
+        let has_closed_work_pool_child = children.iter().any(|task| {
+            task_is_work_pool_pack_child(task) && Self::task_status_is_closed_like(&task.status)
+        });
+
+        has_closed_spec_pack_child && !has_closed_work_pool_child
+    }
+
+    pub(crate) async fn repair_stale_spec_first_parent_auto_close_for_work_pool_handoff(
+        &self,
+        tasks: &[TaskRecord],
+        feature_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let Some(parent) = tasks.iter().find(|task| task.id == feature_id) else {
+            return Ok(false);
+        };
+        if !Self::task_status_is_closed_like(&parent.status)
+            || !task_is_spec_first_feature_parent(parent)
+            || !Self::spec_first_parent_has_closed_spec_before_finished_work_pool(tasks, parent)
+            || !parent.close_reason.as_deref().is_some_and(|reason| {
+                reason.starts_with("all direct child tasks closed after closing")
+            })
+        {
+            return Ok(false);
+        }
+
+        let mut repaired = parent.clone();
+        repaired.status = "open".to_string();
+        repaired.closed_at = None;
+        repaired.close_reason = None;
+        repaired.updated_at = unix_timestamp_nanos().to_string();
+        self.persist_task_record(repaired).await?;
+        Ok(true)
+    }
+
+    fn spec_first_parent_waits_for_work_pool_handoff(
+        tasks: &[TaskRecord],
+        parent_index: usize,
+        child_indices: &[usize],
+    ) -> bool {
+        let parent = &tasks[parent_index];
+        if !task_is_spec_first_feature_parent(parent) {
+            return false;
+        }
+
+        let has_spec_pack_child = child_indices
+            .iter()
+            .any(|index| task_is_spec_pack_child(&tasks[*index]));
+        let has_work_pool_child = child_indices
+            .iter()
+            .any(|index| task_is_work_pool_pack_child(&tasks[*index]));
+
+        has_spec_pack_child && !has_work_pool_child
     }
 
     fn reopen_closed_parent_chain_for_extension(
@@ -182,6 +286,14 @@ impl StateStore {
             }
 
             if !work_item_is_program_container(&tasks[parent_index].issue_type) {
+                break;
+            }
+
+            if Self::spec_first_parent_waits_for_work_pool_handoff(
+                tasks,
+                parent_index,
+                &child_indices,
+            ) {
                 break;
             }
 
@@ -952,6 +1064,70 @@ impl StateStore {
         Ok(true)
     }
 
+    async fn refresh_spec_post_design_handoff_after_task_close(
+        &self,
+        run_id: &str,
+        closed_task_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let task = match self.show_task(closed_task_id).await {
+            Ok(task) => task,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if !Self::task_status_is_closed_like(&task.status) || !task_is_spec_pack_child(&task) {
+            return Ok(());
+        }
+        let Some(mut receipt) = self.run_graph_dispatch_receipt(run_id).await? else {
+            return Ok(());
+        };
+        if receipt.dispatch_target != "specification"
+            || receipt.dispatch_status != "executed"
+            || receipt.downstream_dispatch_target.as_deref() != Some("work-pool-pack")
+            || !receipt.downstream_dispatch_blockers.iter().any(|blocker| {
+                matches!(
+                    blocker.as_str(),
+                    "pending_design_finalize" | "pending_spec_task_close"
+                )
+            })
+        {
+            return Ok(());
+        }
+
+        receipt.downstream_dispatch_blockers.retain(|blocker| {
+            !matches!(
+                blocker.as_str(),
+                "pending_design_finalize" | "pending_spec_task_close"
+            )
+        });
+        receipt.downstream_dispatch_ready = receipt.downstream_dispatch_blockers.is_empty();
+        receipt.downstream_dispatch_status = Some(if receipt.downstream_dispatch_ready {
+            "packet_ready".to_string()
+        } else {
+            "blocked".to_string()
+        });
+        receipt.downstream_dispatch_note = Some(
+            "spec-pack task close cleared design/spec blockers; continue with work-pool handoff"
+                .to_string(),
+        );
+        receipt.downstream_dispatch_active_target = Some("specification".to_string());
+        receipt.downstream_dispatch_last_target = Some("specification".to_string());
+        self.record_run_graph_dispatch_receipt(&receipt).await?;
+
+        let mut status = self.run_graph_status(run_id).await?;
+        status.active_node = "specification".to_string();
+        status.next_node = Some("work_pool_pack".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "specification_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "awaiting_work_pool_pack".to_string();
+        status.resume_target = "dispatch.work_pool_pack_lane".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.recovery_ready = true;
+        self.record_run_graph_status(&status).await?;
+        Ok(())
+    }
+
     async fn refresh_run_graph_continuation_after_task_close(
         &self,
         task_id: &str,
@@ -1003,6 +1179,8 @@ impl StateStore {
         }
 
         for run_id in affected_run_ids {
+            self.refresh_spec_post_design_handoff_after_task_close(&run_id, task_id)
+                .await?;
             let status = self.run_graph_status(&run_id).await?;
             let Some(binding) = self
                 .build_task_close_reconciled_binding(&status, task_id)
@@ -4126,6 +4304,404 @@ mod tests {
             .await
             .expect("validate graph")
             .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn tracked_flow_spec_close_keeps_feature_epic_open_before_work_pool_exists() {
+        let root = unique_task_store_temp_root("vida-tracked-flow-spec-close-no-work-pool");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-y",
+                title: "Feature Y",
+                display_id: None,
+                description: "tracked feature epic",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &["feature-request".to_string(), "spec-first".to_string()],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create feature epic");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-y-spec",
+                title: "Spec pack",
+                display_id: None,
+                description: "bounded spec packet",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("feature-y"),
+                labels: &["spec-pack".to_string(), "documentation".to_string()],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create spec task");
+
+        store
+            .close_task(
+                "feature-y-spec",
+                "design packet finalized and handed off into tracked work-pool shaping",
+            )
+            .await
+            .expect("close spec task");
+
+        let feature = store.show_task("feature-y").await.expect("load feature");
+        let spec = store.show_task("feature-y-spec").await.expect("load spec");
+
+        assert_eq!(spec.status, "closed");
+        assert_eq!(
+            feature.status, "open",
+            "spec-first feature epic must stay open even when work-pool child has not been materialized yet"
+        );
+        assert!(feature.closed_at.is_none());
+        assert!(feature.close_reason.is_none());
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate graph")
+            .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn tracked_flow_spec_close_clears_stale_design_and_spec_recovery_blockers() {
+        let root = unique_task_store_temp_root("vida-tracked-flow-spec-close-clears-recovery");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-z",
+                title: "Feature Z",
+                display_id: None,
+                description: "tracked feature epic",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &["feature-request".to_string(), "spec-first".to_string()],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create feature epic");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-z-spec",
+                title: "Spec pack",
+                display_id: None,
+                description: "bounded spec packet",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("feature-z"),
+                labels: &["spec-pack".to_string(), "documentation".to_string()],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create spec task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "feature-z-spec",
+            "specification",
+            "specification",
+        );
+        status.task_id = "feature-z-spec".to_string();
+        status.active_node = "specification".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "specification_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist spec status");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: "feature-z-spec".to_string(),
+                dispatch_target: "specification".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("work-pool-pack".to_string()),
+                downstream_dispatch_command: Some(
+                    "vida task ensure feature-z-work-pool".to_string(),
+                ),
+                downstream_dispatch_note: Some(
+                    "finalize the design doc and close spec-pack before work-pool shaping"
+                        .to_string(),
+                ),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec![
+                    "pending_design_finalize".to_string(),
+                    "pending_spec_task_close".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("specification".to_string()),
+                downstream_dispatch_last_target: Some("specification".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-06-05T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale spec receipt");
+
+        store
+            .close_task(
+                "feature-z-spec",
+                "design packet finalized and handed off into tracked work-pool shaping",
+            )
+            .await
+            .expect("close spec task");
+
+        let receipt = store
+            .run_graph_dispatch_receipt("feature-z-spec")
+            .await
+            .expect("load receipt")
+            .expect("receipt should remain");
+        assert!(receipt.downstream_dispatch_ready);
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        assert!(!receipt
+            .downstream_dispatch_blockers
+            .iter()
+            .any(|blocker| matches!(
+                blocker.as_str(),
+                "pending_design_finalize" | "pending_spec_task_close"
+            )));
+
+        let refreshed = store
+            .run_graph_status("feature-z-spec")
+            .await
+            .expect("load refreshed status");
+        assert_eq!(refreshed.status, "ready");
+        assert_eq!(refreshed.active_node, "specification");
+        assert_eq!(refreshed.next_node.as_deref(), Some("work_pool_pack"));
+        assert_eq!(refreshed.handoff_state, "awaiting_work_pool_pack");
+        assert_eq!(refreshed.resume_target, "dispatch.work_pool_pack_lane");
+        assert!(refreshed.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn tracked_flow_feature_run_reconciles_closed_spec_and_stale_parent_on_recovery_read() {
+        let root = unique_task_store_temp_root("vida-tracked-flow-feature-run-clears-recovery");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-live",
+                title: "Feature live",
+                display_id: None,
+                description: "tracked feature epic",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &["feature-request".to_string(), "spec-first".to_string()],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create feature epic");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-live-spec",
+                title: "Spec pack",
+                display_id: None,
+                description: "bounded spec packet",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("feature-live"),
+                labels: &["spec-pack".to_string(), "documentation".to_string()],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create spec task");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "activity-live-run",
+                title: "Activity live run",
+                display_id: None,
+                description: "feature delivery run task",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: Some("feature-live"),
+                labels: &["implementation".to_string()],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create feature run task");
+
+        store
+            .close_task(
+                "feature-live-spec",
+                "design packet finalized and handed off into tracked work-pool shaping",
+            )
+            .await
+            .expect("close spec task");
+        let mut stale_parent = store
+            .show_task("feature-live")
+            .await
+            .expect("load feature parent");
+        stale_parent.status = "closed".to_string();
+        stale_parent.closed_at = Some("2".to_string());
+        stale_parent.close_reason =
+            Some("all direct child tasks closed after closing `feature-live-spec`".to_string());
+        store
+            .persist_task_record(stale_parent)
+            .await
+            .expect("persist stale auto-closed parent");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "activity-live-run",
+            "specification",
+            "specification",
+        );
+        status.task_id = "activity-live-run".to_string();
+        status.active_node = "specification".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "specification_blocked".to_string();
+        status.policy_gate = "blocked".to_string();
+        status.handoff_state = "blocked".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist feature-run status");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: "activity-live-run".to_string(),
+                dispatch_target: "specification".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("work-pool-pack".to_string()),
+                downstream_dispatch_command: Some(
+                    "vida task ensure feature-live-work-pool".to_string(),
+                ),
+                downstream_dispatch_note: Some(
+                    "finalize the design doc and close spec-pack before work-pool shaping"
+                        .to_string(),
+                ),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec![
+                    "pending_design_finalize".to_string(),
+                    "pending_spec_task_close".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("specification".to_string()),
+                downstream_dispatch_last_target: Some("specification".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-06-05T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale feature-run receipt");
+
+        let refreshed = store
+            .run_graph_status("activity-live-run")
+            .await
+            .expect("load reconciled feature-run status");
+        assert_eq!(refreshed.status, "ready");
+        assert_eq!(refreshed.active_node, "specification");
+        assert_eq!(refreshed.next_node.as_deref(), Some("work_pool_pack"));
+        assert_eq!(refreshed.lifecycle_stage, "specification_complete");
+        assert_eq!(refreshed.handoff_state, "awaiting_work_pool_pack");
+        assert_eq!(refreshed.resume_target, "dispatch.work_pool_pack_lane");
+        assert!(refreshed.recovery_ready);
+
+        let receipt = store
+            .run_graph_dispatch_receipt("activity-live-run")
+            .await
+            .expect("load receipt")
+            .expect("receipt should remain");
+        let identity = store
+            .run_graph_dispatch_task_identity("activity-live-run")
+            .await
+            .expect("load dispatch task identity")
+            .expect("identity should be recorded");
+        assert_eq!(identity.feature_epic_id.as_deref(), Some("feature-live"));
+        assert_eq!(identity.spec_task_id.as_deref(), Some("feature-live-spec"));
+        assert_eq!(identity.work_pool_task_id, None);
+        assert_eq!(
+            identity.source,
+            "spec_first_work_pool_handoff_reconciliation"
+        );
+        assert!(receipt.downstream_dispatch_ready);
+        assert!(!receipt
+            .downstream_dispatch_blockers
+            .iter()
+            .any(|blocker| matches!(
+                blocker.as_str(),
+                "pending_design_finalize" | "pending_spec_task_close"
+            )));
+        let repaired_parent = store
+            .show_task("feature-live")
+            .await
+            .expect("load repaired feature parent");
+        assert_eq!(repaired_parent.status, "open");
+        assert!(repaired_parent.closed_at.is_none());
+        assert!(repaired_parent.close_reason.is_none());
+
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -275,6 +275,12 @@ pub(crate) fn build_carrier_runtime_projection(
             .unwrap_or(serde_yaml::Value::Null),
     )
     .unwrap_or(serde_json::Value::Null);
+    let stage_attempt_policies = serde_json::to_value(
+        crate::yaml_lookup(config, &["agent_system", "stage_attempt_policies"])
+            .cloned()
+            .unwrap_or(serde_yaml::Value::Null),
+    )
+    .unwrap_or(serde_json::Value::Null);
 
     let mut validation_errors =
         crate::carrier_runtime_catalog::carrier_role_validation_errors(&carrier_roles);
@@ -319,6 +325,7 @@ pub(crate) fn build_carrier_runtime_projection(
             "worker_strategy": worker_strategy,
             "pricing_policy": pricing_policy,
             "model_selection": model_selection,
+            "stage_attempt_policies": stage_attempt_policies,
         }),
         validation_errors,
     }
@@ -326,6 +333,7 @@ pub(crate) fn build_carrier_runtime_projection(
 
 #[cfg(test)]
 mod tests {
+    use super::build_carrier_runtime_projection;
     use super::selected_runtime_root;
     use super::subagent_runtime_candidate_rows;
     use serde_json::json;
@@ -436,6 +444,121 @@ agent_system:
         assert_eq!(
             row["model_profiles"]["opencode_minimax_free_review"]["normalized_cost_units"],
             0
+        );
+    }
+
+    #[test]
+    fn subagent_runtime_candidate_rows_project_service_executor_backend_capability() {
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+agent_system:
+  subagents:
+    vida_coder:
+      enabled: true
+      subagent_backend_class: service_executor
+      default_model_profile: vida_coder_medium_write
+      budget_cost_units: 3
+      write_scope: guard_required_packet_owned_paths
+      runtime_roles:
+        - worker
+      task_classes:
+        - implementation
+      dispatch:
+        command: vida-coder
+        mode: service
+      readiness:
+        adapter:
+          mode: command_found
+          command: sh
+        write_scope_guard:
+          mode: adapter_feature_required
+          required_for_write_profiles: true
+          fail_closed_until_available: true
+      model_profiles:
+        vida_coder_medium_write:
+          provider: vida-coder
+          model_ref: vida-coder/medium
+          reasoning_effort: medium
+          normalized_cost_units: 3
+          speed_tier: medium
+          quality_tier: high
+          write_scope: guard_required_packet_owned_paths
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+"#,
+        )
+        .expect("config should parse");
+
+        let rows = subagent_runtime_candidate_rows(&config);
+
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row["role_id"], "vida_coder");
+        assert_eq!(row["backend_class"], "service_executor");
+        assert_eq!(row["carrier_kind"], "service_executor_backend");
+        assert_eq!(row["write_scope"], "guard_required_packet_owned_paths");
+        assert_eq!(row["runtime_roles"], json!(["worker"]));
+        assert_eq!(row["task_classes"], json!(["implementation"]));
+        assert_eq!(row["default_model_profile"], "vida_coder_medium_write");
+        assert_eq!(
+            row["model_profiles"]["vida_coder_medium_write"]["model_ref"],
+            "vida-coder/medium"
+        );
+    }
+
+    #[test]
+    fn carrier_runtime_projection_exposes_stage_attempt_policies() {
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+agent_system:
+  stage_attempt_policies:
+    analysis:
+      fanout:
+        mode: parallel
+        max_attempts: 2
+      attempts:
+        - attempt_id: analysis-vibe
+          carrier_id: vibe_cli
+          model_profile_id: vibe_review
+          runtime_role: business_analyst
+          task_class: analysis
+          isolation: external_readonly_complete
+      consolidator:
+        attempt_id: analysis-consolidator
+        carrier_id: internal_subagents
+        model_profile_id: codex_medium
+        runtime_role: business_analyst
+        task_class: analysis
+        isolation: root_validate_only
+"#,
+        )
+        .expect("config should parse");
+
+        let projection = build_carrier_runtime_projection(
+            &config,
+            Path::new("/tmp/project"),
+            None,
+            &HashMap::new(),
+            &serde_yaml::Value::Null,
+            None,
+        );
+
+        assert_eq!(
+            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["fanout"]
+                ["max_attempts"],
+            2
+        );
+        assert_eq!(
+            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["attempts"][0]
+                ["carrier_id"],
+            "vibe_cli"
+        );
+        assert_eq!(
+            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["consolidator"]
+                ["model_profile_id"],
+            "codex_medium"
         );
     }
 

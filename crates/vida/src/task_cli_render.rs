@@ -1,6 +1,4 @@
-use crate::operator_contracts::{
-    finalize_release1_operator_truth, shared_operator_output_contract_parity_error,
-};
+use crate::operator_contracts::build_release1_operator_output_payload;
 use crate::state_store::{
     BlockedTaskRecord, TaskBulkReparentResult, TaskCriticalPath, TaskDefectBatchRehomeResult,
     TaskDependencyBulkAddResult, TaskDependencyRecord, TaskDependencyStatus,
@@ -102,43 +100,16 @@ fn build_operator_surface_payload(
     next_actions: Vec<String>,
     extra_fields: serde_json::Value,
 ) -> serde_json::Value {
-    let finalized = finalize_release1_operator_truth(
+    build_release1_operator_output_payload(
+        surface,
         blocker_codes,
         next_actions,
         serde_json::json!({
             "surface": surface,
         }),
+        extra_fields,
     )
-    .expect("task operator surface should finalize");
-    let mut payload = serde_json::json!({
-        "surface": surface,
-        "status": finalized.status,
-        "trace_id": finalized.operator_contracts["trace_id"].clone(),
-        "workflow_class": finalized.operator_contracts["workflow_class"].clone(),
-        "risk_tier": finalized.operator_contracts["risk_tier"].clone(),
-        "blocker_codes": finalized.blocker_codes,
-        "next_actions": finalized.next_actions,
-        "artifact_refs": finalized.artifact_refs,
-        "shared_fields": finalized.shared_fields,
-        "operator_contracts": finalized.operator_contracts,
-    });
-    for key in ["trace_id", "workflow_class", "risk_tier"] {
-        payload["shared_fields"][key] = payload["operator_contracts"][key].clone();
-    }
-    let extra_object = extra_fields
-        .as_object()
-        .expect("task operator surface extras must be an object")
-        .clone();
-    payload
-        .as_object_mut()
-        .expect("task operator surface payload should serialize to an object")
-        .extend(extra_object);
-    assert_eq!(
-        shared_operator_output_contract_parity_error(&payload),
-        None,
-        "task operator surface payload should keep release-1 parity"
-    );
-    payload
+    .expect("task operator surface should finalize release-1 operator output")
 }
 
 pub(crate) fn build_pass_operator_surface_payload(
@@ -346,27 +317,7 @@ pub(crate) fn print_task_list(
 }
 
 fn apply_json_field_selector(value: serde_json::Value, fields: Option<&str>) -> serde_json::Value {
-    let Some(fields) = fields else {
-        return value;
-    };
-    let wanted = fields
-        .split(',')
-        .map(str::trim)
-        .filter(|field| !field.is_empty())
-        .collect::<Vec<_>>();
-    if wanted.is_empty() {
-        return value;
-    }
-    let Some(object) = value.as_object() else {
-        return value;
-    };
-    let mut selected = serde_json::Map::new();
-    for field in wanted {
-        if let Some(value) = object.get(field) {
-            selected.insert(field.to_string(), value.clone());
-        }
-    }
-    serde_json::Value::Object(selected)
+    crate::operator_toon_report::select_fields(value, fields)
 }
 
 pub(crate) fn print_task_ready(
@@ -375,8 +326,10 @@ pub(crate) fn print_task_ready(
     tasks: &[TaskRecord],
     as_json: bool,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+    view: &str,
+    fields: Option<&str>,
 ) {
-    let payload = task_ready_payload(scope_task_id, tasks, read_metadata);
+    let payload = task_ready_payload(scope_task_id, tasks, read_metadata, view, fields);
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -388,7 +341,7 @@ pub(crate) fn print_task_ready(
     if matches!(render, RenderMode::Plain) {
         println!(
             "{}",
-            task_record_list_toon_text("vida task ready", tasks, None)
+            task_record_list_toon_text("vida task ready", tasks, fields)
         );
         return;
     }
@@ -413,14 +366,31 @@ pub(crate) fn task_ready_payload(
     scope_task_id: Option<&str>,
     tasks: &[TaskRecord],
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+    view: &str,
+    fields: Option<&str>,
 ) -> serde_json::Value {
+    let view = match view {
+        "compact" => "compact",
+        "full" => "full",
+        _ => "summary",
+    };
+    let output_policy = task_list_output_policy(view, view == "full");
+    let row_full = view == "full";
+    let task_rows = tasks
+        .iter()
+        .map(|task| task_list_row_value(task, row_full))
+        .map(|value| apply_json_field_selector(value, fields))
+        .collect::<Vec<_>>();
     build_pass_operator_surface_payload(
         "vida task ready",
         serde_json::json!({
             "state_access": task_read_metadata_value(read_metadata),
+            "output_policy": output_policy,
+            "fields": fields,
+            "view": view,
             "scope_task_id": scope_task_id,
             "ready_count": tasks.len(),
-            "tasks": tasks.iter().map(task_record_value).collect::<Vec<_>>(),
+            "tasks": task_rows,
         }),
     )
 }
@@ -501,7 +471,7 @@ pub(crate) fn task_progress_payload(summary: &TaskProgressSummary) -> serde_json
 }
 
 pub(crate) fn task_progress_toon_text(surface: &str, summary: &TaskProgressSummary) -> String {
-    let toon_scalar = |value: &str| crate::surface_render::sanitize_terminal_value(value);
+    let toon_scalar = taskflow_format_toon::sanitize_toon_scalar;
     let mut lines = vec![
         format!("task: {}", toon_scalar(&summary.root_task.id)),
         format!("kind: {}", toon_scalar(&summary.root_task.issue_type)),

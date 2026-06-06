@@ -72,6 +72,62 @@ fn assert_no_legacy_external_backends(backends: &[String]) {
     }
 }
 
+fn assert_stage_attempt_policy_catalog(
+    config: &serde_yaml::Value,
+    expected_stage_ids: &[&str],
+    context: &str,
+) {
+    let policies = &config["agent_system"]["stage_attempt_policies"];
+    assert!(
+        !policies.is_null(),
+        "{context} should define agent_system.stage_attempt_policies",
+    );
+    for stage_id in expected_stage_ids {
+        let policy = &policies[*stage_id];
+        assert!(
+            !policy.is_null(),
+            "{context} should define stage attempt policy {stage_id}",
+        );
+        assert!(
+            policy["fanout"]["max_attempts"]
+                .as_i64()
+                .unwrap_or_default()
+                > 0,
+            "{context} {stage_id} should define positive fanout.max_attempts",
+        );
+        let attempts = policy["attempts"]
+            .as_sequence()
+            .expect("stage policy attempts should render");
+        assert!(
+            !attempts.is_empty(),
+            "{context} {stage_id} should define at least one attempt",
+        );
+        for attempt in attempts {
+            assert!(
+                yaml_string(&attempt["carrier_id"]).is_some(),
+                "{context} {stage_id} attempts should bind carrier_id",
+            );
+            assert!(
+                yaml_string(&attempt["model_profile_id"]).is_some(),
+                "{context} {stage_id} attempts should bind model_profile_id",
+            );
+            assert!(
+                yaml_string(&attempt["isolation"]).is_some(),
+                "{context} {stage_id} attempts should bind isolation",
+            );
+        }
+        let consolidator = &policy["consolidator"];
+        assert!(
+            yaml_string(&consolidator["carrier_id"]).is_some(),
+            "{context} {stage_id} should bind consolidator carrier_id",
+        );
+        assert!(
+            yaml_string(&consolidator["model_profile_id"]).is_some(),
+            "{context} {stage_id} should bind consolidator model_profile_id",
+        );
+    }
+}
+
 fn assert_configured_flow_catalog(config: &serde_yaml::Value, context: &str) {
     let enabled_hooks = yaml_string_list(&config["agent_extensions"]["enabled_hook_templates"]);
     assert_contains_all(
@@ -409,6 +465,29 @@ fn project_routing_shape_keeps_write_routes_internal_fallback_with_diversified_r
             "internal_subagents",
         );
     }
+}
+
+#[test]
+fn project_routing_shape_defines_stage_attempt_policies() {
+    let project = project_config();
+    let template = repo_yaml("docs/framework/templates/vida.config.yaml.template");
+
+    assert_stage_attempt_policy_catalog(
+        &project,
+        &[
+            "analysis",
+            "specification",
+            "implementation",
+            "regression_test",
+            "review",
+        ],
+        "root project config",
+    );
+    assert_stage_attempt_policy_catalog(
+        &template,
+        &["analysis", "specification", "implementation", "review"],
+        "project config template",
+    );
 }
 
 #[test]

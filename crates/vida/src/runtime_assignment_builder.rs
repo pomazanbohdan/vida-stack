@@ -824,48 +824,158 @@ fn pricing_freshness_status_and_reject_reasons(
     (freshness, freshness_status, reasons)
 }
 
-fn external_cli_readiness_verdict_for_candidate(
+fn configured_executor_backend_class(backend_class: &str) -> bool {
+    matches!(
+        backend_class.trim(),
+        "external_cli" | "service" | "service_executor"
+    )
+}
+
+fn service_executor_backend_class(backend_class: &str) -> bool {
+    matches!(backend_class.trim(), "service" | "service_executor")
+}
+
+fn candidate_backend_class(candidate: &ProfileCandidate) -> String {
+    candidate.role["backend_class"]
+        .as_str()
+        .or_else(|| candidate.role["subagent_backend_class"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn configured_backend_readiness_guard_active(readiness: Option<&serde_json::Value>) -> bool {
+    readiness
+        .and_then(|readiness| readiness.pointer("/write_scope_guard/pre_write_enforcement"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        && readiness
+            .and_then(|readiness| readiness.pointer("/write_scope_guard/status"))
+            .and_then(serde_json::Value::as_str)
+            == Some("active")
+}
+
+fn service_executor_write_candidate_ready(
+    backend_class: &str,
+    task_class: &str,
+    readiness: Option<&serde_json::Value>,
+) -> bool {
+    if !service_executor_backend_class(backend_class)
+        || !task_class_requires_write_scope(task_class)
+    {
+        return true;
+    }
+    readiness.is_some_and(|readiness| {
+        readiness
+            .get("blocked")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+            && configured_backend_readiness_guard_active(Some(readiness))
+    })
+}
+
+fn legacy_external_backend_readiness_alias(
+    readiness: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let Some(readiness) = readiness else {
+        return serde_json::Value::Null;
+    };
+    let mut alias = readiness.clone();
+    if let Some(map) = alias.as_object_mut() {
+        if map.get("status").and_then(serde_json::Value::as_str)
+            == Some("configured_backend_dispatch_blocked")
+        {
+            map.insert(
+                "status".to_string(),
+                serde_json::Value::String("external_backend_dispatch_blocked".to_string()),
+            );
+        }
+    }
+    alias
+}
+
+fn configured_backend_dispatch_blocker(
+    backend_id: &str,
+    backend_class: &str,
+    backend_entry: &serde_yaml::Value,
+) -> Option<String> {
+    if backend_class == "external_cli" {
+        return crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            backend_id,
+            backend_entry,
+        );
+    }
+    if crate::yaml_lookup(backend_entry, &["enabled"]).is_some()
+        && !crate::yaml_bool(crate::yaml_lookup(backend_entry, &["enabled"]), false)
+    {
+        return Some(format!(
+            "configured backend `{backend_id}` is disabled; service executor dispatch is forbidden"
+        ));
+    }
+    None
+}
+
+fn configured_backend_readiness_verdict_for_candidate(
     compiled_bundle: &serde_json::Value,
     role: &serde_json::Value,
     profile: &serde_json::Value,
 ) -> Option<serde_json::Value> {
-    let (backend_id, backend_entry) =
-        configured_external_cli_backend_entry_for_role(compiled_bundle, role)?;
+    let (backend_id, backend_class, backend_entry) =
+        configured_backend_entry_for_role(compiled_bundle, role)?;
     let profile_id = profile["profile_id"].as_str().map(str::trim);
     if let Some(blocker_reason) =
-        crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
-            &backend_id,
-            &backend_entry,
-        )
+        configured_backend_dispatch_blocker(&backend_id, &backend_class, &backend_entry)
     {
         let selected_model_profile = profile_id
             .map(|profile_id| serde_json::Value::String(profile_id.to_string()))
             .unwrap_or(serde_json::Value::Null);
         return Some(serde_json::json!({
             "backend_id": backend_id,
-            "status": "external_backend_dispatch_blocked",
+            "backend_class": backend_class,
+            "status": "configured_backend_dispatch_blocked",
             "blocked": true,
             "blocker_code": "configured_backend_dispatch_failed",
             "blocker_reason": blocker_reason,
             "selected_model_profile": selected_model_profile,
+            "raw_provider_dispatch_forbidden": service_executor_backend_class(&backend_class),
             "next_actions": [
                 format!("Enable and repair external backend `{backend_id}` in `vida.config.yaml`, or reroute this lane to a receipt-backed backend before dispatch.")
             ],
         }));
     }
-    Some(
+    let mut verdict =
         crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
             &backend_id,
             &backend_entry,
             profile_id,
-        ),
-    )
+        );
+    if let Some(map) = verdict.as_object_mut() {
+        map.insert(
+            "backend_class".to_string(),
+            serde_json::Value::String(backend_class.clone()),
+        );
+        map.insert(
+            "raw_provider_dispatch_forbidden".to_string(),
+            serde_json::Value::Bool(service_executor_backend_class(&backend_class)),
+        );
+        if service_executor_backend_class(&backend_class)
+            && map.get("status").and_then(serde_json::Value::as_str)
+                == Some("external_cli_command_not_found")
+        {
+            map.insert(
+                "status".to_string(),
+                serde_json::Value::String("service_executor_command_not_found".to_string()),
+            );
+        }
+    }
+    Some(verdict)
 }
 
-fn configured_external_cli_backend_entry_for_role(
+fn configured_backend_entry_for_role(
     compiled_bundle: &serde_json::Value,
     role: &serde_json::Value,
-) -> Option<(String, serde_yaml::Value)> {
+) -> Option<(String, String, serde_yaml::Value)> {
     let backend_id = role["role_id"]
         .as_str()
         .map(str::trim)
@@ -880,24 +990,25 @@ fn configured_external_cli_backend_entry_for_role(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or_default();
-    if backend_class != "external_cli" {
+    if !configured_executor_backend_class(backend_class) {
         return None;
     }
-    Some((backend_id.to_string(), backend_entry))
+    Some((
+        backend_id.to_string(),
+        backend_class.to_string(),
+        backend_entry,
+    ))
 }
 
-fn external_cli_dispatch_blocker_verdict_for_candidate(
+fn configured_backend_dispatch_blocker_verdict_for_candidate(
     compiled_bundle: &serde_json::Value,
     role: &serde_json::Value,
     profile: &serde_json::Value,
 ) -> Option<serde_json::Value> {
-    let (backend_id, backend_entry) =
-        configured_external_cli_backend_entry_for_role(compiled_bundle, role)?;
+    let (backend_id, backend_class, backend_entry) =
+        configured_backend_entry_for_role(compiled_bundle, role)?;
     let blocker_reason =
-        crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
-            &backend_id,
-            &backend_entry,
-        )?;
+        configured_backend_dispatch_blocker(&backend_id, &backend_class, &backend_entry)?;
     let selected_model_profile = profile["profile_id"]
         .as_str()
         .map(str::trim)
@@ -906,11 +1017,13 @@ fn external_cli_dispatch_blocker_verdict_for_candidate(
         .unwrap_or(serde_json::Value::Null);
     Some(serde_json::json!({
         "backend_id": backend_id,
-        "status": "external_backend_dispatch_blocked",
+        "backend_class": backend_class,
+        "status": "configured_backend_dispatch_blocked",
         "blocked": true,
         "blocker_code": "configured_backend_dispatch_failed",
         "blocker_reason": blocker_reason,
         "selected_model_profile": selected_model_profile,
+        "raw_provider_dispatch_forbidden": service_executor_backend_class(&backend_class),
         "next_actions": [
             format!("Enable and repair external backend `{backend_id}` in `vida.config.yaml`, or reroute this lane to a receipt-backed backend before dispatch.")
         ],
@@ -1028,14 +1141,14 @@ impl ProfileCandidate {
     }
 }
 
-fn load_external_cli_readiness_for_candidate(
+fn load_configured_backend_readiness_for_candidate(
     compiled_bundle: &serde_json::Value,
     candidate: &mut ProfileCandidate,
 ) {
     if candidate.external_backend_readiness.is_some() {
         return;
     }
-    candidate.external_backend_readiness = external_cli_readiness_verdict_for_candidate(
+    candidate.external_backend_readiness = configured_backend_readiness_verdict_for_candidate(
         compiled_bundle,
         &candidate.role,
         &candidate.profile,
@@ -1050,18 +1163,19 @@ fn load_external_cli_readiness_for_candidate(
     }
 }
 
-fn load_static_external_cli_dispatch_blocker_for_candidate(
+fn load_static_configured_backend_dispatch_blocker_for_candidate(
     compiled_bundle: &serde_json::Value,
     candidate: &mut ProfileCandidate,
 ) {
     if candidate.external_backend_readiness.is_some() {
         return;
     }
-    candidate.external_backend_readiness = external_cli_dispatch_blocker_verdict_for_candidate(
-        compiled_bundle,
-        &candidate.role,
-        &candidate.profile,
-    );
+    candidate.external_backend_readiness =
+        configured_backend_dispatch_blocker_verdict_for_candidate(
+            compiled_bundle,
+            &candidate.role,
+            &candidate.profile,
+        );
     if let Some(status) = candidate
         .external_backend_readiness
         .as_ref()
@@ -1622,11 +1736,16 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             .or_else(|| candidate.role["write_scope"].as_str())
             .unwrap_or_default()
             .to_string();
+        let backend_class = candidate_backend_class(candidate);
         let live_guard_required = task_class_requires_write_scope(task_class)
             && write_scope_requires_live_guard(&write_scope);
-        load_static_external_cli_dispatch_blocker_for_candidate(compiled_bundle, candidate);
-        if reasons.is_empty() && (probe_external_readiness || live_guard_required) {
-            load_external_cli_readiness_for_candidate(compiled_bundle, candidate);
+        let service_write_guard_required = service_executor_backend_class(&backend_class)
+            && task_class_requires_write_scope(task_class);
+        load_static_configured_backend_dispatch_blocker_for_candidate(compiled_bundle, candidate);
+        if reasons.is_empty()
+            && (probe_external_readiness || live_guard_required || service_write_guard_required)
+        {
+            load_configured_backend_readiness_for_candidate(compiled_bundle, candidate);
         }
         if candidate.readiness_status == "blocked" {
             reasons.push("profile_not_ready".to_string());
@@ -1654,6 +1773,13 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         ) {
             reasons.push("write_scope_inadmissible_for_task_class".to_string());
         }
+        if !service_executor_write_candidate_ready(
+            &backend_class,
+            task_class,
+            candidate.external_backend_readiness.as_ref(),
+        ) {
+            reasons.push("service_executor_guard_not_ready".to_string());
+        }
         if let Some(floor) = quality_floor.as_deref() {
             if candidate.quality_rank < quality_tier_rank(floor) {
                 reasons.push("quality_floor_not_met".to_string());
@@ -1677,7 +1803,14 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             });
             if let Some(readiness) = candidate.external_backend_readiness.clone() {
                 if let Some(row) = rejected_candidate.as_object_mut() {
-                    row.insert("external_backend_readiness".to_string(), readiness);
+                    row.insert(
+                        "configured_backend_readiness".to_string(),
+                        readiness.clone(),
+                    );
+                    row.insert(
+                        "external_backend_readiness".to_string(),
+                        legacy_external_backend_readiness_alias(Some(&readiness)),
+                    );
                 }
             }
             if let Some(row) = rejected_candidate.as_object_mut() {
@@ -1838,6 +1971,16 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             "max_budget_units": max_budget_units,
         }));
     }
+    let selected_write_scope = selected_profile["write_scope"]
+        .as_str()
+        .or_else(|| selected_role["write_scope"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    let selected_write_scope_source_path = if selected_profile["write_scope"].as_str().is_some() {
+        format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.write_scope")
+    } else {
+        format!("carrier_runtime.roles[{selected_role_id}].write_scope")
+    };
 
     let mut assignment = serde_json::json!({
         "enabled": true,
@@ -1860,10 +2003,12 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         "selected_reasoning_effort": selected_profile["reasoning_effort"],
         "selected_plan_mode_reasoning_effort": selected_profile["plan_mode_reasoning_effort"],
         "selected_sandbox_mode": selected_profile["sandbox_mode"],
+        "selected_write_scope": selected_write_scope,
         "selected_quality_tier": selected_profile["quality_tier"],
         "selected_speed_tier": selected_profile["speed_tier"],
-        "selected_model_profile_readiness_status": selected_candidate.readiness_status,
-        "selected_external_backend_readiness": selected_candidate.external_backend_readiness,
+            "selected_model_profile_readiness_status": selected_candidate.readiness_status,
+            "selected_configured_backend_readiness": selected_candidate.external_backend_readiness,
+        "selected_external_backend_readiness": legacy_external_backend_readiness_alias(selected_candidate.external_backend_readiness.as_ref()),
         "pricing_readiness": serde_json::json!({
             "pricing": selected_candidate.pricing,
             "pricing_source_path": selected_candidate.pricing_source_path,
@@ -1909,6 +2054,7 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             "selected_model_ref": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.model_ref"),
             "selected_rate": selected_rate_source_path,
             "selected_reasoning_effort": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.reasoning_effort"),
+            "selected_write_scope": selected_write_scope_source_path,
             "selection_strategy": "carrier_runtime.model_selection.default_strategy",
             "selection_rule": "carrier_runtime.model_selection.selection_rule",
             "candidate_scope": "model_selection.candidate_scope",
@@ -2063,11 +2209,229 @@ pub(crate) fn build_runtime_assignment(
     assignment
 }
 
+fn stage_policy_string(value: &serde_json::Value, field: &str, default_value: &str) -> String {
+    value[field]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default_value)
+        .to_string()
+}
+
+fn stage_policy_optional_string(value: &serde_json::Value, fields: &[&str]) -> Option<String> {
+    fields.iter().find_map(|field| {
+        value[*field]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn stage_policy_scoped_bundle(
+    compiled_bundle: &serde_json::Value,
+    row: &serde_json::Value,
+) -> serde_json::Value {
+    let mut scoped_bundle = compiled_bundle.clone();
+    let requested_carrier_id =
+        stage_policy_optional_string(row, &["carrier_id", "agent_id", "role_id"]);
+    let requested_model_profile_id =
+        stage_policy_optional_string(row, &["model_profile_id", "model_profile"]);
+
+    if let Some(carrier_id) = requested_carrier_id.as_deref() {
+        if let Some(agents) =
+            scoped_bundle["carrier_runtime"]["worker_strategy"]["agents"].as_object_mut()
+        {
+            for (agent_id, agent) in agents {
+                if agent_id != carrier_id {
+                    agent["lifecycle_state"] = serde_json::json!("retired");
+                }
+            }
+        }
+        if let Some(roles) = scoped_bundle["carrier_runtime"]["roles"].as_array_mut() {
+            for role in roles {
+                if role["role_id"].as_str() != Some(carrier_id) {
+                    role["stage_attempt_scoped_out"] = serde_json::json!(true);
+                    continue;
+                }
+                if let Some(model_profile_id) = requested_model_profile_id.as_deref() {
+                    role["default_model_profile"] = serde_json::json!(model_profile_id);
+                }
+            }
+        }
+        if let Some(model_profile_id) = requested_model_profile_id.as_deref() {
+            if let Some(subagent) = scoped_bundle
+                .get_mut("agent_system")
+                .and_then(serde_json::Value::as_object_mut)
+                .and_then(|agent_system| agent_system.get_mut("subagents"))
+                .and_then(serde_json::Value::as_object_mut)
+                .and_then(|subagents| subagents.get_mut(carrier_id))
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                subagent.insert(
+                    "default_model_profile".to_string(),
+                    serde_json::json!(model_profile_id),
+                );
+            }
+        }
+    }
+
+    scoped_bundle
+}
+
+fn stage_policy_assignment(
+    compiled_bundle: &serde_json::Value,
+    stage_id: &str,
+    row: &serde_json::Value,
+    index: usize,
+) -> serde_json::Value {
+    let task_class = stage_policy_string(row, "task_class", stage_id);
+    let runtime_role = stage_policy_string(row, "runtime_role", "worker");
+    let conversation_role = stage_policy_string(row, "conversation_role", &runtime_role);
+    let scoped_bundle = stage_policy_scoped_bundle(compiled_bundle, row);
+    let mut assignment = build_runtime_assignment_from_resolved_constraints(
+        &scoped_bundle,
+        &conversation_role,
+        &task_class,
+        &runtime_role,
+    );
+    if let Some(map) = assignment.as_object_mut() {
+        map.insert("stage_id".to_string(), serde_json::json!(stage_id));
+        map.insert("attempt_index".to_string(), serde_json::json!(index));
+        map.insert(
+            "attempt_id".to_string(),
+            row["attempt_id"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(serde_json::Value::from)
+                .unwrap_or_else(|| serde_json::json!(format!("{stage_id}-attempt-{index}"))),
+        );
+        map.insert(
+            "policy_source_path".to_string(),
+            serde_json::json!(format!(
+                "agent_system.stage_attempt_policies.{stage_id}.attempts[{index}]"
+            )),
+        );
+        map.insert(
+            "isolation".to_string(),
+            row["isolation"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(serde_json::Value::from)
+                .unwrap_or_else(|| serde_json::json!("readonly")),
+        );
+        map.insert(
+            "requested_carrier_id".to_string(),
+            stage_policy_optional_string(row, &["carrier_id", "agent_id", "role_id"])
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "requested_model_profile_id".to_string(),
+            stage_policy_optional_string(row, &["model_profile_id", "model_profile"])
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    assignment
+}
+
+fn stage_policy_blocker_reason(assignment: &serde_json::Value) -> String {
+    let reason = assignment["reason"]
+        .as_str()
+        .unwrap_or("assignment_blocked")
+        .to_string();
+    let Some(requested_carrier_id) = assignment["requested_carrier_id"].as_str() else {
+        return reason;
+    };
+    if reason != "no_carrier_satisfies_runtime_role_or_task_class" {
+        return reason;
+    }
+    assignment["rejected_candidates"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate["carrier_id"].as_str() == Some(requested_carrier_id))
+        .and_then(|candidate| candidate["reason"].as_str())
+        .map(str::to_string)
+        .unwrap_or(reason)
+}
+
+pub(crate) fn build_stage_attempt_policy_from_config(
+    compiled_bundle: &serde_json::Value,
+    stage_id: &str,
+) -> serde_json::Value {
+    let stage_id = stage_id.trim();
+    if stage_id.is_empty() {
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["stage_id_missing"],
+            "reason": "stage_id_missing",
+        });
+    }
+    let policy = &compiled_bundle["agent_system"]["stage_attempt_policies"][stage_id];
+    if !policy.is_object() {
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["stage_attempt_policy_missing"],
+            "stage_id": stage_id,
+            "reason": "stage_attempt_policy_missing",
+            "source_path": format!("agent_system.stage_attempt_policies.{stage_id}"),
+        });
+    }
+
+    let attempts = policy["attempts"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .enumerate()
+                .map(|(index, row)| stage_policy_assignment(compiled_bundle, stage_id, row, index))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let consolidator = policy
+        .get("consolidator")
+        .filter(|value| value.is_object())
+        .map(|row| stage_policy_assignment(compiled_bundle, stage_id, row, attempts.len()));
+
+    let mut blocker_codes = Vec::new();
+    if attempts.is_empty() {
+        blocker_codes.push("stage_attempt_policy_attempts_missing".to_string());
+    }
+    for attempt in &attempts {
+        if attempt["enabled"].as_bool() != Some(true) {
+            blocker_codes.push(format!("attempt:{}", stage_policy_blocker_reason(attempt)));
+        }
+    }
+    match consolidator.as_ref() {
+        Some(assignment) if assignment["enabled"].as_bool() == Some(true) => {}
+        Some(assignment) => blocker_codes.push(format!(
+            "consolidator:{}",
+            stage_policy_blocker_reason(assignment)
+        )),
+        None => blocker_codes.push("stage_attempt_policy_consolidator_missing".to_string()),
+    }
+
+    serde_json::json!({
+        "status": if blocker_codes.is_empty() { "pass" } else { "blocked" },
+        "blocker_codes": blocker_codes,
+        "stage_id": stage_id,
+        "source_path": format!("agent_system.stage_attempt_policies.{stage_id}"),
+        "attempt_count": attempts.len(),
+        "attempts": attempts,
+        "consolidator": consolidator,
+        "fanout": policy["fanout"].clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         build_runtime_assignment, build_runtime_assignment_from_resolved_constraints,
         build_runtime_assignment_preview_from_resolved_constraints,
+        build_stage_attempt_policy_from_config,
     };
     use crate::RuntimeConsumptionLaneSelection;
 
@@ -2116,6 +2480,302 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn stage_attempt_policy_config() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "analysis_internal_low",
+                "tier": "internal_low",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["analysis"],
+                "reasoning_band": "low",
+                "default_model_profile": "codex_low_analysis",
+                "model_profiles": {
+                    "codex_low_analysis": {
+                        "profile_id": "codex_low_analysis",
+                        "model_ref": "codex/low-analysis",
+                        "provider": "openai",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["analysis"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "vibe_medium_analysis",
+                "tier": "external_medium",
+                "rate": 2,
+                "normalized_cost_units": 2,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["analysis"],
+                "reasoning_band": "medium",
+                "backend_class": "external_cli",
+                "subagent_backend_class": "external_cli",
+                "default_model_profile": "mistral_medium_analysis",
+                "model_profiles": {
+                    "mistral_medium_analysis": {
+                        "profile_id": "mistral_medium_analysis",
+                        "model_ref": "mistralai/mistral-medium-3.5-128b",
+                        "provider": "nim",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 2,
+                        "speed_tier": "medium",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["analysis"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "coach_consolidator_high",
+                "tier": "coach_high",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "high",
+                "default_model_profile": "codex_high_consolidator",
+                "model_profiles": {
+                    "codex_high_consolidator": {
+                        "profile_id": "codex_high_consolidator",
+                        "model_ref": "codex/high-consolidator",
+                        "provider": "openai",
+                        "reasoning_effort": "high",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "medium",
+                        "quality_tier": "high",
+                        "write_scope": "none",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "stage_attempt_policies": {
+                "analysis": {
+                    "fanout": { "mode": "parallel", "max_attempts": 2 },
+                    "attempts": [
+                        {
+                            "attempt_id": "analysis-internal-low",
+                            "carrier_id": "analysis_internal_low",
+                            "model_profile_id": "codex_low_analysis",
+                            "conversation_role": "worker",
+                            "runtime_role": "worker",
+                            "task_class": "analysis",
+                            "isolation": "external_readonly_complete"
+                        },
+                        {
+                            "attempt_id": "analysis-external-medium",
+                            "carrier_id": "vibe_medium_analysis",
+                            "model_profile_id": "mistral_medium_analysis",
+                            "conversation_role": "worker",
+                            "runtime_role": "worker",
+                            "task_class": "analysis",
+                            "isolation": "external_readonly_complete"
+                        }
+                    ],
+                    "consolidator": {
+                        "attempt_id": "analysis-consolidator",
+                        "carrier_id": "coach_consolidator_high",
+                        "model_profile_id": "codex_high_consolidator",
+                        "conversation_role": "coach",
+                        "runtime_role": "coach",
+                        "task_class": "review",
+                        "isolation": "root_validate_only"
+                    }
+                }
+            }
+        });
+
+        let policy = build_stage_attempt_policy_from_config(&compiled_bundle, "analysis");
+
+        assert_eq!(policy["status"], "pass");
+        assert!(policy["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .is_empty());
+        assert_eq!(policy["attempt_count"], 2);
+        assert_eq!(
+            policy["source_path"],
+            "agent_system.stage_attempt_policies.analysis"
+        );
+        assert_eq!(policy["fanout"]["mode"], "parallel");
+        assert_eq!(
+            policy["attempts"][0]["policy_source_path"],
+            "agent_system.stage_attempt_policies.analysis.attempts[0]"
+        );
+        assert_eq!(policy["attempts"][0]["enabled"], true);
+        assert_eq!(
+            policy["attempts"][0]["selected_carrier_id"],
+            "analysis_internal_low"
+        );
+        assert_eq!(
+            policy["attempts"][0]["selected_model_profile_id"],
+            "codex_low_analysis"
+        );
+        assert_eq!(
+            policy["attempts"][0]["isolation"],
+            "external_readonly_complete"
+        );
+        assert_eq!(policy["attempts"][1]["enabled"], true);
+        assert_eq!(
+            policy["attempts"][1]["selected_carrier_id"],
+            "vibe_medium_analysis"
+        );
+        assert_eq!(
+            policy["attempts"][1]["selected_model_profile_id"],
+            "mistral_medium_analysis"
+        );
+        assert_eq!(policy["consolidator"]["enabled"], true);
+        assert_eq!(
+            policy["consolidator"]["selected_carrier_id"],
+            "coach_consolidator_high"
+        );
+        assert_eq!(
+            policy["consolidator"]["selected_model_profile_id"],
+            "codex_high_consolidator"
+        );
+        assert_ne!(
+            policy["consolidator"]["selected_model_profile_id"],
+            policy["attempts"][0]["selected_model_profile_id"]
+        );
+    }
+
+    #[test]
+    fn inadmissible_stage_attempt_fails_closed() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "readonly_implementer",
+                "tier": "readonly",
+                "rate": 0,
+                "normalized_cost_units": 0,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "readonly_implementation",
+                "model_profiles": {
+                    "readonly_implementation": {
+                        "profile_id": "readonly_implementation",
+                        "model_ref": "readonly/implementation",
+                        "provider": "test",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 0,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "coach_consolidator",
+                "tier": "coach",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "coach_review",
+                "model_profiles": {
+                    "coach_review": {
+                        "profile_id": "coach_review",
+                        "model_ref": "coach/review",
+                        "provider": "test",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "stage_attempt_policies": {
+                "implementation": {
+                    "fanout": { "mode": "single", "max_attempts": 1 },
+                    "attempts": [
+                        {
+                            "attempt_id": "implementation-readonly",
+                            "carrier_id": "readonly_implementer",
+                            "model_profile_id": "readonly_implementation",
+                            "conversation_role": "worker",
+                            "runtime_role": "worker",
+                            "task_class": "implementation",
+                            "isolation": "external_patch_proposal"
+                        }
+                    ],
+                    "consolidator": {
+                        "attempt_id": "implementation-consolidator",
+                        "carrier_id": "coach_consolidator",
+                        "model_profile_id": "coach_review",
+                        "conversation_role": "coach",
+                        "runtime_role": "coach",
+                        "task_class": "review",
+                        "isolation": "root_validate_only"
+                    }
+                }
+            }
+        });
+
+        let policy = build_stage_attempt_policy_from_config(&compiled_bundle, "implementation");
+
+        assert_eq!(policy["status"], "blocked");
+        assert!(
+            policy["blocker_codes"]
+                .as_array()
+                .expect("blocker codes should render")
+                .iter()
+                .any(|reason| {
+                    reason.as_str() == Some("attempt:write_scope_inadmissible_for_task_class")
+                }),
+            "policy={policy:#}"
+        );
+        assert_eq!(policy["attempts"][0]["enabled"], false);
+        assert_eq!(
+            policy["attempts"][0]["reason"],
+            "no_carrier_satisfies_runtime_role_or_task_class"
+        );
+        assert!(policy["attempts"][0]["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|candidate| {
+                candidate["carrier_id"] == "readonly_implementer"
+                    && candidate["reason"] == "write_scope_inadmissible_for_task_class"
+            }));
+        assert_eq!(
+            policy["attempts"][0]["requested_carrier_id"],
+            "readonly_implementer"
+        );
+        assert_eq!(policy["consolidator"]["enabled"], true);
+        assert_eq!(
+            policy["consolidator"]["selected_model_profile_id"],
+            "coach_review"
+        );
     }
 
     #[test]
@@ -3278,6 +3938,490 @@ mod tests {
         assert_eq!(
             assignment["selected_external_backend_readiness"]["write_scope_guard"]["status"],
             "active"
+        );
+    }
+
+    #[test]
+    fn service_executor_backend_is_selected_only_through_configured_readiness_and_guard() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "internal_subagents",
+                "tier": "senior",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "codex_gpt54_low_write",
+                "model_profiles": {
+                    "codex_gpt54_low_write": {
+                        "profile_id": "codex_gpt54_low_write",
+                        "model_ref": "gpt-5.5",
+                        "provider": "openai",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "vida_coder",
+                "tier": "service_write_guarded",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "medium",
+                "default_model_profile": "vida_coder_medium_write",
+                "backend_class": "service_executor",
+                "subagent_backend_class": "service_executor",
+                "dispatch": { "command": "sh", "mode": "service" },
+                "readiness": {
+                    "adapter": { "mode": "command_found", "command": "sh" },
+                    "provider": { "mode": "command_found", "command": "sh" },
+                    "write_scope_guard": {
+                        "mode": "adapter_feature_required",
+                        "required_for_write_profiles": true,
+                        "fail_closed_until_available": true
+                    }
+                },
+                "model_profiles": {
+                    "vida_coder_medium_write": {
+                        "profile_id": "vida_coder_medium_write",
+                        "model_ref": "vida-coder/medium",
+                        "provider": "vida-coder",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "medium",
+                        "quality_tier": "high",
+                        "write_scope": "guard_required_packet_owned_paths",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        let service_backend_entry = compiled_bundle["carrier_runtime"]["roles"][1].clone();
+        compiled_bundle.as_object_mut().unwrap().insert(
+            "agent_system".to_string(),
+            serde_json::json!({"subagents": {"vida_coder": service_backend_entry}}),
+        );
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "vida_coder");
+        assert_eq!(assignment["selected_backend_id"], "vida_coder");
+        assert_eq!(
+            assignment["selected_model_profile_id"],
+            "vida_coder_medium_write"
+        );
+        assert_eq!(
+            assignment["selected_configured_backend_readiness"]["backend_class"],
+            "service_executor"
+        );
+        assert_eq!(
+            assignment["selected_configured_backend_readiness"]["raw_provider_dispatch_forbidden"],
+            true
+        );
+        assert_eq!(
+            assignment["selected_configured_backend_readiness"]["write_scope_guard"]["status"],
+            "active"
+        );
+        assert_eq!(
+            assignment["selected_external_backend_readiness"],
+            assignment["selected_configured_backend_readiness"]
+        );
+    }
+
+    #[test]
+    fn service_executor_backend_without_guard_fails_closed_for_implementation() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "internal_subagents",
+                "tier": "senior",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "codex_gpt54_low_write",
+                "model_profiles": {
+                    "codex_gpt54_low_write": {
+                        "profile_id": "codex_gpt54_low_write",
+                        "model_ref": "gpt-5.5",
+                        "provider": "openai",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "vida_coder",
+                "tier": "service_write_guarded",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "medium",
+                "default_model_profile": "vida_coder_medium_write",
+                "backend_class": "service_executor",
+                "subagent_backend_class": "service_executor",
+                "dispatch": { "command": "sh", "mode": "service" },
+                "readiness": {
+                    "adapter": {
+                        "mode": "command_found",
+                        "command": "vida-definitely-missing-service-executor-guard-command"
+                    },
+                    "provider": { "mode": "command_found", "command": "sh" },
+                    "write_scope_guard": {
+                        "mode": "adapter_feature_required",
+                        "required_for_write_profiles": true,
+                        "fail_closed_until_available": true,
+                        "status": "blocked"
+                    }
+                },
+                "model_profiles": {
+                    "vida_coder_medium_write": {
+                        "profile_id": "vida_coder_medium_write",
+                        "model_ref": "vida-coder/medium",
+                        "provider": "vida-coder",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "medium",
+                        "quality_tier": "high",
+                        "write_scope": "guard_required_packet_owned_paths",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        let service_backend_entry = compiled_bundle["carrier_runtime"]["roles"][1].clone();
+        compiled_bundle.as_object_mut().unwrap().insert(
+            "agent_system".to_string(),
+            serde_json::json!({"subagents": {"vida_coder": service_backend_entry}}),
+        );
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "internal_subagents");
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "vida_coder"
+                    && row["configured_backend_readiness"]["backend_class"] == "service_executor"
+                    && row["configured_backend_readiness"]["raw_provider_dispatch_forbidden"]
+                        == true
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("service_executor_guard_not_ready"))
+            }));
+    }
+
+    #[test]
+    fn unconfigured_service_executor_backend_fails_closed_for_implementation() {
+        let compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "internal_subagents",
+                "tier": "senior",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "codex_gpt54_low_write",
+                "model_profiles": {
+                    "codex_gpt54_low_write": {
+                        "profile_id": "codex_gpt54_low_write",
+                        "model_ref": "gpt-5.5",
+                        "provider": "openai",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "vida_coder",
+                "tier": "service_write_guarded",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "medium",
+                "default_model_profile": "vida_coder_medium_write",
+                "backend_class": "service_executor",
+                "subagent_backend_class": "service_executor",
+                "model_profiles": {
+                    "vida_coder_medium_write": {
+                        "profile_id": "vida_coder_medium_write",
+                        "model_ref": "vida-coder/medium",
+                        "provider": "vida-coder",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "medium",
+                        "quality_tier": "high",
+                        "write_scope": "guard_required_packet_owned_paths",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "internal_subagents");
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "vida_coder"
+                    && row["configured_backend_readiness"].is_null()
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("service_executor_guard_not_ready"))
+            }));
+    }
+
+    #[test]
+    fn unguarded_service_executor_write_scope_still_requires_service_guard() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "internal_subagents",
+                "tier": "senior",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "codex_gpt54_low_write",
+                "model_profiles": {
+                    "codex_gpt54_low_write": {
+                        "profile_id": "codex_gpt54_low_write",
+                        "model_ref": "gpt-5.5",
+                        "provider": "openai",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "vida_coder",
+                "tier": "service_write_guarded",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "medium",
+                "default_model_profile": "vida_coder_medium_write",
+                "backend_class": "service_executor",
+                "subagent_backend_class": "service_executor",
+                "dispatch": { "command": "sh", "mode": "service" },
+                "readiness": {
+                    "adapter": {
+                        "mode": "command_found",
+                        "command": "vida-definitely-missing-service-executor-guard-command"
+                    },
+                    "provider": { "mode": "command_found", "command": "sh" },
+                    "write_scope_guard": {
+                        "mode": "adapter_feature_required",
+                        "required_for_write_profiles": true,
+                        "fail_closed_until_available": true
+                    }
+                },
+                "model_profiles": {
+                    "vida_coder_medium_write": {
+                        "profile_id": "vida_coder_medium_write",
+                        "model_ref": "vida-coder/medium",
+                        "provider": "vida-coder",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "medium",
+                        "quality_tier": "high",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        let service_backend_entry = compiled_bundle["carrier_runtime"]["roles"][1].clone();
+        compiled_bundle.as_object_mut().unwrap().insert(
+            "agent_system".to_string(),
+            serde_json::json!({"subagents": {"vida_coder": service_backend_entry}}),
+        );
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "internal_subagents");
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "vida_coder"
+                    && row["configured_backend_readiness"]["backend_class"] == "service_executor"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("service_executor_guard_not_ready"))
+            }));
+    }
+
+    #[test]
+    fn legacy_external_backend_readiness_alias_preserves_external_blocked_status() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "internal_support",
+                "tier": "middle",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "internal_review",
+                "model_profiles": {
+                    "internal_review": {
+                        "profile_id": "internal_review",
+                        "model_ref": "gpt-5.5",
+                        "provider": "openai",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "read_or_review",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "vida_coder",
+                "tier": "service_review",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "vida_coder_review",
+                "backend_class": "service_executor",
+                "subagent_backend_class": "service_executor",
+                "model_profiles": {
+                    "vida_coder_review": {
+                        "profile_id": "vida_coder_review",
+                        "model_ref": "vida-coder/review",
+                        "provider": "vida-coder",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "medium",
+                        "quality_tier": "high",
+                        "write_scope": "none",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        let mut service_backend_entry = compiled_bundle["carrier_runtime"]["roles"][1].clone();
+        service_backend_entry["enabled"] = serde_json::Value::Bool(false);
+        compiled_bundle.as_object_mut().unwrap().insert(
+            "agent_system".to_string(),
+            serde_json::json!({"subagents": {"vida_coder": service_backend_entry}}),
+        );
+
+        let assignment = build_runtime_assignment_preview_from_resolved_constraints(
+            &compiled_bundle,
+            "coach",
+            "review",
+            "coach",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "internal_support");
+        let rejected = assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .find(|row| row["carrier_id"] == "vida_coder")
+            .expect("service candidate should be rejected");
+        assert_eq!(
+            rejected["configured_backend_readiness"]["status"],
+            "configured_backend_dispatch_blocked"
+        );
+        assert_eq!(
+            rejected["external_backend_readiness"]["status"],
+            "external_backend_dispatch_blocked"
         );
     }
 

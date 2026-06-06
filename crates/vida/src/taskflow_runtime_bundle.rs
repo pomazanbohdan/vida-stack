@@ -153,30 +153,33 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .map_err(|error| format!("Failed to read tasks for runtime bundle: {error}"))?;
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph_status.as_ref() {
-            Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
-                Some(task) => (
-                    task.status == "closed"
-                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
-                            status,
-                        ),
-                    false,
-                ),
-                None => (false, true),
-            },
+            Some(status) => {
+                let verdict =
+                    crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                        store, status,
+                    )
+                    .await
+                    .map_err(|error| {
+                        format!("Failed to read latest run graph task authority: {error}")
+                    })?;
+                (verdict.task_closed_stale_run(), verdict.task_missing())
+            }
             None => (false, false),
         };
-    let latest_global_run_graph_task_closed =
-        latest_global_run_graph_status
-            .as_ref()
-            .is_some_and(|status| {
-                all_tasks.iter().any(|task| {
-                    task.id == status.task_id
-                        && task.status == "closed"
-                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
-                            status,
-                        )
-                })
-            });
+    let latest_global_run_graph_task_closed = match latest_global_run_graph_status.as_ref() {
+        Some(status) => {
+            let verdict =
+                crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                    store, status,
+                )
+                .await
+                .map_err(|error| {
+                    format!("Failed to read global run graph task authority: {error}")
+                })?;
+            verdict.task_closed_stale_run()
+        }
+        None => false,
+    };
     let continuation_binding =
         crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
             explicit_continuation_binding.as_ref(),

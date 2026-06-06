@@ -4,9 +4,10 @@ use super::{
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
     orchestrator_session_surface, print_root_help, project_activator_surface, proof_surface,
-    protocol_surface, release_surface, resolve_runtime_project_root, run_taskflow_proxy,
-    runtime_web_surface, service_client_cli, state_store, status_surface, task_surface, AgentArgs,
-    AgentCommand, Cli, Command, ReleaseCommand, TaskArgs, TaskCommand,
+    protocol_surface, quality_surface, release_surface, resolve_runtime_project_root,
+    run_taskflow_proxy, runtime_web_surface, service_client_cli, session_surface, state_store,
+    status_surface, task_surface, AgentArgs, AgentCommand, Cli, Command, ReleaseCommand,
+    SessionArgs, SessionCommand, TaskArgs, TaskCommand,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -59,6 +60,8 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::OrchestratorSession(args)) => {
             orchestrator_session_surface::run_orchestrator_session(args).await
         }
+        Some(Command::Session(args)) => session_surface::run_session(args).await,
+        Some(Command::Quality(args)) => quality_surface::run_quality(args).await,
         Some(Command::Consume(args)) => {
             let mut prefixed = vec!["consume".to_string()];
             prefixed.extend(args.args);
@@ -116,6 +119,8 @@ fn command_label(command: &Option<Command>) -> String {
         Some(Command::Receipt(_)) => "vida receipt".to_string(),
         Some(Command::Docs(_)) => "vida docs".to_string(),
         Some(Command::OrchestratorSession(_)) => "vida orchestrator-session".to_string(),
+        Some(Command::Session(_)) => "vida session".to_string(),
+        Some(Command::Quality(_)) => "vida quality".to_string(),
         Some(Command::Consume(_)) => "vida consume".to_string(),
         Some(Command::Lane(_)) => "vida lane".to_string(),
         Some(Command::Approval(_)) => "vida approval".to_string(),
@@ -156,8 +161,14 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         },
         TaskCommand::Block(command) => command.state_dir.is_some(),
         TaskCommand::Verify(command) => command.state_dir.is_some(),
+        TaskCommand::Attempt(command) => match &command.command {
+            super::TaskAttemptCommand::Record(command) => command.state_dir.is_some(),
+            super::TaskAttemptCommand::Transition(command) => command.state_dir.is_some(),
+            super::TaskAttemptCommand::Summary(command) => command.state_dir.is_some(),
+        },
         TaskCommand::OwnedStatus(command) => command.state_dir.is_some(),
         TaskCommand::Close(command) => command.state_dir.is_some(),
+        TaskCommand::Reconcile(command) => command.state_dir.is_some(),
         TaskCommand::ReconcileClosedRuns(command) => command.state_dir.is_some(),
         TaskCommand::Split(command) => command.state_dir.is_some(),
         TaskCommand::SpawnBlocker(command) => command.state_dir.is_some(),
@@ -194,8 +205,39 @@ fn agent_command_needs_project_root(args: &AgentArgs) -> bool {
     match &args.command {
         AgentCommand::DispatchNext(command) => command.state_dir.is_none(),
         AgentCommand::Select(command) => command.state_dir.is_none(),
-        AgentCommand::HostBridge(_) => true,
+        AgentCommand::HostBridge(command) => command.state_dir.is_none(),
+        AgentCommand::Status(command) => command.state_dir.is_none(),
     }
+}
+
+fn diagnostics_command_explicit_state_dir(
+    args: &super::DiagnosticsArgs,
+) -> Option<&std::path::Path> {
+    match &args.command {
+        super::DiagnosticsCommand::PostCommit(command) => command.state_dir.as_deref(),
+        super::DiagnosticsCommand::EvidenceCheck(command) => command.state_dir.as_deref(),
+        super::DiagnosticsCommand::RulesCheck(command) => command.state_dir.as_deref(),
+    }
+}
+
+fn orchestrator_session_command_explicit_state_dir(
+    args: &super::OrchestratorSessionArgs,
+) -> Option<&std::path::Path> {
+    match &args.command {
+        super::OrchestratorSessionCommand::Show(command) => command.state_dir.as_deref(),
+        super::OrchestratorSessionCommand::Reclaim(command) => command.state_dir.as_deref(),
+        super::OrchestratorSessionCommand::Transfer(command) => command.state_dir.as_deref(),
+    }
+}
+
+fn session_command_has_explicit_state_dir(args: &SessionArgs) -> bool {
+    match &args.command {
+        SessionCommand::Triage(command) => command.state_dir.is_some(),
+    }
+}
+
+fn session_command_needs_project_root(args: &SessionArgs) -> bool {
+    !session_command_has_explicit_state_dir(args)
 }
 
 fn proxy_args_request_help_or_version(args: &[String]) -> bool {
@@ -220,23 +262,26 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
         Some(Command::Lane(args) | Command::Approval(args)) => {
             proxy_command_needs_project_root(&args.args)
         }
+        Some(Command::OrchestratorInit(args)) => args.state_dir.is_none(),
+        Some(Command::AgentInit(args)) => args.state_dir.is_none(),
+        Some(Command::ProjectActivator(args)) => args.state_dir.is_none(),
+        Some(Command::Memory(args)) => args.state_dir.is_none(),
+        Some(Command::Status(args)) => args.state_dir.is_none(),
+        Some(Command::Diagnostics(args)) => diagnostics_command_explicit_state_dir(args).is_none(),
+        Some(Command::OrchestratorSession(args)) => {
+            orchestrator_session_command_explicit_state_dir(args).is_none()
+        }
         Some(
-            Command::OrchestratorInit(_)
-            | Command::AgentInit(_)
-            | Command::ProjectActivator(_)
-            | Command::AgentFeedback(_)
-            | Command::Memory(_)
-            | Command::Status(_)
+            Command::AgentFeedback(_)
             | Command::Runtime(_)
-            | Command::Diagnostics(_)
             | Command::Proof(_)
             | Command::Service(_)
             | Command::Project(_)
             | Command::Wizard(_)
             | Command::Job(_)
-            | Command::Receipt(_)
-            | Command::OrchestratorSession(_),
+            | Command::Receipt(_),
         ) => true,
+        Some(Command::Session(args)) => session_command_needs_project_root(args),
         Some(Command::Doctor(args)) => args.state_dir.is_none(),
         _ => false,
     }
@@ -289,6 +334,11 @@ pub(crate) fn prepare_runtime_state_dir_for_parse(
     {
         return Ok(preserve_runtime_state_dir_env_for_project_bound_command());
     }
+    if raw_args_are_env_parse_only_state_surface(args)
+        && std::env::var_os("VIDA_STATE_DIR").is_some()
+    {
+        return Ok(preserve_runtime_state_dir_env_for_parse_only());
+    }
     if raw_args_need_project_root_state_dir(args) {
         return bind_runtime_state_dir_for_project_bound_command();
     }
@@ -301,7 +351,12 @@ pub(crate) fn prepare_runtime_state_dir_for_parse(
 fn prepare_runtime_state_dir(
     command: &Option<Command>,
 ) -> Result<Option<RuntimeStateDirGuard>, String> {
-    if let Some(state_dir) = agent_command_explicit_state_dir(command) {
+    if command_preserves_parse_only_env_state_dir(command)
+        && std::env::var_os("VIDA_STATE_DIR").is_some()
+    {
+        return Ok(preserve_runtime_state_dir_env_for_parse_only());
+    }
+    if let Some(state_dir) = command_explicit_state_dir(command) {
         return bind_runtime_state_dir_override_for_project_bound_command(state_dir);
     }
     if command_preserves_explicit_env_state_dir(command)
@@ -319,13 +374,31 @@ fn prepare_runtime_state_dir(
     bind_runtime_state_dir_for_project_bound_command()
 }
 
-fn agent_command_explicit_state_dir(command: &Option<Command>) -> Option<&std::path::Path> {
+fn command_explicit_state_dir(command: &Option<Command>) -> Option<&std::path::Path> {
     match command {
         Some(Command::Agent(AgentArgs {
             command: AgentCommand::DispatchNext(command),
         })) => command.state_dir.as_deref(),
         Some(Command::Agent(AgentArgs {
             command: AgentCommand::Select(command),
+        })) => command.state_dir.as_deref(),
+        Some(Command::Agent(AgentArgs {
+            command: AgentCommand::HostBridge(command),
+        })) => command.state_dir.as_deref(),
+        Some(Command::Agent(AgentArgs {
+            command: AgentCommand::Status(command),
+        })) => command.state_dir.as_deref(),
+        Some(Command::OrchestratorInit(command)) => command.state_dir.as_deref(),
+        Some(Command::ProjectActivator(command)) => command.state_dir.as_deref(),
+        Some(Command::Memory(command)) => command.state_dir.as_deref(),
+        Some(Command::Status(command)) => command.state_dir.as_deref(),
+        Some(Command::Doctor(command)) => command.state_dir.as_deref(),
+        Some(Command::Diagnostics(command)) => diagnostics_command_explicit_state_dir(command),
+        Some(Command::OrchestratorSession(command)) => {
+            orchestrator_session_command_explicit_state_dir(command)
+        }
+        Some(Command::Session(SessionArgs {
+            command: SessionCommand::Triage(command),
         })) => command.state_dir.as_deref(),
         _ => None,
     }
@@ -337,10 +410,22 @@ fn command_preserves_explicit_env_state_dir(command: &Option<Command>) -> bool {
         Some(Command::Status(_) | Command::Taskflow(_))
             | Some(Command::Consume(_) | Command::Recovery(_) | Command::Route(_))
             | Some(Command::Lane(_) | Command::Approval(_))
+            | Some(Command::OrchestratorInit(_))
+            | Some(Command::ProjectActivator(_) | Command::Memory(_))
+            | Some(Command::Doctor(_) | Command::Diagnostics(_))
+            | Some(Command::OrchestratorSession(_))
+            | Some(Command::Session(_))
             | Some(Command::Agent(AgentArgs {
-                command: AgentCommand::DispatchNext(_) | AgentCommand::Select(_)
+                command: AgentCommand::DispatchNext(_)
+                    | AgentCommand::Select(_)
+                    | AgentCommand::HostBridge(_)
+                    | AgentCommand::Status(_)
             }))
     )
+}
+
+fn command_preserves_parse_only_env_state_dir(command: &Option<Command>) -> bool {
+    matches!(command, Some(Command::AgentInit(_)))
 }
 
 fn bind_runtime_state_dir_for_project_bound_command() -> Result<Option<RuntimeStateDirGuard>, String>
@@ -469,13 +554,41 @@ fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
         .filter_map(|arg| arg.to_str())
         .filter(|arg| !arg.starts_with('-'));
     match positional.next() {
-        Some("agent") => matches!(positional.next(), Some("dispatch-next" | "select")),
+        Some("agent") => matches!(
+            positional.next(),
+            Some("dispatch-next" | "select" | "status" | "host-bridge")
+        ),
         Some(
-            "task" | "taskflow" | "project-activator" | "status" | "doctor" | "lane" | "approval",
+            "orchestrator-init"
+            | "task"
+            | "taskflow"
+            | "project-activator"
+            | "memory"
+            | "status"
+            | "doctor"
+            | "diagnostics"
+            | "orchestrator-session"
+            | "lane"
+            | "approval",
         ) => true,
         Some("consume" | "recovery" | "route") => true,
         _ => false,
     }
+}
+
+fn raw_args_are_env_parse_only_state_surface(args: &[OsString]) -> bool {
+    if raw_args_request_help_or_version(args) || raw_args_have_explicit_state_dir(args) {
+        return false;
+    }
+    let Some(command) = args
+        .iter()
+        .skip(1)
+        .find_map(|arg| arg.to_str())
+        .filter(|arg| !arg.starts_with('-'))
+    else {
+        return false;
+    };
+    matches!(command, "agent-init")
 }
 
 fn raw_args_are_agent_state_dir_bound_surface(args: &[OsString]) -> bool {
@@ -489,7 +602,10 @@ fn raw_args_are_agent_state_dir_bound_surface(args: &[OsString]) -> bool {
         .filter(|arg| !arg.starts_with('-'));
     matches!(
         (positional.next(), positional.next()),
-        (Some("agent"), Some("dispatch-next" | "select"))
+        (
+            Some("agent"),
+            Some("dispatch-next" | "select" | "status" | "host-bridge")
+        )
     )
 }
 
@@ -535,6 +651,23 @@ pub(crate) fn normalize_runtime_state_dir_env_for_parse() -> Option<RuntimeState
     std::env::set_var("VIDA_STATE_DIR", normalized);
     Some(RuntimeStateDirGuard {
         previous: Some(existing),
+        active: true,
+        previous_root: None,
+        root_active: false,
+        previous_cwd: None,
+        cwd_active: false,
+    })
+}
+
+fn preserve_runtime_state_dir_env_for_parse_only() -> Option<RuntimeStateDirGuard> {
+    let previous = std::env::var_os("VIDA_STATE_DIR")?;
+    if let Some(normalized) =
+        normalize_runtime_state_dir_override(&std::path::PathBuf::from(&previous))
+    {
+        std::env::set_var("VIDA_STATE_DIR", normalized);
+    }
+    Some(RuntimeStateDirGuard {
+        previous: Some(previous),
         active: true,
         previous_root: None,
         root_active: false,
@@ -916,6 +1049,124 @@ mod tests {
     }
 
     #[test]
+    fn prepare_runtime_state_dir_preserves_env_for_runtime_state_dir_surface_matrix() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let active_project =
+            TempStateHarness::new().expect("active temp harness should initialize");
+        let env_project = TempStateHarness::new().expect("env temp harness should initialize");
+        make_project_root(active_project.path());
+        make_project_root(env_project.path());
+        fs::create_dir_all(
+            active_project
+                .path()
+                .join(crate::state_store::default_state_dir()),
+        )
+        .expect("active state dir should exist");
+        let env_state_dir = env_project
+            .path()
+            .join(crate::state_store::default_state_dir());
+        fs::create_dir_all(&env_state_dir).expect("env state dir should exist");
+        let scenarios = [
+            vec![
+                "vida",
+                "agent",
+                "host-bridge",
+                "--request",
+                "request.json",
+                "--json",
+            ],
+            vec!["vida", "agent", "status", "--json"],
+            vec!["vida", "orchestrator-init", "--json"],
+            vec!["vida", "memory"],
+            vec!["vida", "diagnostics", "post-commit", "--json"],
+            vec!["vida", "orchestrator-session", "show", "--json"],
+            vec!["vida", "status", "--json"],
+            vec!["vida", "doctor", "--json"],
+        ];
+
+        for scenario in scenarios {
+            let _cwd = crate::test_cli_support::guard_current_dir(active_project.path());
+            let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &env_state_dir);
+            let raw_args = scenario
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>();
+
+            let parse_guard = prepare_runtime_state_dir_for_parse(&raw_args)
+                .unwrap_or_else(|error| panic!("{scenario:?} pre-parse failed: {error}"));
+            let cli = Cli::try_parse_from(raw_args)
+                .unwrap_or_else(|error| panic!("{scenario:?} cli parse failed: {error}"));
+            let command_guard = prepare_runtime_state_dir(&cli.command)
+                .unwrap_or_else(|error| panic!("{scenario:?} command guard failed: {error}"));
+
+            assert!(
+                parse_guard.is_some(),
+                "{scenario:?} should install a pre-parse state-dir guard"
+            );
+            assert!(
+                command_guard.is_some(),
+                "{scenario:?} should install a command state-dir guard"
+            );
+            assert_eq!(
+                std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+                Some(env_state_dir.clone()),
+                "{scenario:?} must preserve VIDA_STATE_DIR as authoritative"
+            );
+            assert_eq!(
+                std::env::var_os("VIDA_ROOT").map(std::path::PathBuf::from),
+                Some(env_project.path().to_path_buf()),
+                "{scenario:?} must bind VIDA_ROOT to the env state project"
+            );
+            assert_eq!(
+                std::env::current_dir().expect("cwd should read"),
+                env_project.path(),
+                "{scenario:?} must bind cwd to the env state project"
+            );
+        }
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_for_parse_preserves_bare_env_for_agent_init() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let active_project =
+            TempStateHarness::new().expect("active temp harness should initialize");
+        let bare_state = TempStateHarness::new().expect("bare state harness should initialize");
+        make_project_root(active_project.path());
+        fs::create_dir_all(bare_state.path()).expect("bare state dir should exist");
+        let _cwd = crate::test_cli_support::guard_current_dir(active_project.path());
+        let _root_guard = EnvVarGuard::unset("VIDA_ROOT");
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", bare_state.path());
+        let raw_args = ["vida", "agent-init", "--role", "tester", "--json"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+
+        let guard = prepare_runtime_state_dir_for_parse(&raw_args)
+            .expect("agent-init should preserve bare env state dir for parse");
+        let cli = Cli::try_parse_from(raw_args).expect("agent-init cli should parse");
+        let command_guard = prepare_runtime_state_dir(&cli.command)
+            .expect("agent-init command guard should preserve bare state dir");
+
+        assert!(guard.is_some());
+        assert!(command_guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(bare_state.path().to_path_buf())
+        );
+        assert!(std::env::var_os("VIDA_ROOT").is_none());
+        assert_eq!(
+            std::env::current_dir().expect("cwd should read"),
+            active_project.path()
+        );
+        match cli.command {
+            Some(Command::AgentInit(command)) => {
+                assert_eq!(command.state_dir, Some(bare_state.path().to_path_buf()));
+            }
+            other => panic!("expected agent-init command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn prepare_runtime_state_dir_preserves_env_for_taskflow_packet_surface() {
         let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let active_project =
@@ -1201,7 +1452,7 @@ mod tests {
         assert!(!command_needs_project_root_state_dir(&cli.command));
         let runtime_guard = prepare_runtime_state_dir(&cli.command)
             .expect("doctor runtime preparation should keep explicit env state dir");
-        assert!(runtime_guard.is_none());
+        assert!(runtime_guard.is_some());
         assert_eq!(
             std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
             Some(isolated_state_dir)

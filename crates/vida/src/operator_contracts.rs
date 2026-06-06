@@ -27,7 +27,25 @@ pub(crate) struct FinalizedRelease1OperatorTruth {
     pub(crate) operator_contracts: Value,
 }
 
+#[derive(Debug)]
+pub(crate) struct OperatorSurfaceVerdict {
+    pub(crate) status: String,
+    pub(crate) blocker_codes: Vec<String>,
+    pub(crate) next_actions: Vec<String>,
+    pub(crate) artifact_refs: Value,
+    pub(crate) shared_fields: Value,
+    pub(crate) operator_contracts: Value,
+}
+
 pub(crate) const VIDA_GATE_RESULT_SCHEMA_VERSION: &str = "vida-gate-result-v1";
+
+pub(crate) fn canonical_pass_blocked_contract_status_str(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "pass" | "ok" => Some("pass"),
+        "blocked" | "block" => Some("blocked"),
+        _ => None,
+    }
+}
 
 fn inferred_gate_status(
     blocker_codes: &[String],
@@ -246,26 +264,19 @@ pub(crate) fn render_operator_contract_envelope(
     })
 }
 
-pub(crate) fn finalize_release1_operator_truth(
+pub(crate) fn finalize_operator_surface_verdict(
+    spec: &OperatorContractSpec,
+    status: &str,
     blocker_codes: Vec<String>,
     next_actions: Vec<String>,
     artifact_refs: Value,
-) -> Result<FinalizedRelease1OperatorTruth, String> {
-    let blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
-    let next_actions =
-        canonical_next_action_entries(&serde_json::json!(next_actions)).unwrap_or(next_actions);
-    let status = if blocker_codes.is_empty() {
-        RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
-    } else {
-        RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status
-    };
-    let operator_contracts = render_operator_contract_envelope(
-        &RELEASE1_OPERATOR_CONTRACT_SPEC,
-        status,
-        blocker_codes.clone(),
-        next_actions.clone(),
-        artifact_refs.clone(),
-    );
+) -> OperatorSurfaceVerdict {
+    let operator_contracts =
+        render_operator_contract_envelope(spec, status, blocker_codes, next_actions, artifact_refs);
+    let status = operator_contracts["status"]
+        .as_str()
+        .unwrap_or(spec.blocked_status)
+        .to_string();
     let blocker_codes = operator_contracts["blocker_codes"]
         .as_array()
         .map(|rows| {
@@ -282,13 +293,7 @@ pub(crate) fn finalize_release1_operator_truth(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    if let Some(error) = release1_operator_contracts_consistency_error(
-        operator_contracts["status"].as_str().unwrap_or(""),
-        &blocker_codes,
-        &next_actions,
-    ) {
-        return Err(error);
-    }
+    let artifact_refs = operator_contracts["artifact_refs"].clone();
     let shared_fields = serde_json::json!({
         "trace_id": operator_contracts["trace_id"].clone(),
         "workflow_class": operator_contracts["workflow_class"].clone(),
@@ -298,14 +303,129 @@ pub(crate) fn finalize_release1_operator_truth(
         "next_actions": operator_contracts["next_actions"].clone(),
         "artifact_refs": operator_contracts["artifact_refs"].clone(),
     });
-    Ok(FinalizedRelease1OperatorTruth {
+    OperatorSurfaceVerdict {
         status,
         blocker_codes,
         next_actions,
         artifact_refs,
         shared_fields,
         operator_contracts,
+    }
+}
+
+pub(crate) fn finalize_release1_operator_surface_verdict_with_status(
+    status: &str,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: Value,
+) -> Result<OperatorSurfaceVerdict, String> {
+    let blocker_codes = blocker_codes
+        .into_iter()
+        .map(|code| code.trim().to_ascii_lowercase())
+        .filter(|code| !code.is_empty())
+        .collect::<Vec<_>>();
+    let blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let next_actions =
+        canonical_next_action_entries(&serde_json::json!(next_actions)).unwrap_or_default();
+    let verdict = finalize_operator_surface_verdict(
+        &RELEASE1_OPERATOR_CONTRACT_SPEC,
+        status,
+        blocker_codes,
+        next_actions,
+        artifact_refs,
+    );
+    if let Some(error) = release1_operator_contracts_consistency_error(
+        verdict.operator_contracts["status"].as_str().unwrap_or(""),
+        &verdict.blocker_codes,
+        &verdict.next_actions,
+    ) {
+        return Err(error);
+    }
+    Ok(verdict)
+}
+
+pub(crate) fn finalize_release1_operator_truth(
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: Value,
+) -> Result<FinalizedRelease1OperatorTruth, String> {
+    let blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let next_actions =
+        canonical_next_action_entries(&serde_json::json!(next_actions)).unwrap_or(next_actions);
+    let status = if blocker_codes.is_empty() {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
+    } else {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status
+    };
+    let verdict = finalize_release1_operator_surface_verdict_with_status(
+        status,
+        blocker_codes,
+        next_actions,
+        artifact_refs,
+    )?;
+    Ok(FinalizedRelease1OperatorTruth {
+        status,
+        blocker_codes: verdict.blocker_codes,
+        next_actions: verdict.next_actions,
+        artifact_refs: verdict.artifact_refs,
+        shared_fields: verdict.shared_fields,
+        operator_contracts: verdict.operator_contracts,
     })
+}
+
+pub(crate) fn build_release1_operator_output_payload(
+    surface: &str,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: Value,
+    extra_fields: Value,
+) -> Result<Value, String> {
+    let finalized = finalize_release1_operator_truth(blocker_codes, next_actions, artifact_refs)?;
+    let mut payload = serde_json::json!({
+        "surface": surface,
+        "status": finalized.status,
+        "trace_id": finalized.operator_contracts["trace_id"].clone(),
+        "workflow_class": finalized.operator_contracts["workflow_class"].clone(),
+        "risk_tier": finalized.operator_contracts["risk_tier"].clone(),
+        "blocker_codes": finalized.blocker_codes,
+        "next_actions": finalized.next_actions,
+        "artifact_refs": finalized.artifact_refs,
+        "shared_fields": finalized.shared_fields,
+        "operator_contracts": finalized.operator_contracts,
+    });
+    for key in ["trace_id", "workflow_class", "risk_tier"] {
+        payload["shared_fields"][key] = payload["operator_contracts"][key].clone();
+    }
+    let extra_object = extra_fields
+        .as_object()
+        .ok_or_else(|| "release-1 operator output extra_fields must be an object".to_string())?
+        .clone();
+    payload
+        .as_object_mut()
+        .ok_or_else(|| "release-1 operator output payload should be an object".to_string())?
+        .extend(extra_object);
+    if let Some(error) = shared_operator_output_contract_parity_error(&payload) {
+        return Err(error.to_string());
+    }
+    Ok(payload)
+}
+
+pub(crate) fn replace_release1_operator_output_artifact_refs(
+    payload: &mut Value,
+    artifact_refs: Value,
+) -> Result<(), String> {
+    {
+        let object = payload
+            .as_object_mut()
+            .ok_or_else(|| "release-1 operator output payload should be an object".to_string())?;
+        object.insert("artifact_refs".to_string(), artifact_refs.clone());
+    }
+    payload["shared_fields"]["artifact_refs"] = artifact_refs.clone();
+    payload["operator_contracts"]["artifact_refs"] = artifact_refs;
+    if let Some(error) = shared_operator_output_contract_parity_error(payload) {
+        return Err(error.to_string());
+    }
+    Ok(())
 }
 
 pub(crate) fn canonical_operator_contract_status_str<'a>(
@@ -665,15 +785,18 @@ fn has_raw_canonical_next_action_entries(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_blocker_code_entries, canonical_next_action_entries,
-        canonical_operator_contract_status, canonical_release1_blocker_code_entries,
-        canonical_release1_operator_contract_status, finalize_release1_operator_truth,
+        build_release1_operator_output_payload, canonical_blocker_code_entries,
+        canonical_next_action_entries, canonical_operator_contract_status,
+        canonical_pass_blocked_contract_status_str, canonical_release1_blocker_code_entries,
+        canonical_release1_operator_contract_status, finalize_operator_surface_verdict,
+        finalize_release1_operator_surface_verdict_with_status, finalize_release1_operator_truth,
         normalize_blocker_codes, operator_contract_status_for_blockers,
         operator_contracts_consistency_error, release1_operator_contracts_consistency_error,
         render_operator_contract_envelope, render_vida_gate_result,
         render_vida_gate_result_from_operator_contracts, render_vida_gate_result_with_status,
-        shared_operator_output_contract_parity_error, RELEASE1_OPERATOR_CONTRACT_SPEC,
-        VIDA_GATE_RESULT_SCHEMA_VERSION,
+        replace_release1_operator_output_artifact_refs,
+        shared_operator_output_contract_parity_error, OperatorContractSpec,
+        RELEASE1_OPERATOR_CONTRACT_SPEC, VIDA_GATE_RESULT_SCHEMA_VERSION,
     };
     use serde_json::json;
 
@@ -698,6 +821,155 @@ mod tests {
         assert!(
             canonical_operator_contract_status(&RELEASE1_OPERATOR_CONTRACT_SPEC, &value).is_none()
         );
+    }
+
+    #[test]
+    fn release1_operator_output_payload_builds_canonical_mirrors_once() {
+        let payload = build_release1_operator_output_payload(
+            "vida task ready",
+            vec![
+                " closure_admission_block ".to_string(),
+                "dispatch_packet_contract_invalid".to_string(),
+            ],
+            vec![" Inspect task ".to_string()],
+            json!({
+                "surface": "vida task ready",
+                "trace_id": "trace-1",
+            }),
+            json!({
+                "task_count": 2,
+            }),
+        )
+        .expect("release-1 operator payload should build");
+
+        assert_eq!(payload["surface"], "vida task ready");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["task_count"], 2);
+        assert_eq!(payload["trace_id"], serde_json::Value::Null);
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task ready");
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"]["surface"],
+            "vida task ready"
+        );
+        assert_eq!(
+            payload["blocker_codes"],
+            json!([
+                "closure_admission_block",
+                "dispatch_packet_contract_invalid"
+            ])
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn generic_operator_surface_verdict_builds_shared_and_contract_mirrors() {
+        let spec = OperatorContractSpec {
+            contract_id: "custom-operator-contract",
+            schema_version: "1",
+            pass_status: "pass",
+            blocked_status: "blocked",
+            canonicalize_status: canonical_pass_blocked_contract_status_str,
+            status_error_label: "canonical pass/blocked",
+        };
+        let verdict = finalize_operator_surface_verdict(
+            &spec,
+            "block",
+            vec!["custom_blocker".to_string()],
+            vec!["repair custom surface".to_string()],
+            json!({"surface": "vida custom"}),
+        );
+
+        assert_eq!(verdict.status, "blocked");
+        assert_eq!(verdict.blocker_codes, vec!["custom_blocker".to_string()]);
+        assert_eq!(
+            verdict.next_actions,
+            vec!["repair custom surface".to_string()]
+        );
+        assert_eq!(verdict.artifact_refs["surface"], "vida custom");
+        assert_eq!(verdict.shared_fields["status"], "blocked");
+        assert_eq!(
+            verdict.shared_fields["blocker_codes"],
+            verdict.operator_contracts["blocker_codes"]
+        );
+        assert_eq!(
+            verdict.shared_fields["next_actions"],
+            verdict.operator_contracts["next_actions"]
+        );
+        assert_eq!(
+            verdict.shared_fields["artifact_refs"],
+            verdict.operator_contracts["artifact_refs"]
+        );
+        assert_eq!(
+            verdict.operator_contracts["contract_id"],
+            "custom-operator-contract"
+        );
+    }
+
+    #[test]
+    fn release1_operator_surface_verdict_with_status_canonicalizes_and_validates() {
+        let verdict = finalize_release1_operator_surface_verdict_with_status(
+            "blocked",
+            vec![" Migration_Required ".to_string()],
+            vec![" Run migration ".to_string()],
+            json!({"surface": "vida status"}),
+        )
+        .expect("release-1 verdict should build");
+
+        assert_eq!(verdict.status, "blocked");
+        assert_eq!(
+            verdict.blocker_codes,
+            vec!["migration_required".to_string()]
+        );
+        assert_eq!(verdict.next_actions, vec!["run migration".to_string()]);
+        assert_eq!(
+            verdict.shared_fields["artifact_refs"],
+            verdict.operator_contracts["artifact_refs"]
+        );
+
+        let error = finalize_release1_operator_surface_verdict_with_status(
+            "pass",
+            Vec::new(),
+            vec!["should not be present".to_string()],
+            json!({}),
+        )
+        .expect_err("pass verdicts must not carry next actions");
+        assert!(error.contains("status=pass must not include next_actions"));
+    }
+
+    #[test]
+    fn release1_operator_output_payload_replaces_artifact_refs_in_all_mirrors() {
+        let mut payload = build_release1_operator_output_payload(
+            "vida task ready",
+            Vec::new(),
+            Vec::new(),
+            json!({
+                "surface": "vida task ready",
+            }),
+            json!({}),
+        )
+        .expect("release-1 operator payload should build");
+
+        replace_release1_operator_output_artifact_refs(
+            &mut payload,
+            json!({
+                "surface": "vida task ready",
+                "snapshot": "updated",
+            }),
+        )
+        .expect("artifact refs should replace in all mirrors");
+
+        assert_eq!(payload["artifact_refs"]["snapshot"], "updated");
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"]["snapshot"],
+            "updated"
+        );
+        assert_eq!(
+            payload["operator_contracts"]["artifact_refs"]["snapshot"],
+            "updated"
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
     #[test]

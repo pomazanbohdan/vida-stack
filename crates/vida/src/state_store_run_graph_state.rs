@@ -119,6 +119,18 @@ pub struct RunGraphDispatchReceipt {
     pub recorded_at: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue, PartialEq, Eq)]
+pub struct RunGraphDispatchTaskIdentity {
+    pub run_id: String,
+    pub feature_epic_id: Option<String>,
+    pub spec_task_id: Option<String>,
+    pub work_pool_task_id: Option<String>,
+    #[serde(default)]
+    pub dev_task_id: Option<String>,
+    pub source: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
 pub struct RunGraphContinuationBinding {
     pub run_id: String,

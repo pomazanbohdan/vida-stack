@@ -177,24 +177,21 @@ pub(crate) fn build_status_operator_contracts(
         .iter()
         .any(|code| code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues))
     {
-        operator_next_actions.push(
-            "Run `vida taskflow protocol-binding check --json` and clear blockers.".to_string(),
-        );
+        operator_next_actions
+            .push(crate::status_surface_signals::protocol_binding_check_next_action());
     }
     if operator_blocker_codes.iter().any(|code| {
         code == blocker_code_str(BlockerCode::MissingRetrievalTrustSourceOperatorEvidence)
     }) {
         operator_next_actions.push(
-            crate::status_surface_signals::MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION
-                .to_string(),
+            crate::status_surface_signals::missing_retrieval_trust_source_operator_evidence_next_action(),
         );
     }
     if operator_blocker_codes.iter().any(|code| {
         code == blocker_code_str(BlockerCode::MissingRetrievalTrustSignalOperatorEvidence)
     }) {
         operator_next_actions.push(
-            crate::status_surface_signals::MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION
-                .to_string(),
+            crate::status_surface_signals::missing_retrieval_trust_signal_operator_evidence_next_action(),
         );
     }
     if operator_blocker_codes
@@ -202,8 +199,7 @@ pub(crate) fn build_status_operator_contracts(
         .any(|code| code == blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence))
     {
         operator_next_actions.push(
-            crate::status_surface_signals::MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION
-                .to_string(),
+            crate::status_surface_signals::missing_retrieval_trust_operator_evidence_next_action(),
         );
     }
     if operator_blocker_codes
@@ -212,10 +208,8 @@ pub(crate) fn build_status_operator_contracts(
     {
         if let Some(truth) = inputs.activation_truth {
             if truth.next_steps.is_empty() {
-                operator_next_actions.push(
-                    "Complete project activation via `vida project-activator --json` before normal work."
-                        .to_string(),
-                );
+                operator_next_actions
+                    .push(crate::status_surface_signals::project_activation_next_action());
             } else {
                 operator_next_actions.extend(truth.next_steps.iter().cloned());
             }
@@ -225,17 +219,14 @@ pub(crate) fn build_status_operator_contracts(
         .iter()
         .any(|code| code == blocker_code_str(BlockerCode::ProjectActivationUnknown))
     {
-        operator_next_actions.push(
-            "Resolve project root detection and run `vida project-activator --json` to surface canonical activation state."
-                .to_string(),
-        );
+        operator_next_actions
+            .push(crate::status_surface_signals::project_activation_unknown_next_action());
     }
     if operator_blocker_codes.iter().any(|code| {
         code == blocker_code_str(BlockerCode::MissingRunGraphDispatchReceiptOperatorEvidence)
     }) {
         operator_next_actions.push(
-            "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
-                .to_string(),
+            crate::status_surface_signals::missing_run_graph_dispatch_receipt_operator_evidence_next_action(),
         );
     }
     if operator_blocker_codes
@@ -276,8 +267,7 @@ pub(crate) fn build_status_operator_contracts(
         .any(|code| code == blocker_code_str(BlockerCode::ClosedTaskActiveRunProjectionMismatch))
     {
         operator_next_actions.push(
-            "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work."
-                .to_string(),
+            crate::status_surface_signals::closed_task_active_run_projection_mismatch_next_action(),
         );
     }
     if operator_blocker_codes
@@ -300,10 +290,8 @@ pub(crate) fn build_status_operator_contracts(
         .iter()
         .any(|code| code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard))
     {
-        operator_next_actions.push(
-            "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard."
-                .to_string(),
-        );
+        operator_next_actions
+            .push(crate::status_surface_signals::missing_root_session_write_guard_next_action());
     }
     if operator_blocker_codes
         .iter()
@@ -627,7 +615,8 @@ mod tests {
             .expect("next_actions should be an array");
         assert!(next_actions.iter().any(|value| {
             value.as_str().is_some_and(|text| {
-                text.contains("vida task reconcile-closed-runs --limit 25 --json")
+                text.contains("vida task reconcile-closed-runs --limit 25")
+                    && !text.contains("--json")
                     && text
                         .contains("closed tasks must not remain projected as active runtime work")
             })

@@ -148,6 +148,10 @@ impl StateStore {
         ))
     }
 
+    fn strict_read_only_open_timeout(timeout: std::time::Duration) -> std::time::Duration {
+        timeout.max(std::time::Duration::from_millis(1))
+    }
+
     fn reclaim_recoverable_authoritative_datastore_lock_marker_with_liveness(
         root: &Path,
         process_liveness: impl Fn(u32) -> ProcessLiveness,
@@ -422,6 +426,46 @@ impl StateStore {
         timeout: std::time::Duration,
     ) -> Result<Self, StateStoreError> {
         let timeout = Self::effective_read_only_open_timeout(timeout);
+        Self::open_existing_read_only_with_resolved_timeout(root, timeout).await
+    }
+
+    pub async fn open_existing_read_only_with_strict_timeout(
+        root: PathBuf,
+        timeout: std::time::Duration,
+    ) -> Result<Self, StateStoreError> {
+        let timeout = Self::strict_read_only_open_timeout(timeout);
+        Self::open_existing_read_only_with_resolved_timeout(root, timeout).await
+    }
+
+    pub async fn open_existing_structural_read_only_with_timeout(
+        root: PathBuf,
+        timeout: std::time::Duration,
+    ) -> Result<Self, StateStoreError> {
+        if !root.exists() {
+            return Err(StateStoreError::MissingStateDir(root));
+        }
+        let timeout = Self::strict_read_only_open_timeout(timeout);
+        match tokio::time::timeout(timeout, async {
+            let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
+            Self::open_existing_structural_read_only_once(root.clone()).await
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker_after_timeout(&root)?;
+                Err(StateStoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "timed out while opening structural read-only state; retry later or run a full diagnostic surface for recovery",
+                )))
+            }
+        }
+    }
+
+    async fn open_existing_read_only_with_resolved_timeout(
+        root: PathBuf,
+        timeout: std::time::Duration,
+    ) -> Result<Self, StateStoreError> {
         match tokio::time::timeout(timeout, Self::open_existing_read_only(root.clone())).await {
             Ok(result) => result,
             Err(_) => {
@@ -468,6 +512,14 @@ impl StateStore {
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         db.query(state_schema_document()).await?;
+        Ok(Self { db, root })
+    }
+
+    async fn open_existing_structural_read_only_once(
+        root: PathBuf,
+    ) -> Result<Self, StateStoreError> {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
+        db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         Ok(Self { db, root })
     }
 
@@ -637,6 +689,18 @@ mod tests {
         assert_eq!(
             StateStore::effective_read_only_open_timeout(std::time::Duration::from_secs(12)),
             std::time::Duration::from_secs(12)
+        );
+    }
+
+    #[test]
+    fn strict_read_only_timeout_preserves_operator_latency_budget() {
+        assert_eq!(
+            StateStore::strict_read_only_open_timeout(std::time::Duration::from_secs(2)),
+            std::time::Duration::from_secs(2)
+        );
+        assert_eq!(
+            StateStore::strict_read_only_open_timeout(std::time::Duration::ZERO),
+            std::time::Duration::from_millis(1)
         );
     }
 

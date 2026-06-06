@@ -106,51 +106,30 @@ pub(crate) fn degraded_read_lock_payload(
     state_dir: &std::path::Path,
     error: &str,
 ) -> serde_json::Value {
-    let blocker_codes = vec!["state_store_read_lock_contention"];
-    let next_actions = vec![
-        "Retry the read surface after concurrent VIDA state readers finish; this degraded response avoided opening the locked datastore.",
-    ];
-    serde_json::json!({
-        "surface": surface,
-        "status": "blocked",
-        "degraded": true,
-        "state_access": {
+    let artifact_refs = serde_json::json!({
+        "state_dir": state_dir.display().to_string(),
+        "read_fallback": "lock_contention_degraded_response",
+    });
+    crate::operator_contracts::build_release1_operator_output_payload(
+        surface,
+        vec!["state_store_read_lock_contention".to_string()],
+        vec![
+            "Retry the read surface after concurrent VIDA state readers finish; this degraded response avoided opening the locked datastore."
+                .to_string(),
+        ],
+        artifact_refs,
+        serde_json::json!({
+            "degraded": true,
+            "state_access": {
             "mode": "degraded_lock_contention",
             "degraded": true,
             "state_dir": state_dir.display().to_string(),
             "detail": "authoritative datastore was locked by another process during a read-only surface",
             "error": error,
-        },
-        "blocker_codes": blocker_codes,
-        "next_actions": next_actions,
-        "artifact_refs": {
-            "state_dir": state_dir.display().to_string(),
-            "read_fallback": "lock_contention_degraded_response",
-        },
-        "shared_fields": {
-            "status": "blocked",
-            "blocker_codes": blocker_codes,
-            "next_actions": next_actions,
-            "artifact_refs": {
-                "state_dir": state_dir.display().to_string(),
-                "read_fallback": "lock_contention_degraded_response",
             },
-        },
-        "operator_contracts": {
-            "contract_id": "release-1-operator-contracts",
-            "schema_version": "release-1-v1",
-            "status": "blocked",
-            "blocker_codes": blocker_codes,
-            "next_actions": next_actions,
-            "artifact_refs": {
-                "state_dir": state_dir.display().to_string(),
-                "read_fallback": "lock_contention_degraded_response",
-            },
-            "risk_tier": null,
-            "trace_id": null,
-            "workflow_class": null,
-        },
-    })
+        }),
+    )
+    .expect("degraded read-lock payload should preserve release-1 operator contract")
 }
 
 pub(crate) fn emit_degraded_read_lock_surface(
@@ -164,12 +143,39 @@ pub(crate) fn emit_degraded_read_lock_surface(
     if as_json {
         crate::print_json_pretty(&payload);
     } else {
-        crate::print_surface_header(render, surface);
-        crate::print_surface_line(render, "status", "blocked");
-        crate::print_surface_line(render, "state access", "degraded_lock_contention");
-        crate::print_surface_line(render, "state dir", &state_dir.display().to_string());
+        if matches!(render, crate::RenderMode::Plain) {
+            println!("{}", degraded_read_lock_toon_text(surface, &payload));
+        } else {
+            crate::print_surface_header(render, surface);
+            crate::print_surface_line(render, "status", "blocked");
+            crate::print_surface_line(render, "state access", "degraded_lock_contention");
+            crate::print_surface_line(render, "state dir", &state_dir.display().to_string());
+        }
     }
     ExitCode::from(1)
+}
+
+pub(crate) fn degraded_read_lock_toon_text(surface: &str, payload: &serde_json::Value) -> String {
+    crate::operator_toon_report::render(
+        surface,
+        vec![
+            crate::operator_toon_report::OperatorToonField::text("status", "blocked"),
+            crate::operator_toon_report::OperatorToonField::text(
+                "state_access",
+                "degraded_lock_contention",
+            ),
+            crate::operator_toon_report::OperatorToonField::text(
+                "state_dir",
+                payload["state_access"]["state_dir"]
+                    .as_str()
+                    .unwrap_or_default(),
+            ),
+            crate::operator_toon_report::OperatorToonField::value(
+                "blocker_codes",
+                payload["blocker_codes"].clone(),
+            ),
+        ],
+    )
 }
 
 pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
@@ -178,9 +184,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         .unwrap_or_else(state_store::default_state_dir);
     let render = args.render;
     let as_json = args.json;
-    let summary_only = args.summary;
+    let view = args.view.trim();
+    let summary_only = args.summary || matches!(view, "compact" | "summary");
+    let field_selection = args.fields.as_deref();
+    let selected_output = field_selection.is_some();
 
-    if as_json {
+    if as_json && !selected_output {
         if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
         {
             if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
@@ -573,37 +582,34 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
                     match latest_run_graph_status.as_ref() {
                         Some(status) => {
-                            match all_tasks.iter().find(|task| task.id == status.task_id) {
-                                Some(task) => (
-                                    task.status == "closed"
-                                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(status),
-                                    false,
-                                ),
-                                None => (
-                                    false,
-                                    !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
-                                        status,
-                                    ),
-                                ),
+                            match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
+                                Ok(verdict) => (verdict.task_closed_stale_run(), verdict.task_missing()),
+                                Err(error) => {
+                                    eprintln!("Failed to read latest run graph task authority: {error}");
+                                    return ExitCode::from(1);
+                                }
                             }
                         }
                         None => (false, false),
                     };
                 let latest_global_run_graph_task_closed =
-                    latest_global_run_graph_status.as_ref().is_some_and(|status| {
-                        all_tasks.iter().any(|task| {
-                            task.id == status.task_id
-                                && task.status == "closed"
-                                && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
-                                    status,
-                                )
-                        })
-                    });
+                    match latest_global_run_graph_status.as_ref() {
+                        Some(status) => {
+                            match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
+                                Ok(verdict) => verdict.task_closed_stale_run(),
+                                Err(error) => {
+                                    eprintln!("Failed to read global run graph task authority: {error}");
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        }
+                        None => false,
+                    };
                 let latest_run_graph_terminal_closure_without_truth = match latest_run_graph_status
                     .as_ref()
                 {
                     Some(status)
-                        if crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                        if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                             status,
                         ) =>
                     {
@@ -908,7 +914,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             StatusRunGraphArtifactSource::DispatchPacket,
                         ),
                     ]);
-                if as_json {
+                if as_json || selected_output {
                     let operator_session_projection =
                         match build_operator_session_projection_for_status(&store).await {
                             Ok(value) => value,
@@ -1066,16 +1072,29 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     if !summary_only {
                         compact_status_projection_for_fast_operator_render(&mut summary_json);
                     }
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&summary_json)
-                            .expect("status summary should render as json")
+                    let rendered_json = crate::operator_toon_report::select_fields(
+                        summary_json.clone(),
+                        field_selection,
                     );
-                    crate::operator_projection_cache::write_json_projection(
-                        store.root(),
-                        status_json_projection_name(summary_only),
-                        &summary_json,
-                    );
+                    if as_json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&rendered_json)
+                                .expect("status summary should render as json")
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            crate::operator_toon_report::render_value("vida status", rendered_json)
+                        );
+                    }
+                    if !selected_output {
+                        crate::operator_projection_cache::write_json_projection(
+                            store.root(),
+                            status_json_projection_name(summary_only),
+                            &summary_json,
+                        );
+                    }
                     return ExitCode::SUCCESS;
                 }
 
@@ -1336,7 +1355,7 @@ async fn cached_status_projection_current_runtime_admissible(
     !all_tasks.iter().any(|task| {
         task.id == latest_run_graph_status.task_id
             && task.status == "closed"
-            && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+            && !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                 &latest_run_graph_status,
             )
     })
@@ -1559,30 +1578,29 @@ async fn refresh_cached_status_projection_runtime_fields(
     let all_tasks = store.list_tasks(None, true).await.ok()?;
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph_status.as_ref() {
-            Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
-                Some(task) => (
-                    task.status == "closed"
-                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
-                            status,
-                        ),
-                    false,
-                ),
-                None => (false, true),
-            },
+            Some(status) => {
+                let verdict =
+                    crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                        &store, status,
+                    )
+                    .await
+                    .ok()?;
+                (verdict.task_closed_stale_run(), verdict.task_missing())
+            }
             None => (false, false),
         };
-    let latest_global_run_graph_task_closed =
-        latest_global_run_graph_status
-            .as_ref()
-            .is_some_and(|status| {
-                all_tasks.iter().any(|task| {
-                    task.id == status.task_id
-                        && task.status == "closed"
-                        && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
-                            status,
-                        )
-                })
-            });
+    let latest_global_run_graph_task_closed = match latest_global_run_graph_status.as_ref() {
+        Some(status) => {
+            let verdict =
+                crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                    &store, status,
+                )
+                .await
+                .ok()?;
+            verdict.task_closed_stale_run()
+        }
+        None => false,
+    };
     let terminal_consume_continue_run_id = if latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
@@ -1925,6 +1943,55 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn degraded_read_lock_payload_uses_shared_operator_contract_mirrors() {
+        let state_dir = std::path::Path::new("C:/project/vida-stack/.vida/data/state");
+        let payload = super::degraded_read_lock_payload("vida status", state_dir, "locked");
+
+        assert_eq!(payload["surface"], "vida status");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["state_store_read_lock_contention"])
+        );
+        assert_eq!(payload["shared_fields"]["status"], payload["status"]);
+        assert_eq!(
+            payload["shared_fields"]["blocker_codes"],
+            payload["operator_contracts"]["blocker_codes"]
+        );
+        assert_eq!(
+            payload["shared_fields"]["next_actions"],
+            payload["operator_contracts"]["next_actions"]
+        );
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"],
+            payload["operator_contracts"]["artifact_refs"]
+        );
+        assert_eq!(
+            payload["artifact_refs"]["read_fallback"],
+            "lock_contention_degraded_response"
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn degraded_read_lock_toon_text_is_compact_and_sanitized() {
+        let payload = super::degraded_read_lock_payload(
+            "vida status",
+            std::path::Path::new("C:/project/vida-stack/.vida/data/state"),
+            "locked\nwith\x1bcontrol",
+        );
+        let output = super::degraded_read_lock_toon_text("vida status", &payload);
+
+        assert!(output.starts_with("vida status\n"));
+        assert!(output.contains("status: blocked"));
+        assert!(output.contains("state_access: degraded_lock_contention"));
+        assert!(output.contains("blocker_codes[1]:"));
+        assert!(output.contains("state_store_read_lock_contention"));
+        assert!(serde_json::from_str::<serde_json::Value>(&output).is_err());
+        assert!(!output.contains('\x1b'));
     }
 
     fn restore_vida_session_id(saved: Option<String>) {
@@ -3399,8 +3466,9 @@ host_environment:
     {
         let next_action = run_graph_latest_snapshot_inconsistent_next_action().to_string();
         assert!(next_action.contains("concrete run/task/packet"));
-        assert!(next_action.contains("Only rerun `vida taskflow consume continue --json` after"));
-        assert!(next_action.contains("recheck `vida status --json`"));
+        assert!(next_action.contains("Only rerun `vida taskflow consume continue` after"));
+        assert!(next_action.contains("recheck `vida status`"));
+        assert!(!next_action.contains("--json"));
         assert_eq!(
             operator_contracts_consistency_error(
                 "blocked",
@@ -3418,6 +3486,7 @@ host_environment:
             run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action().to_string();
         assert!(next_action.contains("checkpoint evidence"));
         assert!(next_action.contains("same run_id"));
+        assert!(!next_action.contains("--json"));
         assert_eq!(
             operator_contracts_consistency_error(
                 "blocked",

@@ -1,12 +1,14 @@
 use super::*;
 use crate::release1_contracts::lane_status_has_required_evidence;
+use crate::state_store::state_store_task_models::{
+    task_has_label, task_is_spec_pack_child, task_is_work_pool_pack_child,
+};
 use crate::taskflow_run_graph::{
     approval_delegation_transition_kind, clear_run_graph_dispatch_init_fast_cache,
     is_dispatch_resume_handoff_complete,
 };
 
 fn reconcile_run_graph_status_with_dispatch_receipt(
-    state_root: Option<&std::path::Path>,
     mut status: RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceiptStored>,
 ) -> Result<RunGraphStatus, StateStoreError> {
@@ -63,8 +65,6 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             Some("lane_open") | Some("lane_running") | Some("packet_ready") | None
         )
         && receipt.downstream_dispatch_status.is_none();
-    let tracked_flow_materialization_completed =
-        tracked_flow_materialization_result_passed(state_root, &receipt);
     let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
             receipt.lane_status.as_deref(),
@@ -100,29 +100,6 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         && status.resume_target == format!("dispatch.{retry_target}_lane")
         && status.recovery_ready;
     if blocked_receipt {
-        if tracked_flow_materialization_completed {
-            if let Some(selected_backend) = receipt
-                .selected_backend
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                status.selected_backend = selected_backend.to_string();
-            }
-            let completed_target = receipt.dispatch_target.trim();
-            let lifecycle_target = completed_target.replace('-', "_");
-            status.active_node = completed_target.to_string();
-            status.next_node = None;
-            status.status = "completed".to_string();
-            status.lifecycle_stage = format!("{lifecycle_target}_complete");
-            status.policy_gate = "not_required".to_string();
-            status.handoff_state = "none".to_string();
-            status.resume_target = "none".to_string();
-            status.context_state = "sealed".to_string();
-            status.checkpoint_kind = "none".to_string();
-            status.recovery_ready = false;
-            return Ok(status);
-        }
         if retry_ready_same_lane {
             if let Some(selected_backend) = receipt
                 .selected_backend
@@ -198,6 +175,49 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.recovery_ready = false;
         return Ok(status);
     }
+    if receipt.dispatch_status == "executed"
+        && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
+        && receipt.downstream_dispatch_ready
+        && receipt.downstream_dispatch_blockers.is_empty()
+        && receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    {
+        if status.status == "ready"
+            && status.recovery_ready
+            && status.active_node != receipt.dispatch_target
+        {
+            return Ok(status);
+        }
+        if let Some(selected_backend) = receipt
+            .selected_backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            status.selected_backend = selected_backend.to_string();
+        }
+        let completed_target = receipt.dispatch_target.trim();
+        let lifecycle_target = completed_target.replace('-', "_");
+        let downstream_node = receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .expect("downstream target checked above")
+            .replace('-', "_");
+        status.active_node = completed_target.to_string();
+        status.next_node = Some(downstream_node.clone());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = format!("{lifecycle_target}_complete");
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = format!("awaiting_{downstream_node}");
+        status.resume_target = format!("dispatch.{downstream_node}_lane");
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.recovery_ready = true;
+        return Ok(status);
+    }
     if status.status == "completed" {
         return Ok(status);
     }
@@ -250,15 +270,23 @@ fn tracked_flow_materialization_result_passed(
     state_root: Option<&std::path::Path>,
     receipt: &RunGraphDispatchReceiptStored,
 ) -> bool {
-    if receipt.dispatch_status != "blocked"
-        || receipt.blocker_code.as_deref() != Some("internal_activation_view_only")
-        || receipt.dispatch_surface.as_deref() != Some("vida task ensure")
-        || !matches!(
-            receipt.dispatch_target.as_str(),
-            "work-pool-pack" | "dev-pack"
-        )
+    tracked_flow_materialization_result(state_root, receipt).is_some()
+}
+
+#[derive(Debug, Clone)]
+struct TrackedFlowMaterializationResult {
+    packet_key: String,
+    epic_task_id: Option<String>,
+    task_id: String,
+}
+
+fn tracked_flow_materialization_result(
+    state_root: Option<&std::path::Path>,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> Option<TrackedFlowMaterializationResult> {
+    if !crate::runtime_dispatch_receipt_helpers::stored_dispatch_is_materialization_only_blocked_task_ensure(receipt)
     {
-        return false;
+        return None;
     }
     let mut candidate_paths = Vec::new();
     if let Some(result_path) = receipt
@@ -288,11 +316,11 @@ fn tracked_flow_materialization_result_passed(
             candidate_paths.extend(result_paths.into_iter().rev());
         }
     }
-    candidate_paths.into_iter().any(|result_path| {
+    candidate_paths.into_iter().find_map(|result_path| {
         let Ok(result_body) = std::fs::read_to_string(&result_path) else {
-            return false;
+            return None;
         };
-        tracked_flow_materialization_result_body_passed(&result_body, receipt)
+        tracked_flow_materialization_result_from_body(&result_body, receipt)
     })
 }
 
@@ -300,29 +328,48 @@ fn tracked_flow_materialization_result_body_passed(
     result_body: &str,
     receipt: &RunGraphDispatchReceiptStored,
 ) -> bool {
+    tracked_flow_materialization_result_from_body(result_body, receipt).is_some()
+}
+
+fn tracked_flow_materialization_result_from_body(
+    result_body: &str,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> Option<TrackedFlowMaterializationResult> {
     let Ok(result_json) = serde_json::from_str::<serde_json::Value>(&result_body) else {
-        return false;
+        return None;
     };
     if result_json["status"].as_str() != Some("pass")
         || result_json["surface"].as_str() != Some("vida task ensure")
     {
-        return false;
+        return None;
     }
     let expected_packet_key = match receipt.dispatch_target.as_str() {
         "work-pool-pack" => "work_pool_task",
         "dev-pack" => "dev_task",
-        _ => return false,
+        _ => return None,
     };
     if result_json["packet_key"].as_str() != Some(expected_packet_key) {
-        return false;
+        return None;
     }
-    let task_id_present = result_json["task"]["task_id"]
+    let task_id = result_json["task"]["task_id"]
         .as_str()
         .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())?
+        .to_string();
     let task_materialized = result_json["task"]["created"].as_bool() == Some(true)
         || result_json["task"]["reused_existing"].as_bool() == Some(true);
-    task_id_present && task_materialized
+    if !task_materialized {
+        return None;
+    }
+    Some(TrackedFlowMaterializationResult {
+        packet_key: expected_packet_key.to_string(),
+        epic_task_id: result_json["epic"]["task_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        task_id,
+    })
 }
 
 fn ready_dispatch_handoff_matches_downstream_receipt(
@@ -362,6 +409,19 @@ fn ready_dispatch_handoff_matches_downstream_receipt(
     status.next_node.as_deref() == Some(downstream_node.as_str())
         && status.handoff_state == format!("awaiting_{downstream_node}")
         && status.resume_target == format!("dispatch.{downstream_node}_lane")
+}
+
+fn receipt_has_pending_spec_first_work_pool_handoff_gate(
+    receipt: &RunGraphDispatchReceipt,
+) -> bool {
+    receipt.dispatch_status == "executed"
+        && receipt.downstream_dispatch_target.as_deref() == Some("work-pool-pack")
+        && receipt.downstream_dispatch_blockers.iter().any(|blocker| {
+            matches!(
+                blocker.as_str(),
+                "pending_design_finalize" | "pending_spec_task_close"
+            )
+        })
 }
 
 fn has_receipt_evidence_id(value: Option<&str>) -> bool {
@@ -2323,6 +2383,244 @@ impl StateStore {
         self.run_graph_status_from_task_rows(run_id, &[]).await
     }
 
+    async fn normalize_spec_first_work_pool_handoff_receipt_truth(
+        &self,
+        receipt: &mut RunGraphDispatchReceipt,
+    ) -> Result<bool, StateStoreError> {
+        if !receipt_has_pending_spec_first_work_pool_handoff_gate(receipt) {
+            return Ok(false);
+        }
+        let tasks = self.list_tasks(None, true).await?;
+        let identity = self
+            .run_graph_dispatch_task_identity(&receipt.run_id)
+            .await?;
+        let feature_id = identity
+            .as_ref()
+            .and_then(|identity| identity.feature_epic_id.as_deref())
+            .and_then(|feature_id| {
+                Self::spec_first_work_pool_handoff_gate_satisfied_for_task(&tasks, feature_id)
+            })
+            .or_else(|| {
+                Self::spec_first_work_pool_handoff_gate_satisfied_for_task(&tasks, &receipt.run_id)
+            });
+        let Some(feature_id) = feature_id else {
+            return Ok(false);
+        };
+        let identity = Self::spec_first_dispatch_task_identity_from_tasks(
+            &tasks,
+            &receipt.run_id,
+            &feature_id,
+            identity
+                .as_ref()
+                .map(|_| "spec_first_work_pool_handoff_identity_reconciliation")
+                .unwrap_or("spec_first_work_pool_handoff_reconciliation"),
+        );
+        self.record_run_graph_dispatch_task_identity(&identity)
+            .await?;
+        self.repair_stale_spec_first_parent_auto_close_for_work_pool_handoff(&tasks, &feature_id)
+            .await?;
+
+        receipt.downstream_dispatch_blockers.retain(|blocker| {
+            !matches!(
+                blocker.as_str(),
+                "pending_design_finalize" | "pending_spec_task_close"
+            )
+        });
+        receipt.downstream_dispatch_ready = receipt.downstream_dispatch_blockers.is_empty();
+        receipt.downstream_dispatch_status = Some(if receipt.downstream_dispatch_ready {
+            "packet_ready".to_string()
+        } else {
+            "blocked".to_string()
+        });
+        receipt.downstream_dispatch_note = Some(format!(
+            "spec-first feature `{feature_id}` has a closed spec-pack task; continue with work-pool handoff"
+        ));
+        receipt.downstream_dispatch_active_target = Some("specification".to_string());
+        receipt.downstream_dispatch_last_target = Some("specification".to_string());
+        Ok(true)
+    }
+
+    async fn normalize_materialized_pack_task_identity_and_receipt(
+        &self,
+        receipt: &mut RunGraphDispatchReceipt,
+    ) -> Result<bool, StateStoreError> {
+        if !crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
+        {
+            return Ok(false);
+        }
+        let expected_packet_key = match receipt.dispatch_target.as_str() {
+            "work-pool-pack" => "work_pool_task",
+            "dev-pack" => "dev_task",
+            _ => return Ok(false),
+        };
+        let stored_receipt = RunGraphDispatchReceiptStored::from(receipt.clone());
+        let Some(result) = tracked_flow_materialization_result(Some(self.root()), &stored_receipt)
+        else {
+            return Ok(false);
+        };
+        if result.packet_key != expected_packet_key {
+            return Ok(false);
+        }
+        let tasks = self.list_tasks(None, true).await?;
+        let materialized_task = match receipt.dispatch_target.as_str() {
+            "work-pool-pack" => tasks
+                .iter()
+                .find(|task| task.id == result.task_id && task_is_work_pool_pack_child(task)),
+            "dev-pack" => tasks
+                .iter()
+                .find(|task| task.id == result.task_id && task_has_label(task, "dev-pack")),
+            _ => None,
+        };
+        let Some(materialized_task) = materialized_task else {
+            return Ok(false);
+        };
+        let Some(feature_id) = Self::parent_id_for_task(materialized_task) else {
+            return Ok(false);
+        };
+        if result
+            .epic_task_id
+            .as_deref()
+            .is_some_and(|epic_task_id| epic_task_id != feature_id)
+        {
+            return Ok(false);
+        }
+        let child_tasks = tasks
+            .iter()
+            .filter(|task| Self::parent_id_for_task(task).as_deref() == Some(feature_id.as_str()))
+            .collect::<Vec<_>>();
+        let spec_task_id = child_tasks
+            .iter()
+            .filter(|task| task_is_spec_pack_child(task))
+            .map(|task| task.id.clone())
+            .min();
+        let identity = RunGraphDispatchTaskIdentity {
+            run_id: receipt.run_id.clone(),
+            feature_epic_id: Some(feature_id),
+            spec_task_id,
+            work_pool_task_id: if receipt.dispatch_target == "work-pool-pack" {
+                Some(result.task_id.clone())
+            } else {
+                child_tasks
+                    .iter()
+                    .filter(|task| task_is_work_pool_pack_child(task))
+                    .map(|task| task.id.clone())
+                    .min()
+            },
+            dev_task_id: if receipt.dispatch_target == "dev-pack" {
+                Some(result.task_id.clone())
+            } else {
+                child_tasks
+                    .iter()
+                    .filter(|task| task_has_label(task, "dev-pack"))
+                    .map(|task| task.id.clone())
+                    .min()
+            },
+            source: if receipt.dispatch_target == "work-pool-pack" {
+                "work_pool_materialization_identity_reconciliation".to_string()
+            } else {
+                "dev_pack_materialization_identity_reconciliation".to_string()
+            },
+            updated_at: unix_timestamp_nanos().to_string(),
+        };
+        self.record_run_graph_dispatch_task_identity(&identity)
+            .await?;
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+        receipt.blocker_code = None;
+        receipt.downstream_dispatch_target = Some(if receipt.dispatch_target == "work-pool-pack" {
+            "dev-pack".to_string()
+        } else {
+            "closure".to_string()
+        });
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_blockers.clear();
+        receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+        receipt.downstream_dispatch_note = Some(if receipt.dispatch_target == "work-pool-pack" {
+            format!(
+                "work-pool task `{}` is materialized; continue with the tracked dev packet",
+                result.task_id
+            )
+        } else {
+            format!(
+                "dev task `{}` is materialized; continue with tracked flow closure",
+                result.task_id
+            )
+        });
+        receipt.downstream_dispatch_active_target = Some(receipt.dispatch_target.clone());
+        receipt.downstream_dispatch_last_target = Some(receipt.dispatch_target.clone());
+        Ok(true)
+    }
+
+    fn spec_first_dispatch_task_identity_from_tasks(
+        tasks: &[TaskRecord],
+        run_id: &str,
+        feature_id: &str,
+        source: &str,
+    ) -> RunGraphDispatchTaskIdentity {
+        let child_tasks = tasks
+            .iter()
+            .filter(|task| Self::parent_id_for_task(task).as_deref() == Some(feature_id))
+            .collect::<Vec<_>>();
+        let spec_task_id = child_tasks
+            .iter()
+            .filter(|task| task_is_spec_pack_child(task))
+            .map(|task| task.id.clone())
+            .min();
+        let work_pool_task_id = child_tasks
+            .iter()
+            .filter(|task| task_is_work_pool_pack_child(task))
+            .map(|task| task.id.clone())
+            .min();
+
+        RunGraphDispatchTaskIdentity {
+            run_id: run_id.to_string(),
+            feature_epic_id: Some(feature_id.to_string()),
+            spec_task_id,
+            work_pool_task_id,
+            dev_task_id: child_tasks
+                .iter()
+                .filter(|task| task_has_label(task, "dev-pack"))
+                .map(|task| task.id.clone())
+                .min(),
+            source: source.to_string(),
+            updated_at: unix_timestamp_nanos().to_string(),
+        }
+    }
+
+    pub async fn record_run_graph_dispatch_task_identity(
+        &self,
+        identity: &RunGraphDispatchTaskIdentity,
+    ) -> Result<(), StateStoreError> {
+        if identity.run_id.trim().is_empty() || identity.source.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "run-graph dispatch task identity requires run_id and source".to_string(),
+            });
+        }
+        let _: Option<RunGraphDispatchTaskIdentity> = self
+            .db
+            .upsert(("run_graph_dispatch_task_identity", identity.run_id.as_str()))
+            .content(identity.clone())
+            .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
+        Ok(())
+    }
+
+    pub async fn run_graph_dispatch_task_identity(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphDispatchTaskIdentity>, StateStoreError> {
+        let identity: Option<RunGraphDispatchTaskIdentity> = match self
+            .db
+            .select(("run_graph_dispatch_task_identity", run_id))
+            .await
+        {
+            Ok(identity) => identity,
+            Err(error) if error.to_string().contains("does not exist") => None,
+            Err(error) => return Err(error.into()),
+        };
+        Ok(identity)
+    }
+
     pub(crate) async fn run_graph_status_from_task_rows(
         &self,
         run_id: &str,
@@ -2368,11 +2666,7 @@ impl StateStore {
             recovery_ready: resumability.recovery_ready,
         };
         let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
-        let status = reconcile_run_graph_status_with_dispatch_receipt(
-            Some(self.root()),
-            status,
-            receipt.as_ref(),
-        )?;
+        let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
         let task = if task_rows.is_empty() {
             self.show_task(&status.task_id).await.ok()
         } else {
@@ -2508,7 +2802,7 @@ impl StateStore {
 
     pub(crate) async fn latest_run_graph_run_id_from_task_rows(
         &self,
-        task_rows: &[TaskRecord],
+        _task_rows: &[TaskRecord],
     ) -> Result<Option<String>, StateStoreError> {
         let mut query = self
             .db
@@ -2518,14 +2812,9 @@ impl StateStore {
             .await?;
         let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
         for latest in rows {
-            let terminal_task_active = if task_rows.is_empty() {
-                self.run_graph_latest_row_points_to_terminal_task_active(&latest)
-                    .await?
-            } else {
-                self.run_graph_latest_row_points_to_terminal_task_active_from_rows(
-                    &latest, task_rows,
-                )?
-            };
+            let terminal_task_active = self
+                .run_graph_latest_row_points_to_terminal_task_active(&latest)
+                .await?;
             if terminal_task_active {
                 continue;
             }
@@ -2590,12 +2879,14 @@ impl StateStore {
         if latest.status == "completed" {
             return Ok(false);
         }
-        let task = match self.show_task(&latest.task_id).await {
-            Ok(task) => task,
-            Err(StateStoreError::MissingTask { .. }) => return Ok(false),
-            Err(error) => return Err(error),
-        };
-        Ok(task_status_is_terminal_for_continuation(&task.status))
+        let status = self.run_graph_status(&latest.run_id).await?;
+        Ok(
+            crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                self, &status,
+            )
+            .await?
+            .task_closed_stale_run(),
+        )
     }
 
     async fn run_graph_status_points_to_terminal_task_active(
@@ -2605,12 +2896,13 @@ impl StateStore {
         if status.status == "completed" {
             return Ok(false);
         }
-        let task = match self.show_task(&status.task_id).await {
-            Ok(task) => task,
-            Err(StateStoreError::MissingTask { .. }) => return Ok(false),
-            Err(error) => return Err(error),
-        };
-        Ok(task_status_is_terminal_for_continuation(&task.status))
+        Ok(
+            crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                self, status,
+            )
+            .await?
+            .task_closed_stale_run(),
+        )
     }
 
     fn run_graph_latest_row_points_to_terminal_task_active_from_rows(
@@ -2921,6 +3213,18 @@ impl StateStore {
         }
         if crate::runtime_dispatch_state::normalize_activation_view_only_receipt_truth(&mut receipt)
             .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?
+        {
+            self.record_run_graph_dispatch_receipt(&receipt).await?;
+        }
+        if self
+            .normalize_spec_first_work_pool_handoff_receipt_truth(&mut receipt)
+            .await?
+        {
+            self.record_run_graph_dispatch_receipt(&receipt).await?;
+        }
+        if self
+            .normalize_materialized_pack_task_identity_and_receipt(&mut receipt)
+            .await?
         {
             self.record_run_graph_dispatch_receipt(&receipt).await?;
         }
@@ -3783,7 +4087,7 @@ mod tests {
 
         let stored_receipt = receipt.into();
         let reconciled =
-            reconcile_run_graph_status_with_dispatch_receipt(None, status, Some(&stored_receipt))
+            reconcile_run_graph_status_with_dispatch_receipt(status, Some(&stored_receipt))
                 .expect("routed pre-execution receipt should reconcile");
 
         assert_eq!(reconciled.status, "ready");
@@ -5110,7 +5414,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tracked_flow_materialization_pass_completes_activation_view_only_receipt() {
+    async fn tracked_flow_materialization_pass_keeps_activation_view_only_receipt_blocked() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -5183,8 +5487,8 @@ mod tests {
             .await
             .expect("load reconciled run graph status");
         assert_eq!(reconciled.active_node, "work-pool-pack");
-        assert_eq!(reconciled.status, "completed");
-        assert_eq!(reconciled.lifecycle_stage, "work_pool_pack_complete");
+        assert_eq!(reconciled.status, "blocked");
+        assert_eq!(reconciled.lifecycle_stage, "work_pool_pack_blocked");
         assert_eq!(reconciled.policy_gate, "not_required");
         assert_eq!(reconciled.resume_target, "none");
         assert!(!reconciled.recovery_ready);
@@ -5193,7 +5497,118 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn work_pool_materialization_pass_reconciles_missing_result_path_receipt() {
+    async fn tracked_flow_materialization_with_null_blocker_records_work_pool_identity() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-tracked-flow-materialization-null-blocker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let tasks_path = root.join("tasks.jsonl");
+        fs::write(
+            &tasks_path,
+            concat!(
+                "{\"id\":\"feature-example\",\"title\":\"Feature\",\"description\":\"feature\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[\"spec-first-feature\"],\"dependencies\":[]}\n",
+                "{\"id\":\"feature-example-spec\",\"title\":\"Spec\",\"description\":\"spec\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[\"spec-pack\"],\"dependencies\":[{\"issue_id\":\"feature-example-spec\",\"depends_on_id\":\"feature-example\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+                "{\"id\":\"feature-example-work-pool\",\"title\":\"Work pool\",\"description\":\"work pool\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"work_pool\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[\"work-pool-pack\"],\"dependencies\":[{\"issue_id\":\"feature-example-work-pool\",\"depends_on_id\":\"feature-example\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write tasks");
+        store
+            .import_tasks_from_jsonl(&tasks_path)
+            .await
+            .expect("import tasks");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-tracked-flow-null-blocker",
+            "feature-example",
+            "scope_discussion",
+        );
+        status.task_id = "feature-example".to_string();
+        status.active_node = "work-pool-pack".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "work_pool_pack_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist materialization status");
+
+        let result_path = root.join("tracked-flow-materialization-null-blocker-result.json");
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "surface": "vida task ensure",
+                "status": "pass",
+                "packet_key": "work_pool_task",
+                "task": {
+                    "task_id": "feature-example-work-pool",
+                    "created": true,
+                    "reused_existing": false,
+                    "label": "work-pool-pack"
+                },
+                "epic": {
+                    "task_id": "feature-example",
+                    "created": false
+                },
+                "changed_files": ["taskflow:feature-example-work-pool"]
+            }))
+            .expect("render materialization result"),
+        )
+        .expect("write materialization result");
+
+        let mut receipt = sample_dispatch_receipt("run-tracked-flow-null-blocker");
+        receipt.dispatch_target = "work-pool-pack".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.dispatch_surface = Some("vida task ensure".to_string());
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+        receipt.blocker_code = None;
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist materialization receipt");
+
+        let loaded = store
+            .run_graph_dispatch_receipt("run-tracked-flow-null-blocker")
+            .await
+            .expect("load dispatch receipt")
+            .expect("receipt should exist");
+        assert_eq!(loaded.dispatch_surface.as_deref(), Some("vida task ensure"));
+        let identity = store
+            .run_graph_dispatch_task_identity("run-tracked-flow-null-blocker")
+            .await
+            .expect("load dispatch task identity")
+            .expect("materialized work-pool identity should be recorded");
+        assert_eq!(identity.feature_epic_id.as_deref(), Some("feature-example"));
+        assert_eq!(
+            identity.spec_task_id.as_deref(),
+            Some("feature-example-spec")
+        );
+        assert_eq!(
+            identity.work_pool_task_id.as_deref(),
+            Some("feature-example-work-pool")
+        );
+        assert_eq!(
+            identity.source,
+            "work_pool_materialization_identity_reconciliation"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn work_pool_materialization_pass_without_result_path_keeps_receipt_blocked() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -5267,8 +5682,8 @@ mod tests {
             .await
             .expect("load reconciled run graph status");
         assert_eq!(reconciled.active_node, "work-pool-pack");
-        assert_eq!(reconciled.status, "completed");
-        assert_eq!(reconciled.lifecycle_stage, "work_pool_pack_complete");
+        assert_eq!(reconciled.status, "blocked");
+        assert_eq!(reconciled.lifecycle_stage, "work_pool_pack_blocked");
         assert_eq!(reconciled.policy_gate, "not_required");
         assert_eq!(reconciled.resume_target, "none");
         assert!(!reconciled.recovery_ready);

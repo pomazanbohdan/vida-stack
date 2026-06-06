@@ -12,6 +12,7 @@ path = "src/main.rs"
 blake3 = "1.8.2"
 clap = { version = "4.5.38", features = ["derive", "env"] }
 docflow-cli = { path = "../docflow-cli" }
+docflow-contracts = { path = "../docflow-contracts" }
 fs2 = "0.4.3"
 futures = "0.3.31"
 interprocess = { version = "2.4.2", features = ["tokio"] }

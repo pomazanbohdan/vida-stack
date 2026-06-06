@@ -202,6 +202,23 @@ fn write_task_doc(root: &std::path::Path, task_id: &str) {
     .expect("changelog should be written");
 }
 
+fn write_task_protocol_doc(root: &std::path::Path, task_id: &str) {
+    fs::create_dir_all(root.join("vida/config/instructions/instruction-contracts"))
+        .expect("instruction-contracts dir should be created");
+    fs::write(
+        root.join("vida/config/instructions/instruction-contracts/unregistered-test-protocol.md"),
+        "# unregistered test protocol\n\n-----\nartifact_path: instruction-contracts/unregistered-test-protocol\nartifact_type: instruction_contract\nartifact_version: 1\nartifact_revision: test\nsource_path: vida/config/instructions/instruction-contracts/unregistered-test-protocol.md\nstatus: draft\nchangelog_ref: unregistered-test-protocol.changelog.jsonl\ncreated_at: 2026-06-05T00:00:00Z\nupdated_at: 2026-06-05T00:00:00Z\n",
+    )
+    .expect("protocol markdown should be written");
+    fs::write(
+        root.join("vida/config/instructions/instruction-contracts/unregistered-test-protocol.changelog.jsonl"),
+        format!(
+            "{{\"ts\":\"2026-06-05T00:00:00Z\",\"event\":\"artifact_updated\",\"artifact_path\":\"instruction-contracts/unregistered-test-protocol\",\"task_id\":\"{task_id}\",\"reason\":\"test\"}}\n"
+        ),
+    )
+    .expect("protocol changelog should be written");
+}
+
 #[test]
 fn proofcheck_help_exposes_task_json_and_compact_modes() {
     let context = vida_test_support::CommandContext::empty();
@@ -290,6 +307,128 @@ fn proofcheck_task_outputs_default_toon_and_explicit_compact_json() {
         0
     );
     assert!(parsed["task_close_allowed"].is_boolean());
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
+#[test]
+fn closeout_task_outputs_default_toon_and_explicit_json() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("closeout-task");
+    write_task_doc(&root, "TASK-CLOSEOUT");
+
+    let toon = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "closeout",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--task",
+            "TASK-CLOSEOUT",
+        ])
+        .output()
+        .expect("docflow closeout task toon should run");
+    assert!(toon.status.success(), "{}", context.diagnostics(&toon));
+    let toon_stdout = String::from_utf8_lossy(&toon.stdout);
+    assert!(toon_stdout.starts_with("closeout\n  mode: task"));
+    assert!(toon_stdout.contains("task_id: TASK-CLOSEOUT"));
+    assert!(toon_stdout.contains("changed_doc_count: 1"));
+    assert!(toon_stdout.contains("protocol_coverage_rows: 0"));
+    assert!(!toon_stdout.trim_start().starts_with('{'));
+    assert!(!toon_stdout.contains("--json"));
+
+    let json = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "closeout",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--task",
+            "TASK-CLOSEOUT",
+            "--json",
+        ])
+        .output()
+        .expect("docflow closeout task json should run");
+    assert!(json.status.success(), "{}", context.diagnostics(&json));
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("closeout task json should parse");
+    assert_eq!(parsed["command"], "closeout");
+    assert_eq!(parsed["mode"], "task");
+    assert_eq!(parsed["task_id"], "TASK-CLOSEOUT");
+    assert_eq!(parsed["changed_doc_count"], 1);
+    assert_eq!(parsed["protocol_coverage_rows"], 0);
+    assert!(parsed["task_close_allowed"].is_boolean());
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
+#[test]
+fn closeout_and_proofcheck_task_share_protocol_coverage_blocker() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("closeout-protocol-coverage");
+    write_task_protocol_doc(&root, "TASK-PROTOCOL");
+
+    let proof = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "proofcheck",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--task",
+            "TASK-PROTOCOL",
+            "--json",
+        ])
+        .output()
+        .expect("docflow proofcheck task protocol blocker should run");
+    assert!(proof.status.success(), "{}", context.diagnostics(&proof));
+    let proof_json: serde_json::Value =
+        serde_json::from_slice(&proof.stdout).expect("proofcheck protocol json should parse");
+    assert_eq!(proof_json["verdict"], "blocking");
+    assert_eq!(proof_json["task_close_allowed"], false);
+    assert_eq!(proof_json["protocol_coverage_rows"], 1);
+    assert!(
+        proof_json["blocker_codes"]
+            .as_array()
+            .expect("proof blockers should be array")
+            .contains(&serde_json::Value::String(
+                "docflow_protocol_coverage_blocking".to_string()
+            )),
+        "{proof_json}"
+    );
+
+    let closeout = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "closeout",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--task",
+            "TASK-PROTOCOL",
+            "--json",
+        ])
+        .output()
+        .expect("docflow closeout task protocol blocker should run");
+    assert!(
+        closeout.status.success(),
+        "{}",
+        context.diagnostics(&closeout)
+    );
+    let closeout_json: serde_json::Value =
+        serde_json::from_slice(&closeout.stdout).expect("closeout protocol json should parse");
+    assert_eq!(closeout_json["verdict"], proof_json["verdict"]);
+    assert_eq!(
+        closeout_json["task_close_allowed"],
+        proof_json["task_close_allowed"]
+    );
+    assert_eq!(
+        closeout_json["protocol_coverage_rows"],
+        proof_json["protocol_coverage_rows"]
+    );
+    assert_eq!(closeout_json["blocker_codes"], proof_json["blocker_codes"]);
 
     fs::remove_dir_all(root).expect("root should be removed");
 }

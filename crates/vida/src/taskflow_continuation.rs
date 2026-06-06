@@ -153,8 +153,7 @@ fn run_graph_active_bounded_unit(status: &RunGraphStatus) -> Option<serde_json::
         let dispatch_target = status
             .next_node
             .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or("closure");
+            .filter(|value| !value.trim().is_empty())?;
         return Some(serde_json::json!({
             "kind": "downstream_dispatch_target",
             "task_id": status.task_id,
@@ -834,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_status_without_next_node_binds_closure_target() {
+    fn completed_status_without_next_node_does_not_infer_closure_target() {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "run-1",
             "implementation",
@@ -849,16 +848,24 @@ mod tests {
         status.handoff_state = "none".to_string();
         status.resume_target = "none".to_string();
 
-        let binding = build_run_graph_continuation_binding(&status, None, "test", None)
-            .expect("completed status should bind closure");
+        assert!(
+            build_run_graph_continuation_binding(&status, None, "test", None).is_none(),
+            "completed non-closure state without explicit next_node must not synthesize closure"
+        );
 
+        status.next_node = Some("closure".to_string());
+        let binding = build_run_graph_continuation_binding(&status, None, "test", None)
+            .expect("explicit closure next_node should bind closure");
         assert_eq!(binding.task_id, "feature-close-dev");
         assert_eq!(
             binding.active_bounded_unit["kind"],
             "downstream_dispatch_target"
         );
         assert_eq!(binding.active_bounded_unit["dispatch_target"], "closure");
-        assert_eq!(binding.sequential_vs_parallel_posture, "sequential_only");
+        assert_eq!(
+            binding.sequential_vs_parallel_posture,
+            "sequential_only_open_cycle"
+        );
     }
 
     #[test]

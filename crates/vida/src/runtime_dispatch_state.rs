@@ -4344,6 +4344,55 @@ agent_system:
     internal_subagents:
       enabled: true
       subagent_backend_class: internal
+      runtime_roles:
+        - pm
+        - specification
+      task_classes:
+        - specification
+      default_runtime_role: pm
+      default_model_profile: fixture-low
+      model_profiles:
+        fixture-low:
+          profile_id: fixture-low
+          provider: test
+          model_ref: fixture-model
+          reasoning_effort: low
+          normalized_cost_units: 1
+          runtime_roles:
+            - pm
+            - specification
+          task_classes:
+            - specification
+          readiness:
+            required: false
+            ready: true
+carrier_runtime:
+  roles:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      default_runtime_role: pm
+      runtime_roles:
+        - pm
+        - specification
+      task_classes:
+        - specification
+      default_model_profile: fixture-low
+      model_profiles:
+        fixture-low:
+          profile_id: fixture-low
+          provider: test
+          model_ref: fixture-model
+          reasoning_effort: low
+          normalized_cost_units: 1
+          runtime_roles:
+            - pm
+            - specification
+          task_classes:
+            - specification
+          readiness:
+            required: false
+            ready: true
 "#,
         )
         .expect("overlay should parse");
@@ -5083,9 +5132,17 @@ fn tracked_flow_bootstrap_has_spec_gate_fields(tracked: &serde_json::Value) -> b
             .is_some_and(|value| !value.is_empty())
 }
 
+fn tracked_flow_bootstrap_has_work_pool_handoff(tracked: &serde_json::Value) -> bool {
+    tracked["work_pool_task"]["ensure_command"]
+        .as_str()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
 fn tracked_specification_gate_required(role_selection: &RuntimeConsumptionLaneSelection) -> bool {
     let tracked = &role_selection.execution_plan["tracked_flow_bootstrap"];
     tracked_flow_bootstrap_has_spec_gate_fields(tracked)
+        || tracked_flow_bootstrap_has_work_pool_handoff(tracked)
         || tracked["required"].as_bool() == Some(true)
         || role_selection.execution_plan["status"].as_str() == Some("design_first")
 }
@@ -5106,6 +5163,29 @@ fn tracked_flow_bootstrap_for_gates(
     }
 }
 
+pub(crate) fn resolved_tracked_flow_bootstrap_for_scope(
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> Option<serde_json::Value> {
+    tracked_flow_bootstrap_for_gates(role_selection)
+}
+
+fn packet_resolved_tracked_flow_bootstrap(packet: &serde_json::Value) -> Option<serde_json::Value> {
+    let tracked = &packet["role_selection_full"]["execution_plan"]["tracked_flow_bootstrap"];
+    if tracked_flow_bootstrap_has_spec_gate_fields(tracked) {
+        return Some(tracked.clone());
+    }
+    let spec_gate_required = tracked["required"].as_bool() == Some(true)
+        || packet["role_selection_full"]["execution_plan"]["status"].as_str()
+            == Some("design_first");
+    if !spec_gate_required {
+        return None;
+    }
+    let request_text = packet_request_text(packet)?;
+    Some(crate::build_design_first_tracked_flow_bootstrap(
+        request_text,
+    ))
+}
+
 fn tracked_specification_task_id(
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Option<String> {
@@ -5116,16 +5196,7 @@ fn tracked_specification_task_id(
         .map(str::to_string)
 }
 
-pub(crate) fn tracked_design_doc_path<'a>(
-    role_selection: &'a RuntimeConsumptionLaneSelection,
-) -> Option<&'a str> {
-    role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn tracked_design_doc_path_for_gates(
+pub(crate) fn resolved_tracked_design_doc_path(
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Option<String> {
     tracked_flow_bootstrap_for_gates(role_selection)?["design_doc_path"]
@@ -5133,6 +5204,12 @@ fn tracked_design_doc_path_for_gates(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn tracked_design_doc_path_for_gates(
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> Option<String> {
+    resolved_tracked_design_doc_path(role_selection)
 }
 
 async fn tracked_implementer_task_closed(
@@ -5891,6 +5968,40 @@ fn apply_downstream_dispatch_preview_to_receipt(
     receipt.downstream_dispatch_active_target = active_downstream_dispatch_target(receipt);
 }
 
+async fn spec_first_work_pool_handoff_feature_from_taskflow(
+    store: &StateStore,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<String> {
+    let tasks = store.list_tasks(None, true).await.ok()?;
+    let identity = store
+        .run_graph_dispatch_task_identity(&receipt.run_id)
+        .await
+        .ok()
+        .flatten();
+    let mut candidates = Vec::new();
+    if let Some(identity) = identity.as_ref() {
+        candidates.extend(
+            [
+                identity.feature_epic_id.as_deref(),
+                identity.spec_task_id.as_deref(),
+                identity.work_pool_task_id.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(str::to_string),
+        );
+    }
+    candidates.push(receipt.run_id.clone());
+
+    let mut visited = BTreeSet::new();
+    candidates
+        .into_iter()
+        .filter(|candidate| visited.insert(candidate.clone()))
+        .find_map(|candidate| {
+            StateStore::spec_first_work_pool_handoff_gate_satisfied_for_task(&tasks, &candidate)
+        })
+}
+
 fn write_runtime_downstream_dispatch_trace(
     state_root: &Path,
     run_id: &str,
@@ -5991,9 +6102,13 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             Vec::new(),
         ),
         "spec-pack" => {
-            let design_doc_finalized = tracked_design_doc_finalized(role_selection);
-            let spec_task_closed =
-                tracked_specification_task_closed(store, role_selection, receipt).await;
+            let taskflow_feature_ready =
+                spec_first_work_pool_handoff_feature_from_taskflow(store, receipt).await;
+            let design_doc_finalized =
+                tracked_design_doc_finalized(role_selection) || taskflow_feature_ready.is_some();
+            let spec_task_closed = tracked_specification_task_closed(store, role_selection, receipt)
+                .await
+                || taskflow_feature_ready.is_some();
             let ready = design_doc_finalized && spec_task_closed;
             let mut blockers = Vec::new();
             if !design_doc_finalized {
@@ -6015,12 +6130,16 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                         .get("ensure_command"),
                 ),
                 Some(
-                    if ready {
-                        "design document is finalized and the spec task is closed; ensure or reuse the tracked work-pool packet"
+                    if let Some(feature_id) = taskflow_feature_ready.as_deref() {
+                        format!(
+                            "spec-first feature `{feature_id}` has a closed spec-pack task; ensure or reuse the tracked work-pool packet"
+                        )
+                    } else if ready {
+                        "design document is finalized and the spec task is closed; ensure or reuse the tracked work-pool packet".to_string()
                     } else {
                         "after the design document is finalized and the spec task is closed, ensure or reuse the tracked work-pool packet"
-                    }
-                        .to_string(),
+                            .to_string()
+                    },
                 ),
                 ready,
                 blockers,
@@ -6153,9 +6272,13 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                 let has_specification_evidence = dispatch_receipt_has_execution_evidence(receipt)
                     || tracked_specification_gate_completion_ready(store, role_selection, receipt)
                         .await;
-                let spec_task_closed =
-                    tracked_specification_task_closed(store, role_selection, receipt).await;
-                let design_doc_finalized = tracked_design_doc_finalized(role_selection);
+                let taskflow_feature_ready =
+                    spec_first_work_pool_handoff_feature_from_taskflow(store, receipt).await;
+                let spec_task_closed = tracked_specification_task_closed(store, role_selection, receipt)
+                    .await
+                    || taskflow_feature_ready.is_some();
+                let design_doc_finalized =
+                    tracked_design_doc_finalized(role_selection) || taskflow_feature_ready.is_some();
                 let evidence_blocker = current_lane
                     .and_then(|lane| lane["completion_blocker"].as_str())
                     .unwrap_or(blocker_code_str(BlockerCode::PendingSpecificationEvidence));
@@ -6166,18 +6289,23 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                         .get("ensure_command"),
                     ),
                     Some(
-                        if receipt.dispatch_status == "executed"
+                        if let Some(feature_id) = taskflow_feature_ready.as_deref() {
+                            format!(
+                                "spec-first feature `{feature_id}` has a closed spec-pack task; ensure or reuse the tracked work-pool packet"
+                            )
+                        } else if receipt.dispatch_status == "executed"
                             && has_specification_evidence
                             && spec_task_closed
                             && design_doc_finalized
                         {
-                            "specification/planning evidence is recorded and the spec-pack is closed; ensure or reuse the tracked work-pool packet"
+                            "specification/planning evidence is recorded and the spec-pack is closed; ensure or reuse the tracked work-pool packet".to_string()
                         } else if receipt.dispatch_status == "executed" {
                             "after specification/planning evidence is recorded, finalize the design doc and close spec-pack before work-pool shaping via tracked work-pool ensure/reuse"
+                                .to_string()
                         } else {
                             "specification/planning lane is active; wait for bounded evidence return before design finalization, spec-pack closure, and tracked work-pool ensure/reuse"
+                                .to_string()
                         }
-                        .to_string(),
                     ),
                     has_specification_evidence && spec_task_closed && design_doc_finalized,
                     {
@@ -6861,11 +6989,12 @@ fn single_task_move_scope_owned_paths(packet: &serde_json::Value) -> Option<Vec<
     single_task_move_scope_paths(request_text)
 }
 
-fn packet_tracked_design_doc_path<'a>(packet: &'a serde_json::Value) -> Option<&'a str> {
-    packet["role_selection_full"]["execution_plan"]["tracked_flow_bootstrap"]["design_doc_path"]
+fn packet_tracked_design_doc_path(packet: &serde_json::Value) -> Option<String> {
+    packet_resolved_tracked_flow_bootstrap(packet)?["design_doc_path"]
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn packet_request_text<'a>(packet: &'a serde_json::Value) -> Option<&'a str> {
@@ -6878,6 +7007,14 @@ fn packet_request_text<'a>(packet: &'a serde_json::Value) -> Option<&'a str> {
             packet
                 .get("delivery_task_packet")
                 .and_then(|value| value.get("request_text"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            packet
+                .get("role_selection_full")
+                .and_then(|value| value.get("request"))
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -6909,6 +7046,26 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
     packet_label: &str,
 ) -> Result<(), String> {
     let (packet_template_kind, active_packet) = active_runtime_packet(packet)?;
+    if packet_template_kind == "delivery_task_packet" {
+        if let (Some(task_id), Some(backlog_id)) = (
+            active_packet
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            active_packet
+                .get("backlog_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+        ) {
+            if task_id != backlog_id {
+                return Err(format!(
+                    "{packet_label} `{packet_template_kind}` dispatch packet contract invalid: task_id `{task_id}` must match backlog_id `{backlog_id}`"
+                ));
+            }
+        }
+    }
     for key in ["owned_paths", "read_only_paths"] {
         if let (Some(top_level), Some(active)) = (
             packet_string_array(packet, key),
@@ -6961,7 +7118,7 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
             let expected_owned_paths = delivery_packet_owned_paths(
                 handoff_task_class,
                 packet_request_text(packet).unwrap_or_default(),
-                packet_tracked_design_doc_path(packet),
+                packet_tracked_design_doc_path(packet).as_deref(),
             );
             let actual_owned_paths = active_packet
                 .get("owned_paths")
@@ -9429,10 +9586,10 @@ host_environment:
         }
     }
 
-    #[test]
-    fn tracked_flow_bootstrap_gate_readers_fallback_when_stored_bootstrap_lacks_spec_gate_fields() {
-        let request = "Define unified command output interface contract";
-        let role_selection = RuntimeConsumptionLaneSelection {
+    fn design_first_role_selection_with_incomplete_bootstrap(
+        request: &str,
+    ) -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
             selection_mode: "fixed".to_string(),
@@ -9441,26 +9598,35 @@ host_environment:
             selected_role: "pm".to_string(),
             conversational_mode: Some("development".to_string()),
             single_task_only: true,
-            tracked_flow_entry: Some("work-pool-pack".to_string()),
+            tracked_flow_entry: Some("spec-pack".to_string()),
             allow_freeform_chat: false,
             confidence: "high".to_string(),
-            matched_terms: vec!["task".to_string()],
+            matched_terms: vec!["specification".to_string()],
             compiled_bundle: serde_json::Value::Null,
             execution_plan: json!({
                 "status": "design_first",
                 "tracked_flow_bootstrap": {
-                    "dev_task": {
-                        "planner_metadata": {
-                            "owned_paths": [],
-                            "proof_targets": [
-                                "Contract map covering root task taskflow doctor status lane route consume recovery docflow proxy surfaces"
-                            ]
+                    "required": true
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "specification_activation": {
+                            "completion_blocker": "pending_specification_evidence",
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst"
                         }
                     }
-                }
+                },
+                "orchestration_contract": {}
             }),
             reason: "test".to_string(),
-        };
+        }
+    }
+
+    #[test]
+    fn tracked_flow_bootstrap_gate_readers_fallback_when_stored_bootstrap_lacks_spec_gate_fields() {
+        let request = "Define unified command output interface contract";
+        let role_selection = design_first_role_selection_with_incomplete_bootstrap(request);
         let expected = crate::build_design_first_tracked_flow_bootstrap(request);
 
         assert_eq!(
@@ -9470,6 +9636,66 @@ host_environment:
         assert_eq!(
             tracked_design_doc_path_for_gates(&role_selection).as_deref(),
             expected["design_doc_path"].as_str()
+        );
+    }
+
+    #[test]
+    fn specification_packet_validator_uses_resolved_tracked_design_doc_scope() {
+        let request = "Define unified command output interface contract";
+        let role_selection = design_first_role_selection_with_incomplete_bootstrap(request);
+        let expected_design_doc_path = resolved_tracked_design_doc_path(&role_selection)
+            .expect("design-first fallback should resolve design doc path");
+        let delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
+            "run-resolved-spec-scope",
+            "specification",
+            "business_analyst",
+            TASK_CLASS_SPECIFICATION,
+            TASK_CLASS_SPECIFICATION,
+            request,
+            Some(expected_design_doc_path.as_str()),
+        );
+        let packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "request_text": request,
+            "role_selection_full": role_selection,
+            "owned_paths": delivery_task_packet["owned_paths"].clone(),
+            "read_only_paths": delivery_task_packet["read_only_paths"].clone(),
+            "delivery_task_packet": delivery_task_packet,
+        });
+
+        validate_runtime_dispatch_packet_contract(&packet, "test packet")
+            .expect("validator should use the same resolved design-doc fallback as renderer");
+        assert_eq!(
+            packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!([expected_design_doc_path])
+        );
+    }
+
+    #[test]
+    fn downstream_specification_packet_uses_resolved_tracked_design_doc_scope() {
+        let request = "Define unified command output interface contract";
+        let role_selection = design_first_role_selection_with_incomplete_bootstrap(request);
+        let expected_design_doc_path = resolved_tracked_design_doc_path(&role_selection)
+            .expect("design-first fallback should resolve design doc path");
+        let receipt = executed_agent_lane_receipt(
+            "spec-pack",
+            "internal_subagents",
+            "middle",
+            "business_analyst",
+            Some("specification"),
+        );
+        let packet = downstream_dispatch_packet_body(
+            &role_selection,
+            &serde_json::json!({ "run_id": "run-resolved-downstream-spec-scope" }),
+            &receipt,
+            None,
+        );
+
+        validate_runtime_dispatch_packet_contract(&packet, "test downstream packet")
+            .expect("downstream writer should emit validator-compatible specification scope");
+        assert_eq!(
+            packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!([expected_design_doc_path])
         );
     }
 
@@ -9910,6 +10136,31 @@ host_environment:
             .expect_err("packet without goal should fail closed");
         assert!(error.contains("missing required packet fields"));
         assert!(error.contains("goal"));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_rejects_delivery_task_identity_mismatch() {
+        let malformed = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "delivery_task_packet": {
+                "packet_id": "run-1::orchestrator::delivery",
+                "task_id": "attacker-controlled-task",
+                "backlog_id": "run-1",
+                "goal": "Execute bounded orchestrator handoff",
+                "scope_in": ["dispatch_target:orchestrator", "runtime_role:worker"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "definition_of_done": ["bounded runtime result artifact"],
+                "verification_command": "vida taskflow consume continue --run-id run-1",
+                "proof_target": "runtime dispatch result artifact plus updated dispatch receipt",
+                "stop_rules": ["stop after writing bounded dispatch result or explicit blocker"],
+                "blocking_question": "What is the next bounded action required for orchestrator?"
+            }
+        });
+        let error = validate_runtime_dispatch_packet_contract(&malformed, "test packet")
+            .expect_err("delivery task_id/backlog_id mismatch should fail closed");
+        assert!(error.contains("dispatch packet contract invalid"));
+        assert!(error.contains("task_id `attacker-controlled-task`"));
+        assert!(error.contains("backlog_id `run-1`"));
     }
 
     #[test]
@@ -13727,6 +13978,312 @@ host_environment:
     }
 
     #[test]
+    fn spec_pack_downstream_reuses_task_identity_when_packet_design_flag_is_stale() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let stale_design_doc_path = harness.path().join("feature-y-stale-design.md");
+        std::fs::create_dir_all(
+            stale_design_doc_path
+                .parent()
+                .expect("stale design doc parent should exist"),
+        )
+        .expect("create stale design doc directory");
+        std::fs::write(
+            &stale_design_doc_path,
+            "# Stale Design\n\nStatus: `draft`\n",
+        )
+        .expect("write stale design doc");
+        let role_selection = specification_test_role_selection(
+            "feature-y-spec",
+            &stale_design_doc_path.display().to_string(),
+        );
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-feature-y".to_string(),
+            dispatch_target: "spec-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida taskflow bootstrap-spec".to_string()),
+            dispatch_command: Some("vida taskflow bootstrap-spec".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: Some("/tmp/spec-pack-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("taskflow_state_store".to_string()),
+            recorded_at: "2026-06-05T00:00:00Z".to_string(),
+        };
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(harness_state_root(&harness)))
+            .expect("state store should initialize");
+        runtime.block_on(async {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: "feature-y-root",
+                    title: "Feature Y root",
+                    display_id: None,
+                    description: "root container",
+                    issue_type: "epic",
+                    status: "open",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &[],
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create root parent");
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: "feature-y",
+                    title: "Feature Y",
+                    display_id: None,
+                    description: "spec-first feature",
+                    issue_type: "feature",
+                    status: "open",
+                    priority: 1,
+                    parent_id: Some("feature-y-root"),
+                    labels: &["feature-request".to_string(), "spec-first".to_string()],
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create feature parent");
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: "feature-y-spec",
+                    title: "Feature Y spec",
+                    display_id: None,
+                    description: "closed spec child",
+                    issue_type: "task",
+                    status: "closed",
+                    priority: 1,
+                    parent_id: Some("feature-y"),
+                    labels: &["spec-pack".to_string()],
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create closed spec child");
+            store
+                .record_run_graph_dispatch_task_identity(
+                    &crate::state_store::RunGraphDispatchTaskIdentity {
+                        run_id: "run-feature-y".to_string(),
+                        feature_epic_id: Some("feature-y".to_string()),
+                        spec_task_id: Some("feature-y-spec".to_string()),
+                        work_pool_task_id: None,
+                        dev_task_id: None,
+                        source: "test_identity".to_string(),
+                        updated_at: "1".to_string(),
+                    },
+                )
+                .await
+                .expect("record task identity");
+        });
+
+        let (target, _command, note, ready, blockers) = runtime.block_on(
+            derive_downstream_dispatch_preview(&store, &role_selection, &receipt),
+        );
+
+        assert_eq!(target.as_deref(), Some("work-pool-pack"));
+        assert!(ready);
+        assert!(
+            blockers.is_empty(),
+            "TaskFlow identity gate should supersede stale packet design blockers: {blockers:?}"
+        );
+        assert!(note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("spec-first feature `feature-y` has a closed spec-pack task"));
+    }
+
+    #[test]
+    fn specification_downstream_reuses_task_identity_when_packet_design_flag_is_stale() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let stale_design_doc_path = harness.path().join("feature-z-stale-design.md");
+        std::fs::create_dir_all(
+            stale_design_doc_path
+                .parent()
+                .expect("stale design doc parent should exist"),
+        )
+        .expect("create stale design doc directory");
+        std::fs::write(
+            &stale_design_doc_path,
+            "# Stale Design\n\nStatus: `draft`\n",
+        )
+        .expect("write stale design doc");
+        let role_selection = specification_test_role_selection(
+            "feature-z-spec",
+            &stale_design_doc_path.display().to_string(),
+        );
+        let result_path = harness.path().join("feature-z-spec-result.json");
+        std::fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&json!({
+                "artifact_kind": "runtime_lane_completion_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "completed_target": "specification",
+                "execution_evidence": {
+                    "status": "recorded",
+                    "receipt_backed": true
+                }
+            }))
+            .expect("encode specification result"),
+        )
+        .expect("write specification result");
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-feature-z".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("work-pool-pack".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_design_finalize".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: Some("specification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-06-05T00:00:00Z".to_string(),
+        };
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(harness_state_root(&harness)))
+            .expect("state store should initialize");
+        runtime.block_on(async {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: "feature-z-root",
+                    title: "Feature Z root",
+                    display_id: None,
+                    description: "root container",
+                    issue_type: "epic",
+                    status: "open",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &[],
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create root parent");
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: "feature-z",
+                    title: "Feature Z",
+                    display_id: None,
+                    description: "spec-first feature",
+                    issue_type: "feature",
+                    status: "open",
+                    priority: 1,
+                    parent_id: Some("feature-z-root"),
+                    labels: &["feature-request".to_string(), "spec-first".to_string()],
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create feature parent");
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: "feature-z-spec",
+                    title: "Feature Z spec",
+                    display_id: None,
+                    description: "closed spec child",
+                    issue_type: "task",
+                    status: "closed",
+                    priority: 1,
+                    parent_id: Some("feature-z"),
+                    labels: &["spec-pack".to_string()],
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create closed spec child");
+            store
+                .record_run_graph_dispatch_task_identity(
+                    &crate::state_store::RunGraphDispatchTaskIdentity {
+                        run_id: "run-feature-z".to_string(),
+                        feature_epic_id: Some("feature-z".to_string()),
+                        spec_task_id: Some("feature-z-spec".to_string()),
+                        work_pool_task_id: None,
+                        dev_task_id: None,
+                        source: "test_identity".to_string(),
+                        updated_at: "1".to_string(),
+                    },
+                )
+                .await
+                .expect("record task identity");
+            refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &json!({ "run_id": "run-feature-z" }),
+                &mut receipt,
+            )
+            .await
+            .expect("refresh downstream preview");
+        });
+
+        assert_eq!(
+            receipt.downstream_dispatch_target.as_deref(),
+            Some("work-pool-pack")
+        );
+        assert!(receipt.downstream_dispatch_ready);
+        assert!(
+            receipt.downstream_dispatch_blockers.is_empty(),
+            "TaskFlow identity gate should clear stale specification blockers: {:?}",
+            receipt.downstream_dispatch_blockers
+        );
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+    }
+
+    #[test]
     fn packet_ready_specification_lane_stays_active_while_work_pool_handoff_remains_blocked() {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
@@ -17471,7 +18028,7 @@ host_environment:
         assert_eq!(advanced.active_node, "implementer");
         assert_eq!(advanced.next_node.as_deref(), Some("coach"));
         assert_eq!(advanced.handoff_state, "awaiting_coach");
-        assert_eq!(advanced.resume_target, "dispatch.coach");
+        assert_eq!(advanced.resume_target, "dispatch.coach_lane");
         assert_eq!(advanced.lifecycle_stage, "implementer_active");
     }
 
@@ -18434,6 +18991,34 @@ host_environment:
         std::fs::create_dir_all(harness.path().join(".vida/config")).expect("config dir");
         std::fs::create_dir_all(harness.path().join(".vida/db")).expect("db dir");
         std::fs::create_dir_all(harness.path().join(".vida/project")).expect("project dir");
+        let framework_source = harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-source/framework");
+        std::fs::create_dir_all(&framework_source).expect("framework source root");
+        std::fs::write(
+            framework_source.join("agent-definition.md"),
+            "agent definition fixture\n",
+        )
+        .expect("agent definition fixture");
+        std::fs::write(
+            framework_source.join("instruction-contract.md"),
+            "instruction contract fixture\n",
+        )
+        .expect("instruction contract fixture");
+        std::fs::write(
+            framework_source.join("prompt-template-config.md"),
+            "prompt template fixture\n",
+        )
+        .expect("prompt template fixture");
+        let framework_memory_source = harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-memory-source");
+        std::fs::create_dir_all(&framework_memory_source).expect("framework memory source root");
+        std::fs::write(
+            framework_memory_source.join("framework-memory.md"),
+            "framework memory fixture\n",
+        )
+        .expect("framework memory fixture");
         std::fs::write(harness.path().join("AGENTS.md"), "test").expect("agents marker");
         std::fs::write(
             harness.path().join("vida.config.yaml"),
@@ -18445,11 +19030,40 @@ host_environment:
       enabled: true
       execution_class: internal
       max_runtime_seconds: 240
-agent_system:
-  subagents:
-    internal_subagents:
-      enabled: true
-      subagent_backend_class: internal
+      carriers:
+        internal_subagents:
+          description: fixture internal carrier
+          rate: 1
+          model: fixture-model
+          model_reasoning_effort: low
+          sandbox_mode: workspace-write
+          default_model_profile: fixture-low
+          default_runtime_role: pm
+          runtime_roles:
+            - pm
+            - specification
+          task_classes:
+            - specification
+          model_profiles:
+            fixture-low:
+              profile_id: fixture-low
+              provider: test
+              model_ref: fixture-model
+              reasoning_effort: low
+              normalized_cost_units: 1
+              runtime_roles:
+                - pm
+                - specification
+              task_classes:
+                - specification
+              readiness:
+                required: false
+                ready: true
+agent_extensions:
+  role_selection:
+    fallback_role: orchestrator
+    mode: fixed
+agent_system: {}
 "#,
         )
         .expect("config should write");
@@ -18472,7 +19086,37 @@ agent_system:
             &dispatch_packet_path,
             serde_json::to_string_pretty(&serde_json::json!({
                 "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
                 "dispatch_target": "specification",
+                "activation_agent_type": "internal_subagents",
+                "activation_runtime_role": "pm",
+                "selected_backend": "internal_subagents",
+                "delivery_task_packet": {
+                    "packet_id": "run-activation-view-only-fast-block::specification",
+                    "goal": "Create the bounded TaskFlow case catalog.",
+                    "scope_in": ["dispatch_target:specification"],
+                    "read_only_paths": ["crates/vida/src"],
+                    "definition_of_done": ["record activation-view-only blocker"],
+                    "verification_command": "vida taskflow recovery status run-activation-view-only-fast-block",
+                    "proof_target": "activation-view-only blocker",
+                    "stop_rules": ["stop after blocker receipt"],
+                    "blocking_question": "Why is this internal activation view-only?"
+                },
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "fixed",
+                    "fallback_role": "orchestrator",
+                    "request": "Create the bounded TaskFlow case catalog.",
+                    "selected_role": "pm",
+                    "single_task_only": true,
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["specification"],
+                    "compiled_bundle": null,
+                    "execution_plan": null,
+                    "reason": "test"
+                },
                 "activation_semantics": {
                     "activation_kind": "activation_view",
                     "view_only": true,
@@ -18592,10 +19236,9 @@ agent_system:
             parsed["blocker_code"],
             INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
         );
-        assert!(parsed["provider_error"]
-            .as_str()
-            .expect("provider_error should render")
-            .contains("receipt-backed completion"));
+        if let Some(provider_error) = parsed["provider_error"].as_str() {
+            assert!(provider_error.contains("receipt-backed completion"));
+        }
     }
 
     #[test]
@@ -22207,7 +22850,10 @@ pub(crate) fn write_runtime_dispatch_packet(
         validate_runtime_dispatch_packet_contract(&body, "Runtime dispatch packet").err();
     if ctx.receipt.dispatch_status != "blocked" {
         if let Some(error) = validation_error {
-            return Err(error);
+            return Err(format!(
+                "{error}; run_id `{}`; dispatch packet `{}`",
+                ctx.receipt.run_id, packet_path_display
+            ));
         }
     }
     let encoded = serde_json::to_string_pretty(&body)
@@ -23942,10 +24588,15 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
         } else {
             None
         };
+    let downstream_lane_suffix = if receipt.dispatch_kind == "taskflow_pack" {
+        ""
+    } else {
+        "_lane"
+    };
     let (handoff_state, resume_target) = if let Some(next_target) = next_node.as_deref() {
         (
             format!("awaiting_{next_target}"),
-            format!("dispatch.{next_target}"),
+            format!("dispatch.{next_target}{downstream_lane_suffix}"),
         )
     } else {
         ("none".to_string(), "none".to_string())

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::host_runtime_materialization::host_runtime_dispatch_alias_catalog_for_root;
+use crate::runtime_assignment_builder::build_stage_attempt_policy_from_config;
 use crate::status_surface_external_cli::external_cli_preflight_summary;
 use crate::status_surface_host_cli_summary::{
     host_cli_system_carrier_summary, host_cli_system_entry_summary,
@@ -50,6 +51,112 @@ fn host_bridge_capacity_summary(
         } else {
             vec!["Configure an enabled host_tool_bridge subagent backend before dispatching internal_subagents.".to_string()]
         }
+    })
+}
+
+fn stage_attempt_assignment_status(assignment: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "attempt_id": assignment["attempt_id"],
+        "enabled": assignment["enabled"].as_bool().unwrap_or(false),
+        "reason": assignment["reason"],
+        "isolation": assignment["isolation"],
+        "requested_carrier_id": assignment["requested_carrier_id"],
+        "requested_model_profile_id": assignment["requested_model_profile_id"],
+        "selected_backend_id": assignment["selected_backend_id"],
+        "selected_dispatch_backend_id": assignment["selected_dispatch_backend_id"],
+        "selected_carrier_id": assignment["selected_carrier_id"],
+        "selected_model_profile_id": assignment["selected_model_profile_id"],
+        "selected_model_ref": assignment["selected_model_ref"],
+        "selected_model_provider": assignment["selected_model_provider"],
+        "selected_write_scope": assignment["selected_write_scope"],
+        "selected_model_profile_readiness_status": assignment["selected_model_profile_readiness_status"],
+        "selected_external_backend_readiness_status": assignment["selected_external_backend_readiness"]["status"],
+        "normalized_cost_units": assignment["normalized_cost_units"],
+        "estimated_task_price_units": assignment["estimated_task_price_units"],
+        "selected_over_budget": assignment["selected_over_budget"],
+        "budget_verdict": assignment["budget_verdict"],
+        "pricing_freshness_status": assignment["pricing_readiness"]["pricing_freshness_status"],
+    })
+}
+
+fn stage_attempt_policy_status_summary(
+    project_root: &Path,
+    overlay: &serde_yaml::Value,
+    selected_cli_system: &str,
+) -> serde_json::Value {
+    let Some(policies) = crate::yaml_lookup(overlay, &["agent_system", "stage_attempt_policies"])
+        .and_then(serde_yaml::Value::as_mapping)
+    else {
+        return serde_json::json!({
+            "status": "not_configured",
+            "source_path": "agent_system.stage_attempt_policies",
+            "stage_count": 0,
+            "stages": {},
+        });
+    };
+    let host_cli_system_registry =
+        crate::project_activator_surface::host_cli_system_registry_with_fallback(Some(overlay));
+    let carrier_projection = crate::carrier_runtime_projection::build_carrier_runtime_projection(
+        overlay,
+        project_root,
+        Some(selected_cli_system),
+        &host_cli_system_registry,
+        &serde_yaml::Value::Null,
+        None,
+    );
+    let compiled_bundle = serde_json::json!({
+        "agent_system": serde_json::to_value(
+            crate::yaml_lookup(overlay, &["agent_system"])
+                .cloned()
+                .unwrap_or(serde_yaml::Value::Null)
+        )
+        .unwrap_or(serde_json::Value::Null),
+        "carrier_runtime": carrier_projection.carrier_runtime,
+    });
+    let mut stages = serde_json::Map::new();
+    let mut blocked_stage_count = 0usize;
+    for key in policies.keys() {
+        let Some(stage_id) = key
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let policy = build_stage_attempt_policy_from_config(&compiled_bundle, stage_id);
+        if policy["status"].as_str() != Some("pass") {
+            blocked_stage_count += 1;
+        }
+        let attempts = policy["attempts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(stage_attempt_assignment_status)
+            .collect::<Vec<_>>();
+        let consolidator = if policy["consolidator"].is_object() {
+            stage_attempt_assignment_status(&policy["consolidator"])
+        } else {
+            serde_json::Value::Null
+        };
+        stages.insert(
+            stage_id.to_string(),
+            serde_json::json!({
+                "status": policy["status"],
+                "blocker_codes": policy["blocker_codes"],
+                "source_path": policy["source_path"],
+                "fanout": policy["fanout"],
+                "attempt_count": policy["attempt_count"],
+                "attempts": attempts,
+                "consolidator": consolidator,
+            }),
+        );
+    }
+    serde_json::json!({
+        "status": if blocked_stage_count == 0 { "pass" } else { "blocked" },
+        "source_path": "agent_system.stage_attempt_policies",
+        "stage_count": stages.len(),
+        "blocked_stage_count": blocked_stage_count,
+        "stages": stages,
     })
 }
 
@@ -169,6 +276,10 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
                 .unwrap_or(serde_yaml::Value::Null),
         )
         .unwrap_or(serde_json::Value::Null),
+    );
+    payload.insert(
+        "stage_attempt_policies".to_string(),
+        stage_attempt_policy_status_summary(project_root, &overlay, &selected_cli_system),
     );
     payload.insert("agents".to_string(), serde_json::json!({}));
     payload.insert("subagent_backends".to_string(), serde_json::json!({}));
@@ -404,6 +515,41 @@ mod tests {
         assert_eq!(
             summary["host_bridge_capacity"]["blocked_result_code"],
             "host_agent_capacity_unavailable"
+        );
+        assert!(
+            summary["stage_attempt_policies"]["stage_count"]
+                .as_u64()
+                .unwrap_or_default()
+                >= 5,
+            "status should expose configured stage attempt policy count",
+        );
+        let implementation_attempt =
+            &summary["stage_attempt_policies"]["stages"]["implementation"]["attempts"][0];
+        assert_eq!(
+            implementation_attempt["requested_carrier_id"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            implementation_attempt["selected_backend_id"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            implementation_attempt["selected_model_profile_id"],
+            "codex_gpt55_low_write"
+        );
+        assert_eq!(
+            implementation_attempt["selected_write_scope"],
+            "orchestrator_native"
+        );
+        assert_eq!(
+            implementation_attempt["selected_model_profile_readiness_status"],
+            "ready"
+        );
+        assert_eq!(implementation_attempt["normalized_cost_units"], 1);
+        assert_eq!(
+            summary["stage_attempt_policies"]["stages"]["implementation"]["consolidator"]
+                ["selected_model_profile_id"],
+            "codex_gpt55_high_readonly"
         );
     }
 

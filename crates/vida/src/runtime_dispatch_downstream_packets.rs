@@ -118,7 +118,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         handoff_task_class,
         closure_class,
         &role_selection.request,
-        crate::runtime_dispatch_state::tracked_design_doc_path(role_selection),
+        crate::runtime_dispatch_state::resolved_tracked_design_doc_path(role_selection).as_deref(),
     );
     if delivery_packet_task_class_requires_owned_paths(handoff_task_class) {
         let owned_paths = if implementation_owned_paths_override.is_empty() {
@@ -461,7 +461,14 @@ pub(crate) fn write_runtime_downstream_dispatch_packet_with_owned_paths(
         run_graph_bootstrap,
         receipt,
         implementation_owned_paths_override,
-    )?;
+    )
+    .map_err(|error| {
+        format!(
+            "{error}; run_id `{}`; dispatch packet `{}`",
+            receipt.run_id,
+            packet_path.display()
+        )
+    })?;
     let _ = target;
     Ok(Some(packet_path.display().to_string()))
 }

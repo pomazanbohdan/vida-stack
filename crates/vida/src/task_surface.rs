@@ -6,6 +6,7 @@ use crate::task_cli_render::{
     task_ready_payload, task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub(crate) struct TaskReadMetadata {
@@ -91,6 +92,37 @@ struct TaskCloseEpicProgressBlocker {
     title: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskEpicReconcileReceipt {
+    surface: &'static str,
+    status: String,
+    scope: String,
+    dry_run: bool,
+    close_if_complete: bool,
+    inspected_epic_count: usize,
+    closed_epics: Vec<TaskEpicReconcileClosedRow>,
+    blocked_epics: Vec<TaskEpicReconcileBlockedRow>,
+    missing_children: Vec<String>,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskEpicReconcileClosedRow {
+    epic_id: String,
+    child_count: usize,
+    reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskEpicReconcileBlockedRow {
+    epic_id: String,
+    child_count: usize,
+    open_child_count: usize,
+    in_progress_child_count: usize,
+    reason: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 struct TaskEpicProgressSummary {
     epic_count: usize,
@@ -125,6 +157,131 @@ struct TaskEpicProgressRow {
     closure_candidate: bool,
     closure_candidate_state: String,
     recommended_next_action: String,
+}
+
+async fn reconcile_epics_from_direct_children(
+    store: &StateStore,
+    close_if_complete: bool,
+    dry_run: bool,
+) -> Result<TaskEpicReconcileReceipt, StateStoreError> {
+    let tasks = store.all_tasks().await?;
+    let mut closed_epics = Vec::new();
+    let mut blocked_epics = Vec::new();
+    let mut inspected_epic_count = 0usize;
+    let mut mutated_epics = BTreeSet::<String>::new();
+    let mut epics = tasks
+        .iter()
+        .filter(|task| crate::state_store::work_item_is_program_container(&task.issue_type))
+        .filter(|task| !StateStore::task_status_is_closed_like(&task.status))
+        .cloned()
+        .collect::<Vec<_>>();
+    epics.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then(left.id.cmp(&right.id))
+    });
+
+    for epic in epics {
+        inspected_epic_count += 1;
+        if mutated_epics.contains(&epic.id) {
+            continue;
+        }
+
+        let children = tasks
+            .iter()
+            .filter(|task| {
+                StateStore::parent_id_for_task(task).as_deref() == Some(epic.id.as_str())
+            })
+            .collect::<Vec<_>>();
+        let child_count = children.len();
+        if child_count == 0 {
+            blocked_epics.push(TaskEpicReconcileBlockedRow {
+                epic_id: epic.id,
+                child_count,
+                open_child_count: 0,
+                in_progress_child_count: 0,
+                reason: "no_direct_children".to_string(),
+            });
+            continue;
+        }
+
+        let open_child_count = children
+            .iter()
+            .filter(|child| child.status == "open")
+            .count();
+        let in_progress_child_count = children
+            .iter()
+            .filter(|child| child.status == "in_progress")
+            .count();
+        let all_children_closed = children
+            .iter()
+            .all(|child| StateStore::task_status_is_closed_like(&child.status));
+        if !all_children_closed {
+            blocked_epics.push(TaskEpicReconcileBlockedRow {
+                epic_id: epic.id,
+                child_count,
+                open_child_count,
+                in_progress_child_count,
+                reason: "direct_children_not_all_closed".to_string(),
+            });
+            continue;
+        }
+
+        if close_if_complete && !dry_run {
+            match store
+                .close_task(
+                    &epic.id,
+                    "all direct child tasks closed by epic auto-reconcile",
+                )
+                .await
+            {
+                Ok(closed) => {
+                    mutated_epics.insert(closed.id.clone());
+                    closed_epics.push(TaskEpicReconcileClosedRow {
+                        epic_id: closed.id,
+                        child_count,
+                        reason: "all_direct_children_closed".to_string(),
+                    });
+                }
+                Err(error) => blocked_epics.push(TaskEpicReconcileBlockedRow {
+                    epic_id: epic.id,
+                    child_count,
+                    open_child_count,
+                    in_progress_child_count,
+                    reason: format!("close_failed:{error}"),
+                }),
+            }
+        } else {
+            closed_epics.push(TaskEpicReconcileClosedRow {
+                epic_id: epic.id,
+                child_count,
+                reason: "eligible_all_direct_children_closed".to_string(),
+            });
+        }
+    }
+
+    let next_actions = if close_if_complete || closed_epics.is_empty() {
+        Vec::new()
+    } else {
+        vec![
+            "Run vida task reconcile --epics --close-if-complete to close eligible epics."
+                .to_string(),
+        ]
+    };
+
+    Ok(TaskEpicReconcileReceipt {
+        surface: "vida task reconcile",
+        status: "pass".to_string(),
+        scope: "epics".to_string(),
+        dry_run,
+        close_if_complete,
+        inspected_epic_count,
+        closed_epics,
+        blocked_epics,
+        missing_children: Vec::new(),
+        blocker_codes: Vec::new(),
+        next_actions,
+    })
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -1122,48 +1279,26 @@ fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value
         crate::release1_contracts::BlockerCode::DependencyGraphIssues,
     )
     .unwrap_or_else(|| "dependency_graph_issues".to_string())];
-    let next_actions = vec![
-        "Repair the JSONL dependency graph issues, then rerun `vida task import-jsonl <path> --json`."
-            .to_string(),
-    ];
+    let retry_command =
+        crate::operator_command_text::human_command("vida task import-jsonl <path> --json");
+    let next_actions = vec![format!(
+        "Repair the JSONL dependency graph issues, then rerun `{retry_command}`."
+    )];
     let artifact_refs = serde_json::json!({
         "surface": "vida task import-jsonl",
         "source_path": path,
     });
-    let shared_fields = serde_json::json!({
-        "status": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
-        "trace_id": serde_json::Value::Null,
-        "workflow_class": serde_json::Value::Null,
-        "risk_tier": serde_json::Value::Null,
-        "blocker_codes": blocker_codes,
-        "next_actions": next_actions,
-        "artifact_refs": artifact_refs,
-    });
-    let operator_contracts = serde_json::json!({
-        "contract_id": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id,
-        "schema_version": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.schema_version,
-        "status": shared_fields["status"],
-        "trace_id": serde_json::Value::Null,
-        "workflow_class": serde_json::Value::Null,
-        "risk_tier": serde_json::Value::Null,
-        "blocker_codes": shared_fields["blocker_codes"],
-        "next_actions": shared_fields["next_actions"],
-        "artifact_refs": shared_fields["artifact_refs"],
-    });
-    serde_json::json!({
-        "status": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
-        "surface": "vida task import-jsonl",
-        "trace_id": serde_json::Value::Null,
-        "workflow_class": serde_json::Value::Null,
-        "risk_tier": serde_json::Value::Null,
-        "source_path": path,
-        "blocker_codes": blocker_codes,
-        "next_actions": next_actions,
-        "error": error,
-        "shared_fields": shared_fields,
-        "operator_contracts": operator_contracts,
-        "artifact_refs": artifact_refs,
-    })
+    crate::operator_contracts::build_release1_operator_output_payload(
+        "vida task import-jsonl",
+        blocker_codes,
+        next_actions,
+        artifact_refs,
+        serde_json::json!({
+            "source_path": path,
+            "error": error,
+        }),
+    )
+    .expect("task import-jsonl error payload should preserve release-1 operator contract")
 }
 
 fn task_next_lawful_projection_name() -> &'static str {
@@ -1860,13 +1995,10 @@ fn task_direct_child_progress_summary_from_rows(
     let all_children_closed_like = children
         .iter()
         .all(|task| StateStore::task_status_is_closed_like(&task.status));
-    let closure_candidate = root_task.issue_type == "epic"
-        && !root_closed
-        && descendant_count > 0
-        && all_children_closed_like;
+    let closure_candidate = !root_closed && descendant_count > 0 && all_children_closed_like;
     let next_required_command = if closure_candidate {
         Some(format!(
-            "vida task close {} --reason \"direct children closed\" --json",
+            "vida task close {} --reason \"direct children closed\"",
             crate::launcher_task_commands::shell_quote(&root_task.id)
         ))
     } else if descendant_count == 0 {
@@ -5527,8 +5659,13 @@ fn runtime_binding_task_closed_next_action(
             .to_string();
     }
     let run_id = crate::shell_quote(run_id);
+    let recovery_command = crate::operator_command_text::human_command(&format!(
+        "vida taskflow recovery status {run_id} --json"
+    ));
+    let continue_command =
+        crate::operator_command_text::human_command("vida taskflow consume continue --json");
     format!(
-        "Runtime binding points to closed task `{}` for run `{run_id}`. Inspect the concrete recovery state with `vida taskflow recovery status {run_id} --json`; resolve or retire the blocked run, then refresh continuation evidence with `vida taskflow consume continue --json` before selecting the next bounded step.",
+        "Runtime binding points to closed task `{}` for run `{run_id}`. Inspect the concrete recovery state with `{recovery_command}`; resolve or retire the blocked run, then refresh continuation evidence with `{continue_command}` before selecting the next bounded step.",
         binding.task_id
     )
 }
@@ -5538,9 +5675,15 @@ fn runtime_binding_task_paused_next_action(
 ) -> String {
     let task_id = crate::shell_quote(&binding.task_id);
     let run_id = crate::shell_quote(&binding.run_id);
+    let resume_command = crate::operator_command_text::human_command(&format!(
+        "vida task update {task_id} --status in_progress --json"
+    ));
+    let bind_command = crate::operator_command_text::human_command(&format!(
+        "vida taskflow continuation bind {run_id} --task-id <task-id> --json"
+    ));
     format!(
-        "Runtime binding points to paused task `{}`. Resume it with `vida task update {} --status in_progress --json`, or bind a different lawful unit with `vida taskflow continuation bind {} --task-id <task-id> --json` if the pause is still intentional.",
-        binding.task_id, task_id, run_id
+        "Runtime binding points to paused task `{}`. Resume it with `{resume_command}`, or bind a different lawful unit with `{bind_command}` if the pause is still intentional.",
+        binding.task_id
     )
 }
 
@@ -5556,8 +5699,11 @@ fn runtime_binding_task_missing_next_action(
         return base;
     }
     let run_id = crate::shell_quote(run_id);
+    let bind_command = crate::operator_command_text::human_command(&format!(
+        "vida taskflow continuation bind {run_id} --task-id <task-id> --json"
+    ));
     format!(
-        "{base} After recovery proves the run is safe to rebind, record the explicit replacement with `vida taskflow continuation bind {run_id} --task-id <task-id> --json` for missing task `{}`.",
+        "{base} After recovery proves the run is safe to rebind, record the explicit replacement with `{bind_command}` for missing task `{}`.",
         binding.task_id
     )
 }
@@ -5565,9 +5711,17 @@ fn runtime_binding_task_missing_next_action(
 fn runtime_binding_open_delegated_cycle_next_action(
     binding: &state_store::RunGraphContinuationBinding,
 ) -> String {
+    let lane_show_command = crate::operator_command_text::human_command(&format!(
+        "vida lane show {} --json",
+        crate::shell_quote(&binding.run_id)
+    ));
+    let recovery_command = crate::operator_command_text::human_command(&format!(
+        "vida taskflow recovery status {} --json",
+        crate::shell_quote(&binding.run_id)
+    ));
     format!(
-        "Runtime binding for task `{}` is still inside an open delegated cycle for run `{}`. Inspect `vida lane show {} --json` and `vida taskflow recovery status {} --json`; wait for a receipt-backed delegated completion or record structured exception takeover before selecting another TaskFlow step.",
-        binding.task_id, binding.run_id, binding.run_id, binding.run_id
+        "Runtime binding for task `{}` is still inside an open delegated cycle for run `{}`. Inspect `{lane_show_command}` and `{recovery_command}`; wait for a receipt-backed delegated completion or record structured exception takeover before selecting another TaskFlow step.",
+        binding.task_id, binding.run_id
     )
 }
 
@@ -5575,29 +5729,20 @@ fn runtime_dispatch_receipt_has_ready_downstream_handoff(
     expected_run_id: Option<&str>,
     dispatch: Option<&state_store::RunGraphDispatchReceiptSummary>,
 ) -> bool {
-    dispatch.is_some_and(|dispatch| {
-        expected_run_id.is_some_and(|run_id| dispatch.run_id == run_id)
-            && dispatch.dispatch_status == "executed"
-            && dispatch.blocker_code.is_none()
-            && dispatch.downstream_dispatch_ready
-            && dispatch.downstream_dispatch_blockers.is_empty()
-            && dispatch
-                .downstream_dispatch_status
-                .as_deref()
-                .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
-    })
+    crate::runtime_dispatch_receipt_helpers::dispatch_summary_has_clean_ready_downstream_handoff(
+        dispatch,
+        expected_run_id,
+    )
 }
 
 fn runtime_dispatch_receipt_has_completed_lane(
     expected_run_id: Option<&str>,
     dispatch: Option<&state_store::RunGraphDispatchReceiptSummary>,
 ) -> bool {
-    dispatch.is_some_and(|dispatch| {
-        expected_run_id.is_some_and(|run_id| dispatch.run_id == run_id)
-            && dispatch.dispatch_status == "executed"
-            && dispatch.lane_status == "lane_completed"
-            && dispatch.blocker_code.is_none()
-    })
+    crate::runtime_dispatch_receipt_helpers::dispatch_summary_has_clean_completed_lane(
+        dispatch,
+        expected_run_id,
+    )
 }
 
 fn downstream_dispatch_command_for_task_next_lawful(
@@ -5682,24 +5827,25 @@ fn pass_ready_downstream_handoff_task_next_lawful_receipt(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|command| {
+                let command = crate::operator_command_text::human_command(command);
                 format!(
                     "Continue `{}` with downstream handoff command `{}`.",
                     binding.task_id, command
                 )
             })
             .unwrap_or_else(|| {
-                format!(
-                    "Inspect `{}` with `vida lane show {} --json`.",
-                    binding.task_id,
+                let lane_show_command = crate::operator_command_text::human_command(&format!(
+                    "vida lane show {} --json",
                     crate::shell_quote(&binding.run_id)
-                )
+                ));
+                format!("Inspect `{}` with `{lane_show_command}`.", binding.task_id)
             })
     } else {
-        format!(
-            "Continue `{}` with `vida taskflow consume continue --run-id {} --json`.",
-            binding.task_id,
+        let continue_command = crate::operator_command_text::human_command(&format!(
+            "vida taskflow consume continue --run-id {} --json",
             crate::shell_quote(&binding.run_id)
-        )
+        ));
+        format!("Continue `{}` with `{continue_command}`.", binding.task_id)
     };
     pass_task_next_lawful_receipt(
         binding.active_bounded_unit.clone(),
@@ -5801,11 +5947,13 @@ fn task_next_lawful_receipt(
                     .iter()
                     .any(|candidate| candidate.task_id == binding.task_id)
             {
+                let next_action =
+                    crate::status_surface_signals::continuation_binding_ambiguous_next_action();
                 return blocked_task_next_lawful_receipt(
                     binding.active_bounded_unit.clone(),
                     ready_task_candidates,
                     "runtime_ready_candidate_conflict",
-                    crate::status_surface_signals::continuation_binding_ambiguous_next_action(),
+                    &next_action,
                 );
             }
             return pass_task_next_lawful_receipt(
@@ -5909,6 +6057,335 @@ fn path_is_explicitly_owned(path: &str, explicit_files: &[String]) -> bool {
                 .map(|suffix| suffix.starts_with('/'))
                 .unwrap_or(false)
     })
+}
+
+async fn run_task_attempt(command: TaskAttemptArgs) -> ExitCode {
+    match command.command {
+        TaskAttemptCommand::Record(command) => {
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => {
+                    let request = state_store::RecordTaskAttemptRequest {
+                        attempt_id: command.attempt_id,
+                        task_id: command.task_id.clone(),
+                        stage_id: command.stage_id.clone(),
+                        backend: command.backend,
+                        model_profile: command.model_profile,
+                        isolation: command.isolation,
+                        freshness: command.freshness,
+                        status: command.status,
+                        artifact_refs: command.artifact_refs,
+                        consolidation_receipt_id: command.consolidation_receipt_id,
+                    };
+                    match store.record_task_attempt(request).await {
+                        Ok(attempt) => {
+                            let summary = store
+                                .task_stage_summary(&attempt.task_id, &attempt.stage_id)
+                                .await
+                                .ok();
+                            print_task_attempt_payload(
+                                "vida task attempt record",
+                                command.render,
+                                command.json,
+                                task_attempt_success_payload(
+                                    "vida task attempt record",
+                                    &attempt,
+                                    summary,
+                                ),
+                            )
+                        }
+                        Err(error) => print_task_attempt_payload(
+                            "vida task attempt record",
+                            command.render,
+                            command.json,
+                            task_attempt_error_payload(
+                                "vida task attempt record",
+                                Some(command.task_id.as_str()),
+                                Some(command.stage_id.as_str()),
+                                None,
+                                &error,
+                            ),
+                        ),
+                    }
+                }
+                Err(error) => print_task_attempt_payload(
+                    "vida task attempt record",
+                    command.render,
+                    command.json,
+                    task_attempt_store_error_payload("vida task attempt record", &error),
+                ),
+            }
+        }
+        TaskAttemptCommand::Transition(command) => {
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => {
+                    let request = state_store::TransitionTaskAttemptRequest {
+                        attempt_id: command.attempt_id.clone(),
+                        task_id: command.task_id.clone(),
+                        stage_id: command.stage_id.clone(),
+                        status: command.status,
+                        artifact_refs: command.artifact_refs,
+                        consolidation_receipt_id: command.consolidation_receipt_id,
+                    };
+                    match store.transition_task_attempt(request).await {
+                        Ok(attempt) => {
+                            let summary = store
+                                .task_stage_summary(&attempt.task_id, &attempt.stage_id)
+                                .await
+                                .ok();
+                            print_task_attempt_payload(
+                                "vida task attempt transition",
+                                command.render,
+                                command.json,
+                                task_attempt_success_payload(
+                                    "vida task attempt transition",
+                                    &attempt,
+                                    summary,
+                                ),
+                            )
+                        }
+                        Err(error) => print_task_attempt_payload(
+                            "vida task attempt transition",
+                            command.render,
+                            command.json,
+                            task_attempt_error_payload(
+                                "vida task attempt transition",
+                                Some(command.task_id.as_str()),
+                                Some(command.stage_id.as_str()),
+                                Some(command.attempt_id.as_str()),
+                                &error,
+                            ),
+                        ),
+                    }
+                }
+                Err(error) => print_task_attempt_payload(
+                    "vida task attempt transition",
+                    command.render,
+                    command.json,
+                    task_attempt_store_error_payload("vida task attempt transition", &error),
+                ),
+            }
+        }
+        TaskAttemptCommand::Summary(command) => {
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing_read_only(state_dir).await {
+                Ok(store) => match store
+                    .task_stage_summary(&command.task_id, &command.stage_id)
+                    .await
+                {
+                    Ok(summary) => print_task_attempt_payload(
+                        "vida task attempt summary",
+                        command.render,
+                        command.json,
+                        task_attempt_summary_payload("vida task attempt summary", summary),
+                    ),
+                    Err(error) => print_task_attempt_payload(
+                        "vida task attempt summary",
+                        command.render,
+                        command.json,
+                        task_attempt_error_payload(
+                            "vida task attempt summary",
+                            Some(command.task_id.as_str()),
+                            Some(command.stage_id.as_str()),
+                            None,
+                            &error,
+                        ),
+                    ),
+                },
+                Err(error) => print_task_attempt_payload(
+                    "vida task attempt summary",
+                    command.render,
+                    command.json,
+                    task_attempt_store_error_payload("vida task attempt summary", &error),
+                ),
+            }
+        }
+    }
+}
+
+fn print_task_attempt_payload(
+    surface: &str,
+    render: RenderMode,
+    as_json: bool,
+    payload: serde_json::Value,
+) -> ExitCode {
+    if !crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task attempt payload should render as json",
+    ) {
+        if matches!(render, RenderMode::Plain) {
+            crate::operator_toon_report::print(
+                surface,
+                vec![
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "status",
+                        payload["status"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "attempt",
+                        payload["attempt"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "stage_summary",
+                        payload["stage_summary"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "blocker_codes",
+                        payload["blocker_codes"].clone(),
+                    ),
+                    crate::operator_toon_report::OperatorToonField::value(
+                        "next_actions",
+                        payload["next_actions"].clone(),
+                    ),
+                ],
+            );
+        } else {
+            print_surface_header(render, surface);
+            print_surface_line(
+                render,
+                "status",
+                payload["status"].as_str().unwrap_or("blocked"),
+            );
+        }
+    }
+    if payload["status"].as_str() == Some("pass") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn task_attempt_success_payload(
+    surface: &str,
+    attempt: &state_store::TaskAttemptRecord,
+    summary: Option<state_store::TaskStageSummary>,
+) -> serde_json::Value {
+    task_attempt_operator_payload(
+        surface,
+        Vec::new(),
+        Vec::new(),
+        serde_json::json!({
+            "surface": surface,
+            "task_id": attempt.task_id,
+            "stage_id": attempt.stage_id,
+            "attempt_id": attempt.attempt_id,
+        }),
+        serde_json::json!({
+            "attempt": attempt,
+            "stage_summary": summary,
+        }),
+    )
+}
+
+fn task_attempt_summary_payload(
+    surface: &str,
+    summary: state_store::TaskStageSummary,
+) -> serde_json::Value {
+    task_attempt_operator_payload(
+        surface,
+        Vec::new(),
+        Vec::new(),
+        serde_json::json!({
+            "surface": surface,
+            "task_id": summary.task_id,
+            "stage_id": summary.stage_id,
+        }),
+        serde_json::json!({
+            "attempt": serde_json::Value::Null,
+            "stage_summary": summary,
+        }),
+    )
+}
+
+fn task_attempt_store_error_payload(
+    surface: &str,
+    error: &state_store::StateStoreError,
+) -> serde_json::Value {
+    task_attempt_operator_payload(
+        surface,
+        vec![crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::ProjectActivationUnknown,
+        )
+        .to_string()],
+        vec![
+            "Run `vida project-activator` or `vida boot` before recording task attempts."
+                .to_string(),
+        ],
+        serde_json::json!({ "surface": surface }),
+        serde_json::json!({
+            "attempt": serde_json::Value::Null,
+            "stage_summary": serde_json::Value::Null,
+            "error": error.to_string(),
+        }),
+    )
+}
+
+fn task_attempt_error_payload(
+    surface: &str,
+    task_id: Option<&str>,
+    stage_id: Option<&str>,
+    attempt_id: Option<&str>,
+    error: &state_store::StateStoreError,
+) -> serde_json::Value {
+    let blocker = match error {
+        state_store::StateStoreError::MissingTask { .. } => {
+            crate::release1_contracts::BlockerCode::NextActionTargetMissing
+        }
+        state_store::StateStoreError::InvalidTaskRecord { .. } => {
+            crate::release1_contracts::BlockerCode::DispatchPacketContractInvalid
+        }
+        _ => crate::release1_contracts::BlockerCode::Unsupported,
+    };
+    let mut artifact_refs = serde_json::json!({
+        "surface": surface,
+        "task_id": task_id,
+        "stage_id": stage_id,
+    });
+    if let Some(attempt_id) = attempt_id {
+        artifact_refs["attempt_id"] = serde_json::json!(attempt_id);
+    }
+    task_attempt_operator_payload(
+        surface,
+        vec![crate::release1_contracts::blocker_code_str(blocker).to_string()],
+        vec![
+            "Inspect the task binding with `vida task show <task-id>` and retry with a live leaf task, matching stage id, and canonical attempt status."
+                .to_string(),
+        ],
+        artifact_refs,
+        serde_json::json!({
+            "attempt": serde_json::Value::Null,
+            "stage_summary": serde_json::Value::Null,
+            "error": error.to_string(),
+        }),
+    )
+}
+
+fn task_attempt_operator_payload(
+    surface: &str,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: serde_json::Value,
+    extra_fields: serde_json::Value,
+) -> serde_json::Value {
+    crate::operator_contracts::build_release1_operator_output_payload(
+        surface,
+        blocker_codes,
+        next_actions,
+        artifact_refs,
+        extra_fields,
+    )
+    .expect("task attempt payload should satisfy release-1 operator contract")
 }
 
 pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
@@ -6898,7 +7375,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            if command.json {
+            let cache_allowed =
+                command.json && command.fields.is_none() && command.view.trim() == "summary";
+            if cache_allowed {
                 let projection_name = task_ready_projection_name(command.scope.as_deref());
                 if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
                     &state_dir,
@@ -6922,14 +7401,21 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             {
                 Ok((tasks, metadata)) => {
                     if command.json {
-                        let payload =
-                            task_ready_payload(command.scope.as_deref(), &tasks, Some(&metadata));
-                        crate::print_json_pretty(&payload);
-                        crate::operator_projection_cache::write_json_projection(
-                            &state_dir,
-                            &task_ready_projection_name(command.scope.as_deref()),
-                            &payload,
+                        let payload = task_ready_payload(
+                            command.scope.as_deref(),
+                            &tasks,
+                            Some(&metadata),
+                            &command.view,
+                            command.fields.as_deref(),
                         );
+                        crate::print_json_pretty(&payload);
+                        if cache_allowed {
+                            crate::operator_projection_cache::write_json_projection(
+                                &state_dir,
+                                &task_ready_projection_name(command.scope.as_deref()),
+                                &payload,
+                            );
+                        }
                     } else {
                         print_task_ready(
                             command.render,
@@ -6937,6 +7423,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             &tasks,
                             false,
                             Some(&metadata),
+                            &command.view,
+                            command.fields.as_deref(),
                         );
                     }
                     ExitCode::SUCCESS
@@ -7747,6 +8235,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Attempt(command) => run_task_attempt(command).await,
         TaskCommand::Split(command) => run_task_split_like(command, "vida task split").await,
         TaskCommand::SpawnBlocker(command) => {
             run_task_spawn_blocker_like(command, "vida task spawn-blocker").await
@@ -7959,6 +8448,92 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     }
                 }
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        TaskCommand::Reconcile(command) => {
+            if !command.epics {
+                let payload = serde_json::json!({
+                    "surface": "vida task reconcile",
+                    "status": "blocked",
+                    "scope": serde_json::Value::Null,
+                    "dry_run": command.dry_run,
+                    "close_if_complete": command.close_if_complete,
+                    "closed_epics": [],
+                    "blocked_epics": [],
+                    "missing_children": [],
+                    "blocker_codes": ["scope_required"],
+                    "next_actions": ["Run vida task reconcile --epics to inspect open epics."],
+                });
+                if command.json {
+                    crate::print_json_pretty(&payload);
+                } else if matches!(command.render, crate::RenderMode::Plain) {
+                    println!(
+                        "{}",
+                        taskflow_format_toon::render_value_section("vida task reconcile", &payload)
+                    );
+                } else {
+                    print_surface_line(command.render, "status", "blocked");
+                    print_surface_line(
+                        command.render,
+                        "next",
+                        "Run vida task reconcile --epics to inspect open epics.",
+                    );
+                }
+                return ExitCode::from(1);
+            }
+
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match reconcile_epics_from_direct_children(
+                    &store,
+                    command.close_if_complete,
+                    command.dry_run,
+                )
+                .await
+                {
+                    Ok(receipt) => {
+                        let payload = serde_json::to_value(&receipt)
+                            .expect("task epic reconcile receipt should serialize");
+                        if command.json {
+                            crate::print_json_pretty(&payload);
+                        } else if matches!(command.render, crate::RenderMode::Plain) {
+                            println!(
+                                "{}",
+                                taskflow_format_toon::render_value_section(
+                                    "vida task reconcile",
+                                    &payload,
+                                )
+                            );
+                        } else {
+                            print_surface_line(command.render, "status", &receipt.status);
+                            print_surface_line(
+                                command.render,
+                                "closed epics",
+                                &receipt.closed_epics.len().to_string(),
+                            );
+                            print_surface_line(
+                                command.render,
+                                "blocked epics",
+                                &receipt.blocked_epics.len().to_string(),
+                            );
+                            if let Some(action) = receipt.next_actions.first() {
+                                print_surface_line(command.render, "next", action);
+                            }
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to reconcile epics: {error}");
+                        ExitCode::from(1)
+                    }
+                },
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -8565,10 +9140,10 @@ mod tests {
         task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
         task_handoff_receipt_root, task_json_success_status, task_next_lawful_apply_strategy,
         task_next_lawful_receipt, task_next_lawful_select_ready_candidate_receipt,
-        task_owned_status_receipt, task_parent_id, task_ready_authoritative_first,
-        task_takeover_status_receipt, task_update_planner_metadata_arg,
-        validate_task_handoff_accept_receipt, TaskCloseAutomationReceipt,
-        ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
+        task_ready_authoritative_first, task_takeover_status_receipt,
+        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
+        TaskCloseAutomationReceipt, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -8605,6 +9180,75 @@ mod tests {
             })
             .await
             .expect("task should create");
+    }
+
+    #[test]
+    fn direct_child_progress_marks_non_epic_parent_ready_when_children_are_closed() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "root-epic",
+                "Root epic",
+                "epic",
+                "in_progress",
+                1,
+                None,
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "parent-task",
+                "Parent task",
+                "task",
+                "in_progress",
+                2,
+                Some("root-epic"),
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "child-a",
+                "Child A",
+                "todo",
+                "closed",
+                2,
+                Some("parent-task"),
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "child-b",
+                "Child B",
+                "todo",
+                "closed",
+                2,
+                Some("parent-task"),
+            )
+            .await;
+
+            let rows = store.all_tasks().await.expect("tasks should read");
+            let summary = task_progress_summary_for_basis(&rows, "parent-task", "direct_children")
+                .expect("direct child progress should compute");
+
+            assert_eq!(summary.direct_child_count, 2);
+            assert_eq!(summary.closed_count, 2);
+            assert_eq!(summary.open_count, 0);
+            assert_eq!(summary.in_progress_count, 0);
+            assert_eq!(summary.closure_candidate_state, "ready_to_close");
+            assert!(summary.ready_for_close);
+            assert_eq!(
+                summary.next_required_command.as_deref(),
+                Some("vida task close parent-task --reason \"direct children closed\"")
+            );
+        });
+
+        runtime.shutdown_timeout(std::time::Duration::from_millis(250));
     }
 
     #[test]
@@ -10721,8 +11365,9 @@ mod tests {
         assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_paused"]);
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
             action.contains(
-                "vida task update taskflow-case-18-rollout-regression-gate --status in_progress --json",
-            ) && action.contains("vida taskflow continuation bind codebase-audit-runtime-helper-dedup-refactor --task-id <task-id> --json")
+                "vida task update taskflow-case-18-rollout-regression-gate --status in_progress",
+            ) && action.contains("vida taskflow continuation bind codebase-audit-runtime-helper-dedup-refactor --task-id <task-id>")
+                && !action.contains("--json")
         }));
     }
 
@@ -10829,7 +11474,8 @@ mod tests {
             .iter()
             .any(|action| action.contains("consume_continue_after_downstream_chain")));
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
-            action.contains("vida taskflow recovery status current-run --json")
+            action.contains("vida taskflow recovery status current-run")
+                && !action.contains("--json")
         }));
     }
 
@@ -11020,8 +11666,9 @@ mod tests {
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_closed"]);
         assert!(receipt.next_actions.iter().any(|action| {
-            action.contains("vida taskflow recovery status current-run --json")
+            action.contains("vida taskflow recovery status current-run")
                 && action.contains("closed-feature-task")
+                && !action.contains("--json")
         }));
     }
 
@@ -11054,8 +11701,9 @@ mod tests {
             "closed-feature-task"
         );
         assert!(receipt.next_actions.iter().any(|action| {
-            action.contains("vida taskflow recovery status current-run --json")
+            action.contains("vida taskflow recovery status current-run")
                 && action.contains("closed-feature-task")
+                && !action.contains("--json")
         }));
     }
 
@@ -11073,11 +11721,11 @@ mod tests {
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_missing"]);
         assert!(receipt.next_actions.iter().any(|action| {
-            action.contains("vida taskflow recovery status current-run --json")
-                && action.contains(
-                    "vida taskflow continuation bind current-run --task-id <task-id> --json",
-                )
+            action.contains("vida taskflow recovery status current-run")
+                && action
+                    .contains("vida taskflow continuation bind current-run --task-id <task-id>")
                 && action.contains("missing-feature-task")
+                && !action.contains("--json")
         }));
     }
 
@@ -11152,8 +11800,9 @@ mod tests {
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["open_delegated_cycle"]);
         assert!(receipt.next_actions.iter().any(|action| {
-            action.contains("vida lane show running-run --json")
-                && action.contains("vida taskflow recovery status running-run --json")
+            action.contains("vida lane show running-run")
+                && action.contains("vida taskflow recovery status running-run")
+                && !action.contains("--json")
         }));
         assert_eq!(
             task_next_lawful_receipt(&[runtime_task], Vec::new(), Some(&binding)).status,
@@ -11241,7 +11890,8 @@ mod tests {
         assert_eq!(receipt.status, "pass");
         assert!(receipt.blocker_codes.is_empty());
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
-            action.contains("vida taskflow consume continue --run-id running-run --json")
+            action.contains("vida taskflow consume continue --run-id running-run")
+                && !action.contains("--json")
         }));
     }
 

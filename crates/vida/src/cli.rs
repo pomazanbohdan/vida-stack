@@ -10,7 +10,7 @@ const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --jso
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
-const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida taskflow help scheduler\n  vida taskflow help scheduling\n  vida task tree <task-id> --json\n  vida taskflow graph explain <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow plan generate --json\n  vida taskflow replan split <task-id> --child child-a:\"First slice\" --reason \"oversized task\" --json\n  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida taskflow scheduler dispatch --json\n  vida taskflow scheduling actualize --scope open-epics --dry-run --json\n  vida taskflow route explain --json\n  vida taskflow validate-routing --json\n  vida taskflow pricing status --json\n  vida taskflow pricing import --source-file <path> --dry-run --json\n  vida taskflow status --summary --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nParallelism guidance:\n  `vida taskflow graph explain <task-id> --json` explains one task's ready/blocked/parallel-safe posture from canonical projection truth.\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow scheduler dispatch --json` turns that projection into a preview-first launch plan capped by `max_parallel_agents`.\n  `vida taskflow scheduling actualize --dry-run --json` previews conservative scheduling metadata repairs before `--apply` mutates tasks.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
+const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida taskflow help scheduler\n  vida taskflow help scheduling\n  vida task tree <task-id> --json\n  vida taskflow graph explain <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow closeout --json --compact\n  vida taskflow receipt-pack --since HEAD~1\n  vida taskflow plan generate --json\n  vida taskflow replan split <task-id> --child child-a:\"First slice\" --reason \"oversized task\" --json\n  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida taskflow scheduler dispatch --json\n  vida taskflow scheduling actualize --scope open-epics --dry-run --json\n  vida taskflow route explain --json\n  vida taskflow validate-routing --json\n  vida taskflow pricing status --json\n  vida taskflow pricing import --source-file <path> --dry-run --json\n  vida taskflow status --summary --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nParallelism guidance:\n  `vida taskflow graph explain <task-id> --json` explains one task's ready/blocked/parallel-safe posture from canonical projection truth.\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow scheduler dispatch --json` turns that projection into a preview-first launch plan capped by `max_parallel_agents`.\n  `vida taskflow scheduling actualize --dry-run --json` previews conservative scheduling metadata repairs before `--apply` mutates tasks.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
 
 const DOCFLOW_LONG_ABOUT: &str = "Delegate to the DocFlow runtime family.\n\nDocFlow is the standalone documentation/readiness utility. Use it for documentation bootstrap, artifact init, validation, readiness checks, inventory, relations, and agent handoff instructions.";
 
@@ -26,6 +26,8 @@ const JOB_AFTER_HELP: &str = "Job operations:\n  vida job status --json\n\nOptio
 
 const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
 const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
+const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  vida session triage --task <task-id>\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
+const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -41,6 +43,7 @@ const TASK_VERIFY_ABOUT: &str =
     "record partial verification evidence on one task without closing it";
 const TASK_VERIFY_LONG_ABOUT: &str = "Record partial verification evidence on one task without closing it.\n\nUse this when source changes and tests are verified but browser, API, or external proof remains unavailable due to a runtime condition. The command leaves the task open, appends structured verification notes, updates proof-blocking labels, and emits source_fixed/tests_green/proof_blocked fields in JSON.";
 const TASK_VERIFY_AFTER_HELP: &str = "Examples:\n  vida task verify <task-id> --source-fixed --tests-green --proof-blocked --proof-blocker \"browser proof unavailable\" --evidence \"cargo test -p vida task_verify\" --json\n\nOptions:\n  --source-fixed          Record that the source fix is complete\n  --tests-green           Record that focused tests passed\n  --proof-blocked         Record that final proof is pending on runtime/external conditions\n  --proof-blocker <text>  Human-readable proof blocker reason\n  --evidence <text>       Evidence command, file, receipt, or observation; accepts repeated flags\n  --state-dir <path>      Override the TaskFlow state directory\n  --json                  Emit machine-readable JSON output";
+const TASK_ATTEMPT_AFTER_HELP: &str = "Examples:\n  vida task attempt record <task-id> --stage-id analysis --backend vibe --model-profile medium --isolation readonly --freshness snapshot-2026-06-05 --status submitted --artifact-ref report.json\n  vida task attempt transition <attempt-id> --task-id <task-id> --stage-id analysis --status accepted --consolidation-receipt receipt-1\n  vida task attempt summary <task-id> --stage-id analysis\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation.";
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
 pub(crate) enum RenderMode {
@@ -159,6 +162,16 @@ pub(crate) enum Command {
     Docs(DocsArgs),
     #[command(about = "inspect or reclaim VIDA orchestrator session ownership evidence")]
     OrchestratorSession(OrchestratorSessionArgs),
+    #[command(
+        about = "summarize session triage evidence for the active bounded unit",
+        after_help = SESSION_AFTER_HELP
+    )]
+    Session(SessionArgs),
+    #[command(
+        about = "inspect quality gates and remediation advice",
+        after_help = QUALITY_AFTER_HELP
+    )]
+    Quality(QualityArgs),
     #[command(about = "thin root alias to the TaskFlow consume family")]
     Consume(ProxyArgs),
     #[command(about = "inspect or mutate canonical lane/takeover operator state")]
@@ -201,6 +214,106 @@ pub(crate) struct ProxyArgs {
 
 #[derive(Args, Debug, Clone)]
 #[command(disable_help_subcommand = true)]
+pub(crate) struct SessionArgs {
+    #[command(subcommand)]
+    pub(crate) command: SessionCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum SessionCommand {
+    #[command(
+        about = "bundle active unit, graph validity, task summary, and latest run parity evidence",
+        after_help = "Examples:\n  vida session triage\n  vida session triage --task runtime-session-triage-proof-bundle-command\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation."
+    )]
+    Triage(SessionTriageArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct SessionTriageArgs {
+    #[arg(
+        long = "task",
+        help = "Optional TaskFlow task id to include in the triage summary"
+    )]
+    pub(crate) task_id: Option<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory used for session triage evidence"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct QualityArgs {
+    #[command(subcommand)]
+    pub(crate) command: QualityCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum QualityCommand {
+    #[command(
+        about = "evaluate pre-push quality gate evidence and remediation advice",
+        after_help = QUALITY_AFTER_HELP
+    )]
+    Gate(QualityGateArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct QualityGateArgs {
+    #[arg(long = "prepush", help = "Evaluate the pre-push quality gate advisor")]
+    pub(crate) prepush: bool,
+
+    #[arg(long = "advise", help = "Include remediation guidance in the output")]
+    pub(crate) advise: bool,
+
+    #[arg(
+        long = "project-root",
+        help = "Repository root used for git dirty/changed file evidence"
+    )]
+    pub(crate) project_root: Option<PathBuf>,
+
+    #[arg(
+        long = "coverage-file",
+        help = "Read LCOV coverage evidence from this file"
+    )]
+    pub(crate) coverage_file: Option<PathBuf>,
+
+    #[arg(
+        long = "coverage-threshold",
+        default_value_t = 90.0,
+        help = "Coverage threshold used for covered-line deficit math"
+    )]
+    pub(crate) coverage_threshold: f64,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
 pub(crate) struct AgentArgs {
     #[command(subcommand)]
     pub(crate) command: AgentCommand,
@@ -221,6 +334,36 @@ pub(crate) enum AgentCommand {
         about = "render a pending host-tool bridge request as an executable parent-host adapter contract"
     )]
     HostBridge(AgentHostBridgeArgs),
+    #[command(
+        about = "summarize active agent and lane state as a compact closeout signal",
+        after_help = "Examples:\n  vida agent status\n  vida agent status --compact\n  vida agent status --json --compact\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation."
+    )]
+    Status(AgentStatusArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct AgentStatusArgs {
+    #[arg(
+        long = "compact",
+        help = "Emit the compact closeout-oriented field set; currently the default view"
+    )]
+    pub(crate) compact: bool,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory used for agent and lane status"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -248,14 +391,23 @@ pub(crate) struct AgentDispatchNextArgs {
     )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
     pub(crate) json: bool,
 
     #[arg(
         long = "dev-team",
-        help = "Preview configured dev-team flow sequence from vida.config.yaml, including analyst, developer, duplication reviewer, final coach, tester/prover, and release closure"
+        help = "Preview configured dev-team flow sequence from vida.config.yaml, for example analyst, autotester, developer, coach-validator, tester/prover, and release closure"
     )]
     pub(crate) dev_team: bool,
+
+    #[arg(
+        long = "materialize-packets",
+        help = "Write receipt-backed dispatch packets for the selected lanes instead of returning only a preview"
+    )]
+    pub(crate) materialize_packets: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -327,7 +479,10 @@ pub(crate) struct AgentHostBridgeArgs {
     )]
     pub(crate) receipt_id: Option<String>,
 
-    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
     pub(crate) json: bool,
 
     #[arg(
@@ -581,6 +736,11 @@ pub(crate) enum TaskCommand {
         after_help = TASK_VERIFY_AFTER_HELP
     )]
     Verify(TaskVerifyArgs),
+    #[command(
+        about = "record and inspect per-stage task attempt ledger state",
+        after_help = TASK_ATTEMPT_AFTER_HELP
+    )]
+    Attempt(TaskAttemptArgs),
     #[command(about = "inspect dirty git files against one task's owned paths")]
     OwnedStatus(TaskOwnedStatusArgs),
     #[command(about = "record delegated agent handoff receipts for a task")]
@@ -589,6 +749,8 @@ pub(crate) enum TaskCommand {
     Takeover(TaskTakeoverArgs),
     #[command(about = "close one tracked task with evidence and optional release automation")]
     Close(TaskCloseArgs),
+    #[command(about = "reconcile open epics whose direct children are complete")]
+    Reconcile(TaskReconcileArgs),
     #[command(about = "retire historical run-graph rows for already-closed tasks")]
     ReconcileClosedRuns(TaskReconcileClosedRunsArgs),
     #[command(about = "split one oversized task into bounded child tasks")]
@@ -1577,6 +1739,168 @@ pub(crate) struct TaskVerifyArgs {
 }
 
 #[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct TaskAttemptArgs {
+    #[command(subcommand)]
+    pub(crate) command: TaskAttemptCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum TaskAttemptCommand {
+    #[command(about = "record one stage attempt for a task")]
+    Record(TaskAttemptRecordArgs),
+    #[command(about = "transition an existing stage attempt after validating task binding")]
+    Transition(TaskAttemptTransitionArgs),
+    #[command(about = "summarize stage attempt counts and latest consolidation evidence")]
+    Summary(TaskAttemptSummaryArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskAttemptRecordArgs {
+    #[arg(help = "Task id that owns the attempt")]
+    pub(crate) task_id: String,
+
+    #[arg(long = "attempt-id", help = "Optional caller-supplied attempt id")]
+    pub(crate) attempt_id: Option<String>,
+
+    #[arg(
+        long = "stage-id",
+        help = "Stage id such as analysis, design, implementation, coach, tester"
+    )]
+    pub(crate) stage_id: String,
+
+    #[arg(
+        long = "backend",
+        help = "Backend or agent carrier used for this attempt"
+    )]
+    pub(crate) backend: String,
+
+    #[arg(
+        long = "model-profile",
+        help = "Model or model profile used for this attempt"
+    )]
+    pub(crate) model_profile: String,
+
+    #[arg(
+        long = "isolation",
+        help = "Isolation mode such as readonly, patch_proposal, or worktree"
+    )]
+    pub(crate) isolation: String,
+
+    #[arg(
+        long = "freshness",
+        help = "Optional freshness boundary or snapshot id; defaults to the task updated_at value"
+    )]
+    pub(crate) freshness: Option<String>,
+
+    #[arg(
+        long = "status",
+        default_value = "running",
+        help = "Attempt status: submitted, running, produced, validating, accepted, partially_accepted, rejected, stale, failed, or consumed"
+    )]
+    pub(crate) status: String,
+
+    #[arg(
+        long = "artifact-ref",
+        help = "Artifact, receipt, report, or patch proposal reference; accepts repeated flags"
+    )]
+    pub(crate) artifact_refs: Vec<String>,
+
+    #[arg(
+        long = "consolidation-receipt",
+        help = "Optional consolidation receipt id produced from this attempt"
+    )]
+    pub(crate) consolidation_receipt_id: Option<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskAttemptTransitionArgs {
+    #[arg(help = "Attempt id to transition")]
+    pub(crate) attempt_id: String,
+
+    #[arg(long = "task-id", help = "Expected task binding for the attempt")]
+    pub(crate) task_id: String,
+
+    #[arg(long = "stage-id", help = "Expected stage binding for the attempt")]
+    pub(crate) stage_id: String,
+
+    #[arg(
+        long = "status",
+        help = "New attempt status: submitted, running, produced, validating, accepted, partially_accepted, rejected, stale, failed, or consumed"
+    )]
+    pub(crate) status: String,
+
+    #[arg(
+        long = "artifact-ref",
+        help = "Artifact, receipt, report, or patch proposal reference; accepts repeated flags"
+    )]
+    pub(crate) artifact_refs: Vec<String>,
+
+    #[arg(
+        long = "consolidation-receipt",
+        help = "Optional consolidation receipt id produced from this attempt"
+    )]
+    pub(crate) consolidation_receipt_id: Option<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskAttemptSummaryArgs {
+    #[arg(help = "Task id that owns the stage attempts")]
+    pub(crate) task_id: String,
+
+    #[arg(long = "stage-id", help = "Stage id to summarize")]
+    pub(crate) stage_id: String,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render output mode for human-readable command output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
 pub(crate) struct TaskCloseArgs {
     #[arg(help = "Task id to close")]
     pub(crate) task_id: String,
@@ -1668,6 +1992,33 @@ pub(crate) struct TaskCloseArgs {
 pub(crate) struct TaskReconcileClosedRunsArgs {
     #[arg(long = "limit", default_value_t = 100)]
     pub(crate) limit: usize,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskReconcileArgs {
+    #[arg(long = "epics", help = "Inspect open epic/container tasks")]
+    pub(crate) epics: bool,
+
+    #[arg(
+        long = "close-if-complete",
+        help = "Close eligible epics whose direct children are all closed-like"
+    )]
+    pub(crate) close_if_complete: bool,
+
+    #[arg(
+        long = "dry-run",
+        help = "Report eligible epics without mutating TaskFlow state"
+    )]
+    pub(crate) dry_run: bool,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
@@ -1776,6 +2127,19 @@ pub(crate) struct TaskAdaptivePreviewArgs {
 pub(crate) struct TaskReadyArgs {
     #[arg(long = "scope")]
     pub(crate) scope: Option<String>,
+
+    #[arg(
+        long = "fields",
+        help = "Comma-separated JSON task row fields to include, for example id,status,title"
+    )]
+    pub(crate) fields: Option<String>,
+
+    #[arg(
+        long = "view",
+        default_value = "summary",
+        help = "Output view for task rows: compact, summary, or full"
+    )]
+    pub(crate) view: String,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
@@ -1926,6 +2290,19 @@ pub(crate) struct TaskDepsArgs {
     )]
     pub(crate) full: bool,
 
+    #[arg(
+        long = "view",
+        default_value = "summary",
+        help = "Output view for init fields: compact, summary, or full"
+    )]
+    pub(crate) view: String,
+
+    #[arg(
+        long = "fields",
+        help = "Comma-separated top-level init fields to include, for example status,active_bounded_unit,next_actions"
+    )]
+    pub(crate) fields: Option<String>,
+
     #[arg(long = "json")]
     pub(crate) json: bool,
 }
@@ -2040,6 +2417,19 @@ pub(crate) struct InitArgs {
         help = "Render the full init envelope; routine --json output defaults to compact summary"
     )]
     pub(crate) full: bool,
+
+    #[arg(
+        long = "view",
+        default_value = "summary",
+        help = "Output view for init fields: compact, summary, or full"
+    )]
+    pub(crate) view: String,
+
+    #[arg(
+        long = "fields",
+        help = "Comma-separated top-level init fields to include, for example status,active_bounded_unit,next_actions"
+    )]
+    pub(crate) fields: Option<String>,
 
     #[arg(long = "json")]
     pub(crate) json: bool,
@@ -2186,31 +2576,58 @@ pub(crate) struct MemoryArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct StatusArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory used for status projections"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render mode for human output; plain is compact TOON by default")]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "summary")]
+    #[arg(long = "summary", help = "Emit the compact status summary shape")]
     pub(crate) summary: bool,
 
-    #[arg(long = "json")]
+    #[arg(
+        long = "view",
+        default_value = "full",
+        help = "Output view for status fields: compact, summary, or full"
+    )]
+    pub(crate) view: String,
+
+    #[arg(
+        long = "fields",
+        help = "Comma-separated top-level status fields to include, for example status,blocker_codes,next_actions"
+    )]
+    pub(crate) fields: Option<String>,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
     pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct DoctorArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory used for doctor checks"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render mode for human output; plain is compact TOON by default")]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "summary")]
+    #[arg(long = "summary", help = "Emit the compact doctor summary shape")]
     pub(crate) summary: bool,
 
-    #[arg(long = "json")]
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
     pub(crate) json: bool,
 }
 
@@ -2716,6 +3133,7 @@ mod tests {
         assert!(host_bridge_help.contains("--host-agent-id"));
         assert!(host_bridge_help.contains("--summary"));
         assert!(host_bridge_help.contains("--receipt-id"));
+        assert!(host_bridge_help.contains("--state-dir"));
         assert!(host_bridge_help.contains("--json"));
 
         let parsed_host_bridge = Cli::try_parse_from([
@@ -2731,6 +3149,8 @@ mod tests {
             "done",
             "--receipt-id",
             "receipt-1",
+            "--state-dir",
+            "/tmp/vida-state",
             "--json",
         ])
         .expect("agent host-bridge should parse");
@@ -2748,6 +3168,13 @@ mod tests {
         assert_eq!(host_bridge.host_agent_id.as_deref(), Some("agent-1"));
         assert_eq!(host_bridge.summary.as_deref(), Some("done"));
         assert_eq!(host_bridge.receipt_id.as_deref(), Some("receipt-1"));
+        assert_eq!(
+            host_bridge
+                .state_dir
+                .as_deref()
+                .map(|path| path.display().to_string()),
+            Some("/tmp/vida-state".to_string())
+        );
         assert!(host_bridge.json);
     }
 

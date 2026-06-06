@@ -123,7 +123,7 @@ fn format_run_graph_dispatch_compact_summary(
     let next_action = summary.recommended_command.as_ref().map(|command| {
         format!(
             "{} ({})",
-            command,
+            crate::operator_command_text::human_command(command),
             summary.recommended_surface.as_deref().unwrap_or("unknown")
         )
     });
@@ -157,6 +157,10 @@ fn emit_dispatch_diagnosis_lines(
 }
 
 pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> ExitCode {
+    if matches!(inputs.render, crate::RenderMode::Plain) {
+        emit_status_toon_report(&inputs);
+        return ExitCode::SUCCESS;
+    }
     crate::surface_render::print_surface_header(inputs.render, "vida status");
     crate::surface_render::print_surface_line(inputs.render, "backend", inputs.backend_summary);
     crate::surface_render::print_surface_line(
@@ -462,20 +466,24 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         );
     }
     if inputs.latest_run_graph_snapshot_inconsistent {
+        let next_action =
+            crate::status_surface_signals::run_graph_latest_snapshot_inconsistent_next_action();
         crate::surface_render::print_surface_line(
             inputs.render,
             "latest run graph next action",
-            crate::status_surface_signals::run_graph_latest_snapshot_inconsistent_next_action(),
+            &next_action,
         );
     }
     if inputs.latest_run_graph_dispatch_receipt_signal_ambiguous {
+        let next_action = crate::status_surface_signals::run_graph_latest_dispatch_receipt_signal_ambiguous_next_action();
         crate::surface_render::print_surface_line(
             inputs.render,
             "latest run graph dispatch receipt next action",
-            crate::status_surface_signals::run_graph_latest_dispatch_receipt_signal_ambiguous_next_action(),
+            &next_action,
         );
     }
     if inputs.latest_run_graph_dispatch_receipt_summary_inconsistent {
+        let next_action = crate::status_surface_signals::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action();
         crate::surface_render::print_surface_line(
             inputs.render,
             "latest run graph dispatch receipt blocker",
@@ -484,10 +492,11 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         crate::surface_render::print_surface_line(
             inputs.render,
             "latest run graph dispatch receipt summary next action",
-            crate::status_surface_signals::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action(),
+            &next_action,
         );
     }
     if inputs.latest_run_graph_dispatch_receipt_checkpoint_leakage {
+        let next_action = crate::status_surface_signals::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action();
         crate::surface_render::print_surface_line(
             inputs.render,
             "latest run graph dispatch receipt blocker",
@@ -496,7 +505,7 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         crate::surface_render::print_surface_line(
             inputs.render,
             "latest run graph dispatch receipt checkpoint leakage next action",
-            crate::status_surface_signals::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action(),
+            &next_action,
         );
     }
     if let Some(host_agents) = inputs.host_agents {
@@ -562,6 +571,140 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         }
     }
     ExitCode::SUCCESS
+}
+
+fn emit_status_toon_report(inputs: &StatusTextReportInputs<'_>) {
+    let mut fields = vec![
+        crate::operator_toon_report::OperatorToonField::text("backend", inputs.backend_summary),
+        crate::operator_toon_report::OperatorToonField::text(
+            "state_dir",
+            inputs.state_dir.display().to_string(),
+        ),
+        crate::operator_toon_report::OperatorToonField::text(
+            "state_spine",
+            format!(
+                "initialized state-v{} surfaces={} mutation_root={}",
+                inputs.state_spine.state_schema_version,
+                inputs.state_spine.entity_surface_count,
+                inputs.state_spine.authoritative_mutation_root
+            ),
+        ),
+        crate::operator_toon_report::OperatorToonField::text(
+            "operator_session_projection",
+            crate::operator_session_projection::projection_plain_summary(
+                inputs.operator_session_projection,
+            ),
+        ),
+        crate::operator_toon_report::OperatorToonField::text(
+            "runtime_consumption",
+            inputs.runtime_consumption.as_display(),
+        ),
+        crate::operator_toon_report::OperatorToonField::text(
+            "protocol_binding",
+            inputs.protocol_binding.as_display(),
+        ),
+        crate::operator_toon_report::OperatorToonField::text(
+            "continuation_binding",
+            format!(
+                "status={} primary_path={} posture={}",
+                inputs.continuation_binding["status"]
+                    .as_str()
+                    .unwrap_or("unknown"),
+                inputs.continuation_binding["primary_path"]
+                    .as_str()
+                    .unwrap_or("unknown"),
+                inputs.continuation_binding["sequential_vs_parallel_posture"]
+                    .as_str()
+                    .unwrap_or("unknown"),
+            ),
+        ),
+    ];
+    fields.push(crate::operator_toon_report::OperatorToonField::text(
+        "project_activation",
+        if inputs.activation_truth.is_some() {
+            format!(
+                "{} activation_pending={}",
+                inputs.project_activation_status.unwrap_or("pending"),
+                inputs.project_activation_pending
+            )
+        } else {
+            "unknown fail_closed=true activation_pending=true".to_string()
+        },
+    ));
+    fields.push(crate::operator_toon_report::OperatorToonField::text(
+        "latest_run_graph_status",
+        inputs
+            .latest_run_graph_status
+            .map(|status| status.as_display())
+            .unwrap_or_else(|| "none".to_string()),
+    ));
+    fields.push(crate::operator_toon_report::OperatorToonField::text(
+        "latest_run_graph_recovery",
+        inputs
+            .latest_run_graph_recovery
+            .map(|summary| summary.as_display())
+            .unwrap_or_else(|| "none".to_string()),
+    ));
+    fields.push(crate::operator_toon_report::OperatorToonField::text(
+        "latest_run_graph_dispatch_receipt",
+        inputs
+            .latest_run_graph_dispatch_receipt
+            .map(|summary| {
+                format!(
+                    "run={} target={} status={} lane_status={} backend={} evidence={}",
+                    summary.run_id,
+                    summary.dispatch_target,
+                    summary.dispatch_status,
+                    summary.lane_status,
+                    summary.selected_backend.as_deref().unwrap_or("none"),
+                    summary.activation_evidence["activation_kind"]
+                        .as_str()
+                        .unwrap_or("unknown"),
+                )
+            })
+            .unwrap_or_else(|| "none".to_string()),
+    ));
+    let compact_summary = crate::taskflow_run_graph::build_run_graph_dispatch_compact_summary(
+        inputs.state_dir,
+        inputs.latest_run_graph_status,
+        inputs.latest_run_graph_recovery,
+        inputs.latest_run_graph_dispatch_receipt,
+        Some(inputs.continuation_binding),
+        inputs.latest_run_graph_activation_vs_execution_evidence,
+    );
+    if let Some(summary) = compact_summary.as_ref() {
+        let (route_truth, downstream_preview, next_action) =
+            format_run_graph_dispatch_compact_summary(summary);
+        fields.push(crate::operator_toon_report::OperatorToonField::text(
+            "latest_dispatch_route_truth",
+            route_truth,
+        ));
+        fields.push(crate::operator_toon_report::OperatorToonField::text(
+            "latest_downstream_dispatch_preview",
+            downstream_preview,
+        ));
+        fields.push(crate::operator_toon_report::OperatorToonField::text(
+            "latest_dispatch_projection_reason",
+            summary.route_truth.projection_reason.clone(),
+        ));
+        if let Some(next_action) = next_action {
+            fields.push(crate::operator_toon_report::OperatorToonField::text(
+                "latest_dispatch_next_action",
+                next_action,
+            ));
+        }
+    }
+    if let Some(step) = inputs.continuation_binding["next_actions"]
+        .as_array()
+        .and_then(|steps| steps.first())
+        .and_then(serde_json::Value::as_str)
+    {
+        fields.push(crate::operator_toon_report::OperatorToonField::text(
+            "continuation_binding_next_action",
+            step,
+        ));
+    }
+    crate::operator_toon_report::print("vida status", fields);
 }
 
 #[cfg(test)]
@@ -647,9 +790,7 @@ mod tests {
         assert!(downstream_preview.contains("blockers=open_delegated_cycle"));
         assert_eq!(
             next_action.as_deref(),
-            Some(
-                "vida taskflow consume continue --run-id run-1 --json (vida taskflow consume continue)"
-            )
+            Some("vida taskflow consume continue --run-id run-1 (vida taskflow consume continue)")
         );
     }
 
@@ -705,9 +846,7 @@ mod tests {
         assert!(downstream_preview.contains("blockers=none"));
         assert_eq!(
             next_action.as_deref(),
-            Some(
-                "vida taskflow consume continue --run-id run-2 --json (vida taskflow consume continue)"
-            )
+            Some("vida taskflow consume continue --run-id run-2 (vida taskflow consume continue)")
         );
     }
 }

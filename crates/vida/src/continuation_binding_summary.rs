@@ -203,16 +203,22 @@ fn active_exception_takeover_next_actions(
     status: &crate::state_store::RunGraphStatus,
 ) -> Vec<String> {
     if exception_takeover_continuation_resumable(status) {
-        return vec![format!(
-            "Continue the active exception-backed bounded unit with `vida taskflow consume continue --run-id {} --json`.",
+        let command = crate::operator_command_text::human_command(&format!(
+            "vida taskflow consume continue --run-id {} --json",
             status.run_id
+        ));
+        return vec![format!(
+            "Continue the active exception-backed bounded unit with `{command}`."
         )];
     }
     if status.resume_target == "none" || !status.resume_target.starts_with("dispatch.") {
+        let recovery_command = crate::operator_command_text::human_command(&format!(
+            "vida taskflow recovery status {} --json",
+            status.run_id
+        ));
         return vec![
             format!(
-                "Inspect the active recovery state with `vida taskflow recovery status {} --json` before attempting resume.",
-                status.run_id
+                "Inspect the active recovery state with `{recovery_command}` before attempting resume."
             ),
             crate::status_surface_signals::recovery_resume_target_missing_next_action(
                 Some(status.run_id.as_str()),
@@ -220,14 +226,20 @@ fn active_exception_takeover_next_actions(
             ),
         ];
     }
+    let lane_command = crate::operator_command_text::human_command(&format!(
+        "vida lane show {} --json",
+        status.run_id
+    ));
+    let continue_command = crate::operator_command_text::human_command(&format!(
+        "vida taskflow consume continue --run-id {} --json",
+        status.run_id
+    ));
     vec![
         format!(
-            "Inspect the active exception-takeover scope with `vida lane show {} --json` before attempting resume.",
-            status.run_id
+            "Inspect the active exception-takeover scope with `{lane_command}` before attempting resume."
         ),
         format!(
-            "Do not run `vida taskflow consume continue --run-id {} --json` until recovery_ready is true and resume_target is a dispatch target.",
-            status.run_id
+            "Do not run `{continue_command}` until recovery_ready is true and resume_target is a dispatch target."
         ),
     ]
 }
@@ -316,30 +328,20 @@ pub(crate) fn dispatch_summary_has_clean_ready_downstream_handoff(
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     run_id: &str,
 ) -> bool {
-    receipt.is_some_and(|receipt| {
-        receipt.run_id == run_id
-            && receipt.dispatch_status == "executed"
-            && receipt.blocker_code.is_none()
-            && receipt.downstream_dispatch_ready
-            && receipt.downstream_dispatch_blockers.is_empty()
-            && receipt
-                .downstream_dispatch_status
-                .as_deref()
-                .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
-    })
+    crate::runtime_dispatch_receipt_helpers::dispatch_summary_has_clean_ready_downstream_handoff(
+        receipt,
+        Some(run_id),
+    )
 }
 
 fn dispatch_summary_has_clean_completed_lane(
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     run_id: &str,
 ) -> bool {
-    receipt.is_some_and(|receipt| {
-        receipt.run_id == run_id
-            && receipt.dispatch_status == "executed"
-            && receipt.lane_status == "lane_completed"
-            && receipt.blocker_code.is_none()
-            && receipt.downstream_dispatch_blockers.is_empty()
-    })
+    crate::runtime_dispatch_receipt_helpers::dispatch_summary_has_clean_completed_lane(
+        receipt,
+        Some(run_id),
+    )
 }
 
 fn continuation_next_actions_for_run(
@@ -360,14 +362,21 @@ fn continuation_next_actions_for_run(
         if let Some(command) =
             latest_run_graph_dispatch_receipt.and_then(downstream_dispatch_command_for_summary)
         {
+            let command = crate::operator_command_text::human_command(&command);
             next_actions.push(format!("Continue the downstream handoff with `{command}`."));
         } else {
+            let command = crate::operator_command_text::human_command(&format!(
+                "vida lane show {run_id} --json"
+            ));
             next_actions.push(format!(
-                "Inspect the active delegated lane with `vida lane show {run_id} --json`."
+                "Inspect the active delegated lane with `{command}`."
             ));
         }
+        let recovery_command = crate::operator_command_text::human_command(&format!(
+            "vida taskflow recovery status {run_id} --json"
+        ));
         next_actions.push(format!(
-            "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
+            "Inspect the live delegated-cycle recovery state with `{recovery_command}` if routing context is needed before the next step."
         ));
         return next_actions;
     }
@@ -376,19 +385,30 @@ fn continuation_next_actions_for_run(
             receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some()
         })
     {
+        let lane_command =
+            crate::operator_command_text::human_command(&format!("vida lane show {run_id} --json"));
         next_actions.push(format!(
-            "Inspect the exception-backed lane with `vida lane show {run_id} --json` and close or settle the run before continuing."
+            "Inspect the exception-backed lane with `{lane_command}` and close or settle the run before continuing."
+        ));
+        let continue_command = crate::operator_command_text::human_command(&format!(
+            "vida taskflow consume continue --run-id {run_id} --json"
         ));
         next_actions.push(format!(
-            "Do not rerun `vida taskflow consume continue --run-id {run_id} --json` until recovery exposes a concrete downstream target."
+            "Do not rerun `{continue_command}` until recovery exposes a concrete downstream target."
         ));
         return next_actions;
     }
-    next_actions.push(format!(
-        "Continue the active bounded unit with `vida taskflow consume continue --run-id {run_id} --json`."
+    let continue_command = crate::operator_command_text::human_command(&format!(
+        "vida taskflow consume continue --run-id {run_id} --json"
     ));
     next_actions.push(format!(
-        "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
+        "Continue the active bounded unit with `{continue_command}`."
+    ));
+    let recovery_command = crate::operator_command_text::human_command(&format!(
+        "vida taskflow recovery status {run_id} --json"
+    ));
+    next_actions.push(format!(
+        "Inspect the live delegated-cycle recovery state with `{recovery_command}` if routing context is needed before the next step."
     ));
     next_actions
 }
@@ -462,7 +482,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
         })
         .unwrap_or_default();
     if let Some(status) = latest_run_graph_status {
-        if latest_run_graph_task_missing && run_graph_status_is_blocked(&status.status) {
+        if latest_run_graph_task_missing {
             return serde_json::json!({
                 "status": "idle",
                 "continuation_allowed": false,
@@ -470,7 +490,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                 "active_bounded_unit": serde_json::Value::Null,
                 "binding_source": serde_json::Value::Null,
                 "why_this_unit": format!(
-                    "Latest run `{}` is blocked but its task `{}` is missing from authoritative TaskFlow state.",
+                    "Latest run `{}` is stale because its task `{}` is missing from authoritative TaskFlow state.",
                     status.run_id, status.task_id
                 ),
                 "primary_path": "taskflow_selection_path",
@@ -1412,9 +1432,11 @@ mod tests {
         assert_eq!(summary["pause_boundary_gate"], "non_blocking_only");
         assert!(summary["next_actions"]
             .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row
-                .as_str()
-                .is_some_and(|value| value.contains("consume continue --run-id task-1 --json")))));
+            .is_some_and(
+                |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
+                    value.contains("consume continue --run-id task-1") && !value.contains("--json")
+                }))
+            ));
     }
 
     #[test]
@@ -1961,8 +1983,9 @@ mod tests {
                 |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
                     value.contains("closed-feature-task")
                         && value.contains(
-                            "vida lane retire run-blocked --receipt-id <concrete-receipt-id> --reason <reason> --json",
+                            "vida lane retire run-blocked --receipt-id <concrete-receipt-id> --reason <reason>",
                         )
+                        && !value.contains("--json")
                         && value.contains("run-blocked")
                 }))
             ));
@@ -1970,7 +1993,8 @@ mod tests {
             .as_array()
             .is_some_and(
                 |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
-                    value.contains("vida taskflow recovery status run-blocked --json")
+                    value.contains("vida taskflow recovery status run-blocked")
+                        && !value.contains("--json")
                 }))
             ));
     }
@@ -2010,8 +2034,9 @@ mod tests {
             .is_some_and(|rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
                 value.contains("closed-exception-task")
                     && value.contains(
-                        "vida lane retire run-blocked-exception --receipt-id <concrete-receipt-id> --reason <reason> --json",
+                        "vida lane retire run-blocked-exception --receipt-id <concrete-receipt-id> --reason <reason>",
                     )
+                    && !value.contains("--json")
             }))));
     }
 

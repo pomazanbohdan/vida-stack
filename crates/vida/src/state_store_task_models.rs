@@ -265,6 +265,22 @@ pub fn work_item_is_program_container(issue_type: &str) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn task_has_label(task: &TaskRecord, label: &str) -> bool {
+    task.labels.iter().any(|value| value.trim() == label)
+}
+
+pub(crate) fn task_is_spec_first_feature_parent(task: &TaskRecord) -> bool {
+    task_has_label(task, "feature-request") && task_has_label(task, "spec-first")
+}
+
+pub(crate) fn task_is_spec_pack_child(task: &TaskRecord) -> bool {
+    task_has_label(task, "spec-pack")
+}
+
+pub(crate) fn task_is_work_pool_pack_child(task: &TaskRecord) -> bool {
+    task_has_label(task, "work-pool-pack")
+}
+
 pub fn task_work_item_kind(issue_type: &str) -> TaskWorkItemKind {
     let original = issue_type.trim().to_string();
     let normalized = normalize_work_item_issue_type(issue_type);

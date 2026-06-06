@@ -18,15 +18,8 @@ const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str = "Clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
-const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
 const CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_BLOCKER: &str =
     "closed_task_active_run_projection_mismatch";
-const CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_NEXT_ACTION: &str = "Run `vida task reconcile-closed-runs --limit 25 --json` and inspect skipped runs with `vida taskflow run-graph status <run-id> --json`; closed tasks must not remain projected as active runtime work.";
-
-const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.";
-const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";
-const MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.";
 const DOCTOR_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
 fn governance_projection_blocker_codes(
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
@@ -411,7 +404,7 @@ fn doctor_operator_next_actions(
         .any(|code| code == blocker_code_str(BlockerCode::DependencyGraphIssues))
     {
         operator_next_actions
-            .push("Run `vida task validate-graph --json` and resolve graph issues.".to_string());
+            .push(crate::status_surface_signals::task_validate_graph_next_action());
     }
     if operator_blocker_codes
         .iter()
@@ -452,37 +445,37 @@ fn doctor_operator_next_actions(
         .iter()
         .any(|code| code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues))
     {
-        operator_next_actions.push(
-            "Run `vida taskflow protocol-binding check --json` and clear blockers.".to_string(),
-        );
+        operator_next_actions
+            .push(crate::status_surface_signals::protocol_binding_check_next_action());
     }
     if operator_blocker_codes.iter().any(|code| {
         code == blocker_code_str(BlockerCode::MissingRetrievalTrustSourceOperatorEvidence)
     }) {
-        operator_next_actions
-            .push(MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+        operator_next_actions.push(
+            crate::status_surface_signals::missing_retrieval_trust_source_operator_evidence_next_action(),
+        );
     }
     if operator_blocker_codes.iter().any(|code| {
         code == blocker_code_str(BlockerCode::MissingRetrievalTrustSignalOperatorEvidence)
     }) {
-        operator_next_actions
-            .push(MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+        operator_next_actions.push(
+            crate::status_surface_signals::missing_retrieval_trust_signal_operator_evidence_next_action(),
+        );
     }
     if operator_blocker_codes
         .iter()
         .any(|code| code == blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence))
     {
-        operator_next_actions
-            .push(MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+        operator_next_actions.push(
+            crate::status_surface_signals::missing_retrieval_trust_operator_evidence_next_action(),
+        );
     }
     if operator_blocker_codes
         .iter()
         .any(|code| code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard))
     {
-        operator_next_actions.push(
-            "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard."
-                .to_string(),
-        );
+        operator_next_actions
+            .push(crate::status_surface_signals::missing_root_session_write_guard_next_action());
     }
     if operator_blocker_codes.iter().any(|code| {
         code == blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence)
@@ -496,10 +489,8 @@ fn doctor_operator_next_actions(
         .iter()
         .any(|code| code == blocker_code_str(BlockerCode::RecoveryReadinessBlocked))
     {
-        operator_next_actions.push(
-            "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff."
-                .to_string(),
-        );
+        operator_next_actions
+            .push(crate::status_surface_signals::recovery_readiness_blocked_next_action());
     }
     if operator_blocker_codes
         .iter()
@@ -512,8 +503,9 @@ fn doctor_operator_next_actions(
         .iter()
         .any(|code| code == MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER)
     {
-        operator_next_actions
-            .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+        operator_next_actions.push(
+            crate::status_surface_signals::missing_run_graph_dispatch_receipt_operator_evidence_next_action(),
+        );
     }
     if operator_blocker_codes
         .iter()
@@ -536,8 +528,9 @@ fn doctor_operator_next_actions(
         .iter()
         .any(|code| code == CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_BLOCKER)
     {
-        operator_next_actions
-            .push(CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_NEXT_ACTION.to_string());
+        operator_next_actions.push(
+            crate::status_surface_signals::closed_task_active_run_projection_mismatch_next_action(),
+        );
     }
     operator_next_actions.extend(governance_projection_next_actions(
         operator_blocker_codes,
@@ -884,16 +877,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 latest_run_graph_task_closed,
                 latest_run_graph_task_stale,
             ) = match latest_run_graph_status.as_ref() {
-                Some(status) => match store.show_task(&status.task_id).await {
-                    Ok(task) => {
-                        let closed = task.status == "closed"
-                            && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
-                                status,
-                            );
-                        (false, closed, closed)
-                    }
-                    Err(crate::state_store::StateStoreError::MissingTask { .. }) => {
-                        (true, false, true)
+                Some(status) => match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
+                    Ok(verdict) => {
+                        let missing = verdict.task_missing();
+                        let closed = verdict.task_closed_stale_run();
+                        (missing, closed, missing || closed)
                     }
                     Err(error) => {
                         eprintln!("latest run graph task authority: failed ({error})");
@@ -982,7 +970,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 });
             let latest_run_graph_terminal_closure = match latest_run_graph_status.as_ref() {
                 Some(status)
-                    if crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                    if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                         status,
                     ) =>
                 {
@@ -1004,16 +992,34 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             let latest_run_graph_terminal_closure_without_receipt_truth =
                 match latest_run_graph_status.as_ref() {
                     Some(status)
-                        if crate::state_store::StateStore::run_graph_status_is_terminal_closure(
+                        if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                             status,
                         ) =>
                     {
-                        !latest_run_graph_terminal_closure
-                            && store
-                                .show_task(&status.task_id)
-                                .await
-                                .map(|task| task.status == "closed")
-                                .unwrap_or(false)
+                        let verdict = match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
+                            Ok(verdict) => verdict,
+                            Err(error) => {
+                                eprintln!("latest terminal run graph task authority: failed ({error})");
+                                return ExitCode::from(1);
+                            }
+                        };
+                        let task_closed = if verdict.task_closed_stale_run() {
+                            true
+                        } else {
+                            match store.show_task(&status.task_id).await {
+                                Ok(task) => task.status == "closed",
+                                Err(crate::state_store::StateStoreError::MissingTask { .. }) => {
+                                    false
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "latest terminal run graph task lookup: failed ({error})"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        };
+                        !latest_run_graph_terminal_closure && task_closed
                     }
                     _ => false,
                 };
@@ -1352,6 +1358,129 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     store.root(),
                     doctor_json_projection_name(summary_only),
                     &summary_json,
+                );
+                return ExitCode::SUCCESS;
+            }
+
+            if matches!(render, crate::RenderMode::Plain) {
+                crate::operator_toon_report::print(
+                    "vida doctor",
+                    vec![
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "storage_metadata",
+                            storage_metadata_display.clone(),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "authoritative_state_spine",
+                            format!(
+                                "state-v{} surfaces={} mutation_root={}",
+                                state_spine.state_schema_version,
+                                state_spine.entity_surface_count,
+                                state_spine.authoritative_mutation_root
+                            ),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "task_store",
+                            task_store.as_display(),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "run_graph",
+                            run_graph.as_display(),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "launcher_runtime_paths",
+                            format!(
+                                "vida={} project_root={} taskflow_surface={}",
+                                launcher_runtime_paths.vida,
+                                launcher_runtime_paths.project_root,
+                                launcher_runtime_paths.taskflow_surface
+                            ),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "dependency_graph",
+                            "0 issues",
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "boot_compatibility",
+                            format!(
+                                "{} ({})",
+                                boot_compatibility.classification, boot_compatibility.next_step
+                            ),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "migration_preflight",
+                            format!(
+                                "{} / {} ({})",
+                                canonical_compatibility_class_str(
+                                    &migration_preflight.compatibility_classification
+                                )
+                                .unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
+                                migration_preflight.migration_state,
+                                migration_preflight.next_step
+                            ),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "runtime_consumption",
+                            runtime_consumption.as_display(),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "root_session_write_guard",
+                            match root_session_write_guard["reason"].as_str() {
+                                Some(reason) => format!(
+                                    "{} ({reason})",
+                                    root_session_write_guard["status"]
+                                        .as_str()
+                                        .unwrap_or("unknown")
+                                ),
+                                None => root_session_write_guard["status"]
+                                    .as_str()
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                            },
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "protocol_binding",
+                            protocol_binding.as_display(),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "trace_evidence",
+                            trace_evidence_display(&trace_evidence),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "latest_run_graph_status",
+                            latest_run_graph_status
+                                .as_ref()
+                                .map(|status| status.as_display())
+                                .unwrap_or_else(|| "none".to_string()),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "latest_run_graph_recovery",
+                            latest_run_graph_recovery
+                                .as_ref()
+                                .map(|summary| summary.as_display())
+                                .unwrap_or_else(|| "none".to_string()),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "latest_run_graph_checkpoint",
+                            latest_run_graph_checkpoint
+                                .as_ref()
+                                .map(|summary| summary.as_display())
+                                .unwrap_or_else(|| "none".to_string()),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "latest_run_graph_gate",
+                            latest_run_graph_gate
+                                .as_ref()
+                                .map(|summary| summary.as_display())
+                                .unwrap_or_else(|| "none".to_string()),
+                        ),
+                        crate::operator_toon_report::OperatorToonField::text(
+                            "effective_instruction_bundle",
+                            effective_instruction_bundle
+                                .mandatory_chain_order
+                                .join(" -> "),
+                        ),
+                    ],
                 );
                 return ExitCode::SUCCESS;
             }
@@ -2066,6 +2195,7 @@ mod tests {
         assert!(next_actions
             .iter()
             .any(|action| action.contains("concrete run/task/packet")));
+        assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
             None
@@ -2101,6 +2231,65 @@ mod tests {
         assert!(next_actions
             .iter()
             .any(|action| action.contains("checkpoint evidence")));
+        assert!(next_actions.iter().all(|action| !action.contains("--json")));
+        assert_eq!(
+            operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
+            None
+        );
+    }
+
+    #[test]
+    fn doctor_operator_next_actions_use_default_human_commands_from_shared_catalog() {
+        let blocker_codes = vec![
+            crate::blocker_code_str(crate::BlockerCode::ProtocolBindingBlockingIssues).to_string(),
+            crate::blocker_code_str(
+                crate::BlockerCode::MissingRetrievalTrustSourceOperatorEvidence,
+            )
+            .to_string(),
+            crate::blocker_code_str(
+                crate::BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
+            )
+            .to_string(),
+            crate::blocker_code_str(crate::BlockerCode::MissingRetrievalTrustOperatorEvidence)
+                .to_string(),
+            crate::blocker_code_str(crate::BlockerCode::MissingRootSessionWriteGuard).to_string(),
+            crate::blocker_code_str(crate::BlockerCode::RecoveryReadinessBlocked).to_string(),
+            "missing_run_graph_dispatch_receipt_operator_evidence".to_string(),
+            "closed_task_active_run_projection_mismatch".to_string(),
+        ];
+        let next_actions = super::doctor_operator_next_actions(
+            &blocker_codes,
+            &crate::state_store::BootCompatibilitySummary {
+                classification: "backward_compatible".to_string(),
+                reasons: vec![],
+                next_step: "none".to_string(),
+            },
+            &crate::state_store::MigrationPreflightSummary {
+                contract_type: "operator_contracts".to_string(),
+                schema_version: "release-1-v1".to_string(),
+                compatibility_classification: "backward_compatible".to_string(),
+                migration_state: "no_migration_required".to_string(),
+                blockers: vec![],
+                source_version_tuple: vec![],
+                next_step: "none".to_string(),
+            },
+            None,
+            None,
+        );
+
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow protocol-binding check")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow consume bundle check")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow recovery latest")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida task reconcile-closed-runs --limit 25")));
+        assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
             None

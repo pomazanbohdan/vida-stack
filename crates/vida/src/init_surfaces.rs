@@ -1678,6 +1678,7 @@ fn build_orchestrator_init_full_payload(
         "orchestrator_runtime_contract": orchestrator_runtime_contract,
         "continuation_binding": init_view["continuation_binding"],
         "active_bounded_unit": init_view["continuation_binding"]["active_bounded_unit"],
+        "next_actions": init_view["continuation_binding"]["next_actions"],
         "why_this_unit": init_view["continuation_binding"]["why_this_unit"],
         "sequential_vs_parallel_posture": init_view["continuation_binding"]["sequential_vs_parallel_posture"],
         "runtime_bundle_summary": orchestrator_runtime_bundle_summary(bundle, state_dir),
@@ -1713,6 +1714,7 @@ fn build_orchestrator_init_summary_payload(
         },
         "continuation_binding": init_view["continuation_binding"],
         "active_bounded_unit": init_view["continuation_binding"]["active_bounded_unit"],
+        "next_actions": init_view["continuation_binding"]["next_actions"],
         "why_this_unit": init_view["continuation_binding"]["why_this_unit"],
         "sequential_vs_parallel_posture": init_view["continuation_binding"]["sequential_vs_parallel_posture"],
         "next_lawful_dispatch_action": orchestrator_runtime_contract["next_lawful_dispatch_action"],
@@ -1782,13 +1784,16 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
         Ok(tasks) => tasks,
         Err(_) => return false,
     };
-    !all_tasks.iter().any(|task| {
-        task.id == latest_run_graph_status.task_id
-            && task.status == "closed"
-            && !crate::state_store::StateStore::run_graph_status_is_terminal_closure(
-                &latest_run_graph_status,
-            )
-    })
+    let Some(latest_task) = all_tasks
+        .iter()
+        .find(|task| task.id == latest_run_graph_status.task_id)
+    else {
+        return false;
+    };
+    !(latest_task.status == "closed"
+        && !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+            &latest_run_graph_status,
+        ))
 }
 
 fn cached_orchestrator_init_payload_has_closed_task_active_run_projection_mismatch(
@@ -2577,6 +2582,81 @@ mod tests {
                 })
                 .to_string()
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn orchestrator_init_cache_rejects_missing_task_active_run_projection() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("state store should open");
+        let status = RunGraphStatus {
+            run_id: "missing-run".to_string(),
+            task_id: "missing-task".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("test_author".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "test_author_lane".to_string(),
+            lifecycle_stage: "implementation_dispatch_ready".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "awaiting_test_author".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.test_author_lane".to_string(),
+            recovery_ready: true,
+        };
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("missing-task run graph status should record");
+        store.close().await;
+        let cached = json!({
+            "surface": "vida orchestrator-init",
+            "view": "summary",
+            "status": "ready_enough_for_normal_work",
+            "active_bounded_unit": {
+                "kind": "run_graph_task",
+                "task_id": "missing-task",
+                "run_id": "missing-run",
+                "active_node": "planning"
+            },
+            "continuation_binding": {
+                "status": "bound",
+                "active_bounded_unit": {
+                    "kind": "run_graph_task",
+                    "task_id": "missing-task",
+                    "run_id": "missing-run",
+                    "active_node": "planning"
+                },
+                "why_this_unit": "Latest runtime state is still active for task `missing-task`.",
+                "sequential_vs_parallel_posture": "sequential_only_open_cycle"
+            },
+            "init": {
+                "continuation_binding": {
+                    "status": "bound",
+                    "active_bounded_unit": {
+                        "kind": "run_graph_task",
+                        "task_id": "missing-task",
+                        "run_id": "missing-run",
+                        "active_node": "planning"
+                    },
+                    "why_this_unit": "Latest runtime state is still active for task `missing-task`.",
+                    "sequential_vs_parallel_posture": "sequential_only_open_cycle"
+                }
+            }
+        });
+
+        assert!(
+            !cached_orchestrator_init_payload_is_currently_admissible(
+                harness.path(),
+                &cached.to_string()
+            )
+            .await,
+            "orchestrator-init cache must not preserve active bounded units for missing tasks"
         );
     }
 
@@ -4696,9 +4776,13 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     let instruction_source_root = PathBuf::from(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
     let framework_memory_source_root =
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
+    let view = args.view.trim();
+    let full_output = args.full || view == "full";
+    let field_selection = args.fields.as_deref();
+    let selected_output = field_selection.is_some();
 
-    if args.json {
-        let projection_name = orchestrator_init_projection_name(args.full);
+    if args.json && !selected_output {
+        let projection_name = orchestrator_init_projection_name(full_output);
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
             &state_dir,
             projection_name,
@@ -4727,7 +4811,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
         if let Some(cached) =
             crate::operator_projection_cache::read_state_stale_recent_json_projection(
                 &state_dir,
-                orchestrator_init_projection_name(args.full),
+                orchestrator_init_projection_name(full_output),
                 std::time::Duration::from_secs(300),
             )
         {
@@ -4834,8 +4918,8 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                         );
                     let orchestrator_runtime_contract =
                         build_orchestrator_runtime_contract(&init_view, &dev_team_readiness);
-                    if args.json {
-                        let payload = if args.full {
+                    if args.json || selected_output {
+                        let payload = if full_output {
                             build_orchestrator_init_full_payload(
                                 &init_view,
                                 &dev_team_readiness,
@@ -4852,16 +4936,30 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                                 store.root(),
                             )
                         };
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&payload)
-                                .expect("orchestrator-init json should render")
-                        );
-                        crate::operator_projection_cache::write_json_projection(
-                            store.root(),
-                            orchestrator_init_projection_name(args.full),
-                            &payload,
-                        );
+                        let selected_payload =
+                            crate::operator_toon_report::select_fields(payload.clone(), field_selection);
+                        if args.json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&selected_payload)
+                                    .expect("orchestrator-init json should render")
+                            );
+                        } else {
+                            println!(
+                                "{}",
+                                crate::operator_toon_report::render_value(
+                                    "vida orchestrator-init",
+                                    selected_payload,
+                                )
+                            );
+                        }
+                        if !selected_output {
+                            crate::operator_projection_cache::write_json_projection(
+                                store.root(),
+                                orchestrator_init_projection_name(full_output),
+                                &payload,
+                            );
+                        }
                     } else {
                         print_surface_header(RenderMode::Plain, "vida orchestrator-init");
                         print_surface_line(

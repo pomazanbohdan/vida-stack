@@ -1,5 +1,8 @@
 use super::*;
 use crate::launcher_task_commands::shell_quote;
+use crate::state_store::state_store_task_models::{
+    task_is_spec_first_feature_parent, task_is_spec_pack_child, task_is_work_pool_pack_child,
+};
 
 const TASK_TREE_MAX_DEPTH: usize = 64;
 const TASK_TREE_MAX_NODE_VISITS: usize = 10_000;
@@ -825,7 +828,7 @@ impl StateStore {
                     crate::release1_contracts::BlockerCode::MissingRunGraphDispatchReceiptOperatorEvidence,
                 )
                 .to_string(),
-                next_action: "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.".to_string(),
+                next_action: crate::status_surface_signals::missing_run_graph_dispatch_receipt_operator_evidence_next_action(),
             }],
             nodes,
         })
@@ -968,7 +971,19 @@ impl StateStore {
                             })
                             .unwrap_or(true)
                     });
-                if !has_non_closed_child && !has_unresolved_non_parent_dependency {
+                let waiting_for_work_pool_handoff = task_is_spec_first_feature_parent(task)
+                    && children
+                        .iter()
+                        .filter_map(|child_id| by_id.get(child_id))
+                        .any(|child| task_is_spec_pack_child(child))
+                    && !children
+                        .iter()
+                        .filter_map(|child_id| by_id.get(child_id))
+                        .any(|child| task_is_work_pool_pack_child(child));
+                if !has_non_closed_child
+                    && !has_unresolved_non_parent_dependency
+                    && !waiting_for_work_pool_handoff
+                {
                     issues.push(TaskGraphIssue {
                         issue_type: "open_parent_has_no_open_child".to_string(),
                         issue_id: task.id.clone(),

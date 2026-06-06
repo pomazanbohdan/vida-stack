@@ -74,9 +74,114 @@ pub struct ReadinessRow {
     pub checked_at: CheckedAt,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DocflowCloseoutVerdict {
+    pub command: String,
+    pub mode: String,
+    pub task_id: Option<String>,
+    pub root: String,
+    pub profile: String,
+    pub changed_doc_count: usize,
+    pub changed_docs: Vec<String>,
+    pub fastcheck_rows: usize,
+    pub protocol_coverage_rows: usize,
+    pub readiness_rows: usize,
+    pub doctor_error_rows: usize,
+    pub doctor_warning_rows: usize,
+    pub task_close_allowed: bool,
+    pub verdict: String,
+    pub blocker_codes: Vec<String>,
+    pub next_actions: Vec<String>,
+}
+
+pub struct DocflowCloseoutVerdictInput<'a> {
+    pub command: &'a str,
+    pub mode: &'a str,
+    pub task_id: Option<&'a str>,
+    pub root: Option<&'a str>,
+    pub profile: &'a str,
+    pub changed_docs: Vec<String>,
+    pub fastcheck_rows: usize,
+    pub protocol_coverage_rows: usize,
+    pub readiness_rows: usize,
+    pub doctor_error_rows: usize,
+    pub doctor_warning_rows: usize,
+}
+
+pub fn build_docflow_closeout_verdict(
+    input: DocflowCloseoutVerdictInput<'_>,
+) -> DocflowCloseoutVerdict {
+    let mut blocker_codes = Vec::new();
+    if input.changed_docs.is_empty() {
+        blocker_codes.push(if input.mode == "task" {
+            "missing_docflow_task_evidence".to_string()
+        } else {
+            "no_changed_docflow_docs".to_string()
+        });
+    }
+    if input.fastcheck_rows > 0 || input.readiness_rows > 0 {
+        blocker_codes.push("docflow_check_blocking".to_string());
+    }
+    if input.protocol_coverage_rows > 0 {
+        blocker_codes.push("docflow_protocol_coverage_blocking".to_string());
+    }
+    if input.doctor_error_rows > 0 {
+        blocker_codes.push("docflow_doctor_error".to_string());
+    }
+
+    let task_close_allowed = !input.changed_docs.is_empty() && blocker_codes.is_empty();
+    let verdict = if task_close_allowed { "ok" } else { "blocking" }.to_string();
+    let mut next_actions = Vec::new();
+    if task_close_allowed {
+        next_actions.push("Continue task closeout with the current DocFlow evidence.".to_string());
+    } else if input.changed_docs.is_empty() && input.mode == "task" {
+        next_actions.push(
+            "Record DocFlow changelog evidence with the active task id before closing the task."
+                .to_string(),
+        );
+        if let Some(task_id) = input.task_id {
+            next_actions.push(format!(
+                "Inspect task-bound DocFlow history with `docflow task-summary --task-id {task_id}`."
+            ));
+        }
+    } else if input.changed_docs.is_empty() {
+        next_actions.push(
+            "Change or finalize at least one markdown DocFlow artifact before closeout."
+                .to_string(),
+        );
+    } else {
+        next_actions.push(
+            "Run `docflow check` and clear blocking DocFlow validation or doctor rows before closing the task."
+                .to_string(),
+        );
+    }
+
+    DocflowCloseoutVerdict {
+        command: input.command.to_string(),
+        mode: input.mode.to_string(),
+        task_id: input.task_id.map(ToString::to_string),
+        root: input.root.unwrap_or_default().to_string(),
+        profile: input.profile.to_string(),
+        changed_doc_count: input.changed_docs.len(),
+        changed_docs: input.changed_docs,
+        fastcheck_rows: input.fastcheck_rows,
+        protocol_coverage_rows: input.protocol_coverage_rows,
+        readiness_rows: input.readiness_rows,
+        doctor_error_rows: input.doctor_error_rows,
+        doctor_warning_rows: input.doctor_warning_rows,
+        task_close_allowed,
+        verdict,
+        blocker_codes,
+        next_actions,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ArtifactRelation, ArtifactRelationKind, ReadinessRow, RegistryRow, ScanRow};
+    use super::{
+        ArtifactRelation, ArtifactRelationKind, DocflowCloseoutVerdictInput, ReadinessRow,
+        RegistryRow, ScanRow, build_docflow_closeout_verdict,
+    };
     use docflow_core::{ArtifactPath, CheckedAt, ReadinessVerdict};
 
     #[test]
@@ -140,5 +245,52 @@ mod tests {
         };
         assert!(row.has_footer);
         assert!(!row.has_changelog);
+    }
+
+    #[test]
+    fn closeout_verdict_blocks_task_without_task_bound_evidence() {
+        let verdict = build_docflow_closeout_verdict(DocflowCloseoutVerdictInput {
+            command: "docflow closeout",
+            mode: "task",
+            task_id: Some("TASK-1"),
+            root: Some("C:/repo"),
+            profile: "",
+            changed_docs: Vec::new(),
+            fastcheck_rows: 0,
+            protocol_coverage_rows: 0,
+            readiness_rows: 0,
+            doctor_error_rows: 0,
+            doctor_warning_rows: 0,
+        });
+
+        assert!(!verdict.task_close_allowed);
+        assert_eq!(verdict.blocker_codes, ["missing_docflow_task_evidence"]);
+        assert!(
+            verdict
+                .next_actions
+                .iter()
+                .any(|action| { action.contains("docflow task-summary --task-id TASK-1") })
+        );
+    }
+
+    #[test]
+    fn closeout_verdict_allows_clean_changed_doc_evidence() {
+        let verdict = build_docflow_closeout_verdict(DocflowCloseoutVerdictInput {
+            command: "docflow closeout",
+            mode: "changed",
+            task_id: None,
+            root: None,
+            profile: "",
+            changed_docs: vec!["docs/process/example.md".to_string()],
+            fastcheck_rows: 0,
+            protocol_coverage_rows: 0,
+            readiness_rows: 0,
+            doctor_error_rows: 0,
+            doctor_warning_rows: 0,
+        });
+
+        assert!(verdict.task_close_allowed);
+        assert!(verdict.blocker_codes.is_empty());
+        assert_eq!(verdict.verdict, "ok");
     }
 }
