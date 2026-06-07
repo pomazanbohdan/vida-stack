@@ -1622,6 +1622,31 @@ fn persist_host_bridge_lane_receipt_with_target(
     blocker_code: &str,
     lifecycle_stage: &str,
 ) {
+    persist_host_bridge_lane_receipt_with_target_and_active_node(
+        state_dir,
+        run_id,
+        dispatch_target,
+        dispatch_target,
+        downstream_target,
+        dispatch_status,
+        lane_status,
+        blocker_code,
+        lifecycle_stage,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_host_bridge_lane_receipt_with_target_and_active_node(
+    state_dir: &str,
+    run_id: &str,
+    dispatch_target: &str,
+    active_node: &str,
+    downstream_target: &str,
+    dispatch_status: &str,
+    lane_status: &str,
+    blocker_code: &str,
+    lifecycle_stage: &str,
+) {
     let project_root = format!("{state_dir}/../../..");
     let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
     let result_dir = format!("{state_dir}/runtime-consumption/dispatch-results");
@@ -1648,6 +1673,10 @@ fn persist_host_bridge_lane_receipt_with_target(
         .env(
             runtime_consumption::RECEIPT_HELPER_DISPATCH_TARGET_ENV,
             dispatch_target,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_ACTIVE_NODE_ENV,
+            active_node,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DISPATCH_PACKET_PATH_ENV,
@@ -2044,8 +2073,8 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
     let lane_payload: serde_json::Value =
         serde_json::from_slice(&lane_show.stdout).expect("lane show json should parse");
     assert_eq!(
-        lane_payload["recommended_surface"],
-        "vida agent host-bridge"
+        lane_payload["recommended_surface"], "vida agent host-bridge",
+        "lane payload should recommend active implementer request: {lane_payload}"
     );
     assert!(lane_payload["recommended_command"]
         .as_str()
@@ -2091,6 +2120,99 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
     .expect("bridge result should parse");
     assert_eq!(bridge_result["status"], "pass");
     assert_eq!(bridge_result["execution_state"], "executed");
+}
+
+#[test]
+fn host_bridge_public_cli_completes_reconciled_active_request_when_receipt_points_to_stale_target()
+{
+    let fixture =
+        create_host_bridge_lane_fixture("host-bridge-stale-receipt", "crates/vida/src/lib.rs");
+    let mut request: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.request_path).expect("request should exist"),
+    )
+    .expect("request should parse");
+    request["adapter_kind"] = serde_json::json!("codex_host_tools");
+    request["adapter_capability_id"] = serde_json::json!("codex.multi_agent_v1");
+    request["request_path"] = serde_json::json!(fixture.request_path.clone());
+    std::fs::write(
+        &fixture.request_path,
+        serde_json::to_string_pretty(&request).expect("request should serialize"),
+    )
+    .expect("request should write");
+    persist_host_bridge_lane_receipt_with_target_and_active_node(
+        &fixture.state_dir,
+        &fixture.run_id,
+        "coach",
+        "implementer",
+        "tester",
+        "bridge_request_pending",
+        "lane_open",
+        "host_tool_bridge_adapter_required",
+        "implementer_blocked",
+    );
+    std::fs::write(
+        format!(
+            "{}/runtime-consumption/dispatch-packets/{}-coach.json",
+            fixture.state_dir, fixture.run_id
+        ),
+        serde_json::json!({
+            "run_id": fixture.run_id,
+            "dispatch_target": "coach",
+            "source_dispatch_target": "implementer",
+            "source_dispatch_status": "bridge_request_pending",
+            "source_blocker_code": "host_tool_bridge_adapter_required",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["pending_implementation_evidence"]
+        })
+        .to_string(),
+    )
+    .expect("stale coach packet should preserve blocked implementer source");
+
+    let lane_show = vida()
+        .args(["lane", "show", &fixture.run_id, "--json"])
+        .env("VIDA_STATE_DIR", &fixture.state_dir)
+        .output()
+        .expect("lane show should run");
+    assert_failure(&lane_show, "lane show stale receipt guidance");
+    let lane_payload: serde_json::Value =
+        serde_json::from_slice(&lane_show.stdout).expect("lane show json should parse");
+    assert_eq!(
+        lane_payload["recommended_surface"],
+        "vida agent host-bridge"
+    );
+    assert!(lane_payload["recommended_command"]
+        .as_str()
+        .expect("recommended command")
+        .contains(&fixture.request_path));
+
+    let output = vida()
+        .args([
+            "agent",
+            "host-bridge",
+            "--request",
+            &fixture.request_path,
+            "--complete",
+            "--host-agent-id",
+            "agent-stale-receipt-proof",
+            "--summary",
+            "completion after recovery reconciled active implementer request",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("agent host-bridge stale receipt completion should run");
+    assert_success(
+        &output,
+        "agent host-bridge should complete active implementer request despite stale coach receipt",
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
+    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["dispatch_status"], "executed");
+    assert_eq!(payload["lane_status"], "lane_completed");
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
 }
 
 #[test]

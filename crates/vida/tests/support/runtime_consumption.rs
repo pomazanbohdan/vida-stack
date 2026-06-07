@@ -11,6 +11,8 @@ pub(crate) const RECEIPT_HELPER_STATE_DIR_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_R
 pub(crate) const RECEIPT_HELPER_RUN_ID_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_RUN_ID";
 pub(crate) const RECEIPT_HELPER_DISPATCH_TARGET_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DISPATCH_TARGET";
+pub(crate) const RECEIPT_HELPER_ACTIVE_NODE_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_ACTIVE_NODE";
 pub(crate) const RECEIPT_HELPER_DISPATCH_PACKET_PATH_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DISPATCH_PACKET_PATH";
 pub(crate) const RECEIPT_HELPER_DOWNSTREAM_TARGET_ENV: &str =
@@ -291,13 +293,18 @@ fn persist_ready_downstream_receipt(
             })
             .await
             .expect("runtime receipt helper should persist resumability capsule");
+        let active_node = std::env::var(RECEIPT_HELPER_ACTIVE_NODE_ENV)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| dispatch_target.to_string());
         let _: Option<TestExecutionPlanStateRow> = db
             .upsert(("execution_plan_state", run_id))
             .content(TestExecutionPlanStateRow {
                 run_id: run_id.to_string(),
                 task_id: run_id.to_string(),
                 task_class: task_class.to_string(),
-                active_node: dispatch_target.to_string(),
+                active_node,
                 next_node: Some(downstream_target.to_string()),
                 status: status_label.to_string(),
                 updated_at,
