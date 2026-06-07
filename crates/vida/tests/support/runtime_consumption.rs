@@ -304,7 +304,7 @@ fn persist_ready_downstream_receipt(
             downstream_dispatch_last_target: Some(dispatch_target.to_string()),
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some(dispatch_target.to_string()),
-            selected_backend: Some("middle".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
             recorded_at: "2026-06-05T00:00:00Z".to_string(),
         };
         let _: Option<TestRunGraphDispatchReceiptRow> = db

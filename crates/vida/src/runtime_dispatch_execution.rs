@@ -2024,10 +2024,6 @@ fn path_has_dot_segment(path: &Path) -> bool {
     })
 }
 
-fn host_tool_bridge_state_root(project_root: &Path) -> PathBuf {
-    project_root.join(".vida/data/state")
-}
-
 struct HostToolBridgeArtifactPaths {
     request_path: PathBuf,
     result_path: PathBuf,
@@ -2036,26 +2032,30 @@ struct HostToolBridgeArtifactPaths {
 
 fn host_tool_bridge_artifact_paths(
     project_root: &Path,
+    state_root: &Path,
     system_entry: Option<&serde_yaml::Value>,
     request_id: &str,
 ) -> HostToolBridgeArtifactPaths {
     let request_dir = configured_host_tool_bridge_dir(
         project_root,
+        state_root,
         system_entry,
         "request_dir",
-        ".vida/data/state/host-tool-bridge/requests",
+        "host-tool-bridge/requests",
     );
     let result_dir = configured_host_tool_bridge_dir(
         project_root,
+        state_root,
         system_entry,
         "result_dir",
-        ".vida/data/state/host-tool-bridge/results",
+        "host-tool-bridge/results",
     );
     let receipt_dir = configured_host_tool_bridge_dir(
         project_root,
+        state_root,
         system_entry,
         "receipt_dir",
-        ".vida/data/state/host-tool-bridge/receipts",
+        "host-tool-bridge/receipts",
     );
     HostToolBridgeArtifactPaths {
         request_path: request_dir.join(format!("{request_id}.json")),
@@ -2066,6 +2066,7 @@ fn host_tool_bridge_artifact_paths(
 
 fn configured_host_tool_bridge_dir(
     project_root: &Path,
+    state_root: &Path,
     system_entry: Option<&serde_yaml::Value>,
     key: &str,
     fallback: &str,
@@ -2073,15 +2074,16 @@ fn configured_host_tool_bridge_dir(
     let configured = system_entry
         .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["host_tool_bridge", key])))
         .unwrap_or_else(|| fallback.to_string());
-    let state_root = host_tool_bridge_state_root(project_root);
-    let fallback_path = project_root.join(fallback);
+    let fallback_path = state_root.join(fallback);
     let path = PathBuf::from(configured);
     let candidate = if path.is_absolute() {
         path
+    } else if let Ok(relative_to_state) = path.strip_prefix(".vida/data/state") {
+        state_root.join(relative_to_state)
     } else {
         project_root.join(path)
     };
-    if !path_has_dot_segment(&candidate) && candidate.starts_with(&state_root) {
+    if !path_has_dot_segment(&candidate) && candidate.starts_with(state_root) {
         candidate
     } else {
         fallback_path
@@ -2092,6 +2094,7 @@ fn write_host_bridge_request_file(
     path: &Path,
     request: &serde_json::Value,
     replace_existing: bool,
+    state_root: &Path,
 ) -> Result<(), String> {
     let parent = path.parent().ok_or_else(|| {
         format!(
@@ -2113,17 +2116,7 @@ fn write_host_bridge_request_file(
             parent.display()
         )
     })?;
-    let Some(state_root) = path
-        .ancestors()
-        .find(|ancestor| ancestor.ends_with(".vida/data/state"))
-        .map(Path::to_path_buf)
-    else {
-        return Err(format!(
-            "Host bridge request path `{}` is not under VIDA state root.",
-            path.display()
-        ));
-    };
-    let canonical_state_root = std::fs::canonicalize(&state_root).map_err(|error| {
+    let canonical_state_root = std::fs::canonicalize(state_root).map_err(|error| {
         format!(
             "Failed to canonicalize VIDA state root `{}`: {error}",
             state_root.display()
@@ -2536,6 +2529,7 @@ fn existing_host_bridge_request_needs_adapter_refresh(
 
 fn materialize_host_tool_bridge_request(
     project_root: &Path,
+    state_root: &Path,
     selected_cli_entry: Option<&serde_yaml::Value>,
     dispatch_packet_path: &str,
     backend_id: &str,
@@ -2544,7 +2538,8 @@ fn materialize_host_tool_bridge_request(
     _role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Result<serde_json::Value, String> {
     let request_id = host_tool_bridge_request_id(receipt, dispatch_packet_path);
-    let paths = host_tool_bridge_artifact_paths(project_root, selected_cli_entry, &request_id);
+    let paths =
+        host_tool_bridge_artifact_paths(project_root, state_root, selected_cli_entry, &request_id);
     let adapter_kind = configured_host_tool_bridge_string(selected_cli_entry, "adapter_kind")
         .unwrap_or_else(|| "unconfigured_host_agent_adapter".to_string());
     let adapter_capability_id =
@@ -2660,7 +2655,12 @@ fn materialize_host_tool_bridge_request(
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("Failed to create host bridge receipt directory: {error}"))?;
     }
-    write_host_bridge_request_file(&paths.request_path, &request, replace_existing_request)?;
+    write_host_bridge_request_file(
+        &paths.request_path,
+        &request,
+        replace_existing_request,
+        state_root,
+    )?;
     Ok(request)
 }
 
@@ -3610,6 +3610,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         );
         let bridge_request = materialize_host_tool_bridge_request(
             project_root,
+            state_root,
             selected_cli_entry.as_ref(),
             dispatch_packet_path,
             backend_id,
@@ -5489,6 +5490,7 @@ host_environment:
         };
         let request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             Some(&entry),
             &project_root
                 .join(".vida/dispatch.json")
@@ -5574,6 +5576,7 @@ dispatch:
 
         let request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             None,
             &project_root
                 .join(".vida/dispatch.json")
@@ -5603,6 +5606,7 @@ dispatch:
     #[test]
     fn configured_host_tool_bridge_dir_accepts_state_root_subdirectories() {
         let project_root = std::env::temp_dir().join("vida-host-bridge-configured-dir");
+        let state_root = project_root.join(".vida/data/state-alt");
         let configured = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 host_tool_bridge:
@@ -5613,20 +5617,22 @@ host_tool_bridge:
 
         let resolved = configured_host_tool_bridge_dir(
             &project_root,
+            &state_root,
             Some(&configured),
             "result_dir",
-            ".vida/data/state/host-tool-bridge/results",
+            "host-tool-bridge/results",
         );
 
         assert_eq!(
             resolved,
-            project_root.join(".vida/data/state/custom-agent-bridge/results")
+            state_root.join("custom-agent-bridge/results")
         );
     }
 
     #[test]
     fn configured_host_tool_bridge_dir_rejects_paths_outside_state_root() {
         let project_root = std::env::temp_dir().join("vida-host-bridge-dir-guard");
+        let state_root = project_root.join(".vida/data/state-alt");
         let configured = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 host_tool_bridge:
@@ -5637,14 +5643,15 @@ host_tool_bridge:
 
         let resolved = configured_host_tool_bridge_dir(
             &project_root,
+            &state_root,
             Some(&configured),
             "result_dir",
-            ".vida/data/state/host-tool-bridge/results",
+            "host-tool-bridge/results",
         );
 
         assert_eq!(
             resolved,
-            project_root.join(".vida/data/state/host-tool-bridge/results")
+            state_root.join("host-tool-bridge/results")
         );
     }
 
@@ -5696,6 +5703,7 @@ host_tool_bridge:
         };
         let stale_request_path = host_tool_bridge_artifact_paths(
             &project_root,
+            &project_root.join(".vida/data/state"),
             None,
             &host_tool_bridge_request_id(
                 &receipt,
@@ -5711,6 +5719,7 @@ host_tool_bridge:
 
         let error = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             None,
             dispatch_packet_path
                 .to_str()
@@ -5757,6 +5766,7 @@ host_tool_bridge:
 
         let first_request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             None,
             first_packet_path
                 .to_str()
@@ -5782,6 +5792,7 @@ host_tool_bridge:
 
         let second_request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             None,
             second_packet_path
                 .to_str()
@@ -5919,6 +5930,7 @@ agent_system:
         );
         let request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             Some(&selected_cli_entry),
             dispatch_packet_path
                 .to_str()
@@ -6302,6 +6314,7 @@ agent_system:
         );
         let request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             Some(&selected_cli_entry),
             dispatch_packet_path
                 .to_str()
@@ -6451,6 +6464,7 @@ agent_system:
         );
         let request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             None,
             dispatch_packet_path
                 .to_str()
@@ -6482,6 +6496,7 @@ agent_system:
 
         let error = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             None,
             dispatch_packet_path
                 .to_str()
@@ -6532,6 +6547,7 @@ agent_system:
         );
         let stale_request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             None,
             dispatch_packet_path
                 .to_str()
@@ -6574,6 +6590,7 @@ dispatch:
 
         let refreshed_request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             Some(&legacy_codex_entry),
             dispatch_packet_path
                 .to_str()
@@ -8533,6 +8550,7 @@ host_tool_bridge:
 
         let request = materialize_host_tool_bridge_request(
             &project_root,
+            &project_root.join(".vida/data/state"),
             Some(&selected_cli_entry),
             packet_path.to_str().expect("packet path should render"),
             "internal_subagents",

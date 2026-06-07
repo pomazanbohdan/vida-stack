@@ -2885,7 +2885,7 @@ mod tests {
         );
     }
 
-    fn run_on_cli_runtime_stack(name: &str, test: impl FnOnce() + Send + 'static) {
+    pub(super) fn run_on_cli_runtime_stack(name: &str, test: impl FnOnce() + Send + 'static) {
         let handle = std::thread::Builder::new()
             .name(name.to_string())
             .stack_size(32 * 1024 * 1024)
@@ -8823,6 +8823,10 @@ mod agent_init_surface_tests {
         assert!(payload["next_actions"][0]
             .as_str()
             .unwrap()
+            .contains("vida orchestrator-init"));
+        assert!(!payload["next_actions"][0]
+            .as_str()
+            .unwrap()
             .contains("vida orchestrator-init --json"));
         assert_eq!(
             payload["shared_fields"]["artifact_refs"]["timed_out_surface"],
@@ -9105,18 +9109,20 @@ mod agent_init_surface_tests {
 
     #[test]
     fn agent_init_succeeds_after_init_scaffold() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-        let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
+        super::tests::run_on_cli_runtime_stack("agent_init_succeeds_after_init_scaffold", || {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+            let harness = TempStateHarness::new().expect("temp state harness should initialize");
+            let _cwd = guard_current_dir(harness.path());
+            let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
 
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
-        assert_eq!(
-            runtime.block_on(run(cli(&["agent-init", "--role", "worker", "--json"]))),
-            ExitCode::SUCCESS
-        );
+            assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+            assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
+            wait_for_state_unlock(harness.path());
+            assert_eq!(
+                runtime.block_on(run(cli(&["agent-init", "--role", "worker", "--json"]))),
+                ExitCode::SUCCESS
+            );
+        });
     }
 
     #[test]

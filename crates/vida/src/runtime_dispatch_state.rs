@@ -24562,6 +24562,16 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         "after dispatch execution",
     )
     .await?;
+    if receipt.dispatch_status == "bridge_request_pending" {
+        store
+            .record_run_graph_dispatch_receipt(receipt)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to persist host bridge pending dispatch receipt before projection refresh: {error}"
+                )
+            })?;
+    }
     tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
         refresh_downstream_dispatch_preview(&store, role_selection, run_graph_bootstrap, receipt),

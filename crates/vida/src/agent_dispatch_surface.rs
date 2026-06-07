@@ -234,10 +234,55 @@ async fn host_bridge_request_provenance_blockers(
     request: &serde_json::Value,
     state_root: Option<&Path>,
 ) -> Vec<String> {
-    let state_root = state_root
-        .map(Path::to_path_buf)
-        .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
+    let provided_state_root = state_root.map(Path::to_path_buf);
+    let inferred_state_root = infer_host_bridge_state_root_from_request_path(request_path);
+    let state_root = match (provided_state_root, inferred_state_root) {
+        (Some(provided), Some(_inferred))
+            if host_bridge_request_path_is_under_state_root(request_path, &provided) =>
+        {
+            provided
+        }
+        (Some(_provided), Some(inferred)) => inferred,
+        (Some(provided), None) => provided,
+        (None, Some(inferred)) => inferred,
+        (None, None) => crate::taskflow_task_bridge::proxy_state_dir(),
+    };
     host_bridge_request_provenance_blockers_for_state_root(&state_root, request_path, request).await
+}
+
+fn infer_host_bridge_state_root_from_request_path(request_path: &Path) -> Option<std::path::PathBuf> {
+    let request_path = std::fs::canonicalize(request_path).ok()?;
+    for ancestor in request_path.ancestors() {
+        let Some(state_name) = ancestor.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let Some(data_dir) = ancestor.parent() else {
+            continue;
+        };
+        let Some(data_name) = data_dir.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let Some(vida_dir) = data_dir.parent() else {
+            continue;
+        };
+        let Some(vida_name) = vida_dir.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if state_name == "state" && data_name == "data" && vida_name == ".vida" {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+fn host_bridge_request_path_is_under_state_root(request_path: &Path, state_root: &Path) -> bool {
+    let Ok(request_path) = std::fs::canonicalize(request_path) else {
+        return false;
+    };
+    let Ok(state_root) = std::fs::canonicalize(state_root) else {
+        return false;
+    };
+    request_path.starts_with(state_root)
 }
 
 async fn host_bridge_request_provenance_blockers_for_state_root(
@@ -1720,10 +1765,30 @@ fn build_agent_dispatch_next_preview_dev_team(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let single_current_task_dev_team = projection.current_task_id.is_some()
+    let all_ready_flow_ids = projection
+        .ready
+        .iter()
+        .filter(|candidate| candidate.ready_now)
+        .filter_map(|candidate| {
+            selected_dev_team_flow_for_task(
+                &activation_bundle["dev_team_readiness"],
+                &candidate.task,
+            )
+            .and_then(|flow| flow["flow_id"].as_str())
+            .map(str::to_string)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let has_unsafe_ready_candidates = projection
+        .ready
+        .iter()
+        .any(|candidate| candidate.ready_now && !candidate.ready_parallel_safe);
+    let scoped_current_task_dev_team = projection.current_task_id.is_some()
         && current_task_matches.len() == 1
-        && (lanes_requested <= 1 || projection.ready.len() == 1);
-    let selected_ready_candidates = if single_current_task_dev_team {
+        && (lanes_requested <= 1
+            || projection.ready.len() == 1
+            || all_ready_flow_ids.len() > 1
+            || has_unsafe_ready_candidates);
+    let selected_ready_candidates = if scoped_current_task_dev_team {
         current_task_matches
     } else {
         projection.ready.iter().collect::<Vec<_>>()
@@ -1776,11 +1841,7 @@ fn build_agent_dispatch_next_preview_dev_team(
 
     let configured_max_parallel_agents = configured_max_parallel_agents.max(1);
     let effective_max_parallel_agents = lanes_requested.min(configured_max_parallel_agents);
-    let preview_step_limit = if single_current_task_dev_team {
-        1
-    } else {
-        effective_max_parallel_agents
-    };
+    let preview_step_limit = effective_max_parallel_agents;
     let steps_to_preview = sequence
         .iter()
         .cloned()
@@ -1856,8 +1917,14 @@ fn build_agent_dispatch_next_preview_dev_team(
                 step.role_label.replace('_', "-")
             ));
         }
-        let candidate = selected_ready_candidates.get(ready_index).copied();
-        ready_index += usize::from(candidate.is_some());
+        let candidate = if scoped_current_task_dev_team {
+            selected_ready_candidates.first().copied()
+        } else {
+            selected_ready_candidates.get(ready_index).copied()
+        };
+        if !scoped_current_task_dev_team {
+            ready_index += usize::from(candidate.is_some());
+        }
         let Some(candidate) = candidate else {
             blocker_codes.push(format!(
                 "dev_team_step_missing_ready_task:position={}:{}",
@@ -3784,8 +3851,8 @@ mod tests {
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, host_bridge_adapter_payload,
         host_bridge_completion_lane_args, host_bridge_request_provenance_blockers_for_state_root,
-        resolve_agent_dispatch_next_current_task_ids, single_in_progress_task_id_from_rows,
-        state_store,
+        infer_host_bridge_state_root_from_request_path, resolve_agent_dispatch_next_current_task_ids,
+        single_in_progress_task_id_from_rows, state_store,
     };
     use crate::state_store::{
         CreateTaskRequest, RunGraphDispatchReceipt, TaskExecutionSemantics, TaskRecord,
@@ -4009,6 +4076,32 @@ mod tests {
         ));
 
         assert!(blockers.contains(&"host_bridge_request_untrusted_path".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_state_root_infers_from_project_state_request_path() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-state-root-infer-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should exist");
+        std::fs::write(&request_path, b"{}").expect("request should write");
+
+        let inferred = infer_host_bridge_state_root_from_request_path(&request_path)
+            .expect("state root should infer from project state request path");
+
+        assert_eq!(
+            inferred,
+            std::fs::canonicalize(&state_root).expect("state root should canonicalize")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

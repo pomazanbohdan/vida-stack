@@ -951,7 +951,8 @@ mod tests {
         assert_eq!(payload["blocker_codes"][0], "next_action_target_missing");
         assert!(payload["next_actions"][0].as_str().is_some_and(|action| {
             action.contains("missing-task")
-                && action.contains("vida taskflow recovery status run-1 --json")
+                && action.contains("vida taskflow recovery status run-1")
+                && !action.contains("vida taskflow recovery status run-1 --json")
                 && action.contains("closure_complete")
                 && !action.contains("vida taskflow continuation bind")
         }));

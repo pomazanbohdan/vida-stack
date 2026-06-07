@@ -1564,6 +1564,18 @@ fn persist_host_bridge_lane_receipt_with_helper(
             downstream_packet_path,
         )
         .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_READY_ENV,
+            "false",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_STATUS_ENV,
+            "blocked",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV,
+            "pending_host_bridge_completion",
+        )
+        .env(
             runtime_consumption::RECEIPT_HELPER_RESULT_PATH_ENV,
             activation_result_path,
         )
@@ -3435,9 +3447,8 @@ fn projection_surfaces_fail_closed_for_ready_missing_task_run_host_bridge() {
         .output()
         .expect("recovery latest should run");
     assert!(
-        recovery.status.success(),
-        "recovery latest should succeed: stderr={}",
-        String::from_utf8_lossy(&recovery.stderr)
+        !recovery.status.success(),
+        "recovery latest should fail closed for stale missing-task host-bridge runs"
     );
     let recovery_json: serde_json::Value =
         serde_json::from_slice(&recovery.stdout).expect("recovery json should parse");
@@ -3651,7 +3662,10 @@ fn projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge() {
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("recovery status should run");
-    assert!(recovery.status.success());
+    assert!(
+        !recovery.status.success(),
+        "recovery status should fail closed for stale missing-task host-bridge runs"
+    );
     let recovery_json: serde_json::Value =
         serde_json::from_slice(&recovery.stdout).expect("recovery json should parse");
     assert_eq!(recovery_json["status"], "blocked");
