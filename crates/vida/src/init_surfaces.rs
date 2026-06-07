@@ -1797,21 +1797,17 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     if latest_terminal_task_active_run_graph_status.is_some() {
         return false;
     }
-    let all_tasks = match store.list_tasks(None, true).await {
-        Ok(tasks) => tasks,
-        Err(_) => return false,
-    };
-    let cached_active_task_closed = payload
+    let cached_active_task_id = payload
         .get("active_bounded_unit")
         .and_then(|unit| unit.get("task_id"))
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|task_id| {
-            all_tasks
-                .iter()
-                .any(|task| task.id == task_id && task.status == "closed")
-        });
-    if cached_active_task_closed {
-        return false;
+        .and_then(serde_json::Value::as_str);
+    if let Some(task_id) = cached_active_task_id {
+        let Ok(task) = store.show_task(task_id).await else {
+            return false;
+        };
+        if task.status == "closed" {
+            return false;
+        }
     }
     let latest_run_graph_status = match store.latest_run_graph_status().await {
         Ok(summary) => summary,
@@ -1823,10 +1819,7 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     if latest_run_graph_status.status == "blocked" {
         return false;
     }
-    let Some(latest_task) = all_tasks
-        .iter()
-        .find(|task| task.id == latest_run_graph_status.task_id)
-    else {
+    let Ok(latest_task) = store.show_task(&latest_run_graph_status.task_id).await else {
         return false;
     };
     !(latest_task.status == "closed"
