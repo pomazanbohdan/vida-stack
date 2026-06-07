@@ -1031,6 +1031,88 @@ pub(crate) fn runtime_consumption_run_id(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeDispatchTargetResolution {
+    pub(crate) dispatch_target: String,
+    pub(crate) lane_id: Option<String>,
+}
+
+fn dispatch_target_resolution_from_lane(
+    lane_id: &str,
+    lane: &serde_json::Value,
+) -> Option<RuntimeDispatchTargetResolution> {
+    let lane_id = lane_id.trim();
+    if lane_id.is_empty() {
+        return None;
+    }
+    let dispatch_target = json_string(lane.get("dispatch_target"))
+        .or_else(|| json_string(lane.get("target")))
+        .unwrap_or_else(|| canonical_dispatch_target_name(lane_id));
+    let dispatch_target = dispatch_target.trim();
+    if dispatch_target.is_empty() {
+        return None;
+    }
+    Some(RuntimeDispatchTargetResolution {
+        dispatch_target: dispatch_target.to_string(),
+        lane_id: (lane_id != dispatch_target).then(|| lane_id.to_string()),
+    })
+}
+
+pub(crate) fn resolve_runtime_dispatch_target(
+    execution_plan: &serde_json::Value,
+    lane_or_target: &str,
+) -> Option<RuntimeDispatchTargetResolution> {
+    let candidate = lane_or_target.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    let canonical_candidate = canonical_dispatch_target_name(candidate);
+    let lane_catalog =
+        execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"].as_object();
+    for lookup in [candidate, canonical_candidate.as_str()] {
+        if let Some(resolution) = lane_catalog
+            .and_then(|catalog| catalog.get(lookup))
+            .and_then(|lane| dispatch_target_resolution_from_lane(lookup, lane))
+        {
+            return Some(resolution);
+        }
+    }
+    if let Some(catalog) = lane_catalog {
+        for (lane_id, lane) in catalog {
+            let configured_target = json_string(lane.get("dispatch_target"))
+                .or_else(|| json_string(lane.get("target")))
+                .map(|value| canonical_dispatch_target_name(&value));
+            let configured_alias = json_string(lane.get("dispatch_alias"));
+            if configured_target.as_deref() == Some(canonical_candidate.as_str())
+                || configured_alias.as_deref() == Some(candidate)
+            {
+                return dispatch_target_resolution_from_lane(lane_id, lane);
+            }
+        }
+    }
+    if dispatch_contract_lane(execution_plan, candidate).is_some()
+        || dispatch_contract_lane(execution_plan, &canonical_candidate).is_some()
+    {
+        return Some(RuntimeDispatchTargetResolution {
+            dispatch_target: canonical_candidate,
+            lane_id: None,
+        });
+    }
+    None
+}
+
+pub(crate) fn first_runtime_dispatch_target_after_dev_pack(
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> Result<RuntimeDispatchTargetResolution, String> {
+    let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
+    let first_lane = dispatch_contract_execution_lane_sequence(dispatch_contract)
+        .into_iter()
+        .next()
+        .ok_or_else(|| "missing_configured_runtime_dispatch_target".to_string())?;
+    resolve_runtime_dispatch_target(&role_selection.execution_plan, &first_lane)
+        .ok_or_else(|| "missing_configured_runtime_dispatch_target".to_string())
+}
+
 fn missing_agent_lane_dispatch_packet_error(dispatch_target: &str) -> String {
     let _ = blocker_code_str(BlockerCode::MissingPacket);
     format!("Agent lane dispatch for `{dispatch_target}` is missing dispatch_packet_path")
@@ -1040,10 +1122,14 @@ pub(crate) fn downstream_activation_fields(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
 ) -> (String, Option<String>, Option<String>, Option<String>) {
-    match dispatch_target {
+    let resolved_dispatch_target =
+        resolve_runtime_dispatch_target(&role_selection.execution_plan, dispatch_target)
+            .map(|resolution| resolution.dispatch_target)
+            .unwrap_or_else(|| dispatch_target.trim().to_string());
+    match resolved_dispatch_target.as_str() {
         "spec-pack" | "work-pool-pack" | "dev-pack" => (
             "taskflow_pack".to_string(),
-            match dispatch_target {
+            match resolved_dispatch_target.as_str() {
                 "spec-pack" => Some("vida taskflow bootstrap-spec".to_string()),
                 "work-pool-pack" => Some("vida task ensure".to_string()),
                 "dev-pack" => Some("vida task ensure".to_string()),
@@ -1054,7 +1140,11 @@ pub(crate) fn downstream_activation_fields(
         ),
         "closure" => ("closure".to_string(), None, None, None),
         _ => {
-            let lane = dispatch_contract_lane(&role_selection.execution_plan, dispatch_target);
+            let lane =
+                dispatch_contract_lane(&role_selection.execution_plan, &resolved_dispatch_target)
+                    .or_else(|| {
+                        dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)
+                    });
             (
                 "agent_lane".to_string(),
                 Some("vida agent-init".to_string()),
@@ -2664,7 +2754,11 @@ pub(crate) fn build_downstream_dispatch_receipt(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Option<crate::state_store::RunGraphDispatchReceipt> {
-    let dispatch_target = receipt.downstream_dispatch_target.clone()?;
+    let raw_dispatch_target = receipt.downstream_dispatch_target.clone()?;
+    let dispatch_target =
+        resolve_runtime_dispatch_target(&role_selection.execution_plan, &raw_dispatch_target)
+            .map(|resolution| resolution.dispatch_target)
+            .unwrap_or(raw_dispatch_target);
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("rfc3339 timestamp should render");
@@ -6072,12 +6166,33 @@ pub(crate) async fn try_bridge_bounded_specification_completion_to_downstream_re
         preview_result_path,
     );
     receipt.downstream_dispatch_trace_path = None;
-    receipt.downstream_dispatch_packet_path = write_runtime_downstream_dispatch_packet(
-        store.root(),
-        role_selection,
-        run_graph_bootstrap,
-        receipt,
-    )?;
+    let dev_owned_paths = if let Some(gate) = taskflow_dev_ready.as_ref() {
+        store
+            .list_tasks(None, true)
+            .await
+            .ok()
+            .and_then(|tasks| {
+                tasks
+                    .into_iter()
+                    .find(|task| task.id == gate.dev_task_id)
+                    .map(|task| task.planner_metadata.owned_paths)
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    receipt.downstream_dispatch_packet_path =
+        write_runtime_downstream_dispatch_packet_with_owned_paths(
+            store.root(),
+            role_selection,
+            run_graph_bootstrap,
+            receipt,
+            &dev_owned_paths,
+        )?;
+    if let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() {
+        receipt.downstream_dispatch_command =
+            Some(agent_init_execute_command_for_packet_path(packet_path));
+    }
     receipt.blocker_code = None;
     Ok(true)
 }
@@ -6330,15 +6445,25 @@ pub(crate) async fn derive_downstream_dispatch_preview(
         "spec-pack" => {
             let taskflow_dev_ready = spec_first_dev_handoff_gate_from_taskflow(store, receipt).await;
             if let Some(gate) = taskflow_dev_ready {
+                let Ok(next_target) = first_runtime_dispatch_target_after_dev_pack(role_selection)
+                else {
+                    return (
+                        None,
+                        None,
+                        Some(
+                            "spec-first dev handoff is ready in TaskFlow, but no configured runtime dispatch target could be resolved"
+                                .to_string(),
+                        ),
+                        false,
+                        vec!["missing_configured_runtime_dispatch_target".to_string()],
+                    );
+                };
                 return (
-                    Some("dev-pack".to_string()),
-                    json_string(
-                        role_selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]
-                            .get("ensure_command"),
-                    ),
+                    Some(next_target.dispatch_target.clone()),
+                    Some("vida agent-init".to_string()),
                     Some(format!(
-                        "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}`; resume the tracked dev packet",
-                        gate.feature_id, gate.dev_task_id
+                        "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}`; dispatch configured runtime target `{}`",
+                        gate.feature_id, gate.dev_task_id, next_target.dispatch_target
                     )),
                     true,
                     Vec::new(),
@@ -6405,21 +6530,29 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             },
         ),
         "dev-pack" => {
-            let next_target = execution_lane_sequence
-                .first()
-                .map(|value| value.as_str())
-                .unwrap_or("implementer")
-                .to_string();
+            let Ok(next_target) = first_runtime_dispatch_target_after_dev_pack(role_selection)
+            else {
+                return (
+                    None,
+                    None,
+                    Some(
+                        "dev-pack materialization is complete, but no configured runtime dispatch target could be resolved"
+                            .to_string(),
+                    ),
+                    false,
+                    vec!["missing_configured_runtime_dispatch_target".to_string()],
+                );
+            };
             let missing_owned_scope =
                 request_missing_owned_write_scope_for_dispatch_target(
                     store,
                     role_selection,
                     receipt,
-                    &next_target,
+                    &next_target.dispatch_target,
                 )
                 .await;
             (
-                Some(next_target),
+                Some(next_target.dispatch_target),
                 Some("vida agent-init".to_string()),
                 Some(
                     "after the dev packet is created, activate the selected implementer lane for bounded execution"
@@ -6519,15 +6652,25 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                 let taskflow_dev_ready =
                     spec_first_dev_handoff_gate_from_taskflow(store, receipt).await;
                 if let Some(gate) = taskflow_dev_ready {
+                    let Ok(next_target) = first_runtime_dispatch_target_after_dev_pack(role_selection)
+                    else {
+                        return (
+                            None,
+                            None,
+                            Some(
+                                "spec-first dev handoff is ready in TaskFlow, but no configured runtime dispatch target could be resolved"
+                                    .to_string(),
+                            ),
+                            false,
+                            vec!["missing_configured_runtime_dispatch_target".to_string()],
+                        );
+                    };
                     return (
-                        Some("dev-pack".to_string()),
-                        json_string(
-                            role_selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]
-                                .get("ensure_command"),
-                        ),
+                        Some(next_target.dispatch_target.clone()),
+                        Some("vida agent-init".to_string()),
                         Some(format!(
-                            "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}`; resume the tracked dev packet",
-                            gate.feature_id, gate.dev_task_id
+                            "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}`; dispatch configured runtime target `{}`",
+                            gate.feature_id, gate.dev_task_id, next_target.dispatch_target
                         )),
                         true,
                         Vec::new(),
@@ -6680,6 +6823,19 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             };
             let next_target = execution_lane_sequence.get(current_index + 1);
             if let Some(next_target) = next_target {
+                let Some(next_target_resolution) =
+                    resolve_runtime_dispatch_target(&role_selection.execution_plan, next_target)
+                else {
+                    return (
+                        None,
+                        None,
+                        Some(format!(
+                            "next lane `{next_target}` does not resolve to an executable runtime dispatch target"
+                        )),
+                        false,
+                        vec!["missing_configured_runtime_dispatch_target".to_string()],
+                    );
+                };
                 let blocker = effective_current_target
                     .as_deref()
                     .and_then(|target| dispatch_contract_lane(&role_selection.execution_plan, target))
@@ -6693,15 +6849,15 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     store,
                     role_selection,
                     receipt,
-                    next_target,
+                    &next_target_resolution.dispatch_target,
                 )
                 .await;
                 (
-                    Some(next_target.clone()),
+                    Some(next_target_resolution.dispatch_target.clone()),
                     Some("vida agent-init".to_string()),
                     Some(format!(
                         "after `{}` evidence is recorded, activate `{}` for the next bounded lane",
-                        receipt.dispatch_target, next_target
+                        receipt.dispatch_target, next_target_resolution.dispatch_target
                     )),
                     has_lane_evidence && !missing_owned_scope,
                     {
@@ -6888,6 +7044,18 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
         } else {
             None
         };
+    if let (Some(packet_path), Some(downstream_target)) = (
+        receipt.downstream_dispatch_packet_path.as_deref(),
+        receipt.downstream_dispatch_target.as_deref(),
+    ) {
+        let (dispatch_kind, _, _, _) =
+            downstream_activation_fields(role_selection, downstream_target);
+        if dispatch_kind != "agent_lane" {
+            return Ok(());
+        }
+        receipt.downstream_dispatch_command =
+            Some(agent_init_execute_command_for_packet_path(packet_path));
+    }
     Ok(())
 }
 
@@ -9031,6 +9199,79 @@ host_environment:
             }),
             reason: "test".to_string(),
         }
+    }
+
+    fn configured_first_step_role_selection(
+        first_lane_id: Option<&str>,
+        first_dispatch_target: Option<&str>,
+    ) -> RuntimeConsumptionLaneSelection {
+        let mut role_selection = bridge_test_role_selection("feature-x-dev");
+        let Some(first_lane_id) = first_lane_id else {
+            role_selection.execution_plan["development_flow"]["dispatch_contract"] = json!({
+                "execution_lane_sequence": []
+            });
+            return role_selection;
+        };
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]
+            ["execution_lane_sequence"] = json!([first_lane_id, "coach"]);
+        let mut lane_catalog = serde_json::Map::new();
+        lane_catalog.insert(
+            first_lane_id.to_string(),
+            json!({
+                "dispatch_target": first_dispatch_target.unwrap_or(first_lane_id),
+                "task_class": "implementation",
+                "closure_class": "implementation",
+                "activation": {
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                }
+            }),
+        );
+        lane_catalog.insert(
+            "coach".to_string(),
+            json!({
+                "dispatch_target": "coach",
+                "task_class": "coach",
+                "closure_class": "proof",
+                "activation": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "coach"
+                }
+            }),
+        );
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] =
+            serde_json::Value::Object(lane_catalog);
+        role_selection
+    }
+
+    #[test]
+    fn first_runtime_dispatch_target_after_dev_pack_uses_configured_first_step_matrix() {
+        let cases = [
+            ("test_author", Some("test_author")),
+            ("developer", Some("developer")),
+            ("coach_test_gate", Some("coach")),
+        ];
+
+        for (lane_id, expected_dispatch_target) in cases {
+            let role_selection =
+                configured_first_step_role_selection(Some(lane_id), expected_dispatch_target);
+            let resolution = first_runtime_dispatch_target_after_dev_pack(&role_selection)
+                .expect("configured first lane should resolve");
+
+            assert_eq!(
+                resolution.dispatch_target,
+                expected_dispatch_target.unwrap()
+            );
+            if lane_id != expected_dispatch_target.unwrap() {
+                assert_eq!(resolution.lane_id.as_deref(), Some(lane_id));
+            }
+        }
+
+        let missing = configured_first_step_role_selection(None, None);
+        assert_eq!(
+            first_runtime_dispatch_target_after_dev_pack(&missing).unwrap_err(),
+            "missing_configured_runtime_dispatch_target"
+        );
     }
 
     #[test]
@@ -16704,6 +16945,68 @@ host_environment:
             assert_eq!(next_target.as_deref(), Some("implementer"));
             assert!(!next_ready);
             assert_eq!(next_blockers, vec!["missing_owned_write_scope".to_string()]);
+        });
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_canonicalizes_lane_id_and_packet_command() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let mut role_selection =
+                configured_first_step_role_selection(Some("implementer"), Some("implementer"));
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["execution_lane_sequence"] = json!(["implementer", "coach_test_gate"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["coach_test_gate"] = json!({
+                "dispatch_target": "coach",
+                "task_class": "coach",
+                "closure_class": "proof",
+                "packet_template_kind": "coach_review_packet",
+                "activation": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "coach"
+                }
+            });
+            let run_graph_bootstrap = json!({ "run_id": "run-coach-test-gate" });
+            let mut receipt =
+                executed_agent_lane_receipt("implementer", "junior", "junior", "worker", None);
+            receipt.run_id = "run-coach-test-gate".to_string();
+
+            refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("preview should refresh");
+
+            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("coach"));
+            assert_eq!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready")
+            );
+            let packet_path = receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .expect("packet-ready downstream dispatch should write a packet");
+            let expected_command = agent_init_execute_command_for_packet_path(packet_path);
+            assert_eq!(
+                receipt.downstream_dispatch_command.as_deref(),
+                Some(expected_command.as_str())
+            );
+            let packet = read_json(harness.path(), packet_path);
+            assert_eq!(packet["dispatch_target"], "coach");
+            assert_eq!(packet["downstream_dispatch_target"], "coach");
+            assert_eq!(packet["downstream_lane_id"], "coach_test_gate");
+            assert_eq!(packet["packet_template_kind"], "coach_review_packet");
         });
     }
 

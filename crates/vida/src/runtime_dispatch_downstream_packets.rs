@@ -11,8 +11,9 @@ use crate::runtime_dispatch_packets::{
     runtime_execution_block_packet, runtime_verifier_proof_packet,
 };
 use crate::{
-    derive_lane_status, dispatch_contract_lane, downstream_activation_fields, json_string,
-    validate_runtime_dispatch_packet_contract, RuntimeConsumptionLaneSelection,
+    derive_lane_status, dispatch_contract_execution_lane_sequence, dispatch_contract_lane,
+    downstream_activation_fields, json_string, validate_runtime_dispatch_packet_contract,
+    RuntimeConsumptionLaneSelection,
 };
 
 fn neutral_downstream_activation_evidence() -> serde_json::Value {
@@ -28,6 +29,40 @@ fn neutral_downstream_activation_evidence() -> serde_json::Value {
             "records_completion_receipt": false,
         },
         "execution_evidence": serde_json::Value::Null,
+    })
+}
+
+fn infer_downstream_lane_id_for_dispatch_target(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    current_dispatch_target: &str,
+    downstream_target: &str,
+    explicit_lane_id: Option<String>,
+) -> Option<String> {
+    if explicit_lane_id.is_some() || downstream_target.trim().is_empty() {
+        return explicit_lane_id;
+    }
+    let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
+    let sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
+    let current_index = sequence.iter().position(|lane_id| {
+        lane_id == current_dispatch_target
+            || crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
+                &role_selection.execution_plan,
+                lane_id,
+            )
+            .is_some_and(|resolution| resolution.dispatch_target == current_dispatch_target)
+    });
+    let candidate_lanes = current_index
+        .map(|index| sequence.iter().skip(index + 1).collect::<Vec<_>>())
+        .unwrap_or_else(|| sequence.iter().collect::<Vec<_>>());
+    candidate_lanes.into_iter().find_map(|lane_id| {
+        crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
+            &role_selection.execution_plan,
+            lane_id,
+        )
+        .filter(|resolution| {
+            resolution.dispatch_target == downstream_target && lane_id.as_str() != downstream_target
+        })
+        .map(|_| lane_id.clone())
     })
 }
 
@@ -55,10 +90,30 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     implementation_owned_paths_override: &[String],
 ) -> serde_json::Value {
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let downstream_target = receipt
+    let raw_downstream_target = receipt
         .downstream_dispatch_target
         .as_deref()
         .unwrap_or_default();
+    let downstream_target_resolution =
+        crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
+            &role_selection.execution_plan,
+            raw_downstream_target,
+        );
+    let downstream_lane_id = downstream_target_resolution
+        .as_ref()
+        .and_then(|resolution| resolution.lane_id.clone());
+    let downstream_target = downstream_target_resolution
+        .as_ref()
+        .map(|resolution| resolution.dispatch_target.as_str())
+        .unwrap_or(raw_downstream_target);
+    let downstream_lane_id = infer_downstream_lane_id_for_dispatch_target(
+        role_selection,
+        &receipt.dispatch_target,
+        downstream_target,
+        downstream_lane_id,
+    );
+    let downstream_contract_lookup_target =
+        downstream_lane_id.as_deref().unwrap_or(downstream_target);
     let (
         downstream_dispatch_kind,
         _downstream_dispatch_surface,
@@ -93,7 +148,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     } else {
         crate::runtime_dispatch_state::runtime_dispatch_packet_kind(
             &role_selection.execution_plan,
-            downstream_target,
+            downstream_contract_lookup_target,
             &downstream_dispatch_kind,
         )
     };
@@ -103,12 +158,15 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     let handoff_task_class =
         crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
             &role_selection.execution_plan,
-            downstream_target,
+            downstream_contract_lookup_target,
             handoff_runtime_role,
         );
-    let closure_class = dispatch_contract_lane(&role_selection.execution_plan, downstream_target)
-        .and_then(|lane| lane["closure_class"].as_str())
-        .unwrap_or("implementation");
+    let closure_class = dispatch_contract_lane(
+        &role_selection.execution_plan,
+        downstream_contract_lookup_target,
+    )
+    .and_then(|lane| lane["closure_class"].as_str())
+    .unwrap_or("implementation");
     let selected_backend = crate::runtime_dispatch_state::downstream_selected_backend(
         role_selection,
         downstream_target,
@@ -261,6 +319,14 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     );
     body.insert("run_id".to_string(), serde_json::json!(receipt.run_id));
     body.insert(
+        "dispatch_target".to_string(),
+        serde_json::json!(if downstream_target.is_empty() {
+            receipt.dispatch_target.as_str()
+        } else {
+            downstream_target
+        }),
+    );
+    body.insert(
         "source_dispatch_target".to_string(),
         serde_json::json!(receipt.dispatch_target),
     );
@@ -286,7 +352,15 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     );
     body.insert(
         "downstream_dispatch_target".to_string(),
+        serde_json::json!((!downstream_target.is_empty()).then(|| downstream_target.to_string())),
+    );
+    body.insert(
+        "source_downstream_dispatch_target".to_string(),
         serde_json::json!(receipt.downstream_dispatch_target),
+    );
+    body.insert(
+        "downstream_lane_id".to_string(),
+        serde_json::json!(downstream_lane_id),
     );
     body.insert(
         "downstream_dispatch_command".to_string(),
@@ -596,5 +670,37 @@ mod tests {
         assert!(request_text.contains("blocking_question:"));
         assert!(prompt.contains("Request: review_goal:"));
         assert!(!prompt.trim_end().ends_with("Request:"));
+    }
+
+    #[test]
+    fn downstream_packet_canonicalizes_lane_id_to_top_level_dispatch_target() {
+        let mut role_selection = role_selection_with_empty_request();
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
+            ["coach_test_gate"] = serde_json::json!({
+            "dispatch_target": "coach",
+            "task_class": "coach",
+            "runtime_role": "coach",
+            "closure_class": "review",
+            "packet_template_kind": "coach_review_packet"
+        });
+        let mut receipt = receipt_with_coach_downstream();
+        receipt.downstream_dispatch_target = Some("coach_test_gate".to_string());
+
+        let packet = downstream_dispatch_packet_body_with_owned_paths(
+            &role_selection,
+            &serde_json::json!({ "run_id": "feature-test" }),
+            &receipt,
+            None,
+            &[],
+        );
+
+        assert_eq!(packet["dispatch_target"], "coach");
+        assert_eq!(packet["downstream_dispatch_target"], "coach");
+        assert_eq!(
+            packet["source_downstream_dispatch_target"],
+            "coach_test_gate"
+        );
+        assert_eq!(packet["downstream_lane_id"], "coach_test_gate");
+        assert_eq!(packet["packet_template_kind"], "coach_review_packet");
     }
 }

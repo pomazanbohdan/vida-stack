@@ -82,18 +82,20 @@ Canonical entrypoints:
 34. `docs/process/vida-runtime-development-environment.md`
      - compact project-owned runbook for keeping runtime development skills, TaskFlow, DocFlow, GitHub issue processing, and operator-efficiency work aligned
 35. `docs/product/spec/feature-design-and-adr-model.md`
-     - product-law owner for the split between structured feature/change design documents and linked ADRs
+    - product-law owner for the split between structured feature/change design documents and linked ADRs
 36. `docs/framework/templates/feature-design-document.template.md`
-     - framework-owned reusable feature/change design template with stable sections and bounded variable fields
+    - framework-owned reusable feature/change design template with stable sections and bounded variable fields
+37. `docs/process/runtime-defect-function-option-matrix-protocol.md`
+    - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
 
 -----
 artifact_path: process/readme
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-06-04
+artifact_revision: 2026-06-07
 schema_version: '1'
 status: canonical
 source_path: docs/process/README.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: 2026-06-04T03:53:58.4688828Z
+updated_at: 2026-06-07T00:00:00+03:00
 changelog_ref: README.changelog.jsonl

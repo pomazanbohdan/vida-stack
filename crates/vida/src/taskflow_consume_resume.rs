@@ -698,6 +698,16 @@ async fn receipt_backed_terminal_closure_resume(
         && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
 }
 
+fn receipt_has_ready_downstream_packet(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    receipt.downstream_dispatch_ready
+        && receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty())
+}
+
 async fn validate_run_graph_resume_state(
     store: &super::StateStore,
     run_id: &str,
@@ -705,8 +715,18 @@ async fn validate_run_graph_resume_state(
     let status = match store.run_graph_status(run_id).await {
         Ok(status) => status,
         Err(error) => {
-            let receipt_exists =
-                matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)));
+            let receipt = store
+                .run_graph_dispatch_receipt(run_id)
+                .await
+                .ok()
+                .flatten();
+            let receipt_exists = receipt.is_some();
+            if receipt
+                .as_ref()
+                .is_some_and(receipt_has_ready_downstream_packet)
+            {
+                return Ok(());
+            }
             if receipt_exists && resume_from_persisted_final_snapshot(store, run_id)? {
                 return Ok(());
             }
@@ -728,6 +748,13 @@ async fn validate_run_graph_resume_state(
         .flatten();
     if receipt_backed_terminal_closure_resume(store, &status, run_id).await {
         return Ok(());
+    }
+    if status.resume_target == "none" {
+        if let Some(receipt) = active_receipt.as_ref() {
+            if receipt_has_ready_downstream_packet(receipt) {
+                return Ok(());
+            }
+        }
     }
     let task_authority =
         crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(store, &status)
@@ -2242,8 +2269,18 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
     let status = match store.run_graph_status(run_id).await {
         Ok(status) => status,
         Err(error) => {
-            let receipt_exists =
-                matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)));
+            let receipt = store
+                .run_graph_dispatch_receipt(run_id)
+                .await
+                .ok()
+                .flatten();
+            let receipt_exists = receipt.is_some();
+            if receipt
+                .as_ref()
+                .is_some_and(receipt_has_ready_downstream_packet)
+            {
+                return Ok(());
+            }
             if receipt_exists && resume_from_persisted_final_snapshot(store, run_id)? {
                 return Ok(());
             }
@@ -2270,6 +2307,13 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
     {
         return Ok(());
     }
+    if status.resume_target == "none" {
+        if let Some(receipt) = active_receipt.as_ref() {
+            if receipt_has_ready_downstream_packet(receipt) {
+                return Ok(());
+            }
+        }
+    }
     let task_authority =
         crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(store, &status)
             .await
@@ -2283,18 +2327,6 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
             &status,
             active_receipt.as_ref(),
         ));
-    }
-    if status.resume_target == "none" {
-        if let Some(receipt) = active_receipt.as_ref() {
-            if receipt.downstream_dispatch_ready
-                && receipt
-                    .downstream_dispatch_packet_path
-                    .as_deref()
-                    .is_some_and(|path| !path.trim().is_empty())
-            {
-                return Ok(());
-            }
-        }
     }
     if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
         return Ok(());
@@ -3153,7 +3185,15 @@ async fn recover_missing_first_dispatch_receipt(
             .filter(|value| !value.is_empty())
             .is_some_and(|next_node| next_node != status.active_node);
     if active_lane_in_progress {
-        let dispatch_target = status.active_node.clone();
+        let active_lane_id = status.active_node.clone();
+        let dispatch_target =
+            super::resolve_runtime_dispatch_target(&role_selection.execution_plan, &active_lane_id)
+                .map(|resolution| resolution.dispatch_target)
+                .ok_or_else(|| {
+                    format!(
+                        "missing_configured_runtime_dispatch_target: active lane `{active_lane_id}` does not resolve to an executable runtime dispatch target"
+                    )
+                })?;
         let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
             super::downstream_activation_fields(&role_selection, &dispatch_target);
         dispatch_receipt.dispatch_target = dispatch_target.clone();
@@ -3168,6 +3208,7 @@ async fn recover_missing_first_dispatch_receipt(
         dispatch_receipt.downstream_dispatch_target = Some(dispatch_target.clone());
         dispatch_receipt.downstream_dispatch_command =
             super::runtime_dispatch_command_for_target(&role_selection, &dispatch_target);
+        dispatch_receipt.downstream_dispatch_active_target = Some(active_lane_id);
         dispatch_receipt.activation_agent_type = activation_agent_type;
         dispatch_receipt.activation_runtime_role = activation_runtime_role;
         dispatch_receipt.selected_backend = super::downstream_selected_backend(
@@ -11009,6 +11050,13 @@ agent_system:
                         std::process::id(),
                         nanos
                     ));
+                    let saved_vida_session_id = std::env::var("VIDA_SESSION_ID").ok();
+                    unsafe {
+                        std::env::set_var(
+                            "VIDA_SESSION_ID",
+                            format!("consume-resume-dev-bridge-{nanos}"),
+                        );
+                    }
                     let state_dir = root.join("state");
                     let store = StateStore::open(state_dir.clone())
                         .await
@@ -11158,6 +11206,18 @@ agent_system:
                         .list_tasks(None, true)
                         .await
                         .expect("list dev-ready tasks");
+                    let dev_task = tasks
+                        .iter()
+                        .find(|task| task.id == dev_task_id)
+                        .expect("dev task should exist");
+                    assert!(
+                        dev_task
+                            .planner_metadata
+                            .owned_paths
+                            .iter()
+                            .any(|path| !path.trim().is_empty()),
+                        "dev task fixture should expose owned paths for configured test-author handoff"
+                    );
                     assert!(
                         StateStore::spec_first_dev_handoff_gate_satisfied_for_task(
                             &tasks, feature_id
@@ -11314,6 +11374,25 @@ agent_system:
                         )
                         .await
                         .expect("persist stale executing specification receipt");
+                    store
+                        .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                            claim_id: format!("consume-resume-dev-bridge-claim-{nanos}"),
+                            state_root_id: "test-state-root".to_string(),
+                            worktree_environment_id: "test-worktree".to_string(),
+                            orchestrator_session_id: format!("consume-resume-dev-bridge-{nanos}"),
+                            process_id: Some(std::process::id()),
+                            task_id: Some(feature_id.to_string()),
+                            run_id: Some(run_id.to_string()),
+                            lane_id: None,
+                            claim_kind: "write".to_string(),
+                            conflict_domain: Some("run-graph-continuation-ownership".to_string()),
+                            owned_paths: vec!["crates/vida/src/taskflow_consume_resume.rs".to_string()],
+                            read_only_paths: Vec::new(),
+                            lease_mode: crate::state_store::LeaseMode::Exclusive,
+                            lease_seconds: 60,
+                        })
+                        .await
+                        .expect("acquire current session run claim");
                     drop(store);
 
                     let exit = super::run_taskflow_consume_resume_command(
@@ -11343,9 +11422,23 @@ agent_system:
                     assert_eq!(receipt.dispatch_status, "executed");
                     assert_eq!(
                         receipt.downstream_dispatch_target.as_deref(),
-                        Some("dev-pack")
+                        Some("test_author")
                     );
                     assert!(receipt.downstream_dispatch_ready);
+                    assert!(
+                        receipt
+                            .downstream_dispatch_packet_path
+                            .as_deref()
+                            .is_some_and(|path| !path.trim().is_empty()),
+                        "configured dev handoff should materialize an executable downstream packet"
+                    );
+                    assert!(
+                        receipt
+                            .downstream_dispatch_command
+                            .as_deref()
+                            .is_some_and(|command| command.contains("--execute-dispatch")),
+                        "configured dev handoff should expose executable downstream command"
+                    );
                     assert!(
                         receipt.downstream_dispatch_blockers.is_empty(),
                         "dev-ready TaskFlow state should clear stale specification blockers: {:?}",
@@ -11357,16 +11450,23 @@ agent_system:
                         .expect("load reconciled run graph status");
                     assert_eq!(status.status, "ready");
                     assert_eq!(status.active_node, "specification");
-                    assert_eq!(status.next_node.as_deref(), Some("dev_pack"));
+                    assert_eq!(status.next_node.as_deref(), Some("test_author"));
                     assert_eq!(status.lifecycle_stage, "specification_complete");
-                    assert_eq!(status.handoff_state, "awaiting_dev_pack");
-                    assert_eq!(status.resume_target, "dispatch.dev_pack_lane");
+                    assert_eq!(status.handoff_state, "awaiting_test_author");
+                    assert_eq!(status.resume_target, "dispatch.test_author_lane");
                     assert!(
                         status.recovery_ready,
                         "dev-ready receipt should make run graph recovery-ready"
                     );
 
                     let _ = fs::remove_dir_all(&root);
+                    unsafe {
+                        if let Some(value) = saved_vida_session_id {
+                            std::env::set_var("VIDA_SESSION_ID", value);
+                        } else {
+                            std::env::remove_var("VIDA_SESSION_ID");
+                        }
+                    }
                 }));
             })
             .expect("spawn stack-heavy dev bridge regression")

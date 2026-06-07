@@ -2528,8 +2528,13 @@ impl StateStore {
             );
             self.record_run_graph_dispatch_task_identity(&identity)
                 .await?;
-            receipt.downstream_dispatch_target = Some("dev-pack".to_string());
-            receipt.downstream_dispatch_command = None;
+            let dispatch_context = self.reconciled_pack_dispatch_context(receipt)?;
+            let resolved_dev_target = dispatch_context.as_ref().and_then(|(role_selection, _)| {
+                crate::runtime_dispatch_state::first_runtime_dispatch_target_after_dev_pack(
+                    role_selection,
+                )
+                .ok()
+            });
             receipt.downstream_dispatch_blockers.retain(|blocker| {
                 !matches!(
                     blocker.as_str(),
@@ -2538,18 +2543,88 @@ impl StateStore {
                         | "pending_specification_evidence"
                 )
             });
-            receipt.downstream_dispatch_ready = receipt.downstream_dispatch_blockers.is_empty();
+            if let Some(resolved_dev_target) = resolved_dev_target {
+                receipt.downstream_dispatch_target = Some(resolved_dev_target.dispatch_target);
+                receipt.downstream_dispatch_command =
+                    dispatch_context.as_ref().and_then(|(role_selection, _)| {
+                        crate::runtime_dispatch_state::runtime_dispatch_command_for_target(
+                            role_selection,
+                            receipt
+                                .downstream_dispatch_target
+                                .as_deref()
+                                .unwrap_or_default(),
+                        )
+                    });
+            } else {
+                receipt.downstream_dispatch_target = None;
+                receipt.downstream_dispatch_command = None;
+                if !receipt
+                    .downstream_dispatch_blockers
+                    .iter()
+                    .any(|blocker| blocker == "missing_configured_runtime_dispatch_target")
+                {
+                    receipt
+                        .downstream_dispatch_blockers
+                        .push("missing_configured_runtime_dispatch_target".to_string());
+                }
+            }
+            receipt.downstream_dispatch_ready = receipt.downstream_dispatch_blockers.is_empty()
+                && receipt.downstream_dispatch_target.is_some();
             receipt.downstream_dispatch_status = Some(if receipt.downstream_dispatch_ready {
                 "packet_ready".to_string()
             } else {
                 "blocked".to_string()
             });
-            receipt.downstream_dispatch_note = Some(format!(
-                "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}`; continue with dev handoff",
-                gate.feature_id, gate.dev_task_id
-            ));
+            receipt.downstream_dispatch_note = if let Some(target) =
+                receipt.downstream_dispatch_target.as_deref()
+            {
+                Some(format!(
+                        "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}`; dispatch configured runtime target `{target}`",
+                        gate.feature_id, gate.dev_task_id
+                    ))
+            } else {
+                Some(format!(
+                        "spec-first feature `{}` has closed spec/work-pool tasks and open dev task `{}` but no configured runtime dispatch target could be resolved",
+                        gate.feature_id, gate.dev_task_id
+                    ))
+            };
             receipt.downstream_dispatch_active_target = Some("specification".to_string());
             receipt.downstream_dispatch_last_target = Some("specification".to_string());
+            if receipt.downstream_dispatch_ready {
+                if let Some((role_selection, run_graph_bootstrap)) = dispatch_context.as_ref() {
+                    let dev_owned_paths = tasks
+                        .iter()
+                        .find(|task| task.id == gate.dev_task_id)
+                        .map(|task| task.planner_metadata.owned_paths.clone())
+                        .unwrap_or_default();
+                    receipt.downstream_dispatch_packet_path =
+                        crate::runtime_dispatch_downstream_packets::write_runtime_downstream_dispatch_packet_with_owned_paths(
+                            self.root(),
+                            role_selection,
+                            run_graph_bootstrap,
+                            receipt,
+                            &dev_owned_paths,
+                        )
+                        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+                    if let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() {
+                        receipt.downstream_dispatch_command = Some(
+                            crate::runtime_dispatch_state::agent_init_execute_command_for_packet_path(
+                                packet_path,
+                            ),
+                        );
+                    }
+                }
+                if receipt.downstream_dispatch_packet_path.is_none() {
+                    receipt.downstream_dispatch_ready = false;
+                    receipt.downstream_dispatch_status = Some("blocked".to_string());
+                    receipt.downstream_dispatch_blockers =
+                        vec!["missing_downstream_dispatch_packet".to_string()];
+                    receipt.downstream_dispatch_note = Some(format!(
+                        "spec-first feature `{}` resolved a dev runtime target, but no executable downstream packet could be produced",
+                        gate.feature_id
+                    ));
+                }
+            }
             return Ok(true);
         }
         let feature_id = identity
@@ -2764,7 +2839,9 @@ impl StateStore {
             .filter(|path| !path.is_empty())
         {
             receipt.downstream_dispatch_command = Some(
-                crate::runtime_dispatch_state::agent_init_command_for_packet_path(packet_path),
+                crate::runtime_dispatch_state::agent_init_execute_command_for_packet_path(
+                    packet_path,
+                ),
             );
             return Ok(true);
         }
@@ -2778,7 +2855,9 @@ impl StateStore {
             .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         if let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() {
             receipt.downstream_dispatch_command = Some(
-                crate::runtime_dispatch_state::agent_init_command_for_packet_path(packet_path),
+                crate::runtime_dispatch_state::agent_init_execute_command_for_packet_path(
+                    packet_path,
+                ),
             );
         }
         Ok(receipt

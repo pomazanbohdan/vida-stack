@@ -46,6 +46,8 @@ This map does not cover extracted secondary bundles by default.
      - proposed follow-up architecture for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
 16. `docs/process/vida-runtime-development-environment.md`
      - compact project-owned runbook for runtime development environment alignment, project-local skills, GitHub issue processing, and operator-efficiency follow-up
+17. `docs/process/runtime-defect-function-option-matrix-protocol.md`
+     - project-owned runtime defect matrix schema for command surfaces, CLI options, owning functions, output contracts, fixtures, and proof tests
 
 ## Activation Triggers
 
@@ -92,6 +94,8 @@ Do not use this map as the default route for extracted bundles unless the task e
      - continue to `docs/process/multi-agent-stage-ensemble-protocol.md`
 15. Runtime development environment / skill activation / GitHub issue processing / operator-efficiency follow-up:
      - continue to `docs/process/vida-runtime-development-environment.md`
+16. Runtime defect function/option matrix or command-surface proof matrix questions:
+     - continue to `docs/process/runtime-defect-function-option-matrix-protocol.md`
 
 ## Boundary Rule
 
