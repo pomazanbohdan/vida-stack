@@ -5623,10 +5623,7 @@ host_tool_bridge:
             "host-tool-bridge/results",
         );
 
-        assert_eq!(
-            resolved,
-            state_root.join("custom-agent-bridge/results")
-        );
+        assert_eq!(resolved, state_root.join("custom-agent-bridge/results"));
     }
 
     #[test]
@@ -5649,10 +5646,7 @@ host_tool_bridge:
             "host-tool-bridge/results",
         );
 
-        assert_eq!(
-            resolved,
-            state_root.join("host-tool-bridge/results")
-        );
+        assert_eq!(resolved, state_root.join("host-tool-bridge/results"));
     }
 
     #[test]

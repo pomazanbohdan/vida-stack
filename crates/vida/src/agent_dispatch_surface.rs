@@ -250,7 +250,9 @@ async fn host_bridge_request_provenance_blockers(
     host_bridge_request_provenance_blockers_for_state_root(&state_root, request_path, request).await
 }
 
-fn infer_host_bridge_state_root_from_request_path(request_path: &Path) -> Option<std::path::PathBuf> {
+fn infer_host_bridge_state_root_from_request_path(
+    request_path: &Path,
+) -> Option<std::path::PathBuf> {
     let request_path = std::fs::canonicalize(request_path).ok()?;
     for ancestor in request_path.ancestors() {
         let Some(state_name) = ancestor.file_name().and_then(|value| value.to_str()) else {
@@ -350,7 +352,9 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     {
         Ok(store) => store,
         Err(_) => {
-            blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+            if !modern_pending_host_bridge_request(request) {
+                blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+            }
             return blockers;
         }
     };
@@ -374,17 +378,33 @@ async fn append_host_bridge_dispatch_receipt_blockers(
     run_id: &str,
     canonical_packet_path: Option<&Path>,
 ) {
+    let request_target = host_bridge_request_string(request, "dispatch_target");
     let receipt = match store.run_graph_dispatch_receipt(run_id).await {
         Ok(Some(receipt)) => receipt,
         Err(_) => {
-            blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+            if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
+                .await
+                && !modern_pending_host_bridge_request(request)
+            {
+                blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+            }
             return;
         }
         Ok(None) => {
-            blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+            if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
+                .await
+                && !modern_pending_host_bridge_request(request)
+            {
+                blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+            }
             return;
         }
     };
+    if host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target).await
+        && request_target != Some(receipt.dispatch_target.as_str())
+    {
+        return;
+    }
     if !matches!(
         receipt.dispatch_status.as_str(),
         "routed" | "executing" | "bridge_request_pending"
@@ -405,6 +425,35 @@ async fn append_host_bridge_dispatch_receipt_blockers(
     {
         blockers.push("host_bridge_dispatch_receipt_mismatch".to_string());
     }
+}
+
+async fn host_bridge_request_matches_reconciled_blocked_status(
+    store: &StateStore,
+    run_id: &str,
+    request_target: Option<&str>,
+) -> bool {
+    let Some(request_target) = request_target else {
+        return false;
+    };
+    let Ok(status) = store.run_graph_status(run_id).await else {
+        return false;
+    };
+    status.status == "blocked"
+        && status.active_node.trim() == request_target
+        && status.policy_gate == "host_tool_bridge_adapter_required"
+}
+
+fn modern_pending_host_bridge_request(request: &serde_json::Value) -> bool {
+    if host_bridge_request_string(request, "status") != Some("pending")
+        || host_bridge_request_string(request, "dispatch_transport") != Some("host_tool_bridge")
+    {
+        return false;
+    }
+    let Some(request_path) = host_bridge_request_string(request, "request_path") else {
+        return false;
+    };
+    let normalized = request_path.replace('\\', "/");
+    normalized.contains("/.vida/data/state/host-tool-bridge/requests/")
 }
 
 fn host_bridge_operator_fields(
@@ -3851,8 +3900,9 @@ mod tests {
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, host_bridge_adapter_payload,
         host_bridge_completion_lane_args, host_bridge_request_provenance_blockers_for_state_root,
-        infer_host_bridge_state_root_from_request_path, resolve_agent_dispatch_next_current_task_ids,
-        single_in_progress_task_id_from_rows, state_store,
+        infer_host_bridge_state_root_from_request_path,
+        resolve_agent_dispatch_next_current_task_ids, single_in_progress_task_id_from_rows,
+        state_store,
     };
     use crate::state_store::{
         CreateTaskRequest, RunGraphDispatchReceipt, TaskExecutionSemantics, TaskRecord,

@@ -1612,6 +1612,124 @@ fn persist_host_bridge_lane_receipt_with_helper(
     assert_success(&output, "runtime receipt helper process");
 }
 
+fn persist_host_bridge_lane_receipt_with_target(
+    state_dir: &str,
+    run_id: &str,
+    dispatch_target: &str,
+    downstream_target: &str,
+    dispatch_status: &str,
+    lane_status: &str,
+    blocker_code: &str,
+    lifecycle_stage: &str,
+) {
+    let project_root = format!("{state_dir}/../../..");
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    let result_dir = format!("{state_dir}/runtime-consumption/dispatch-results");
+    std::fs::create_dir_all(&packet_dir).expect("dispatch packet dir should exist");
+    std::fs::create_dir_all(&result_dir).expect("dispatch result dir should exist");
+    let dispatch_packet_path = format!("{packet_dir}/{run_id}-{dispatch_target}.json");
+    let downstream_packet_path = format!("{packet_dir}/{run_id}-{downstream_target}.json");
+    let result_path = format!("{result_dir}/{run_id}-{dispatch_target}.json");
+    std::fs::write(&dispatch_packet_path, "{}").expect("dispatch packet should write");
+    std::fs::write(&downstream_packet_path, "{}").expect("downstream packet should write");
+    std::fs::write(&result_path, "{}").expect("dispatch result should write");
+
+    let helper = std::env::current_exe().expect("current test binary should resolve");
+    let output = Command::new(helper)
+        .current_dir(project_root)
+        .args([
+            "--ignored",
+            "--exact",
+            "runtime_receipt_helper_process",
+            "--nocapture",
+        ])
+        .env(runtime_consumption::RECEIPT_HELPER_STATE_DIR_ENV, state_dir)
+        .env(runtime_consumption::RECEIPT_HELPER_RUN_ID_ENV, run_id)
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DISPATCH_TARGET_ENV,
+            dispatch_target,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DISPATCH_PACKET_PATH_ENV,
+            &dispatch_packet_path,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_TARGET_ENV,
+            downstream_target,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_PACKET_PATH_ENV,
+            &downstream_packet_path,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_READY_ENV,
+            "false",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_STATUS_ENV,
+            "blocked",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV,
+            blocker_code,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_RESULT_PATH_ENV,
+            &result_path,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DISPATCH_STATUS_ENV,
+            dispatch_status,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_LANE_STATUS_ENV,
+            lane_status,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_BLOCKER_CODE_ENV,
+            blocker_code,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_TASK_CLASS_ENV,
+            "implementation",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_LIFECYCLE_STAGE_ENV,
+            lifecycle_stage,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_HANDOFF_STATE_ENV,
+            "none",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_RESUME_TARGET_ENV,
+            format!("dispatch.{dispatch_target}"),
+        )
+        .output()
+        .expect("runtime receipt helper process should run");
+    assert_success(&output, "runtime receipt helper process");
+}
+
+fn delete_run_graph_row_with_helper(state_dir: &str, table: &str, run_id: &str) {
+    let helper = std::env::current_exe().expect("current test binary should resolve");
+    let output = Command::new(helper)
+        .args([
+            "--ignored",
+            "--exact",
+            "runtime_delete_run_graph_row_helper_process",
+            "--nocapture",
+        ])
+        .env(
+            runtime_consumption::RUN_GRAPH_DELETE_STATE_DIR_ENV,
+            state_dir,
+        )
+        .env(runtime_consumption::RUN_GRAPH_DELETE_TABLE_ENV, table)
+        .env(runtime_consumption::RUN_GRAPH_DELETE_RUN_ID_ENV, run_id)
+        .output()
+        .expect("runtime delete helper process should run");
+    assert_success(&output, "runtime delete helper process");
+}
+
 fn create_host_bridge_lane_fixture(test_name: &str, changed_file: &str) -> HostBridgeLaneFixture {
     let state_dir = unique_state_dir();
     let boot = vida()
@@ -1820,6 +1938,14 @@ fn runtime_receipt_helper_process() {
 }
 
 #[test]
+#[ignore = "helper process for public persisted-state row deletion"]
+fn runtime_delete_run_graph_row_helper_process() {
+    if std::env::var(runtime_consumption::RUN_GRAPH_DELETE_STATE_DIR_ENV).is_ok() {
+        runtime_consumption::delete_run_graph_row_from_env();
+    }
+}
+
+#[test]
 fn host_bridge_public_cli_completes_with_taskflow_attempt_artifacts_without_parent_db_lock() {
     let fixture =
         create_host_bridge_lane_fixture("host-bridge-public-pass", "crates/vida/src/lib.rs");
@@ -1860,6 +1986,43 @@ fn host_bridge_public_cli_completes_with_taskflow_attempt_artifacts_without_pare
     assert!(
         std::path::Path::new(&fixture.bridge_receipt_path).exists(),
         "bridge receipt should be materialized"
+    );
+}
+
+#[test]
+fn lane_show_recommends_host_bridge_completion_before_exception_takeover() {
+    let fixture =
+        create_host_bridge_lane_fixture("host-bridge-lane-guidance", "crates/vida/src/lib.rs");
+
+    let output = vida()
+        .args(["lane", "show", &fixture.run_id, "--json"])
+        .env("VIDA_STATE_DIR", &fixture.state_dir)
+        .output()
+        .expect("lane show should run");
+    assert_failure(&output, "lane show blocked host bridge");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lane show json should parse");
+
+    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["recommended_surface"], "vida agent host-bridge",
+        "payload={payload}"
+    );
+    assert!(payload["recommended_command"]
+        .as_str()
+        .expect("recommended command should exist")
+        .starts_with("vida agent host-bridge --request "));
+    assert!(payload["recommended_command"]
+        .as_str()
+        .expect("recommended command should exist")
+        .contains(&fixture.request_path));
+    assert!(
+        !payload["recommended_command"]
+            .as_str()
+            .expect("recommended command should exist")
+            .contains("exception-takeover"),
+        "host bridge pending lanes must not recommend exception takeover as primary action"
     );
 }
 
@@ -3763,5 +3926,122 @@ fn projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge() {
         serde_json::json!(["dispatch_packet_contract_invalid"]),
         "retired stale run must not let unrelated malformed packet files block default consume"
     );
+    let _ = std::fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn projection_surfaces_fail_closed_for_receipt_backed_missing_execution_row_host_bridge() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let run_id = "zzzz-run-host-bridge-missing-execution-row";
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+    sync_protocol_binding(&state_dir);
+    persist_host_bridge_lane_receipt_with_target(
+        &state_dir,
+        run_id,
+        "coach",
+        "tester",
+        "bridge_request_pending",
+        "lane_open",
+        "host_tool_bridge_adapter_required",
+        "coach_blocked",
+    );
+    delete_run_graph_row_with_helper(&state_dir, "execution_plan_state", run_id);
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph status should run");
+    assert!(
+        run_graph.status.success(),
+        "run-graph status should return a structured fail-closed envelope instead of generic MissingTask: stderr={}",
+        String::from_utf8_lossy(&run_graph.stderr)
+    );
+    let run_graph_json: serde_json::Value =
+        serde_json::from_slice(&run_graph.stdout).expect("run-graph json should parse");
+    assert_eq!(run_graph_json["status"], "blocked");
+    assert_eq!(
+        run_graph_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
+    assert_eq!(run_graph_json["run_graph_status"]["active_node"], "coach");
+    assert_eq!(
+        run_graph_json["run_graph_status"]["checkpoint_kind"],
+        "missing_execution_plan_state"
+    );
+    assert_eq!(
+        run_graph_json["projection_truth"]["stale_state_suspected"],
+        true
+    );
+
+    let recovery = vida()
+        .args(["taskflow", "recovery", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("recovery status should run");
+    assert_failure(
+        &recovery,
+        "recovery status should fail closed for missing execution row",
+    );
+    let recovery_json: serde_json::Value =
+        serde_json::from_slice(&recovery.stdout).expect("recovery json should parse");
+    assert_eq!(recovery_json["status"], "blocked");
+    assert_eq!(
+        recovery_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
+
+    let orchestrator = vida()
+        .args(["orchestrator-init", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("orchestrator-init should run");
+    assert_success(&orchestrator, "orchestrator-init");
+    let orchestrator_json: serde_json::Value =
+        serde_json::from_slice(&orchestrator.stdout).expect("orchestrator json should parse");
+    assert!(
+        matches!(
+            orchestrator_json["status"].as_str(),
+            Some("blocked") | Some("pending")
+        ),
+        "orchestrator-init should not pass while the latest receipt-backed run has no execution row: {orchestrator_json}"
+    );
+    assert_eq!(
+        orchestrator_json["continuation_binding"]["continuation_allowed"],
+        false
+    );
+    assert_eq!(
+        orchestrator_json["sequential_vs_parallel_posture"],
+        "unknown_until_run_graph_blocker_resolved"
+    );
+
+    let consume = vida()
+        .args([
+            "taskflow", "consume", "continue", "--run-id", run_id, "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("consume continue should run");
+    assert_failure(
+        &consume,
+        "consume continue should fail closed for missing execution row",
+    );
+    let consume_json: serde_json::Value =
+        serde_json::from_slice(&consume.stdout).expect("consume json should parse");
+    assert_eq!(consume_json["status"], "blocked");
+    assert_eq!(
+        consume_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
+    assert!(
+        !String::from_utf8_lossy(&consume.stderr).contains("Failed to read run-graph status"),
+        "consume continue must not leak generic run-graph MissingTask stderr"
+    );
+
     let _ = std::fs::remove_dir_all(project_root);
 }

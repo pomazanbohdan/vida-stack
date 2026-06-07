@@ -1715,9 +1715,11 @@ fn build_orchestrator_init_full_payload(
     bundle: &crate::TaskflowConsumeBundlePayload,
     state_dir: &Path,
 ) -> serde_json::Value {
+    let status = orchestrator_init_effective_status(init_view, orchestrator_runtime_contract);
     serde_json::json!({
         "surface": "vida orchestrator-init",
         "view": "full",
+        "status": status,
         "state_read": {
             "mode": "authoritative_open",
             "lock_resilient": true,
@@ -1742,10 +1744,11 @@ fn build_orchestrator_init_summary_payload(
     bundle: &crate::TaskflowConsumeBundlePayload,
     state_dir: &Path,
 ) -> serde_json::Value {
+    let status = orchestrator_init_effective_status(init_view, orchestrator_runtime_contract);
     serde_json::json!({
         "surface": "vida orchestrator-init",
         "view": "summary",
-        "status": init_view["status"],
+        "status": status,
         "full_output_available": true,
         "full_output_command": "vida orchestrator-init --full --json",
         "state_read": {
@@ -1771,6 +1774,20 @@ fn build_orchestrator_init_summary_payload(
         "dev_team_readiness_summary": compact_dev_team_readiness_summary(dev_team_readiness),
         "runtime_bundle_summary": orchestrator_runtime_bundle_summary(bundle, state_dir),
     })
+}
+
+fn orchestrator_init_effective_status(
+    init_view: &serde_json::Value,
+    orchestrator_runtime_contract: &serde_json::Value,
+) -> serde_json::Value {
+    let next_status = orchestrator_runtime_contract["next_lawful_dispatch_action"]["status"]
+        .as_str()
+        .unwrap_or_default();
+    if next_status.starts_with("blocked") {
+        serde_json::Value::String("blocked".to_string())
+    } else {
+        init_view["status"].clone()
+    }
 }
 
 fn cached_orchestrator_init_payload_has_top_level_continuation_fields(cached: &str) -> bool {
@@ -1799,14 +1816,6 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     if cached_orchestrator_init_payload_has_closed_task_active_run_projection_mismatch(&payload) {
         return false;
     }
-    if payload
-        .get("active_bounded_unit")
-        .unwrap_or(&serde_json::Value::Null)
-        .is_null()
-    {
-        return true;
-    }
-
     let Ok(store) = StateStore::open_existing_read_only_with_timeout(
         state_dir.to_path_buf(),
         std::time::Duration::from_secs(2),
@@ -1846,6 +1855,9 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     let Some(latest_run_graph_status) = latest_run_graph_status else {
         return true;
     };
+    if latest_run_graph_status.status == "blocked" {
+        return false;
+    }
     let Some(latest_task) = all_tasks
         .iter()
         .find(|task| task.id == latest_run_graph_status.task_id)
@@ -1874,6 +1886,18 @@ fn build_orchestrator_runtime_contract(
     let activation_pending = init_view["project_activation"]["activation_pending"]
         .as_bool()
         .unwrap_or(false);
+    let continuation_binding = &init_view["continuation_binding"];
+    let continuation_allowed = continuation_binding["continuation_allowed"]
+        .as_bool()
+        .unwrap_or(false);
+    let ambiguity_reason = continuation_binding["ambiguity_reason"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let pause_boundary_gate = continuation_binding["pause_boundary_gate"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let default_topology =
         init_view["project_activation"]["normal_work_defaults"]["default_agent_topology"].clone();
     let configured_flows = dev_team_readiness["flows"].clone();
@@ -1884,6 +1908,16 @@ fn build_orchestrator_runtime_contract(
             "surface": "vida project-activator",
             "command": "vida project-activator --json",
             "reason": "project activation must complete before normal dispatch"
+        })
+    } else if !continuation_allowed
+        && (ambiguity_reason.is_some()
+            || pause_boundary_gate.is_some_and(|gate| gate.starts_with("forbidden_while_")))
+    {
+        serde_json::json!({
+            "status": "blocked_continuation_binding",
+            "surface": "vida status",
+            "command": "vida status",
+            "reason": "continuation binding is blocked or ambiguous; resolve runtime/recovery state before dispatch preview"
         })
     } else {
         serde_json::json!({
@@ -2719,6 +2753,115 @@ mod tests {
             )
             .await,
             "orchestrator-init cache must not preserve active bounded units for missing tasks"
+        );
+    }
+
+    #[tokio::test]
+    async fn orchestrator_init_cache_rejects_null_active_unit_when_latest_run_graph_is_blocked() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("state store should open");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "blocked-run-task",
+                title: "Blocked run task",
+                display_id: None,
+                description: "Open task with blocked latest run graph status",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("blocked run task should exist");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "blocked-run",
+            "blocked-run-task",
+            "coach",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("blocked run graph status should record");
+        store.close().await;
+        let cached = json!({
+            "surface": "vida orchestrator-init",
+            "view": "summary",
+            "status": "ready_enough_for_normal_work",
+            "active_bounded_unit": serde_json::Value::Null,
+            "continuation_binding": {
+                "status": "ambiguous",
+                "active_bounded_unit": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "sequential_vs_parallel_posture": "unknown_until_explicit_binding"
+            },
+            "init": {
+                "continuation_binding": {
+                    "status": "ambiguous",
+                    "active_bounded_unit": serde_json::Value::Null,
+                    "why_this_unit": serde_json::Value::Null,
+                    "sequential_vs_parallel_posture": "unknown_until_explicit_binding"
+                }
+            }
+        });
+
+        assert!(
+            !cached_orchestrator_init_payload_is_currently_admissible(
+                harness.path(),
+                &cached.to_string()
+            )
+            .await,
+            "orchestrator-init cache must not hide a blocked latest run graph status behind a null active unit"
+        );
+    }
+
+    #[test]
+    fn orchestrator_runtime_contract_blocks_dispatch_preview_when_continuation_is_ambiguous() {
+        let init_view = json!({
+            "status": "ready_enough_for_normal_work",
+            "project_activation": {
+                "activation_pending": false,
+                "normal_work_defaults": {
+                    "default_agent_topology": "dev-team"
+                }
+            },
+            "continuation_binding": {
+                "status": "ambiguous",
+                "continuation_allowed": false,
+                "ambiguity_reason": "runtime_evidence_ambiguous",
+                "pause_boundary_gate": "forbidden_while_ambiguous"
+            }
+        });
+        let contract = build_orchestrator_runtime_contract(
+            &init_view,
+            &json!({
+                "flows": [],
+                "roles": []
+            }),
+        );
+        assert_eq!(
+            contract["next_lawful_dispatch_action"]["status"],
+            "blocked_continuation_binding"
+        );
+        assert_eq!(
+            contract["next_lawful_dispatch_action"]["surface"],
+            "vida status"
+        );
+        assert_eq!(
+            contract["next_lawful_dispatch_action"]["command"],
+            "vida status"
+        );
+        assert_eq!(
+            orchestrator_init_effective_status(&init_view, &contract),
+            "blocked"
         );
     }
 
@@ -5714,6 +5857,23 @@ fn resume_inputs_from_downstream_packet_without_store(
                 .to_string(),
         );
     }
+    if !downstream_dispatch_ready {
+        let blocker_codes = if downstream_dispatch_blockers.is_empty() {
+            string_field(&packet, "source_blocker_code")
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            downstream_dispatch_blockers.clone()
+        };
+        let blocker_summary = if blocker_codes.is_empty() {
+            "none".to_string()
+        } else {
+            blocker_codes.join(",")
+        };
+        return Err(format!(
+            "Persisted downstream dispatch packet for run `{run_id}` target `{dispatch_target}` is not ready for execution; blocker_codes=[{blocker_summary}]"
+        ));
+    }
     let dispatch_status = if downstream_dispatch_ready && downstream_dispatch_blockers.is_empty() {
         "packet_ready".to_string()
     } else {
@@ -8022,6 +8182,52 @@ mod agent_init_surface_tests {
                 .as_deref(),
             Some("implementer")
         );
+    }
+
+    #[test]
+    fn downstream_packet_resume_rejects_blocked_source_lane_before_execution() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("downstream-blocked-source.json");
+        fs::write(
+            &packet_path,
+            serde_json::to_string(&serde_json::json!({
+                "run_id": "run-blocked-source",
+                "source_dispatch_target": "writer_a",
+                "source_dispatch_status": "bridge_request_pending",
+                "source_blocker_code": "host_tool_bridge_adapter_required",
+                "downstream_dispatch_target": "review_b",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["host_tool_bridge_adapter_required"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked",
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "coach_review_packet",
+                "coach_review_packet": {
+                    "packet_id": "run-blocked-source::review_b::review",
+                    "reviewed_dispatch_target": "writer_a",
+                    "review_goal": "review only after source evidence"
+                },
+                "activation_runtime_role": "reviewer",
+                "activation_agent_type": "middle",
+                "selected_backend": "middle",
+                "role_selection_full": test_role_selection(),
+                "run_graph_bootstrap": {
+                    "run_id": "run-blocked-source"
+                }
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet should write");
+
+        let error = match resume_inputs_from_downstream_packet_without_store(
+            packet_path.to_str().expect("packet path should be utf-8"),
+        ) {
+            Ok(_) => panic!("blocked source packet must not execute downstream target"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("target `review_b` is not ready for execution"));
+        assert!(error.contains("host_tool_bridge_adapter_required"));
     }
 
     #[test]

@@ -946,6 +946,9 @@ fn lane_blocked_next_action(
     if !blocked {
         return None;
     }
+    if let Some(action) = pending_host_bridge_next_action(summary, status) {
+        return Some(action);
+    }
     if let Some(receipt_id) = summary
         .exception_path_receipt_id
         .as_deref()
@@ -1053,6 +1056,217 @@ fn lane_blocked_next_action(
         command,
         reason: "record bounded exception-path evidence for the dispatch blocker before local recovery work".to_string(),
     })
+}
+
+fn pending_host_bridge_next_action(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    status: Option<&crate::state_store::RunGraphStatus>,
+) -> Option<LaneNextAction> {
+    if summary.dispatch_status != "bridge_request_pending" {
+        return None;
+    }
+    if let Some(request_path) = status
+        .filter(|status| status.active_node.trim() != summary.dispatch_target.trim())
+        .and_then(|status| {
+            host_bridge_request_path_for_run_target(summary, status.active_node.trim())
+        })
+    {
+        return Some(host_bridge_next_action_for_request_path(request_path));
+    }
+    if let Some(request_path) = blocked_source_target_from_summary_packet(summary)
+        .and_then(|target| host_bridge_request_path_for_run_target(summary, &target))
+    {
+        return Some(host_bridge_next_action_for_request_path(request_path));
+    }
+    let dispatch_result_path = summary.dispatch_result_path.as_deref()?.trim();
+    if dispatch_result_path.is_empty() {
+        return None;
+    }
+    let result_path =
+        crate::runtime_dispatch_state::normalize_persisted_runtime_path(dispatch_result_path);
+    let raw = std::fs::read_to_string(result_path).ok()?;
+    let result: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let request = host_bridge_request_object(&result)?;
+    let request_path = host_bridge_path_string(request, "request_path")
+        .ok()?
+        .to_string();
+    Some(host_bridge_next_action_for_request_path(request_path))
+}
+
+fn host_bridge_next_action_for_request_path(request_path: String) -> LaneNextAction {
+    let command = format!(
+        "vida agent host-bridge --request {}",
+        crate::shell_quote(&request_path)
+    );
+    LaneNextAction {
+        surface: "vida agent host-bridge".to_string(),
+        command,
+        reason: "complete the pending parent-host bridge before considering exception recovery"
+            .to_string(),
+    }
+}
+
+fn host_bridge_request_path_for_run_target(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    dispatch_target: &str,
+) -> Option<String> {
+    let state_root = host_bridge_state_root_from_receipt_summary(summary)?;
+    let mut scan_dirs = vec![
+        state_root.join("host-tool-bridge").join("requests"),
+        state_root
+            .join("runtime-consumption")
+            .join("host-tool-bridge"),
+    ];
+    collect_host_bridge_scan_dirs(&state_root, 0, &mut scan_dirs);
+    scan_dirs.sort();
+    scan_dirs.dedup();
+    let mut candidates = scan_dirs
+        .into_iter()
+        .filter_map(|request_dir| std::fs::read_dir(request_dir).ok())
+        .flat_map(|entries| entries.flatten())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                return None;
+            }
+            let raw = std::fs::read_to_string(&path).ok()?;
+            let request: serde_json::Value = serde_json::from_str(&raw).ok()?;
+            let run_matches = request
+                .get("run_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|run_id| run_id.trim() == summary.run_id.trim());
+            let target_matches = request
+                .get("dispatch_target")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .is_some_and(|target| target == dispatch_target);
+            let target_is_not_latest = request
+                .get("dispatch_target")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .is_some_and(|target| target != summary.dispatch_target.trim());
+            let pending = request
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|status| status.trim() == "pending");
+            if run_matches && pending && (target_matches || target_is_not_latest) {
+                let score = if target_matches { 2 } else { 1 };
+                host_bridge_path_string(&request, "request_path")
+                    .ok()
+                    .map(str::to_string)
+                    .map(|path| (score, path))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.pop().map(|(_, path)| path)
+}
+
+fn collect_host_bridge_scan_dirs(
+    directory: &std::path::Path,
+    depth: usize,
+    scan_dirs: &mut Vec<std::path::PathBuf>,
+) {
+    if depth >= 4 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path
+            .components()
+            .any(|component| component.as_os_str() == ".git")
+        {
+            continue;
+        }
+        if path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.contains("host-tool-bridge") || name == "requests")
+        {
+            scan_dirs.push(path.clone());
+        }
+        collect_host_bridge_scan_dirs(&path, depth + 1, scan_dirs);
+    }
+}
+
+fn host_bridge_state_root_from_receipt_summary(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> Option<std::path::PathBuf> {
+    let path = summary
+        .dispatch_result_path
+        .as_deref()
+        .or(summary.dispatch_packet_path.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
+    for ancestor in path.ancestors() {
+        if ancestor.file_name().and_then(|value| value.to_str()) == Some("runtime-consumption") {
+            return ancestor.parent().map(std::path::Path::to_path_buf);
+        }
+        if ancestor.file_name().and_then(|value| value.to_str()) == Some("state") {
+            let data_dir = ancestor.parent()?;
+            let vida_dir = data_dir.parent()?;
+            if data_dir.file_name().and_then(|value| value.to_str()) == Some("data")
+                && vida_dir.file_name().and_then(|value| value.to_str()) == Some(".vida")
+            {
+                return Some(ancestor.to_path_buf());
+            }
+        }
+    }
+    None
+}
+
+fn blocked_source_target_from_summary_packet(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> Option<String> {
+    let packet_path = summary.dispatch_packet_path.as_deref()?.trim();
+    if packet_path.is_empty() {
+        return None;
+    }
+    let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
+    let raw = std::fs::read_to_string(packet_path).ok()?;
+    let packet: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let source_dispatch_target = packet
+        .get("source_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if source_dispatch_target == summary.dispatch_target.trim() {
+        return None;
+    }
+    let source_dispatch_status = packet
+        .get("source_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let source_blocked = packet
+        .get("source_blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let downstream_ready = packet
+        .get("downstream_dispatch_ready")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let downstream_blocked = packet
+        .get("downstream_dispatch_blockers")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|blockers| !blockers.is_empty());
+    if source_dispatch_status == "executed"
+        && !source_blocked
+        && downstream_ready
+        && !downstream_blocked
+    {
+        return None;
+    }
+    Some(source_dispatch_target.to_string())
 }
 
 async fn task_owned_write_scope_for_status(

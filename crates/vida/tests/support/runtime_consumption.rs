@@ -40,6 +40,10 @@ pub(crate) const RECEIPT_HELPER_RESUME_TARGET_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_RESUME_TARGET";
 pub(crate) const PROTOCOL_BINDING_CLEAR_STATE_DIR_ENV: &str =
     "VIDA_BOOT_SMOKE_PROTOCOL_BINDING_CLEAR_STATE_DIR";
+pub(crate) const RUN_GRAPH_DELETE_STATE_DIR_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUN_GRAPH_DELETE_STATE_DIR";
+pub(crate) const RUN_GRAPH_DELETE_TABLE_ENV: &str = "VIDA_BOOT_SMOKE_RUN_GRAPH_DELETE_TABLE";
+pub(crate) const RUN_GRAPH_DELETE_RUN_ID_ENV: &str = "VIDA_BOOT_SMOKE_RUN_GRAPH_DELETE_RUN_ID";
 
 const MAX_OPEN_RETRIES: usize = 20;
 
@@ -188,6 +192,29 @@ pub(crate) fn clear_protocol_binding_receipts_from_env() {
     let state_dir = std::env::var(PROTOCOL_BINDING_CLEAR_STATE_DIR_ENV)
         .expect("protocol binding clear helper state dir should be set");
     clear_protocol_binding_receipts(&state_dir);
+}
+
+pub(crate) fn delete_run_graph_row_from_env() {
+    let state_dir = std::env::var(RUN_GRAPH_DELETE_STATE_DIR_ENV)
+        .expect("run graph delete helper state dir should be set");
+    let table = std::env::var(RUN_GRAPH_DELETE_TABLE_ENV)
+        .expect("run graph delete helper table should be set");
+    let run_id = std::env::var(RUN_GRAPH_DELETE_RUN_ID_ENV)
+        .expect("run graph delete helper run id should be set");
+    delete_run_graph_row(&state_dir, &table, &run_id);
+}
+
+pub(crate) fn delete_run_graph_row(state_dir: &str, table: &str, run_id: &str) {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+    runtime.block_on(async {
+        let db = open_state_db_with_retry(state_dir).await;
+        let _: Option<serde_json::Value> = db
+            .delete((table, run_id))
+            .await
+            .expect("run graph test row should delete");
+        drop(db);
+    });
+    runtime.shutdown_timeout(Duration::from_millis(250));
 }
 
 fn clear_protocol_binding_receipts(state_dir: &str) {

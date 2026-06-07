@@ -135,6 +135,19 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.handoff_state = "none".to_string();
             status.resume_target = "none".to_string();
             status.context_state = "sealed".to_string();
+        } else if let Some(blocked_source) =
+            blocked_source_lane_from_downstream_dispatch_packet(&receipt)
+        {
+            let blocked_target = blocked_source.dispatch_target.replace('-', "_");
+            status.active_node = blocked_source.dispatch_target;
+            status.next_node = None;
+            status.lifecycle_stage = format!("{blocked_target}_blocked");
+            status.policy_gate = blocked_source
+                .blocker_code
+                .unwrap_or_else(|| receipt.blocker_code.clone().unwrap_or_default());
+            status.handoff_state = "none".to_string();
+            status.resume_target = format!("dispatch.{blocked_target}");
+            status.context_state = "sealed".to_string();
         } else {
             let blocked_target = receipt.dispatch_target.trim().replace('-', "_");
             status.active_node = receipt.dispatch_target.clone();
@@ -251,6 +264,61 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
     Ok(status)
 }
 
+struct BlockedSourceLane {
+    dispatch_target: String,
+    blocker_code: Option<String>,
+}
+
+fn blocked_source_lane_from_downstream_dispatch_packet(
+    receipt: &RunGraphDispatchReceiptStored,
+) -> Option<BlockedSourceLane> {
+    if receipt.dispatch_status != "bridge_request_pending" && receipt.dispatch_status != "blocked" {
+        return None;
+    }
+    let packet_path = receipt.dispatch_packet_path.as_deref()?.trim();
+    if packet_path.is_empty() {
+        return None;
+    }
+    let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
+    let raw = std::fs::read_to_string(packet_path).ok()?;
+    let packet: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let source_dispatch_target = packet
+        .get("source_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if source_dispatch_target == receipt.dispatch_target.trim() {
+        return None;
+    }
+    let source_dispatch_status = packet
+        .get("source_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let source_blocker_code = packet
+        .get("source_blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let downstream_ready = packet
+        .get("downstream_dispatch_ready")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let downstream_blocked = packet
+        .get("downstream_dispatch_blockers")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|blockers| !blockers.is_empty());
+    let source_terminal = source_dispatch_status == "executed" && source_blocker_code.is_none();
+    if source_terminal && downstream_ready && !downstream_blocked {
+        return None;
+    }
+    Some(BlockedSourceLane {
+        dispatch_target: source_dispatch_target.to_string(),
+        blocker_code: source_blocker_code,
+    })
+}
+
 fn blocked_agent_lane_receipt_keeps_resume_target(receipt: &RunGraphDispatchReceiptStored) -> bool {
     if receipt.dispatch_kind != "agent_lane"
         || !receipt
@@ -267,6 +335,25 @@ fn blocked_agent_lane_receipt_keeps_resume_target(receipt: &RunGraphDispatchRece
         "internal_activation_view_only"
             | crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
     )
+}
+
+fn dispatch_identity_task_id_for_target(
+    identity: &RunGraphDispatchTaskIdentity,
+    dispatch_target: &str,
+) -> Option<String> {
+    let target = dispatch_target.trim().replace('-', "_");
+    let candidate = match target.as_str() {
+        "specification" | "specification_pack" | "spec_pack" => identity.spec_task_id.as_ref(),
+        "work_pool_pack" | "work_pool" => identity.work_pool_task_id.as_ref(),
+        "dev_pack" | "implementer" | "developer" | "coach" | "tester" | "reviewer"
+        | "verification" | "closure" => identity.dev_task_id.as_ref(),
+        _ => None,
+    }
+    .or(identity.work_pool_task_id.as_ref())
+    .or(identity.spec_task_id.as_ref())
+    .or(identity.feature_epic_id.as_ref())?;
+    let candidate = candidate.trim();
+    (!candidate.is_empty()).then(|| candidate.to_string())
 }
 
 fn tracked_flow_materialization_result_passed(
@@ -2835,44 +2922,133 @@ impl StateStore {
     ) -> Result<RunGraphStatus, StateStoreError> {
         let execution: Option<ExecutionPlanStateRow> =
             self.db.select(("execution_plan_state", run_id)).await?;
-        let execution = execution.ok_or_else(|| StateStoreError::MissingTask {
-            task_id: format!("run_graph:{run_id}"),
-        })?;
         let routed: Option<RoutedRunStateRow> =
             self.db.select(("routed_run_state", run_id)).await?;
-        let routed = routed.ok_or_else(|| StateStoreError::MissingTask {
-            task_id: format!("run_graph_route:{run_id}"),
-        })?;
         let governance: Option<GovernanceStateRow> =
             self.db.select(("governance_state", run_id)).await?;
-        let governance = governance.ok_or_else(|| StateStoreError::MissingTask {
-            task_id: format!("run_graph_governance:{run_id}"),
-        })?;
         let resumability: Option<ResumabilityCapsuleRow> =
             self.db.select(("resumability_capsule", run_id)).await?;
-        let resumability = resumability.ok_or_else(|| StateStoreError::MissingTask {
-            task_id: format!("run_graph_resumability:{run_id}"),
-        })?;
+        let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
+        let identity = self.run_graph_dispatch_task_identity(run_id).await?;
+        if execution.is_none() && routed.is_none() && receipt.is_none() && identity.is_none() {
+            return Err(StateStoreError::MissingTask {
+                task_id: format!("run_graph:{run_id}"),
+            });
+        }
+        let missing_execution = execution.is_none();
+        let missing_routed = routed.is_none();
+        let missing_governance = governance.is_none();
+        let missing_resumability = resumability.is_none();
+        let fallback_dispatch_target = receipt
+            .as_ref()
+            .map(|receipt| receipt.dispatch_target.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown");
+        let fallback_node = fallback_dispatch_target.replace('-', "_");
+        let fallback_task_id = identity
+            .as_ref()
+            .and_then(|identity| {
+                dispatch_identity_task_id_for_target(identity, fallback_dispatch_target)
+            })
+            .unwrap_or_else(|| run_id.to_string());
+        let fallback_task_class = routed
+            .as_ref()
+            .map(|row| row.route_task_class.clone())
+            .or_else(|| execution.as_ref().map(|row| row.task_class.clone()))
+            .unwrap_or_else(|| "implementation".to_string());
 
         let status = RunGraphStatus {
-            run_id: execution.run_id,
-            task_id: execution.task_id,
-            task_class: execution.task_class,
-            active_node: execution.active_node,
-            next_node: execution.next_node,
-            status: execution.status,
-            route_task_class: routed.route_task_class,
-            selected_backend: routed.selected_backend,
-            lane_id: routed.lane_id,
-            lifecycle_stage: routed.lifecycle_stage,
-            policy_gate: governance.policy_gate,
-            handoff_state: governance.handoff_state,
-            context_state: governance.context_state,
-            checkpoint_kind: resumability.checkpoint_kind,
-            resume_target: resumability.resume_target,
-            recovery_ready: resumability.recovery_ready,
+            run_id: execution
+                .as_ref()
+                .map(|row| row.run_id.clone())
+                .unwrap_or_else(|| run_id.to_string()),
+            task_id: execution
+                .as_ref()
+                .map(|row| row.task_id.clone())
+                .unwrap_or(fallback_task_id),
+            task_class: execution
+                .as_ref()
+                .map(|row| row.task_class.clone())
+                .unwrap_or_else(|| fallback_task_class.clone()),
+            active_node: execution
+                .as_ref()
+                .map(|row| row.active_node.clone())
+                .unwrap_or_else(|| fallback_dispatch_target.to_string()),
+            next_node: execution.as_ref().and_then(|row| row.next_node.clone()),
+            status: execution
+                .as_ref()
+                .map(|row| row.status.clone())
+                .unwrap_or_else(|| "blocked".to_string()),
+            route_task_class: routed
+                .as_ref()
+                .map(|row| row.route_task_class.clone())
+                .unwrap_or(fallback_task_class),
+            selected_backend: routed
+                .as_ref()
+                .map(|row| row.selected_backend.clone())
+                .or_else(|| {
+                    receipt
+                        .as_ref()
+                        .and_then(|receipt| receipt.selected_backend.clone())
+                })
+                .unwrap_or_else(|| "unknown".to_string()),
+            lane_id: routed
+                .as_ref()
+                .map(|row| row.lane_id.clone())
+                .unwrap_or_else(|| format!("{fallback_node}_lane")),
+            lifecycle_stage: routed
+                .as_ref()
+                .map(|row| row.lifecycle_stage.clone())
+                .unwrap_or_else(|| format!("{fallback_node}_blocked")),
+            policy_gate: governance
+                .as_ref()
+                .map(|row| row.policy_gate.clone())
+                .unwrap_or_else(|| {
+                    if missing_execution {
+                        "stale_missing_run_graph_execution".to_string()
+                    } else if missing_routed {
+                        "stale_missing_run_graph_route".to_string()
+                    } else {
+                        "stale_missing_run_graph_governance".to_string()
+                    }
+                }),
+            handoff_state: governance
+                .as_ref()
+                .map(|row| row.handoff_state.clone())
+                .unwrap_or_else(|| {
+                    if missing_execution {
+                        "blocked_missing_run_graph_execution".to_string()
+                    } else if missing_routed {
+                        "blocked_missing_run_graph_route".to_string()
+                    } else {
+                        "blocked_missing_run_graph_governance".to_string()
+                    }
+                }),
+            context_state: governance
+                .as_ref()
+                .map(|row| row.context_state.clone())
+                .unwrap_or_else(|| "stale_projection".to_string()),
+            checkpoint_kind: resumability
+                .as_ref()
+                .map(|row| row.checkpoint_kind.clone())
+                .unwrap_or_else(|| {
+                    if missing_execution {
+                        "missing_execution_plan_state".to_string()
+                    } else if missing_routed {
+                        "missing_routed_run_state".to_string()
+                    } else {
+                        "missing_resumability_capsule".to_string()
+                    }
+                }),
+            resume_target: resumability
+                .as_ref()
+                .map(|row| row.resume_target.clone())
+                .unwrap_or_else(|| "none".to_string()),
+            recovery_ready: resumability
+                .as_ref()
+                .map(|row| row.recovery_ready)
+                .unwrap_or(false),
         };
-        let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
         let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
         let task = if task_rows.is_empty() {
             self.show_task(&status.task_id).await.ok()
@@ -2884,6 +3060,24 @@ impl StateStore {
         };
         let status =
             reconcile_run_graph_status_with_closed_task(status, task.as_ref(), receipt.as_ref());
+        if missing_execution || missing_routed || missing_governance || missing_resumability {
+            let checkpoint_kind = if missing_execution {
+                "missing_execution_plan_state"
+            } else if missing_routed {
+                "missing_routed_run_state"
+            } else if missing_resumability {
+                "missing_resumability_capsule"
+            } else {
+                status.checkpoint_kind.as_str()
+            };
+            return Ok(RunGraphStatus {
+                status: "blocked".to_string(),
+                checkpoint_kind: checkpoint_kind.to_string(),
+                recovery_ready: false,
+                resume_target: "none".to_string(),
+                ..status
+            });
+        }
         status.validate_memory_governance()?;
         Ok(status)
     }
@@ -3032,6 +3226,33 @@ impl StateStore {
                 continue;
             }
             return Ok(Some(latest.run_id));
+        }
+        let mut receipt_query = self
+            .db
+            .query(
+                "SELECT * FROM run_graph_dispatch_receipt ORDER BY recorded_at DESC, run_id DESC LIMIT 25;",
+            )
+            .await?;
+        let receipts: Vec<RunGraphDispatchReceiptStored> = receipt_query.take(0)?;
+        for receipt in receipts {
+            Self::ensure_run_graph_dispatch_receipt_required_fields_present(&receipt)?;
+            let run_id = receipt.run_id.trim();
+            if run_id.is_empty() {
+                continue;
+            }
+            if self
+                .run_graph_latest_receipt_row_supersedes_lane(run_id)
+                .await?
+            {
+                continue;
+            }
+            if self
+                .run_graph_status_from_task_rows(run_id, &[])
+                .await
+                .is_ok()
+            {
+                return Ok(Some(run_id.to_string()));
+            }
         }
         Ok(None)
     }
@@ -3592,8 +3813,6 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<RunGraphStatus, StateStoreError> {
-        self.ensure_run_graph_recovery_surface_rows_present(run_id)
-            .await?;
         let status = self.run_graph_status(run_id).await?;
         self.ensure_run_graph_recovery_surface_has_checkpoint_lineage(&status)
             .await?;
@@ -3648,8 +3867,6 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<RunGraphCheckpointSummary, StateStoreError> {
-        self.ensure_run_graph_recovery_surface_rows_present(run_id)
-            .await?;
         let status = self.run_graph_status(run_id).await?;
         self.ensure_run_graph_recovery_surface_has_checkpoint_lineage(&status)
             .await?;
@@ -3661,8 +3878,6 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<RunGraphGateSummary, StateStoreError> {
-        self.ensure_run_graph_recovery_surface_rows_present(run_id)
-            .await?;
         let status = self.run_graph_status(run_id).await?;
         self.ensure_run_graph_recovery_surface_has_checkpoint_lineage(&status)
             .await?;
@@ -3815,6 +4030,7 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::temp_state::TempStateHarness;
     use std::fs;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -4017,6 +4233,48 @@ mod tests {
             provider_mapping: None,
             dependencies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn run_graph_status_fails_closed_when_governance_and_resumability_rows_are_missing() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = runtime
+            .block_on(StateStore::open(harness.path().join(".vida/data/state")))
+            .expect("state store should open");
+        let status = sample_run_graph_status();
+        runtime
+            .block_on(store.record_run_graph_status(&status))
+            .expect("run graph status should persist");
+        let _: Option<GovernanceStateRow> = runtime
+            .block_on(async {
+                store
+                    .db
+                    .delete(("governance_state", status.run_id.as_str()))
+                    .await
+            })
+            .expect("governance row should delete");
+        let _: Option<ResumabilityCapsuleRow> = runtime
+            .block_on(async {
+                store
+                    .db
+                    .delete(("resumability_capsule", status.run_id.as_str()))
+                    .await
+            })
+            .expect("resumability row should delete");
+
+        let loaded = runtime
+            .block_on(store.run_graph_status(&status.run_id))
+            .expect("stale run graph status should remain inspectable");
+
+        assert_eq!(loaded.run_id, status.run_id);
+        assert_eq!(loaded.task_id, status.task_id);
+        assert_eq!(loaded.policy_gate, "stale_missing_run_graph_governance");
+        assert_eq!(loaded.handoff_state, "blocked_missing_run_graph_governance");
+        assert_eq!(loaded.context_state, "stale_projection");
+        assert_eq!(loaded.checkpoint_kind, "missing_resumability_capsule");
+        assert_eq!(loaded.resume_target, "none");
+        assert!(!loaded.recovery_ready);
     }
 
     fn sample_explicit_binding(
