@@ -45,3 +45,21 @@ pub(crate) fn canonical_dispatch_target_name(value: &str) -> String {
         .unwrap_or_else(|| value.trim())
         .to_string()
 }
+
+/// Return the backend-admissibility matrix key that represents a task class.
+///
+/// Configured development-team flows may keep human role labels (for example
+/// `developer` or `tester`) as lane ids. Backend admissibility must still be
+/// enforced against the canonical task-class lane, not the arbitrary label.
+pub(crate) fn backend_admissibility_key_for_task_class(task_class: &str) -> Option<&'static str> {
+    match task_class.trim() {
+        "implementation" | "delivery_task" | "execution_block" | "writer" => Some("implementation"),
+        "verification" | "test_authoring" | "quality_gate" | "release_readiness" => {
+            Some("verification")
+        }
+        "architecture" | "execution_preparation" | "escalation" => Some("architecture"),
+        "specification" | "planning" | "analysis" => Some("specification"),
+        "coach" | "review" | "validation" => Some("coach"),
+        _ => None,
+    }
+}

@@ -9,7 +9,9 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 #[cfg(windows)]
 use std::os::windows::process::ExitStatusExt;
 
-use crate::runtime_contract_vocab::canonical_dispatch_target_name;
+use crate::runtime_contract_vocab::{
+    backend_admissibility_key_for_task_class, canonical_dispatch_target_name,
+};
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 
@@ -21,10 +23,29 @@ fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String 
     }
 }
 
-fn dispatch_target_requires_strict_admissibility(dispatch_target: &str) -> bool {
+fn backend_admissibility_key_for_dispatch_target(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> String {
+    let canonical_target = canonical_dispatch_target_for_admissibility(dispatch_target);
+    match canonical_target.as_str() {
+        "implementation" | "verification" | "architecture" | "specification" | "coach"
+        | "analysis" | "review" => canonical_target,
+        other => crate::dispatch_contract_lane(execution_plan, dispatch_target)
+            .and_then(|lane| lane["task_class"].as_str())
+            .and_then(backend_admissibility_key_for_task_class)
+            .unwrap_or(other)
+            .to_string(),
+    }
+}
+
+fn dispatch_target_requires_strict_admissibility(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> bool {
     matches!(
-        canonical_dispatch_target_for_admissibility(dispatch_target).as_str(),
-        "implementation" | "architecture"
+        backend_admissibility_key_for_dispatch_target(execution_plan, dispatch_target).as_str(),
+        "implementation" | "verification" | "architecture"
     )
 }
 
@@ -37,8 +58,10 @@ fn backend_is_admissible_for_dispatch_target(
     backend_id: &str,
     dispatch_target: &str,
 ) -> bool {
-    let canonical_target = canonical_dispatch_target_for_admissibility(dispatch_target);
-    let strict_required = dispatch_target_requires_strict_admissibility(dispatch_target);
+    let canonical_target =
+        backend_admissibility_key_for_dispatch_target(execution_plan, dispatch_target);
+    let strict_required =
+        dispatch_target_requires_strict_admissibility(execution_plan, dispatch_target);
     let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
         return !strict_required;
     };
@@ -8917,6 +8940,54 @@ agent_system:
                 "implementer"
             ),
             "implementer lane should fail closed when canonical implementation key is absent"
+        );
+    }
+
+    #[test]
+    fn backend_is_admissible_for_dispatch_target_uses_configured_lane_task_class_for_role_label() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "hermes_cli",
+                    "lane_admissibility": {
+                        "implementation": false,
+                        "verification": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "developer": {
+                            "dispatch_target": "developer",
+                            "runtime_role": "worker",
+                            "task_class": "implementation"
+                        },
+                        "tester": {
+                            "dispatch_target": "tester",
+                            "runtime_role": "verifier",
+                            "task_class": "verification"
+                        }
+                    }
+                }
+            }
+        });
+
+        assert!(
+            !super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "hermes_cli",
+                "developer"
+            ),
+            "developer role label should enforce implementation denial"
+        );
+        assert!(
+            super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "hermes_cli",
+                "tester"
+            ),
+            "tester role label should enforce verification allowance"
         );
     }
 
