@@ -5561,12 +5561,24 @@ fn select_task_next_lawful_binding<'a>(
                 (true, false) => return Ok(Some(explicit)),
                 (true, true) => {}
             }
+            let recovery_command = crate::operator_command_text::human_command(&format!(
+                "vida taskflow recovery status {} --json",
+                crate::shell_quote(&current.run_id)
+            ));
+            let lane_show_command = crate::operator_command_text::human_command(&format!(
+                "vida lane show {} --json",
+                crate::shell_quote(&current.run_id)
+            ));
+            let explicit_status_command = crate::operator_command_text::human_command(&format!(
+                "vida taskflow run-graph status {} --json",
+                crate::shell_quote(&explicit.run_id)
+            ));
             Err(blocked_task_next_lawful_receipt(
                 explicit.active_bounded_unit.clone(),
                 Vec::new(),
                 "continuation_source_drift",
                 &format!(
-                    "Continuation sources disagree: explicit binding `{}`/`{}` points to `{}`, while current latest-run binding `{}`/`{}` from `{}` points to `{}`. Inspect current blocked-run recovery with `vida taskflow recovery status {} --json`, lane evidence with `vida lane show {} --json`, and explicit binding state with `vida taskflow run-graph status {} --json` before continuing.",
+                    "Continuation sources disagree: explicit binding `{}`/`{}` points to `{}`, while current latest-run binding `{}`/`{}` from `{}` points to `{}`. Inspect current blocked-run recovery with `{recovery_command}`, lane evidence with `{lane_show_command}`, and explicit binding state with `{explicit_status_command}` before continuing.",
                     explicit.run_id,
                     explicit.binding_source,
                     explicit.task_id,
@@ -5574,9 +5586,6 @@ fn select_task_next_lawful_binding<'a>(
                     current.binding_source,
                     current.binding_source,
                     current.task_id,
-                    crate::shell_quote(&current.run_id),
-                    crate::shell_quote(&current.run_id),
-                    crate::shell_quote(&explicit.run_id)
                 ),
             ))
         }
@@ -5617,15 +5626,39 @@ fn blocked_task_next_lawful_receipt(
     blocker_code: &str,
     next_action: &str,
 ) -> TaskNextLawfulReceipt {
+    blocked_task_next_lawful_receipt_with_blockers(
+        active_bounded_unit,
+        ready_task_candidates,
+        vec![blocker_code.to_string()],
+        next_action,
+        true,
+    )
+}
+
+fn blocked_task_next_lawful_receipt_with_blockers(
+    active_bounded_unit: serde_json::Value,
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+    mut blocker_codes: Vec<String>,
+    next_action: &str,
+    include_bind_command: bool,
+) -> TaskNextLawfulReceipt {
+    if blocker_codes.is_empty() {
+        blocker_codes.push("runtime_recovery_blocked".to_string());
+    }
     let next_actions = vec![next_action.to_string()];
     let recommended_primary = task_next_lawful_recommended_primary(&ready_task_candidates);
-    let bind_command = recommended_primary
-        .as_ref()
-        .map(task_next_lawful_bind_command);
+    let bind_command = include_bind_command
+        .then(|| {
+            recommended_primary
+                .as_ref()
+                .map(task_next_lawful_bind_command)
+        })
+        .flatten();
     let recommended_parallel_batch =
         task_next_lawful_recommended_parallel_batch(&ready_task_candidates);
+    let primary_blocker = blocker_codes.first().map(String::as_str);
     let why_not_auto_bound =
-        task_next_lawful_why_not_auto_bound(Some(blocker_code), &ready_task_candidates);
+        task_next_lawful_why_not_auto_bound(primary_blocker, &ready_task_candidates);
     TaskNextLawfulReceipt {
         status: "blocked".to_string(),
         active_bounded_unit,
@@ -5637,7 +5670,7 @@ fn blocked_task_next_lawful_receipt(
         why_not_auto_bound,
         bind_command,
         ready_task_candidates,
-        blocker_codes: vec![blocker_code.to_string()],
+        blocker_codes,
         next_action: next_actions.first().cloned(),
         next_actions,
         source_surfaces: task_continuation_source_surfaces(),
@@ -5839,6 +5872,60 @@ fn runtime_binding_open_delegated_cycle_next_action(
     format!(
         "Runtime binding for task `{}` is still inside an open delegated cycle for run `{}`. Inspect `{lane_show_command}` and `{recovery_command}`; wait for a receipt-backed delegated completion or record structured exception takeover before selecting another TaskFlow step.",
         binding.task_id, binding.run_id
+    )
+}
+
+fn push_unique_next_lawful_blocker(blocker_codes: &mut Vec<String>, blocker_code: &str) {
+    let Some(canonical) = crate::release1_contracts::canonical_blocker_code_str(blocker_code)
+    else {
+        return;
+    };
+    if !blocker_codes.iter().any(|code| code == canonical) {
+        blocker_codes.push(canonical.to_string());
+    }
+}
+
+fn runtime_recovery_task_next_lawful_blocker_codes(
+    recovery: Option<&state_store::RunGraphRecoverySummary>,
+    dispatch: Option<&state_store::RunGraphDispatchReceiptSummary>,
+) -> Vec<String> {
+    let mut blocker_codes = Vec::new();
+    if let Some(recovery) = recovery {
+        if recovery.delegation_gate.delegated_cycle_open
+            || recovery.delegation_gate.local_exception_takeover_gate
+                == "blocked_open_delegated_cycle"
+        {
+            push_unique_next_lawful_blocker(&mut blocker_codes, "open_delegated_cycle");
+        }
+        if let Some(blocker_code) = recovery.delegation_gate.blocker_code.as_deref() {
+            push_unique_next_lawful_blocker(&mut blocker_codes, blocker_code);
+        }
+    }
+    if let (Some(recovery), Some(dispatch)) = (recovery, dispatch) {
+        if dispatch.run_id == recovery.run_id {
+            if let Some(blocker_code) = dispatch.blocker_code.as_deref() {
+                push_unique_next_lawful_blocker(&mut blocker_codes, blocker_code);
+            }
+        }
+    }
+    if blocker_codes.is_empty() {
+        push_unique_next_lawful_blocker(&mut blocker_codes, "open_delegated_cycle");
+    }
+    blocker_codes
+}
+
+fn blocked_runtime_recovery_task_next_lawful_receipt(
+    binding: &state_store::RunGraphContinuationBinding,
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+    recovery: Option<&state_store::RunGraphRecoverySummary>,
+    dispatch: Option<&state_store::RunGraphDispatchReceiptSummary>,
+) -> TaskNextLawfulReceipt {
+    blocked_task_next_lawful_receipt_with_blockers(
+        binding.active_bounded_unit.clone(),
+        ready_task_candidates,
+        runtime_recovery_task_next_lawful_blocker_codes(recovery, dispatch),
+        &runtime_binding_open_delegated_cycle_next_action(binding),
+        false,
     )
 }
 
@@ -8797,11 +8884,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     latest_dispatch_receipt.as_ref(),
                                 ) =>
                             {
-                                blocked_task_next_lawful_receipt(
-                                    binding.active_bounded_unit.clone(),
+                                blocked_runtime_recovery_task_next_lawful_receipt(
+                                    binding,
                                     ready_task_candidates,
-                                    "open_delegated_cycle",
-                                    &runtime_binding_open_delegated_cycle_next_action(binding),
+                                    runtime_recovery.as_ref(),
+                                    latest_dispatch_receipt.as_ref(),
                                 )
                             }
                             _ => task_next_lawful_receipt(
@@ -10249,14 +10336,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        blocked_task_next_lawful_receipt, build_adaptive_replan_finding_preview,
-        build_spawn_blocker_preview, build_split_mutation_preview,
-        canonical_json_string_array_entries, classify_task_close_git_stage_failure,
-        ensure_existing_task_mismatch_reason, exception_takeover_state_label,
-        load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
-        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
-        parse_proof_target_values, parse_split_child_specs,
-        pass_completed_lane_task_next_lawful_receipt,
+        blocked_runtime_recovery_task_next_lawful_receipt, blocked_task_next_lawful_receipt,
+        build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
+        build_split_mutation_preview, canonical_json_string_array_entries,
+        classify_task_close_git_stage_failure, ensure_existing_task_mismatch_reason,
+        exception_takeover_state_label, load_adaptive_preview_finding_json,
+        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
+        parse_label_values, parse_optional_label_value, parse_proof_target_values,
+        parse_split_child_specs, pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
@@ -10275,7 +10362,7 @@ mod tests {
         task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
         task_ready_authoritative_first, task_takeover_status_receipt,
         task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        TaskCloseAutomationReceipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        TaskCloseAutomationReceipt, TaskContinuationCandidate, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -12969,6 +13056,106 @@ mod tests {
     }
 
     #[test]
+    fn task_next_lawful_preserves_timeout_blocker_without_bind_command() {
+        let binding = test_continuation_binding(
+            "running-run",
+            "running-runtime-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+        let ready_candidate = TaskContinuationCandidate {
+            task_id: "unrelated-ready-task".to_string(),
+            title: "Unrelated ready task".to_string(),
+            status: "open".to_string(),
+            priority: 1,
+            issue_type: "task".to_string(),
+            ready_parallel_safe: false,
+        };
+        let recovery = state_store::RunGraphRecoverySummary {
+            run_id: "running-run".to_string(),
+            task_id: "running-runtime-task".to_string(),
+            active_node: "analysis".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: false,
+            delegation_gate: state_store::RunGraphDelegationGateSummary {
+                active_node: "analysis".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_blocked".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "analysis_blocked".to_string(),
+            },
+        };
+        let dispatch = state_store::RunGraphDispatchReceiptSummary {
+            run_id: "running-run".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some("packet.json".to_string()),
+            dispatch_result_path: Some("result.json".to_string()),
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("analyst".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-06-07T01:00:00Z".to_string(),
+        };
+
+        let receipt = blocked_runtime_recovery_task_next_lawful_receipt(
+            &binding,
+            vec![ready_candidate],
+            Some(&recovery),
+            Some(&dispatch),
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.blocker_codes,
+            vec![
+                "open_delegated_cycle".to_string(),
+                "timeout_without_takeover_authority".to_string()
+            ]
+        );
+        assert!(receipt.recommended_primary.is_some());
+        assert_eq!(
+            receipt.bind_command, None,
+            "runtime recovery blockers must not expose unrelated ready-task bind guidance"
+        );
+        assert!(receipt.next_actions.iter().any(|action| {
+            action.contains("vida lane show running-run")
+                && action.contains("vida taskflow recovery status running-run")
+                && !action.contains("--json")
+        }));
+    }
+
+    #[test]
     fn task_next_lawful_allows_ready_downstream_handoff_despite_open_cycle_gate() {
         let binding = test_continuation_binding(
             "running-run",
@@ -13218,12 +13405,16 @@ mod tests {
 
         assert_eq!(receipt.status, "pass");
         assert!(receipt.blocker_codes.is_empty());
-        assert!(receipt
+        let next_action = receipt
             .next_action
             .as_deref()
-            .is_some_and(|action| action.contains(
-                "vida agent-init --downstream-packet packet.json --execute-dispatch --json"
-            )));
+            .expect("ready downstream handoff should return a next action");
+        assert!(next_action
+            .contains("vida agent-init --downstream-packet packet.json --execute-dispatch"));
+        assert!(
+            !next_action.contains("--json"),
+            "human next-action guidance should prefer the default output mode"
+        );
     }
 
     #[test]
@@ -13591,6 +13782,145 @@ mod tests {
             .as_array()
             .expect("blockers should be an array")
             .is_empty());
+    }
+
+    #[test]
+    fn task_next_lawful_command_preserves_timeout_blocker_without_bind_command() {
+        run_on_runtime_stack_for_test(
+            task_next_lawful_command_preserves_timeout_blocker_without_bind_command_body,
+        );
+    }
+
+    fn task_next_lawful_command_preserves_timeout_blocker_without_bind_command_body() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "running-runtime-task",
+                "Running runtime task",
+                "task",
+                "open",
+                1,
+                Some("parent-epic"),
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "unrelated-ready-task",
+                "Unrelated ready task",
+                "task",
+                "open",
+                2,
+                Some("parent-epic"),
+            )
+            .await;
+            store
+                .record_run_graph_status(&crate::state_store::RunGraphStatus {
+                    run_id: "running-run".to_string(),
+                    task_id: "running-runtime-task".to_string(),
+                    task_class: "worker".to_string(),
+                    active_node: "analysis".to_string(),
+                    next_node: None,
+                    status: "blocked".to_string(),
+                    route_task_class: "analysis".to_string(),
+                    selected_backend: "internal_subagents".to_string(),
+                    lane_id: "analysis_lane".to_string(),
+                    lifecycle_stage: "analysis_blocked".to_string(),
+                    policy_gate: "targeted_verification".to_string(),
+                    handoff_state: "none".to_string(),
+                    context_state: "sealed".to_string(),
+                    checkpoint_kind: "execution_cursor".to_string(),
+                    resume_target: "none".to_string(),
+                    recovery_ready: false,
+                })
+                .await
+                .expect("run graph status should record");
+            store
+                .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                    run_id: "running-run".to_string(),
+                    dispatch_target: "analysis".to_string(),
+                    dispatch_status: "blocked".to_string(),
+                    lane_status: "lane_blocked".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("internal_cli:codex".to_string()),
+                    dispatch_command: Some("codex exec".to_string()),
+                    dispatch_packet_path: Some("packet.json".to_string()),
+                    dispatch_result_path: Some("result.json".to_string()),
+                    blocker_code: Some("timeout_without_takeover_authority".to_string()),
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("middle".to_string()),
+                    activation_runtime_role: Some("analyst".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
+                    recorded_at: "2026-06-07T01:00:00Z".to_string(),
+                })
+                .await
+                .expect("dispatch receipt should record");
+            let binding = test_continuation_binding(
+                "running-run",
+                "running-runtime-task",
+                "consume_continue_after_downstream_chain",
+                "run_graph_task",
+            );
+            store
+                .record_run_graph_continuation_binding(&binding)
+                .await
+                .expect("continuation binding should record");
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("snapshot should refresh");
+        });
+
+        let code = runtime.block_on(crate::run(cli(&[
+            "task",
+            "next-lawful",
+            "--state-dir",
+            harness.path().to_str().expect("state path should be utf8"),
+            "--json",
+        ])));
+
+        assert_eq!(code, ExitCode::from(1));
+        let projection_path = harness
+            .path()
+            .join("operator-projections")
+            .join("task-next-lawful-latest.json");
+        let projection: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(projection_path).expect("next-lawful projection should be written"),
+        )
+        .expect("next-lawful projection should parse");
+        assert_eq!(projection["status"], "blocked");
+        assert_eq!(
+            projection["blocker_codes"],
+            serde_json::json!(["open_delegated_cycle", "timeout_without_takeover_authority"])
+        );
+        assert_eq!(projection["bind_command"], serde_json::Value::Null);
+        assert!(projection["ready_task_candidates"]
+            .as_array()
+            .expect("ready candidates should be an array")
+            .iter()
+            .any(|candidate| candidate["task_id"] == "unrelated-ready-task"));
+        assert!(projection["next_action"]
+            .as_str()
+            .is_some_and(|action| action.contains("vida lane show running-run")
+                && !action.contains("--json")));
     }
 
     #[test]
