@@ -242,7 +242,7 @@ async fn host_bridge_request_provenance_blockers(
         {
             provided
         }
-        (Some(_provided), Some(inferred)) => inferred,
+        (Some(provided), Some(_inferred)) => provided,
         (Some(provided), None) => provided,
         (None, Some(inferred)) => inferred,
         (None, None) => crate::taskflow_task_bridge::proxy_state_dir(),
@@ -3998,7 +3998,8 @@ mod tests {
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, host_bridge_adapter_payload,
-        host_bridge_completion_lane_args, host_bridge_request_provenance_blockers_for_state_root,
+        host_bridge_completion_lane_args, host_bridge_request_provenance_blockers,
+        host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path,
         resolve_agent_dispatch_next_current_task_ids, single_in_progress_task_id_from_rows,
         state_store,
@@ -4238,6 +4239,63 @@ mod tests {
         ));
 
         assert!(blockers.contains(&"host_bridge_request_untrusted_path".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_provenance_keeps_provided_state_root_authoritative() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-authoritative-state-root-{}-{nanos}",
+            std::process::id()
+        ));
+        let trusted_state_root = root.join("trusted/.vida/data/state");
+        let attacker_state_root = root.join("attacker/.vida/data/state");
+        let request_path = attacker_state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path = attacker_state_root.join("packets/run-attacker.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should be created");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("packet parent should be created");
+        std::fs::create_dir_all(&trusted_state_root).expect("trusted state root should exist");
+        std::fs::write(&request_path, b"{}").expect("request file should be written");
+        std::fs::write(&packet_path, b"{}").expect("packet file should be written");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-attacker",
+            "run_id": "run-attacker",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path.display().to_string(),
+            "result_path": attacker_state_root.join("host-tool-bridge/results/result.json").display().to_string(),
+            "receipt_path": attacker_state_root.join("host-tool-bridge/receipts/receipt.json").display().to_string()
+        });
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+        let blockers = runtime.block_on(host_bridge_request_provenance_blockers(
+            &request_path,
+            &request,
+            Some(&trusted_state_root),
+        ));
+
+        assert!(blockers.contains(&"host_bridge_request_untrusted_path".to_string()));
+        let payload = host_bridge_adapter_payload(&request_path, &request, blockers, None);
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["host_bridge"]["host_tool_calls"]
+            .as_array()
+            .expect("host tool calls should render")
+            .is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
