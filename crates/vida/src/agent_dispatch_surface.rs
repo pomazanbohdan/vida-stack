@@ -352,7 +352,9 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     {
         Ok(store) => store,
         Err(_) => {
-            if !modern_pending_host_bridge_request(request) {
+            if !modern_pending_host_bridge_request(request)
+                && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
+            {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
             return blockers;
@@ -385,6 +387,7 @@ async fn append_host_bridge_dispatch_receipt_blockers(
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
                 && !modern_pending_host_bridge_request(request)
+                && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
@@ -394,6 +397,7 @@ async fn append_host_bridge_dispatch_receipt_blockers(
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
                 && !modern_pending_host_bridge_request(request)
+                && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
@@ -405,10 +409,18 @@ async fn append_host_bridge_dispatch_receipt_blockers(
     {
         return;
     }
+    let retryable_blocked_receipt = receipt.dispatch_status == "blocked"
+        && (receipt.blocker_code.as_deref().is_some_and(
+            crate::runtime_dispatch_packets::host_bridge_completion_retryable_blocker,
+        ) || receipt.downstream_dispatch_blockers.iter().any(|blocker| {
+            crate::runtime_dispatch_packets::host_bridge_completion_retryable_blocker(blocker)
+        }));
     if !matches!(
         receipt.dispatch_status.as_str(),
         "routed" | "executing" | "bridge_request_pending"
-    ) {
+    ) && !retryable_blocked_receipt
+        && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
+    {
         blockers.push("host_bridge_dispatch_receipt_inactive".to_string());
     }
     if host_bridge_request_string(request, "dispatch_target")
@@ -454,6 +466,71 @@ fn modern_pending_host_bridge_request(request: &serde_json::Value) -> bool {
     };
     let normalized = request_path.replace('\\', "/");
     normalized.contains("/.vida/data/state/host-tool-bridge/requests/")
+}
+
+fn host_bridge_artifact_has_retryable_completion_blocker(artifact: &serde_json::Value) -> bool {
+    artifact
+        .get("blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .is_some_and(crate::runtime_dispatch_packets::host_bridge_completion_retryable_blocker)
+        || artifact
+            .get("blocker_codes")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blockers| {
+                blockers.iter().any(|blocker| {
+                    blocker.as_str().map(str::trim).is_some_and(
+                        crate::runtime_dispatch_packets::host_bridge_completion_retryable_blocker,
+                    )
+                })
+            })
+}
+
+fn retryable_host_bridge_completion_request_for_state_root(
+    state_root: &Path,
+    request: &serde_json::Value,
+) -> bool {
+    if !matches!(
+        host_bridge_request_string(request, "status"),
+        Some("blocked" | "retryable_blocked")
+    ) || host_bridge_request_string(request, "dispatch_transport") != Some("host_tool_bridge")
+    {
+        return false;
+    }
+    for field in ["receipt_path", "result_path"] {
+        let Some(raw_path) = host_bridge_request_string(request, field) else {
+            continue;
+        };
+        let Ok(path) = canonical_state_artifact_path(state_root, raw_path, true) else {
+            continue;
+        };
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(artifact) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if artifact.get("status").and_then(serde_json::Value::as_str) == Some("blocked")
+            && host_bridge_artifact_has_retryable_completion_blocker(&artifact)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn retryable_host_bridge_completion_request(
+    request_path: &Path,
+    request: &serde_json::Value,
+    state_root: Option<&Path>,
+) -> bool {
+    state_root
+        .map(Path::to_path_buf)
+        .or_else(|| infer_host_bridge_state_root_from_request_path(request_path))
+        .as_deref()
+        .is_some_and(|state_root| {
+            retryable_host_bridge_completion_request_for_state_root(state_root, request)
+        })
 }
 
 fn host_bridge_operator_fields(
@@ -564,6 +641,7 @@ fn host_bridge_adapter_payload(
     request_path: &Path,
     request: &serde_json::Value,
     provenance_blockers: Vec<String>,
+    state_root: Option<&Path>,
 ) -> serde_json::Value {
     let effective_request = effective_host_bridge_request(request);
     let request = &effective_request;
@@ -605,7 +683,9 @@ fn host_bridge_adapter_payload(
     if dispatch_transport != Some("host_tool_bridge") {
         blocker_codes.push("host_bridge_request_wrong_transport".to_string());
     }
-    if request_status != "pending" {
+    let retryable_completion_request =
+        retryable_host_bridge_completion_request(request_path, request, state_root);
+    if request_status != "pending" && !retryable_completion_request {
         blocker_codes.push("host_bridge_request_not_pending".to_string());
     }
     if adapter_capability_id != Some("codex.multi_agent_v1") {
@@ -3385,6 +3465,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                     command.state_dir.as_deref(),
                 )
                 .await,
+                command.state_dir.as_deref(),
             );
             if command.complete {
                 if payload["status"].as_str() != Some("pass") {
@@ -3935,8 +4016,12 @@ mod tests {
             "result_path": "result.json",
             "receipt_path": "receipt.json"
         });
-        let payload =
-            host_bridge_adapter_payload(std::path::Path::new("request.json"), &request, Vec::new());
+        let payload = host_bridge_adapter_payload(
+            std::path::Path::new("request.json"),
+            &request,
+            Vec::new(),
+            None,
+        );
 
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
@@ -4007,8 +4092,12 @@ mod tests {
             "result_path": "result.json",
             "receipt_path": "receipt.json"
         });
-        let payload =
-            host_bridge_adapter_payload(std::path::Path::new("request.json"), &request, Vec::new());
+        let payload = host_bridge_adapter_payload(
+            std::path::Path::new("request.json"),
+            &request,
+            Vec::new(),
+            None,
+        );
 
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
@@ -4044,8 +4133,12 @@ mod tests {
             "result_path": "result.json",
             "receipt_path": "receipt.json"
         });
-        let payload =
-            host_bridge_adapter_payload(std::path::Path::new("request.json"), &request, Vec::new());
+        let payload = host_bridge_adapter_payload(
+            std::path::Path::new("request.json"),
+            &request,
+            Vec::new(),
+            None,
+        );
 
         assert_eq!(payload["status"], "blocked");
         let blockers = payload["blocker_codes"]
@@ -4084,6 +4177,7 @@ mod tests {
             std::path::Path::new("/tmp/forged-request.json"),
             &request,
             vec!["host_bridge_request_untrusted_path".to_string()],
+            None,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -4248,6 +4342,165 @@ mod tests {
     }
 
     #[test]
+    fn host_bridge_adapter_payload_allows_retryable_blocked_completion_request() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-retryable-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        for path in [&request_path, &packet_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("artifact parent should be created");
+        }
+        std::fs::write(&packet_path, b"{}").expect("packet file should be written");
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_receipt",
+                "status": "blocked",
+                "request_id": "req-retry",
+                "run_id": "run-retry",
+                "dispatch_target": "implementer",
+                "blocker_code": "implementation_artifacts_missing",
+                "blocker_codes": ["implementation_artifacts_missing"]
+            }))
+            .expect("receipt should serialize"),
+        )
+        .expect("receipt file should be written");
+        std::fs::write(
+            &result_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "blocked",
+                "request_id": "req-retry",
+                "run_id": "run-retry",
+                "dispatch_target": "implementer",
+                "blocker_codes": ["implementation_artifacts_missing"]
+            }))
+            .expect("result should serialize"),
+        )
+        .expect("result file should be written");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "blocked",
+            "request_id": "req-retry",
+            "run_id": "run-retry",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
+
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
+
+        assert_eq!(payload["status"], "pass");
+        assert!(!payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
+        assert_eq!(payload["host_bridge"]["request_status"], "blocked");
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .starts_with("vida lane complete run-retry "));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_rejects_non_retryable_blocked_request() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-nonretryable-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        for path in [&request_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("artifact parent should be created");
+        }
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_receipt",
+                "status": "blocked",
+                "blocker_codes": ["host_agent_execution_failed"]
+            }))
+            .expect("receipt should serialize"),
+        )
+        .expect("receipt file should be written");
+        std::fs::write(
+            &result_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "blocked",
+                "blocker_codes": ["host_agent_execution_failed"]
+            }))
+            .expect("result should serialize"),
+        )
+        .expect("result file should be written");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "blocked",
+            "request_id": "req-terminal",
+            "run_id": "run-terminal",
+            "dispatch_target": "implementer",
+            "packet_path": state_root.join("packets/run.json").display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
+
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn host_bridge_completion_lane_args_routes_through_lane_complete() {
         let request = serde_json::json!({
             "schema_version": 1,
@@ -4264,8 +4517,12 @@ mod tests {
             "result_path": "result.json",
             "receipt_path": "receipt.json"
         });
-        let payload =
-            host_bridge_adapter_payload(std::path::Path::new("request.json"), &request, Vec::new());
+        let payload = host_bridge_adapter_payload(
+            std::path::Path::new("request.json"),
+            &request,
+            Vec::new(),
+            None,
+        );
         let args = host_bridge_completion_lane_args(
             std::path::Path::new("request.json"),
             &payload,

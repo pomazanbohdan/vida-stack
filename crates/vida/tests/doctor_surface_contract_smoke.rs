@@ -1990,6 +1990,110 @@ fn host_bridge_public_cli_completes_with_taskflow_attempt_artifacts_without_pare
 }
 
 #[test]
+fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifacts() {
+    let fixture =
+        create_host_bridge_lane_fixture("host-bridge-public-retry", "crates/vida/src/lib.rs");
+    let mut request: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.request_path).expect("request should exist"),
+    )
+    .expect("request should parse");
+    request["status"] = serde_json::json!("blocked");
+    request["adapter_kind"] = serde_json::json!("codex_host_tools");
+    request["adapter_capability_id"] = serde_json::json!("codex.multi_agent_v1");
+    request["request_path"] = serde_json::json!(fixture.request_path.clone());
+    std::fs::write(
+        &fixture.request_path,
+        serde_json::to_string_pretty(&request).expect("request should serialize"),
+    )
+    .expect("request should write");
+    std::fs::write(
+        &fixture.result_path,
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "status": "blocked",
+            "request_id": "host-bridge-public-retry",
+            "run_id": &fixture.run_id,
+            "dispatch_target": "implementer",
+            "blocker_code": "implementation_artifacts_missing",
+            "blocker_codes": ["implementation_artifacts_missing"]
+        })
+        .to_string(),
+    )
+    .expect("blocked bridge result should write");
+    std::fs::write(
+        &fixture.bridge_receipt_path,
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_receipt",
+            "status": "blocked",
+            "request_id": "host-bridge-public-retry",
+            "run_id": &fixture.run_id,
+            "dispatch_target": "implementer",
+            "blocker_code": "implementation_artifacts_missing",
+            "blocker_codes": ["implementation_artifacts_missing"]
+        })
+        .to_string(),
+    )
+    .expect("blocked bridge receipt should write");
+
+    let lane_show = vida()
+        .args(["lane", "show", &fixture.run_id, "--json"])
+        .env("VIDA_STATE_DIR", &fixture.state_dir)
+        .output()
+        .expect("lane show retry guidance should run");
+    assert_failure(&lane_show, "lane show retry guidance");
+    let lane_payload: serde_json::Value =
+        serde_json::from_slice(&lane_show.stdout).expect("lane show json should parse");
+    assert_eq!(
+        lane_payload["recommended_surface"],
+        "vida agent host-bridge"
+    );
+    assert!(lane_payload["recommended_command"]
+        .as_str()
+        .expect("recommended command")
+        .starts_with("vida agent host-bridge --request "));
+    assert!(
+        !lane_payload["recommended_command"]
+            .as_str()
+            .expect("recommended command")
+            .contains("exception-takeover"),
+        "retryable host bridge blockers must not recommend exception takeover first"
+    );
+
+    let output = vida()
+        .args([
+            "agent",
+            "host-bridge",
+            "--request",
+            &fixture.request_path,
+            "--complete",
+            "--host-agent-id",
+            "agent-public-retry-proof",
+            "--summary",
+            "retry after accepted implementation attempt artifact",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("agent host-bridge retry should run");
+    assert_success(&output, "agent host-bridge retry after retryable blocker");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
+    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["dispatch_status"], "executed");
+    assert_eq!(payload["lane_status"], "lane_completed");
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+
+    let bridge_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
+    )
+    .expect("bridge result should parse");
+    assert_eq!(bridge_result["status"], "pass");
+    assert_eq!(bridge_result["execution_state"], "executed");
+}
+
+#[test]
 fn lane_show_recommends_host_bridge_completion_before_exception_takeover() {
     let fixture =
         create_host_bridge_lane_fixture("host-bridge-lane-guidance", "crates/vida/src/lib.rs");

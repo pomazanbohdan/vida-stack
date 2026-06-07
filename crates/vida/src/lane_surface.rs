@@ -1062,7 +1062,16 @@ fn pending_host_bridge_next_action(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
     status: Option<&crate::state_store::RunGraphStatus>,
 ) -> Option<LaneNextAction> {
-    if summary.dispatch_status != "bridge_request_pending" {
+    let retryable_blocked_host_bridge = summary.dispatch_status == "blocked"
+        && (summary
+            .blocker_code
+            .as_deref()
+            .is_some_and(host_bridge_completion_retryable_blocker)
+            || summary
+                .downstream_dispatch_blockers
+                .iter()
+                .any(|blocker| host_bridge_completion_retryable_blocker(blocker)));
+    if summary.dispatch_status != "bridge_request_pending" && !retryable_blocked_host_bridge {
         return None;
     }
     if let Some(request_path) = status
@@ -1077,6 +1086,13 @@ fn pending_host_bridge_next_action(
         .and_then(|target| host_bridge_request_path_for_run_target(summary, &target))
     {
         return Some(host_bridge_next_action_for_request_path(request_path));
+    }
+    if retryable_blocked_host_bridge {
+        if let Some(request_path) =
+            host_bridge_request_path_for_run_target(summary, summary.dispatch_target.trim())
+        {
+            return Some(host_bridge_next_action_for_request_path(request_path));
+        }
     }
     let dispatch_result_path = summary.dispatch_result_path.as_deref()?.trim();
     if dispatch_result_path.is_empty() {
@@ -1101,7 +1117,7 @@ fn host_bridge_next_action_for_request_path(request_path: String) -> LaneNextAct
     LaneNextAction {
         surface: "vida agent host-bridge".to_string(),
         command,
-        reason: "complete the pending parent-host bridge before considering exception recovery"
+        reason: "complete or retry the parent-host bridge before considering exception recovery"
             .to_string(),
     }
 }
@@ -1140,21 +1156,25 @@ fn host_bridge_request_path_for_run_target(
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .is_some_and(|target| target == dispatch_target);
-            let target_is_not_latest = request
-                .get("dispatch_target")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .is_some_and(|target| target != summary.dispatch_target.trim());
             let pending = request
                 .get("status")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|status| status.trim() == "pending");
-            if run_matches && pending && (target_matches || target_is_not_latest) {
-                let score = if target_matches { 2 } else { 1 };
-                host_bridge_path_string(&request, "request_path")
-                    .ok()
-                    .map(str::to_string)
-                    .map(|path| (score, path))
+            let request_path = host_bridge_path_string(&request, "request_path")
+                .map(str::to_string)
+                .unwrap_or_else(|_| path.display().to_string());
+            let retryable_blocked = request
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .is_some_and(|status| matches!(status, "blocked" | "retryable_blocked"))
+                && host_bridge_request_has_retryable_completion_evidence(
+                    &state_root,
+                    &request_path,
+                );
+            if run_matches && (pending || retryable_blocked) && target_matches {
+                let score = 2 + i32::from(retryable_blocked);
+                Some((score, request_path))
             } else {
                 None
             }
@@ -2939,19 +2959,56 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
 }
 
 fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
-    matches!(
-        blocker_code,
-        "lane_completion_blocked_by_summary"
-            | "host_bridge_request_task_mismatch"
-            | "implementation_artifact_authority_missing"
-            | "implementation_artifact_changed_files_missing"
-            | "implementation_artifact_authority_invalid"
-            | "implementation_artifact_contract_invalid"
-            | "implementation_artifact_receipt_missing"
-            | "implementation_artifact_receipt_unverified"
-            | "implementation_artifacts_missing"
-            | "implementation_attempt_scope_guard_violation"
-    )
+    crate::runtime_dispatch_packets::host_bridge_completion_retryable_blocker(blocker_code)
+}
+
+fn host_bridge_artifact_has_retryable_completion_blocker(artifact: &serde_json::Value) -> bool {
+    artifact
+        .get("blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .is_some_and(host_bridge_completion_retryable_blocker)
+        || artifact
+            .get("blocker_codes")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blockers| {
+                blockers.iter().any(|blocker| {
+                    blocker
+                        .as_str()
+                        .map(str::trim)
+                        .is_some_and(host_bridge_completion_retryable_blocker)
+                })
+            })
+}
+
+fn host_bridge_request_has_retryable_completion_evidence(
+    state_root: &Path,
+    request_path: &str,
+) -> bool {
+    let Ok(request) = read_host_bridge_request(request_path) else {
+        return false;
+    };
+    for field in ["receipt_path", "result_path"] {
+        let Ok(raw_path) = host_bridge_path_string(&request, field) else {
+            continue;
+        };
+        let path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(raw_path);
+        let Ok(path) = canonicalize_existing_state_path(state_root, &path, field) else {
+            continue;
+        };
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(artifact) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if artifact.get("status").and_then(serde_json::Value::as_str) == Some("blocked")
+            && host_bridge_artifact_has_retryable_completion_blocker(&artifact)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn host_bridge_completion_request_required(
@@ -3191,8 +3248,17 @@ fn materialize_host_bridge_completion_evidence(
     } else {
         write_json_artifact_new(&receipt_path, &receipt, "host bridge receipt")?;
     }
+    let request_status = if status == "blocked"
+        && blocker_codes
+            .iter()
+            .all(|blocker| host_bridge_completion_retryable_blocker(blocker))
+    {
+        "retryable_blocked"
+    } else {
+        status
+    };
     if let Some(object) = request.as_object_mut() {
-        object.insert("status".to_string(), serde_json::json!(status));
+        object.insert("status".to_string(), serde_json::json!(request_status));
         object.insert(
             "completion_receipt_id".to_string(),
             serde_json::json!(receipt_id),
@@ -3814,7 +3880,14 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                             .downstream_dispatch_blockers
                             .iter()
                             .any(|blocker| host_bridge_completion_retryable_blocker(blocker)));
-                if receipt.dispatch_status != "bridge_request_pending" && !retrying_summary_guard {
+                let retrying_request_guard = host_bridge_request_has_retryable_completion_evidence(
+                    store.root(),
+                    request_path,
+                );
+                if receipt.dispatch_status != "bridge_request_pending"
+                    && !retrying_summary_guard
+                    && !retrying_request_guard
+                {
                     eprintln!("Lane `{run_id}` is not waiting on host bridge completion evidence.");
                     return ExitCode::from(2);
                 }
@@ -3834,7 +3907,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     host_agent_id,
                     host_bridge_summary,
                     taskflow_artifacts,
-                    retrying_summary_guard,
+                    retrying_summary_guard || retrying_request_guard,
                 ) {
                     Ok(evidence) => Some(evidence),
                     Err(error) => {
