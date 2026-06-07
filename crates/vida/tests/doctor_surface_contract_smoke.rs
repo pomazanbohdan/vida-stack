@@ -2221,8 +2221,7 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
 }
 
 #[test]
-fn host_bridge_public_cli_completes_reconciled_active_request_when_receipt_points_to_stale_target()
-{
+fn host_bridge_public_cli_blocks_reconciled_active_request_when_receipt_points_to_stale_target() {
     let fixture =
         create_host_bridge_lane_fixture("host-bridge-stale-receipt", "crates/vida/src/lib.rs");
     let mut request: serde_json::Value = serde_json::from_str(
@@ -2300,17 +2299,29 @@ fn host_bridge_public_cli_completes_reconciled_active_request_when_receipt_point
         ])
         .output()
         .expect("agent host-bridge stale receipt completion should run");
-    assert_success(
+    assert_failure(
         &output,
-        "agent host-bridge should complete active implementer request despite stale coach receipt",
+        "agent host-bridge must reject active implementer request with stale coach receipt",
     );
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
-    assert_eq!(payload["surface"], "vida lane");
-    assert_eq!(payload["status"], "pass");
-    assert_eq!(payload["dispatch_status"], "executed");
-    assert_eq!(payload["lane_status"], "lane_completed");
-    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    assert_eq!(payload["surface"], "vida agent host-bridge");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["host_bridge_dispatch_receipt_mismatch"])
+    );
+    assert_eq!(
+        payload["operator_contracts"]["blocker_codes"],
+        payload["blocker_codes"]
+    );
+    assert!(
+        payload
+            .get("host_tool_calls")
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "stale receipt must not emit parent-host tool calls: {payload}"
+    );
 }
 
 #[test]
