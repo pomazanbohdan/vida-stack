@@ -1981,7 +1981,8 @@ fn create_host_bridge_lane_fixture(test_name: &str, changed_file: &str) -> HostB
             "host_tool_bridge_request": {
                 "request_path": request_path,
                 "result_path": result_path,
-                "receipt_path": bridge_receipt_path
+                "receipt_path": bridge_receipt_path,
+                "packet_path": packet_path
             }
         })
         .to_string(),
@@ -2117,6 +2118,61 @@ fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
 }
 
 #[test]
+fn host_bridge_public_cli_rejects_mutable_request_artifact_path_redirect() {
+    let fixture = create_host_bridge_lane_fixture(
+        "host-bridge-request-path-redirect",
+        "crates/vida/src/lib.rs",
+    );
+    let mut request: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.request_path).expect("request should exist"),
+    )
+    .expect("request should parse");
+    let redirected_result_path = format!(
+        "{}/runtime-consumption/host-tool-bridge/redirected-result.json",
+        fixture.state_dir
+    );
+    let redirected_receipt_path = format!(
+        "{}/runtime-consumption/host-tool-bridge/redirected-receipt.json",
+        fixture.state_dir
+    );
+    request["result_path"] = serde_json::json!(redirected_result_path);
+    request["receipt_path"] = serde_json::json!(redirected_receipt_path);
+    std::fs::write(
+        &fixture.request_path,
+        serde_json::to_string_pretty(&request).expect("request should serialize"),
+    )
+    .expect("request should write");
+
+    let output = vida()
+        .args([
+            "lane",
+            "complete",
+            &fixture.run_id,
+            "--receipt-id",
+            "host-bridge-request-path-redirect-receipt",
+            "--host-bridge-request",
+            &fixture.request_path,
+            "--host-agent-id",
+            "agent-public-proof",
+            "--host-bridge-summary",
+            "attempted mutable request artifact redirect",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("lane complete mutable request redirect should run");
+    assert_failure(&output, "lane complete mutable request redirect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Host bridge request artifact paths do not match persisted dispatch receipt evidence"
+        ),
+        "mutable request redirect should fail on persisted receipt binding: {stderr}"
+    );
+}
+
+#[test]
 fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifacts() {
     let fixture =
         create_host_bridge_lane_fixture("host-bridge-public-retry", "crates/vida/src/lib.rs");
@@ -2248,6 +2304,21 @@ fn host_bridge_public_cli_completes_reconciled_active_request_when_receipt_point
         "host_tool_bridge_adapter_required",
         "implementer_blocked",
     );
+    let persisted_result_path = format!(
+        "{}/runtime-consumption/dispatch-results/{}-coach.json",
+        fixture.state_dir, fixture.run_id
+    );
+    std::fs::write(
+        &persisted_result_path,
+        serde_json::json!({
+            "artifact_kind": "runtime_dispatch_result",
+            "status": "blocked",
+            "execution_state": "bridge_request_pending",
+            "host_tool_bridge_request": request
+        })
+        .to_string(),
+    )
+    .expect("persisted dispatch result should bind active request paths");
     std::fs::write(
         format!(
             "{}/runtime-consumption/dispatch-packets/{}-coach.json",
