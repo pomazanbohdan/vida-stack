@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -23,6 +25,19 @@ pub(crate) const RECEIPT_HELPER_DOWNSTREAM_STATUS_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DOWNSTREAM_STATUS";
 pub(crate) const RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DOWNSTREAM_BLOCKERS";
+pub(crate) const RECEIPT_HELPER_DISPATCH_STATUS_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DISPATCH_STATUS";
+pub(crate) const RECEIPT_HELPER_LANE_STATUS_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_LANE_STATUS";
+pub(crate) const RECEIPT_HELPER_BLOCKER_CODE_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_BLOCKER_CODE";
+pub(crate) const RECEIPT_HELPER_TASK_CLASS_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_TASK_CLASS";
+pub(crate) const RECEIPT_HELPER_LIFECYCLE_STAGE_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_LIFECYCLE_STAGE";
+pub(crate) const RECEIPT_HELPER_HANDOFF_STATE_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_HANDOFF_STATE";
+pub(crate) const RECEIPT_HELPER_RESUME_TARGET_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_RESUME_TARGET";
 pub(crate) const PROTOCOL_BINDING_CLEAR_STATE_DIR_ENV: &str =
     "VIDA_BOOT_SMOKE_PROTOCOL_BINDING_CLEAR_STATE_DIR";
 
@@ -61,6 +76,45 @@ struct TestRunGraphDispatchReceiptRow {
     recorded_at: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, SurrealValue)]
+struct TestExecutionPlanStateRow {
+    run_id: String,
+    task_id: String,
+    task_class: String,
+    active_node: String,
+    next_node: Option<String>,
+    status: String,
+    updated_at: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, SurrealValue)]
+struct TestRoutedRunStateRow {
+    run_id: String,
+    route_task_class: String,
+    selected_backend: String,
+    lane_id: String,
+    lifecycle_stage: String,
+    updated_at: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, SurrealValue)]
+struct TestGovernanceStateRow {
+    run_id: String,
+    policy_gate: String,
+    handoff_state: String,
+    context_state: String,
+    updated_at: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, SurrealValue)]
+struct TestResumabilityCapsuleRow {
+    run_id: String,
+    checkpoint_kind: String,
+    resume_target: String,
+    recovery_ready: bool,
+    updated_at: String,
+}
+
 pub(crate) fn persist_ready_downstream_receipt_from_env() {
     let state_dir = std::env::var(RECEIPT_HELPER_STATE_DIR_ENV)
         .expect("runtime receipt helper state dir should be set");
@@ -92,6 +146,22 @@ pub(crate) fn persist_ready_downstream_receipt_from_env() {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let dispatch_status = std::env::var(RECEIPT_HELPER_DISPATCH_STATUS_ENV)
+        .unwrap_or_else(|_| "executed".to_string());
+    let lane_status = std::env::var(RECEIPT_HELPER_LANE_STATUS_ENV)
+        .unwrap_or_else(|_| "lane_completed".to_string());
+    let blocker_code = std::env::var(RECEIPT_HELPER_BLOCKER_CODE_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let task_class =
+        std::env::var(RECEIPT_HELPER_TASK_CLASS_ENV).unwrap_or_else(|_| dispatch_target.clone());
+    let lifecycle_stage = std::env::var(RECEIPT_HELPER_LIFECYCLE_STAGE_ENV)
+        .unwrap_or_else(|_| format!("{dispatch_target}_active"));
+    let handoff_state = std::env::var(RECEIPT_HELPER_HANDOFF_STATE_ENV)
+        .unwrap_or_else(|_| format!("awaiting_{downstream_target}"));
+    let resume_target = std::env::var(RECEIPT_HELPER_RESUME_TARGET_ENV)
+        .unwrap_or_else(|_| format!("dispatch.{dispatch_target}"));
 
     persist_ready_downstream_receipt(
         &state_dir,
@@ -101,6 +171,13 @@ pub(crate) fn persist_ready_downstream_receipt_from_env() {
         &downstream_target,
         &downstream_packet_path,
         &result_path,
+        &dispatch_status,
+        &lane_status,
+        blocker_code,
+        &task_class,
+        &lifecycle_stage,
+        &handoff_state,
+        &resume_target,
         downstream_ready,
         &downstream_status,
         downstream_blockers,
@@ -133,6 +210,13 @@ fn persist_ready_downstream_receipt(
     downstream_target: &str,
     downstream_packet_path: &str,
     result_path: &str,
+    dispatch_status: &str,
+    lane_status: &str,
+    blocker_code: Option<String>,
+    task_class: &str,
+    lifecycle_stage: &str,
+    handoff_state: &str,
+    resume_target: &str,
     downstream_ready: bool,
     downstream_status: &str,
     downstream_blockers: Vec<String>,
@@ -140,11 +224,64 @@ fn persist_ready_downstream_receipt(
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
     runtime.block_on(async {
         let db = open_state_db_with_retry(state_dir).await;
+        let updated_at = "2026-06-05T00:00:00Z".to_string();
+        let status_label = if dispatch_status == "executed" {
+            "ready"
+        } else {
+            "blocked"
+        };
+        let _: Option<TestRoutedRunStateRow> = db
+            .upsert(("routed_run_state", run_id))
+            .content(TestRoutedRunStateRow {
+                run_id: run_id.to_string(),
+                route_task_class: task_class.to_string(),
+                selected_backend: "internal_subagents".to_string(),
+                lane_id: format!("{dispatch_target}_lane"),
+                lifecycle_stage: lifecycle_stage.to_string(),
+                updated_at: updated_at.clone(),
+            })
+            .await
+            .expect("runtime receipt helper should persist routed run state");
+        let _: Option<TestGovernanceStateRow> = db
+            .upsert(("governance_state", run_id))
+            .content(TestGovernanceStateRow {
+                run_id: run_id.to_string(),
+                policy_gate: "test_fixture".to_string(),
+                handoff_state: handoff_state.to_string(),
+                context_state: "active".to_string(),
+                updated_at: updated_at.clone(),
+            })
+            .await
+            .expect("runtime receipt helper should persist governance state");
+        let _: Option<TestResumabilityCapsuleRow> = db
+            .upsert(("resumability_capsule", run_id))
+            .content(TestResumabilityCapsuleRow {
+                run_id: run_id.to_string(),
+                checkpoint_kind: "runtime_consumption_test_fixture".to_string(),
+                resume_target: resume_target.to_string(),
+                recovery_ready: dispatch_status == "executed",
+                updated_at: updated_at.clone(),
+            })
+            .await
+            .expect("runtime receipt helper should persist resumability capsule");
+        let _: Option<TestExecutionPlanStateRow> = db
+            .upsert(("execution_plan_state", run_id))
+            .content(TestExecutionPlanStateRow {
+                run_id: run_id.to_string(),
+                task_id: run_id.to_string(),
+                task_class: task_class.to_string(),
+                active_node: dispatch_target.to_string(),
+                next_node: Some(downstream_target.to_string()),
+                status: status_label.to_string(),
+                updated_at,
+            })
+            .await
+            .expect("runtime receipt helper should persist execution plan state");
         let row = TestRunGraphDispatchReceiptRow {
             run_id: run_id.to_string(),
             dispatch_target: dispatch_target.to_string(),
-            dispatch_status: "executed".to_string(),
-            lane_status: Some("lane_completed".to_string()),
+            dispatch_status: dispatch_status.to_string(),
+            lane_status: Some(lane_status.to_string()),
             supersedes_receipt_id: None,
             exception_path_receipt_id: None,
             dispatch_kind: "taskflow_pack".to_string(),
@@ -152,7 +289,7 @@ fn persist_ready_downstream_receipt(
             dispatch_command: Some("vida agent-init".to_string()),
             dispatch_packet_path: Some(dispatch_packet_path.to_string()),
             dispatch_result_path: Some(result_path.to_string()),
-            blocker_code: None,
+            blocker_code,
             downstream_dispatch_target: Some(downstream_target.to_string()),
             downstream_dispatch_command: Some("vida taskflow consume continue".to_string()),
             downstream_dispatch_note: Some("receipt-backed downstream packet fixture".to_string()),

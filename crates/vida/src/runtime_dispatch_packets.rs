@@ -311,10 +311,17 @@ pub(crate) fn implementation_isolation_contract(
     })
 }
 
+pub(crate) struct ImplementationArtifactAuthority<'a> {
+    pub task_id: &'a str,
+    pub task_updated_at: &'a str,
+}
+
 pub(crate) fn implementation_artifact_scope_validation(
     owned_paths: &[String],
     artifacts: &serde_json::Value,
+    authority: ImplementationArtifactAuthority<'_>,
 ) -> serde_json::Value {
+    const IMPLEMENTATION_STAGE_ID: &str = "implementation";
     let normalized_owned_paths = owned_paths
         .iter()
         .filter_map(|path| normalize_scope_path_for_compare(path))
@@ -323,6 +330,8 @@ pub(crate) fn implementation_artifact_scope_validation(
     let mut reported_changed_files = Vec::new();
     let mut out_of_scope_paths = Vec::new();
     let mut contract_invalid = false;
+    let mut authority_invalid = false;
+    let mut receipt_missing = false;
 
     let Some(rows) = artifacts.as_array() else {
         return serde_json::json!({
@@ -358,6 +367,36 @@ pub(crate) fn implementation_artifact_scope_validation(
                 contract_invalid = true;
             }
         }
+        let artifact_task_id = object
+            .get("task_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim);
+        let artifact_stage_id = object
+            .get("stage_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim);
+        let artifact_freshness = object
+            .get("freshness")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim);
+        if artifact_task_id != Some(authority.task_id)
+            || artifact_stage_id != Some(IMPLEMENTATION_STAGE_ID)
+            || artifact_freshness != Some(authority.task_updated_at)
+        {
+            authority_invalid = true;
+        }
+        let receipt_backed = object
+            .get("receipt_backed")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let consolidation_receipt_id = object
+            .get("consolidation_receipt_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if !receipt_backed || consolidation_receipt_id.is_none() {
+            receipt_missing = true;
+        }
         collect_implementation_changed_files(artifact, &mut reported_changed_files);
     }
 
@@ -376,6 +415,12 @@ pub(crate) fn implementation_artifact_scope_validation(
     if contract_invalid {
         blocker_codes.push("implementation_artifact_contract_invalid".to_string());
     }
+    if authority_invalid {
+        blocker_codes.push("implementation_artifact_authority_invalid".to_string());
+    }
+    if receipt_missing {
+        blocker_codes.push("implementation_artifact_receipt_missing".to_string());
+    }
     if !rows.is_empty() && reported_changed_files.is_empty() {
         blocker_codes.push("implementation_artifact_changed_files_missing".to_string());
     }
@@ -392,6 +437,180 @@ pub(crate) fn implementation_artifact_scope_validation(
         "reported_changed_files": reported_changed_files,
         "out_of_scope_paths": out_of_scope_paths
     })
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TaskflowImplementationArtifacts {
+    pub artifacts: Vec<serde_json::Value>,
+    pub artifact_refs: Vec<String>,
+    pub authority_keys: Vec<TaskflowImplementationArtifactAuthority>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskflowImplementationArtifactAuthority {
+    pub attempt_id: String,
+    pub task_id: String,
+    pub stage_id: String,
+    pub freshness: String,
+    pub consolidation_receipt_id: String,
+}
+
+pub(crate) fn taskflow_attempt_implementation_artifacts(
+    attempts: &[crate::state_store::TaskAttemptRecord],
+    task_updated_at: &str,
+) -> TaskflowImplementationArtifacts {
+    const IMPLEMENTATION_STAGE_ID: &str = "implementation";
+    let mut collected = TaskflowImplementationArtifacts::default();
+    for attempt in attempts.iter().filter(|attempt| {
+        attempt.stage_id.trim() == IMPLEMENTATION_STAGE_ID
+            && attempt.freshness == task_updated_at
+            && attempt
+                .consolidation_receipt_id
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+            && taskflow_attempt_status_can_supply_implementation_artifact(&attempt.status)
+    }) {
+        for artifact_ref in &attempt.artifact_refs {
+            let path = std::path::Path::new(artifact_ref);
+            if !path.exists() {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            if let Some(artifact) =
+                normalize_taskflow_attempt_implementation_artifact(attempt, artifact_ref, &json)
+            {
+                push_unique_string(&mut collected.artifact_refs, artifact_ref);
+                if let Some(authority_key) = taskflow_attempt_implementation_authority(attempt) {
+                    push_unique_implementation_authority(
+                        &mut collected.authority_keys,
+                        authority_key,
+                    );
+                }
+                collected.artifacts.push(artifact);
+            }
+        }
+    }
+    collected
+}
+
+fn taskflow_attempt_implementation_authority(
+    attempt: &crate::state_store::TaskAttemptRecord,
+) -> Option<TaskflowImplementationArtifactAuthority> {
+    Some(TaskflowImplementationArtifactAuthority {
+        attempt_id: attempt.attempt_id.clone(),
+        task_id: attempt.task_id.clone(),
+        stage_id: attempt.stage_id.clone(),
+        freshness: attempt.freshness.clone(),
+        consolidation_receipt_id: attempt
+            .consolidation_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?
+            .to_string(),
+    })
+}
+
+fn taskflow_attempt_status_can_supply_implementation_artifact(status: &str) -> bool {
+    matches!(
+        status.trim(),
+        "accepted" | "partially_accepted" | "consumed"
+    )
+}
+
+fn normalize_taskflow_attempt_implementation_artifact(
+    attempt: &crate::state_store::TaskAttemptRecord,
+    artifact_ref: &str,
+    json: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let changed_files = json
+        .get("changed_files")
+        .and_then(serde_json::Value::as_array)?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if changed_files.is_empty() {
+        return None;
+    }
+    if json_identity_conflicts_attempt(json, attempt) {
+        return None;
+    }
+    let consolidation_receipt_id = attempt
+        .consolidation_receipt_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let artifact_kind = json
+        .get("artifact_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| {
+            matches!(
+                *value,
+                "patch_proposal" | "isolated_worktree_manifest" | "task_handoff_accept_receipt"
+            )
+        })
+        .unwrap_or("patch_proposal");
+    let normalized_kind = if artifact_kind == "task_handoff_accept_receipt" {
+        "patch_proposal"
+    } else {
+        artifact_kind
+    };
+    Some(serde_json::json!({
+        "artifact_kind": normalized_kind,
+        "schema_version": "stage-attempt-implementation-artifact-v1",
+        "attempt_id": attempt.attempt_id,
+        "task_id": attempt.task_id,
+        "stage_id": attempt.stage_id,
+        "freshness": attempt.freshness,
+        "consolidation_receipt_id": consolidation_receipt_id,
+        "changed_files": changed_files,
+        "source_artifact_ref": artifact_ref,
+        "source_artifact_kind": artifact_kind,
+        "receipt_backed": true
+    }))
+}
+
+fn json_identity_conflicts_attempt(
+    json: &serde_json::Value,
+    attempt: &crate::state_store::TaskAttemptRecord,
+) -> bool {
+    [
+        ("attempt_id", attempt.attempt_id.as_str()),
+        ("task_id", attempt.task_id.as_str()),
+        ("stage_id", attempt.stage_id.as_str()),
+    ]
+    .into_iter()
+    .any(|(field, expected)| {
+        json.get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|actual| !actual.is_empty())
+            .is_some_and(|actual| actual != expected)
+    })
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: &str) {
+    if !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
+    }
+}
+
+fn push_unique_implementation_authority(
+    values: &mut Vec<TaskflowImplementationArtifactAuthority>,
+    value: TaskflowImplementationArtifactAuthority,
+) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
 }
 
 fn collect_implementation_changed_files(value: &serde_json::Value, files: &mut Vec<String>) {
@@ -692,8 +911,9 @@ pub(crate) fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        delivery_packet_owned_paths, runtime_coach_review_packet, tracked_design_doc_owned_paths,
-        RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH,
+        delivery_packet_owned_paths, implementation_artifact_scope_validation,
+        runtime_coach_review_packet, tracked_design_doc_owned_paths,
+        ImplementationArtifactAuthority, RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH,
     };
 
     #[test]
@@ -751,5 +971,88 @@ mod tests {
             .expect("expected output")
             .iter()
             .any(|value| value.as_str() == Some("decision=approve|rework|blocker")));
+    }
+
+    fn implementation_artifact(
+        task_id: &str,
+        stage_id: &str,
+        freshness: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "artifact_kind": "patch_proposal",
+            "attempt_id": "attempt-1",
+            "task_id": task_id,
+            "stage_id": stage_id,
+            "freshness": freshness,
+            "consolidation_receipt_id": "receipt-1",
+            "receipt_backed": true,
+            "changed_files": ["crates/vida/src/lib.rs"]
+        })
+    }
+
+    fn implementation_authority() -> ImplementationArtifactAuthority<'static> {
+        ImplementationArtifactAuthority {
+            task_id: "task-1",
+            task_updated_at: "task-updated-at-1",
+        }
+    }
+
+    #[test]
+    fn implementation_artifact_validation_accepts_current_receipt_backed_implementation_artifact() {
+        let validation = implementation_artifact_scope_validation(
+            &["crates/vida/src/lib.rs".to_string()],
+            &serde_json::json!([implementation_artifact(
+                "task-1",
+                "implementation",
+                "task-updated-at-1"
+            )]),
+            implementation_authority(),
+        );
+
+        assert_eq!(validation["status"], "pass");
+        assert_eq!(validation["blocker_codes"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn implementation_artifact_validation_rejects_wrong_task_stage_or_stale_freshness() {
+        for artifact in [
+            implementation_artifact("other-task", "implementation", "task-updated-at-1"),
+            implementation_artifact("task-1", "coach", "task-updated-at-1"),
+            implementation_artifact("task-1", "implementation", "old-task-updated-at"),
+        ] {
+            let validation = implementation_artifact_scope_validation(
+                &["crates/vida/src/lib.rs".to_string()],
+                &serde_json::json!([artifact]),
+                implementation_authority(),
+            );
+
+            assert_eq!(validation["status"], "blocked");
+            assert!(validation["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "implementation_artifact_authority_invalid"));
+        }
+    }
+
+    #[test]
+    fn implementation_artifact_validation_rejects_receiptless_artifacts() {
+        let mut artifact = implementation_artifact("task-1", "implementation", "task-updated-at-1");
+        artifact
+            .as_object_mut()
+            .expect("artifact object")
+            .remove("consolidation_receipt_id");
+        let validation = implementation_artifact_scope_validation(
+            &["crates/vida/src/lib.rs".to_string()],
+            &serde_json::json!([artifact]),
+            implementation_authority(),
+        );
+
+        assert_eq!(validation["status"], "blocked");
+        assert!(validation["blocker_codes"]
+            .as_array()
+            .expect("blocker codes")
+            .iter()
+            .any(|code| code == "implementation_artifact_receipt_missing"));
     }
 }

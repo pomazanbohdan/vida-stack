@@ -1,6 +1,9 @@
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "support/runtime_consumption.rs"]
+mod runtime_consumption;
+
 fn vida() -> Command {
     vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
 }
@@ -60,6 +63,24 @@ fn assert_no_raw_terminal_controls(surface: &str, stdout: &str) {
             character.is_control() && !matches!(character, '\n' | '\r' | '\t')
         }),
         "{surface} default human output must not contain raw terminal controls: {stdout:?}"
+    );
+}
+
+fn assert_success(output: &std::process::Output, context: &str) {
+    assert!(
+        output.status.success(),
+        "{context} should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn assert_failure(output: &std::process::Output, context: &str) {
+    assert!(
+        !output.status.success(),
+        "{context} should fail closed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -1400,6 +1421,381 @@ fn agent_host_bridge_trusted_missing_receipt_fails_closed_within_latency_budget(
         payload["shared_fields"]["artifact_refs"],
         payload["operator_contracts"]["artifact_refs"]
     );
+}
+
+#[derive(Debug)]
+struct HostBridgeLaneFixture {
+    state_dir: String,
+    run_id: String,
+    request_path: String,
+    result_path: String,
+    bridge_receipt_path: String,
+}
+
+fn persist_host_bridge_lane_receipt_with_helper(
+    state_dir: &str,
+    run_id: &str,
+    dispatch_packet_path: &str,
+    downstream_packet_path: &str,
+    activation_result_path: &str,
+) {
+    let helper = std::env::current_exe().expect("current test binary should resolve");
+    let output = Command::new(helper)
+        .args([
+            "--ignored",
+            "--exact",
+            "runtime_receipt_helper_process",
+            "--nocapture",
+        ])
+        .env(runtime_consumption::RECEIPT_HELPER_STATE_DIR_ENV, state_dir)
+        .env(runtime_consumption::RECEIPT_HELPER_RUN_ID_ENV, run_id)
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DISPATCH_TARGET_ENV,
+            "implementer",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DISPATCH_PACKET_PATH_ENV,
+            dispatch_packet_path,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_TARGET_ENV,
+            "coach",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_PACKET_PATH_ENV,
+            downstream_packet_path,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_RESULT_PATH_ENV,
+            activation_result_path,
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_DISPATCH_STATUS_ENV,
+            "bridge_request_pending",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_LANE_STATUS_ENV,
+            "lane_open",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_BLOCKER_CODE_ENV,
+            "host_tool_bridge_adapter_required",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_TASK_CLASS_ENV,
+            "implementation",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_LIFECYCLE_STAGE_ENV,
+            "implementer_blocked",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_HANDOFF_STATE_ENV,
+            "none",
+        )
+        .env(
+            runtime_consumption::RECEIPT_HELPER_RESUME_TARGET_ENV,
+            "dispatch.implementer",
+        )
+        .output()
+        .expect("runtime receipt helper process should run");
+    assert_success(&output, "runtime receipt helper process");
+}
+
+fn create_host_bridge_lane_fixture(test_name: &str, changed_file: &str) -> HostBridgeLaneFixture {
+    let state_dir = unique_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+
+    let run_id = format!("run-{test_name}");
+    let parent_id = format!("{run_id}-epic");
+    let create_parent = vida()
+        .args([
+            "task",
+            "create",
+            &parent_id,
+            "Host bridge public proof epic",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("parent task create should run");
+    assert_success(&create_parent, "parent task create");
+
+    let create_task = vida()
+        .args([
+            "task",
+            "create",
+            &run_id,
+            "Host bridge public proof task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            &parent_id,
+            "--owned-path",
+            "crates/vida/src/lib.rs",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("task create should run");
+    assert_success(&create_task, "task create");
+
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    std::fs::create_dir_all(&artifact_dir).expect("artifact dir should exist");
+    let artifact_path = format!("{artifact_dir}/{test_name}-attempt.json");
+    std::fs::write(
+        &artifact_path,
+        serde_json::json!({
+            "artifact_kind": "patch_proposal",
+            "task_id": run_id,
+            "stage_id": "implementation",
+            "changed_files": [changed_file]
+        })
+        .to_string(),
+    )
+    .expect("attempt artifact should be written");
+
+    let record_attempt = vida()
+        .args([
+            "task",
+            "attempt",
+            "record",
+            &run_id,
+            "--stage-id",
+            "implementation",
+            "--backend",
+            "internal_subagents",
+            "--model-profile",
+            "middle",
+            "--isolation",
+            "patch_proposal",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            &artifact_path,
+            "--consolidation-receipt",
+            &format!("{test_name}-consolidation-receipt"),
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("attempt record should run");
+    assert_success(&record_attempt, "attempt record");
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/downstream-dispatch-packets");
+    let bridge_dir = format!("{state_dir}/runtime-consumption/host-tool-bridge");
+    let activation_dir = format!("{state_dir}/runtime-consumption/dispatch-results");
+    std::fs::create_dir_all(&packet_dir).expect("packet dir should exist");
+    std::fs::create_dir_all(&bridge_dir).expect("bridge dir should exist");
+    std::fs::create_dir_all(&activation_dir).expect("activation dir should exist");
+    let packet_path = format!("{packet_dir}/{test_name}.json");
+    let request_path = format!("{bridge_dir}/{test_name}-request.json");
+    let result_path = format!("{bridge_dir}/{test_name}-result.json");
+    let bridge_receipt_path = format!("{bridge_dir}/{test_name}-receipt.json");
+    let activation_result_path = format!("{activation_dir}/{test_name}-activation.json");
+
+    std::fs::write(
+        &packet_path,
+        serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "implementer",
+            "activation_runtime_role": "worker",
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["crates/vida/src/lib.rs"],
+            "read_only_paths": ["crates/vida/src"],
+            "delivery_task_packet": {
+                "goal": "Complete host bridge lane evidence.",
+                "scope_in": ["dispatch_target:implementer"],
+                "handoff_task_class": "implementation",
+                "handoff_runtime_role": "worker",
+                "owned_paths": ["crates/vida/src/lib.rs"],
+                "read_only_paths": ["crates/vida/src"],
+                "definition_of_done": ["host bridge completion is receipt-backed"],
+                "verification_command": "cargo test -p vida host_bridge_public_cli",
+                "proof_target": "host bridge completion receipt",
+                "stop_rules": ["stop if bridge evidence is missing"],
+                "blocking_question": "none"
+            },
+            "downstream_dispatch_target": "coach",
+            "downstream_dispatch_active_target": "implementer",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["pending_implementation_evidence"],
+            "downstream_dispatch_status": "blocked",
+            "downstream_lane_status": "lane_blocked"
+        })
+        .to_string(),
+    )
+    .expect("packet should be written");
+
+    std::fs::write(
+        &request_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": test_name,
+            "run_id": run_id,
+            "task_id": run_id,
+            "dispatch_target": "implementer",
+            "packet_path": packet_path,
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "implementation_isolation": {
+                "schema_version": "implementation-isolation-v1",
+                "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                "owned_paths": ["crates/vida/src/lib.rs"]
+            },
+            "implementation_artifacts": [],
+            "result_path": result_path,
+            "receipt_path": bridge_receipt_path
+        })
+        .to_string(),
+    )
+    .expect("request should be written");
+
+    std::fs::write(
+        &activation_result_path,
+        serde_json::json!({
+            "artifact_kind": "runtime_dispatch_result",
+            "status": "blocked",
+            "execution_state": "bridge_request_pending",
+            "host_tool_bridge_request": {
+                "request_path": request_path,
+                "result_path": result_path,
+                "receipt_path": bridge_receipt_path
+            }
+        })
+        .to_string(),
+    )
+    .expect("activation result should be written");
+
+    persist_host_bridge_lane_receipt_with_helper(
+        &state_dir,
+        &run_id,
+        &packet_path,
+        &packet_path,
+        &activation_result_path,
+    );
+
+    HostBridgeLaneFixture {
+        state_dir,
+        run_id,
+        request_path,
+        result_path,
+        bridge_receipt_path,
+    }
+}
+
+#[test]
+#[ignore = "helper process for public host bridge fixture setup"]
+fn runtime_receipt_helper_process() {
+    if std::env::var(runtime_consumption::RECEIPT_HELPER_STATE_DIR_ENV).is_ok() {
+        runtime_consumption::persist_ready_downstream_receipt_from_env();
+    }
+}
+
+#[test]
+fn host_bridge_public_cli_completes_with_taskflow_attempt_artifacts_without_parent_db_lock() {
+    let fixture =
+        create_host_bridge_lane_fixture("host-bridge-public-pass", "crates/vida/src/lib.rs");
+
+    let output = vida()
+        .args([
+            "lane",
+            "complete",
+            &fixture.run_id,
+            "--receipt-id",
+            "host-bridge-public-pass-receipt",
+            "--host-bridge-request",
+            &fixture.request_path,
+            "--host-agent-id",
+            "agent-public-proof",
+            "--host-bridge-summary",
+            "internal agent completed",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("lane complete public cli should run");
+    assert_success(&output, "lane complete public cli pass");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lane complete json should parse");
+    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["dispatch_status"], "executed");
+    assert_eq!(payload["lane_status"], "lane_completed");
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    let bridge_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
+    )
+    .expect("bridge result should be json");
+    assert_eq!(bridge_result["execution_state"], "executed");
+    assert_eq!(bridge_result["scope_validation"]["status"], "pass");
+    assert!(
+        std::path::Path::new(&fixture.bridge_receipt_path).exists(),
+        "bridge receipt should be materialized"
+    );
+}
+
+#[test]
+fn host_bridge_public_cli_blocks_out_of_scope_taskflow_attempt_artifacts_without_parent_db_lock() {
+    let fixture = create_host_bridge_lane_fixture(
+        "host-bridge-public-block",
+        "crates/vida/src/root_command_router.rs",
+    );
+
+    let output = vida()
+        .args([
+            "lane",
+            "complete",
+            &fixture.run_id,
+            "--receipt-id",
+            "host-bridge-public-block-receipt",
+            "--host-bridge-request",
+            &fixture.request_path,
+            "--host-agent-id",
+            "agent-public-proof",
+            "--host-bridge-summary",
+            "internal agent completed",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("lane complete public cli should run");
+    assert_failure(&output, "lane complete public cli blocked");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lane complete blocked json should parse");
+    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(payload["dispatch_status"], "blocked");
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be an array")
+        .iter()
+        .any(|code| code == "implementation_attempt_scope_guard_violation"));
+    let bridge_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
+    )
+    .expect("bridge result should be json");
+    assert_eq!(bridge_result["execution_state"], "blocked");
+    assert_eq!(bridge_result["scope_validation"]["status"], "blocked");
 }
 
 #[test]
