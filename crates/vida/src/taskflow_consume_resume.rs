@@ -277,257 +277,9 @@ fn emit_consume_continue_state_access_blocker(
     }
 }
 
-fn consume_continue_resume_error_blocker_code(error: &str) -> &'static str {
-    if error.contains("materialization-only dispatch receipt")
-        || error.contains("task-materialization result")
-    {
-        "internal_activation_view_only"
-    } else if error.contains("Stale missing-task run graph")
-        || error.contains("references missing TaskFlow task")
-    {
-        "stale_missing_task_run_graph"
-    } else if error.contains("missing required packet fields")
-        || error.contains("dispatch packet contract invalid")
-        || error.contains("dispatch_packet_contract_invalid")
-        || error.contains("missing_owned_write_scope")
-        || error.contains("missing_owned_paths")
-    {
-        "dispatch_packet_contract_invalid"
-    } else if error.contains("Latest continuation binding") && error.contains("ambiguous") {
-        "continuation_binding_ambiguous"
-    } else if error.contains("Latest explicit continuation binding points to run") {
-        "continuation_binding_mismatch"
-    } else if error.contains("not resumeable through default") {
-        "continuation_binding_not_resumeable"
-    } else if error.contains("Run-graph resume gate denied") && error.contains("recovery_ready") {
-        "run_graph_recovery_not_ready"
-    } else if error.contains("No persisted run-graph dispatch receipt exists")
-        || error.contains("missing receipt recovery could not load dispatch context")
-    {
-        "missing_run_graph_dispatch_receipt"
-    } else if error.contains("Timed out executing runtime dispatch handoff") {
-        "runtime_dispatch_handoff_timeout"
-    } else {
-        "consume_continue_resume_blocked"
-    }
-}
-
-fn consume_continue_resume_error_run_id(error: &str) -> Option<String> {
-    for marker in [
-        "Stale missing-task run graph `",
-        "Run-graph resume gate denied for `",
-        "run `",
-        "run_id `",
-    ] {
-        let Some(start) = error.find(marker).map(|index| index + marker.len()) else {
-            continue;
-        };
-        let rest = &error[start..];
-        let Some(end) = rest.find('`') else {
-            continue;
-        };
-        let run_id = rest[..end].trim();
-        if !run_id.is_empty() {
-            return Some(run_id.to_string());
-        }
-    }
-    None
-}
-
-fn consume_continue_resume_error_packet_path(error: &str) -> Option<String> {
-    for marker in [
-        "; dispatch packet `",
-        "dispatch packet `",
-        "packet path `",
-        "packet_path `",
-    ] {
-        let Some(start) = error.find(marker).map(|index| index + marker.len()) else {
-            continue;
-        };
-        let rest = &error[start..];
-        let Some(end) = rest.find('`') else {
-            continue;
-        };
-        let path = rest[..end].trim();
-        if !path.is_empty() && path != "delivery_task_packet" {
-            return Some(path.to_string());
-        }
-    }
-    None
-}
-
-#[derive(Debug, Default)]
-struct DispatchPacketRepairRefs {
-    run_id: Option<String>,
-    task_id: Option<String>,
-}
-
-fn dispatch_packet_repair_refs_from_path(path: &str) -> DispatchPacketRepairRefs {
-    let Ok(body) = std::fs::read_to_string(path) else {
-        return DispatchPacketRepairRefs::default();
-    };
-    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&body) else {
-        return DispatchPacketRepairRefs::default();
-    };
-    DispatchPacketRepairRefs {
-        run_id: dispatch_packet_string_field(&packet, &["run_id"])
-            .or_else(|| dispatch_packet_string_field(&packet, &["run_graph_bootstrap", "run_id"])),
-        task_id: dispatch_packet_string_field(&packet, &["task_id"])
-            .or_else(|| dispatch_packet_string_field(&packet, &["delivery_task_packet", "task_id"]))
-            .or_else(|| dispatch_packet_string_field(&packet, &["delivery_task_packet", "id"]))
-            .or_else(|| {
-                dispatch_packet_string_field(&packet, &["delivery_task_packet", "backlog_id"])
-            })
-            .or_else(|| dispatch_packet_string_field(&packet, &["run_graph_bootstrap", "task_id"])),
-    }
-}
-
-fn dispatch_packet_string_field(packet: &serde_json::Value, path: &[&str]) -> Option<String> {
-    let mut cursor = packet;
-    for key in path {
-        cursor = cursor.get(*key)?;
-    }
-    cursor
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> serde_json::Value {
-    let blocker_code = consume_continue_resume_error_blocker_code(error);
-    let packet_path = consume_continue_resume_error_packet_path(error);
-    let packet_refs = packet_path
-        .as_deref()
-        .map(dispatch_packet_repair_refs_from_path)
-        .unwrap_or_default();
-    let run_id = consume_continue_resume_error_run_id(error).or(packet_refs.run_id);
-    let task_id = packet_refs.task_id;
-    let next_actions = if blocker_code == "stale_missing_task_run_graph" {
-        let retire_action = run_id.as_ref().map_or_else(
-            || {
-                "Inspect `vida taskflow recovery latest`; if it reports a missing-task stale run, retire that concrete run with `vida lane retire <run-id> --receipt-id <receipt-id> --reason \"missing TaskFlow task stale run\"`."
-                    .to_string()
-            },
-            |run_id| {
-                format!(
-                    "Retire the stale missing-task run with `vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"`.",
-                    crate::shell_quote(run_id),
-                    crate::shell_quote(run_id)
-                )
-            },
-        );
-        serde_json::json!([
-            retire_action,
-            "Refresh continuation evidence with `vida status` and `vida taskflow recovery latest` before retrying `vida taskflow consume continue`.",
-            "Do not bind recovery to the missing TaskFlow task."
-        ])
-    } else if blocker_code == "dispatch_packet_contract_invalid" {
-        let repair_action = match (run_id.as_ref(), task_id.as_ref()) {
-            (Some(run_id), Some(task_id)) => {
-                format!(
-                    "Repair the persisted dispatch packet from canonical task metadata with `vida taskflow packet repair --run-id {} --from-task {}`, or regenerate the packet from the active bounded task before retrying.",
-                    crate::shell_quote(run_id),
-                    crate::shell_quote(task_id),
-                )
-            }
-            (Some(run_id), None) => {
-                let inspect_command = crate::operator_command_text::human_command(&format!(
-                    "vida taskflow run-graph status {} --json",
-                    crate::shell_quote(run_id)
-                ));
-                format!(
-                    "Inspect the dispatch packet owner with `{inspect_command}` before repair; do not run packet repair until a canonical TaskFlow task_id for run `{run_id}` is proven."
-                )
-            }
-            _ => {
-                "Repair the persisted dispatch packet from canonical task metadata with `vida taskflow packet repair --run-id <run-id> --from-task <task-id>`, or regenerate the packet from the active bounded task before retrying."
-                    .to_string()
-            }
-        };
-        serde_json::json!([
-            repair_action,
-            "Ensure delivery_task_packet.owned_paths and proof targets are present before running `vida taskflow consume continue`.",
-            "Do not treat packet-contract failure as a continuation-binding ambiguity."
-        ])
-    } else if blocker_code == "continuation_binding_ambiguous"
-        && error.contains("has not reached closure_complete")
-    {
-        let refresh_action = run_id.as_ref().map_or_else(
-            || {
-                "Pass `--run-id <run-id>` only when intentionally refreshing that specific active run."
-                    .to_string()
-            },
-            |run_id| {
-                format!(
-                    "Refresh the active run explicitly with `vida taskflow consume continue --run-id {}`.",
-                    crate::shell_quote(run_id)
-                )
-            },
-        );
-        serde_json::json!([
-            refresh_action,
-            "Do not bind a new --task-id until the source run reaches closure_complete with no downstream target.",
-            "Inspect run-graph and task evidence if the explicit refresh remains blocked."
-        ])
-    } else if blocker_code == "continuation_binding_ambiguous" {
-        serde_json::json!([
-            "Bind the next bounded unit explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id>`.",
-            "Pass `--run-id <run-id>` only when intentionally refreshing that specific run."
-        ])
-    } else if blocker_code == "run_graph_recovery_not_ready" {
-        serde_json::json!([
-            "Inspect recovery state with `vida taskflow recovery latest`.",
-            "Do not infer a closure handoff unless recovery exposes a closure packet or closure result."
-        ])
-    } else if blocker_code == "internal_activation_view_only" {
-        serde_json::json!([
-            "Inspect the blocked materialization lane with `vida lane show` for the same run.",
-            "Do not resume the run until receipt, lane, run-graph, and task identity agree on an executable next packet."
-        ])
-    } else {
-        serde_json::json!([
-            "Inspect continuation evidence with `vida status` and `vida taskflow recovery latest`.",
-            "Bind or refresh the intended bounded unit before retrying `vida taskflow consume continue`."
-        ])
-    };
-    let artifact_refs = serde_json::json!({
-        "surface": surface_name,
-        "run_id": run_id,
-        "task_id": task_id,
-        "dispatch_packet_path": packet_path,
-    });
-    let shared_fields = serde_json::json!({
-        "status": "blocked",
-        "blocker_codes": [blocker_code],
-        "next_actions": next_actions,
-        "artifact_refs": artifact_refs,
-    });
-    serde_json::json!({
-        "surface": surface_name,
-        "status": "blocked",
-        "error": error,
-        "run_id": run_id,
-        "blocker_codes": [blocker_code],
-        "next_actions": next_actions,
-        "artifact_refs": artifact_refs,
-        "shared_fields": shared_fields,
-        "operator_contracts": {
-            "contract_id": "release-1-operator-contracts",
-            "schema_version": "release-1-v1",
-            "status": "blocked",
-            "blocker_codes": [blocker_code],
-            "next_actions": next_actions,
-            "artifact_refs": artifact_refs,
-            "risk_tier": null,
-            "trace_id": null,
-            "workflow_class": null
-        }
-    })
-}
-
 pub(crate) fn emit_consume_continue_resume_error(error: &str, surface_name: &str, as_json: bool) {
-    let payload = consume_continue_resume_error_payload(error, surface_name);
+    let payload =
+        crate::taskflow_operator_diagnostics::consume_resume_error_payload(error, surface_name);
     if as_json {
         crate::print_json_pretty(&payload);
     } else {
@@ -1965,7 +1717,7 @@ async fn latest_dispatch_packet_contract_error_for_resume_gate(
     Ok(
         raw_dispatch_packet_contract_error_for_resume_gate(Path::new(packet_path)).filter(
             |error| {
-                consume_continue_resume_error_blocker_code(error)
+                crate::taskflow_operator_diagnostics::consume_resume_error_blocker_code(error)
                     == "dispatch_packet_contract_invalid"
             },
         ),
@@ -7166,7 +6918,6 @@ mod tests {
         canonical_resume_string_array_entries, completed_task_close_reconcile_resume_target,
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
         consume_continue_dispatch_handoff_timeout, consume_continue_handoff_with_timeout,
-        consume_continue_resume_error_blocker_code, consume_continue_resume_error_payload,
         consume_continue_should_defer_agent_handoff, consume_continue_state_access_blocker_payload,
         dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
         dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
@@ -7193,6 +6944,10 @@ mod tests {
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics, UpdateTaskRequest};
     use crate::taskflow_consume_resume_receipt;
+    use crate::taskflow_operator_diagnostics::{
+        consume_resume_error_blocker_code as consume_continue_resume_error_blocker_code,
+        consume_resume_error_payload as consume_continue_resume_error_payload,
+    };
     use crate::{RuntimeConsumptionLaneSelection, StateStore};
     use std::fs;
     use std::process::ExitCode;
@@ -16765,7 +16520,10 @@ agent_system:
             &packet_path,
             serde_json::to_vec_pretty(&serde_json::json!({
                 "run_id": "run-1",
-                "packet_template_kind": "delivery_task_packet"
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": {
+                    "task_id": "task-1"
+                }
             }))
             .expect("encode packet"),
         )

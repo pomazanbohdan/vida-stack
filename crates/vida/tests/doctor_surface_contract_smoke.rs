@@ -4179,6 +4179,31 @@ fn projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge() {
     )
     .expect("malformed dispatch packet should be written");
 
+    let default_toon_consume = vida()
+        .args(["taskflow", "consume", "continue"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("default consume continue should run");
+    assert!(
+        !default_toon_consume.status.success(),
+        "default consume continue should fail closed for latest missing task authority"
+    );
+    let default_toon_stdout = String::from_utf8_lossy(&default_toon_consume.stdout);
+    assert_not_json_output("vida taskflow consume continue", &default_toon_stdout);
+    assert_no_raw_terminal_controls("vida taskflow consume continue", &default_toon_stdout);
+    assert!(
+        default_toon_stdout.contains("stale_missing_task_run_graph"),
+        "default consume continue should expose the shared stale-run blocker: {default_toon_stdout}"
+    );
+    assert!(
+        default_toon_stdout.contains("vida lane retire"),
+        "default consume continue should expose the shared repair action: {default_toon_stdout}"
+    );
+    assert!(
+        !default_toon_stdout.contains("--json"),
+        "default next action should not bias operators toward --json: {default_toon_stdout}"
+    );
+
     let default_consume = vida()
         .args(["taskflow", "consume", "continue", "--json"])
         .env("VIDA_STATE_DIR", &state_dir)

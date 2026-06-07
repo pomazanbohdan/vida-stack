@@ -1125,7 +1125,10 @@ pub(crate) enum BlockerCode {
     MigrationRequired,
     ProtocolBindingBlockingIssues,
     ContinuationBindingAmbiguous,
+    ContinuationBindingMismatch,
+    ContinuationBindingNotResumeable,
     HostToolBridgeAdapterRequired,
+    MissingRunGraphDispatchReceipt,
     MissingRunGraphDispatchReceiptOperatorEvidence,
     ClosedTaskActiveRunProjectionMismatch,
     StaleMissingTaskRunGraph,
@@ -1141,6 +1144,9 @@ pub(crate) enum BlockerCode {
     ProjectActivationUnknown,
     DependencyGraphIssues,
     DispatchPacketContractInvalid,
+    RunGraphRecoveryNotReady,
+    RuntimeDispatchHandoffTimeout,
+    ConsumeContinueResumeBlocked,
     ExecutionModeNotParallelSafe,
     CurrentExecutionModeNotParallelSafe,
     OrderBucketMismatchOrMissing,
@@ -1276,7 +1282,10 @@ impl BlockerCode {
             Self::MigrationRequired => "migration_required",
             Self::ProtocolBindingBlockingIssues => "protocol_binding_blocking_issues",
             Self::ContinuationBindingAmbiguous => "continuation_binding_ambiguous",
+            Self::ContinuationBindingMismatch => "continuation_binding_mismatch",
+            Self::ContinuationBindingNotResumeable => "continuation_binding_not_resumeable",
             Self::HostToolBridgeAdapterRequired => "host_tool_bridge_adapter_required",
+            Self::MissingRunGraphDispatchReceipt => "missing_run_graph_dispatch_receipt",
             Self::MissingRunGraphDispatchReceiptOperatorEvidence => {
                 "missing_run_graph_dispatch_receipt_operator_evidence"
             }
@@ -1304,6 +1313,9 @@ impl BlockerCode {
             Self::ProjectActivationUnknown => "project_activation_unknown",
             Self::DependencyGraphIssues => "dependency_graph_issues",
             Self::DispatchPacketContractInvalid => "dispatch_packet_contract_invalid",
+            Self::RunGraphRecoveryNotReady => "run_graph_recovery_not_ready",
+            Self::RuntimeDispatchHandoffTimeout => "runtime_dispatch_handoff_timeout",
+            Self::ConsumeContinueResumeBlocked => "consume_continue_resume_blocked",
             Self::ExecutionModeNotParallelSafe => "execution_mode_not_parallel_safe",
             Self::CurrentExecutionModeNotParallelSafe => "current_execution_mode_not_parallel_safe",
             Self::OrderBucketMismatchOrMissing => "order_bucket_mismatch_or_missing",
@@ -1469,7 +1481,10 @@ impl BlockerCode {
             "migration_required" => Some(Self::MigrationRequired),
             "protocol_binding_blocking_issues" => Some(Self::ProtocolBindingBlockingIssues),
             "continuation_binding_ambiguous" => Some(Self::ContinuationBindingAmbiguous),
+            "continuation_binding_mismatch" => Some(Self::ContinuationBindingMismatch),
+            "continuation_binding_not_resumeable" => Some(Self::ContinuationBindingNotResumeable),
             "host_tool_bridge_adapter_required" => Some(Self::HostToolBridgeAdapterRequired),
+            "missing_run_graph_dispatch_receipt" => Some(Self::MissingRunGraphDispatchReceipt),
             "missing_run_graph_dispatch_receipt_operator_evidence" => {
                 Some(Self::MissingRunGraphDispatchReceiptOperatorEvidence)
             }
@@ -1499,6 +1514,9 @@ impl BlockerCode {
             "project_activation_unknown" => Some(Self::ProjectActivationUnknown),
             "dependency_graph_issues" => Some(Self::DependencyGraphIssues),
             "dispatch_packet_contract_invalid" => Some(Self::DispatchPacketContractInvalid),
+            "run_graph_recovery_not_ready" => Some(Self::RunGraphRecoveryNotReady),
+            "runtime_dispatch_handoff_timeout" => Some(Self::RuntimeDispatchHandoffTimeout),
+            "consume_continue_resume_blocked" => Some(Self::ConsumeContinueResumeBlocked),
             "execution_mode_not_parallel_safe" => Some(Self::ExecutionModeNotParallelSafe),
             "current_execution_mode_not_parallel_safe" => {
                 Some(Self::CurrentExecutionModeNotParallelSafe)

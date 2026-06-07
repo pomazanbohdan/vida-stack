@@ -110,6 +110,7 @@ mod taskflow_consume_resume_projection;
 mod taskflow_consume_resume_receipt;
 mod taskflow_continuation;
 mod taskflow_layer4;
+mod taskflow_operator_diagnostics;
 mod taskflow_packet;
 mod taskflow_plan_graph;
 mod taskflow_pricing;

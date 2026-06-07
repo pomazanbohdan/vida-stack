@@ -1263,44 +1263,6 @@ async fn start_agent_init_dispatch_worker_and_return(
     Ok(ExitCode::SUCCESS)
 }
 
-fn agent_init_execute_dispatch_resume_error_run_id(error: &str) -> Option<String> {
-    for marker in [
-        "Run-graph resume gate denied for `",
-        "Stale missing-task run graph `",
-        "run `",
-        "run_id `",
-    ] {
-        let Some(start) = error.find(marker).map(|index| index + marker.len()) else {
-            continue;
-        };
-        let rest = &error[start..];
-        let Some(end) = rest.find('`') else {
-            continue;
-        };
-        let run_id = rest[..end].trim();
-        if !run_id.is_empty() {
-            return Some(run_id.to_string());
-        }
-    }
-    None
-}
-
-fn agent_init_execute_dispatch_resume_error_blocker_code(error: &str) -> &'static str {
-    if error.contains("recovery_ready is false") {
-        "run_graph_recovery_not_ready"
-    } else if error.contains("Stale missing-task run graph")
-        || error.contains("references missing TaskFlow task")
-    {
-        "stale_missing_task_run_graph"
-    } else if error.contains("No persisted run-graph dispatch receipt exists")
-        || error.contains("missing receipt recovery could not load dispatch context")
-    {
-        "missing_run_graph_dispatch_receipt"
-    } else {
-        "agent_init_execute_dispatch_resume_blocked"
-    }
-}
-
 fn agent_init_execute_dispatch_resume_error_next_actions(
     blocker_code: &str,
     run_id: Option<&str>,
@@ -1407,8 +1369,9 @@ fn agent_init_execute_dispatch_resume_error_payload(
     dispatch_mode: &serde_json::Value,
     error: &str,
 ) -> serde_json::Value {
-    let blocker_code = agent_init_execute_dispatch_resume_error_blocker_code(error);
-    let run_id = agent_init_execute_dispatch_resume_error_run_id(error);
+    let decision = crate::taskflow_operator_diagnostics::diagnose_consume_resume_error(error);
+    let blocker_code = decision.kind.blocker_code();
+    let run_id = decision.run_id;
     let next_actions =
         agent_init_execute_dispatch_resume_error_next_actions(blocker_code, run_id.as_deref());
     let artifact_refs = serde_json::json!({
@@ -1638,11 +1601,13 @@ async fn agent_init_execute_dispatch_resume_error_receipt_evidence(
     Option<crate::state_store::RunGraphDispatchReceipt>,
     Option<serde_json::Value>,
 ) {
-    let run_id = agent_init_execute_dispatch_resume_error_run_id(error).or_else(|| {
-        requested_dispatch_packet_path
-            .and_then(|path| super::taskflow_consume_resume::read_dispatch_packet(path).ok())
-            .and_then(|packet| string_field(&packet, "run_id"))
-    });
+    let run_id = crate::taskflow_operator_diagnostics::diagnose_consume_resume_error(error)
+        .run_id
+        .or_else(|| {
+            requested_dispatch_packet_path
+                .and_then(|path| super::taskflow_consume_resume::read_dispatch_packet(path).ok())
+                .and_then(|packet| string_field(&packet, "run_id"))
+        });
     let Some(run_id) = run_id else {
         return (None, None);
     };
