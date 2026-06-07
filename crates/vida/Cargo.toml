@@ -4,6 +4,10 @@ version = "0.9.7"
 edition = "2021"
 build = "build.rs"
 
+[features]
+default = []
+coder = []
+
 [[bin]]
 name = "vida"
 path = "src/main.rs"

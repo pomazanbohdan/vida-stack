@@ -6,8 +6,8 @@ use super::{
     orchestrator_session_surface, print_root_help, project_activator_surface, proof_surface,
     protocol_surface, quality_surface, release_surface, resolve_runtime_project_root,
     run_taskflow_proxy, runtime_web_surface, service_client_cli, session_surface, state_store,
-    status_surface, task_surface, AgentArgs, AgentCommand, Cli, Command, ReleaseCommand,
-    SessionArgs, SessionCommand, TaskArgs, TaskCommand,
+    status_surface, task_surface, AgentArgs, AgentCommand, Cli, CoderCommand, Command,
+    ReleaseCommand, SessionArgs, SessionCommand, TaskArgs, TaskCommand,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -37,6 +37,15 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::OrchestratorInit(args)) => init_surfaces::run_orchestrator_init(args).await,
         Some(Command::AgentInit(args)) => init_surfaces::run_agent_init(args).await,
         Some(Command::Agent(args)) => agent_dispatch_surface::run_agent(args).await,
+        Some(Command::Coder(args)) => match args.command {
+            CoderCommand::Capabilities(args) => vida::run_coder_capabilities(args.json),
+            CoderCommand::ProviderCheck(args) => {
+                vida::run_coder_provider_check(&args.provider, args.json)
+            }
+            CoderCommand::Run(args) => {
+                vida::run_coder(&args.provider, args.request.as_deref(), args.json)
+            }
+        },
         Some(Command::Protocol(args)) => protocol_surface::run_protocol(args).await,
         Some(Command::ProjectActivator(args)) => {
             project_activator_surface::run_project_activator(args).await
@@ -102,6 +111,7 @@ fn command_label(command: &Option<Command>) -> String {
         Some(Command::OrchestratorInit(_)) => "vida orchestrator-init".to_string(),
         Some(Command::AgentInit(_)) => "vida agent-init".to_string(),
         Some(Command::Agent(_)) => "vida agent".to_string(),
+        Some(Command::Coder(_)) => "vida coder".to_string(),
         Some(Command::Protocol(_)) => "vida protocol".to_string(),
         Some(Command::ProjectActivator(_)) => "vida project-activator".to_string(),
         Some(Command::AgentFeedback(_)) => "vida agent-feedback".to_string(),

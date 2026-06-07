@@ -28,6 +28,7 @@ const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json
 const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
 const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  vida session triage --task <task-id>\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
+const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -104,6 +105,11 @@ pub(crate) enum Command {
     AgentInit(AgentInitArgs),
     #[command(about = "preview delegated agent lane selection without executing dispatch")]
     Agent(AgentArgs),
+    #[command(
+        about = "inspect and invoke the feature-gated VIDA coder provider surface",
+        after_help = CODER_AFTER_HELP
+    )]
+    Coder(CoderArgs),
     #[command(about = "resolve and render framework protocol/guide surfaces")]
     Protocol(ProtocolArgs),
     #[command(
@@ -339,6 +345,70 @@ pub(crate) enum AgentCommand {
         after_help = "Examples:\n  vida agent status\n  vida agent status --compact\n  vida agent status --json --compact\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation."
     )]
     Status(AgentStatusArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct CoderArgs {
+    #[command(subcommand)]
+    pub(crate) command: CoderCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum CoderCommand {
+    #[command(
+        about = "emit machine-readable VIDA coder capability metadata",
+        after_help = CODER_AFTER_HELP
+    )]
+    Capabilities(CoderCapabilitiesArgs),
+    #[command(
+        about = "check provider readiness without executing provider code",
+        after_help = CODER_AFTER_HELP
+    )]
+    ProviderCheck(CoderProviderCheckArgs),
+    #[command(
+        about = "fail closed before provider execution until coder providers are implemented",
+        after_help = CODER_AFTER_HELP
+    )]
+    Run(CoderRunArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct CoderCapabilitiesArgs {
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct CoderProviderCheckArgs {
+    #[arg(
+        long = "provider",
+        default_value = "codex",
+        help = "Provider id to inspect before execution"
+    )]
+    pub(crate) provider: String,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct CoderRunArgs {
+    #[arg(
+        long = "provider",
+        default_value = "codex",
+        help = "Provider id reserved for future execution"
+    )]
+    pub(crate) provider: String,
+
+    #[arg(
+        long = "request",
+        help = "Bounded coder request text for future provider execution"
+    )]
+    pub(crate) request: Option<String>,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -3041,7 +3111,7 @@ pub(crate) struct OrchestratorSessionTransferArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, TaskCommand};
+    use super::{Cli, CoderCommand, TaskCommand};
     use clap::{CommandFactory, Parser};
 
     fn assert_help_has_no_blank_description_rows(label: &str, help: &str) {
@@ -3455,6 +3525,65 @@ mod tests {
             Some("/tmp/vida-state".to_string())
         );
         assert!(host_bridge.json);
+    }
+
+    #[test]
+    fn coder_surface_help_and_commands_are_discoverable() {
+        let root_error = Cli::try_parse_from(["vida", "--help"])
+            .expect_err("help should render clap display error");
+        assert!(root_error.to_string().contains("coder"));
+
+        let coder_error = Cli::try_parse_from(["vida", "coder", "--help"])
+            .expect_err("help should render clap display error");
+        let coder_help = coder_error.to_string();
+        assert!(coder_help.contains("capabilities"));
+        assert!(coder_help.contains("provider-check"));
+        assert!(coder_help.contains("run"));
+        assert!(coder_help.contains("Default output is compact TOON/plain"));
+        assert!(coder_help.contains("Use --json only when a machine-readable payload is required."));
+        assert!(coder_help.contains("vida coder capabilities\n"));
+        assert!(!coder_help.contains("vida coder capabilities --json"));
+
+        let capabilities_error = Cli::try_parse_from(["vida", "coder", "capabilities", "--help"])
+            .expect_err("help should render clap display error");
+        assert!(capabilities_error.to_string().contains("--json"));
+
+        let parsed_provider = Cli::try_parse_from([
+            "vida",
+            "coder",
+            "provider-check",
+            "--provider",
+            "codex",
+            "--json",
+        ])
+        .expect("coder provider-check should parse");
+        let Some(super::Command::Coder(coder_args)) = parsed_provider.command else {
+            panic!("coder command should parse");
+        };
+        let CoderCommand::ProviderCheck(provider_check) = coder_args.command else {
+            panic!("provider-check command should parse");
+        };
+        assert_eq!(provider_check.provider, "codex");
+        assert!(provider_check.json);
+
+        let parsed_run = Cli::try_parse_from([
+            "vida",
+            "coder",
+            "run",
+            "--request",
+            "bounded request",
+            "--json",
+        ])
+        .expect("coder run should parse");
+        let Some(super::Command::Coder(coder_args)) = parsed_run.command else {
+            panic!("coder command should parse");
+        };
+        let CoderCommand::Run(run) = coder_args.command else {
+            panic!("run command should parse");
+        };
+        assert_eq!(run.provider, "codex");
+        assert_eq!(run.request.as_deref(), Some("bounded request"));
+        assert!(run.json);
     }
 
     #[test]
