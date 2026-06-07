@@ -1145,6 +1145,8 @@ fn host_bridge_request_path_for_run_target(
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 return None;
             }
+            let path =
+                canonicalize_existing_regular_state_path(&state_root, &path, "request").ok()?;
             let raw = std::fs::read_to_string(&path).ok()?;
             let request: serde_json::Value = serde_json::from_str(&raw).ok()?;
             let run_matches = request
@@ -2606,6 +2608,27 @@ fn canonicalize_existing_state_path(
     Ok(canonical_path)
 }
 
+fn canonicalize_existing_regular_state_path(
+    state_root: &Path,
+    path: &Path,
+    label: &str,
+) -> Result<PathBuf, String> {
+    let canonical_path = canonicalize_existing_state_path(state_root, path, label)?;
+    let metadata = std::fs::metadata(&canonical_path).map_err(|error| {
+        format!(
+            "Failed to inspect host bridge {label} path `{}`: {error}",
+            canonical_path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "Host bridge {label} path `{}` is not a regular file.",
+            canonical_path.display()
+        ));
+    }
+    Ok(canonical_path)
+}
+
 fn validate_new_state_artifact_path(
     state_root: &Path,
     path: &Path,
@@ -3057,6 +3080,16 @@ fn host_bridge_request_has_retryable_completion_evidence(
     state_root: &Path,
     request_path: &str,
 ) -> bool {
+    let request_path =
+        crate::runtime_dispatch_state::normalize_persisted_runtime_path(request_path);
+    let Ok(request_path) =
+        canonicalize_existing_regular_state_path(state_root, &request_path, "request")
+    else {
+        return false;
+    };
+    let Some(request_path) = request_path.to_str() else {
+        return false;
+    };
     let Ok(request) = read_host_bridge_request(request_path) else {
         return false;
     };
@@ -3065,7 +3098,7 @@ fn host_bridge_request_has_retryable_completion_evidence(
             continue;
         };
         let path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(raw_path);
-        let Ok(path) = canonicalize_existing_state_path(state_root, &path, field) else {
+        let Ok(path) = canonicalize_existing_regular_state_path(state_root, &path, field) else {
             continue;
         };
         let Ok(raw) = std::fs::read_to_string(path) else {
@@ -4899,6 +4932,84 @@ mod tests {
             selected_backend: Some("internal_subagents".to_string()),
             recorded_at: "2026-04-09T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn retryable_host_bridge_scan_rejects_request_path_outside_state_root() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-retryable-request-path-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let outside_root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-retryable-request-path-outside-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(root.join("host-tool-bridge/requests"))
+            .expect("create request dir");
+        std::fs::create_dir_all(root.join("host-tool-bridge/receipts"))
+            .expect("create receipt dir");
+        std::fs::create_dir_all(root.join("runtime-consumption/dispatch-results"))
+            .expect("create dispatch dir");
+        std::fs::create_dir_all(&outside_root).expect("create outside dir");
+
+        let run_id = "run-retryable-outside-request-path";
+        let request_path = root.join("host-tool-bridge/requests/retryable.json");
+        let outside_request_path = outside_root.join("retryable.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/retryable-receipt.json");
+        std::fs::write(
+            &receipt_path,
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_code": "implementation_artifact_receipt_unverified"
+            })
+            .to_string(),
+        )
+        .expect("write receipt");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "blocked",
+            "request_id": "retryable",
+            "run_id": run_id,
+            "task_id": run_id,
+            "dispatch_target": "implementer",
+            "request_path": outside_request_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        })
+        .to_string();
+        std::fs::write(&request_path, &request).expect("write scanned request");
+        std::fs::write(&outside_request_path, request).expect("write outside request");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.dispatch_result_path = Some(
+            root.join("runtime-consumption/dispatch-results/retryable.json")
+                .display()
+                .to_string(),
+        );
+        receipt.blocker_code = Some("implementation_artifact_receipt_unverified".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+
+        assert!(!host_bridge_request_has_retryable_completion_evidence(
+            &root,
+            outside_request_path
+                .to_str()
+                .expect("outside request path should be utf8")
+        ));
+        assert_eq!(
+            host_bridge_request_path_for_run_target(&summary, "implementer"),
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside_root);
     }
 
     fn sample_exception_takeover_args(run_id: &str, receipt_id: &str) -> Vec<String> {
