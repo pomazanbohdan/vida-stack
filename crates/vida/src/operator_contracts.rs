@@ -324,7 +324,11 @@ pub(crate) fn finalize_release1_operator_surface_verdict_with_status(
         .map(|code| code.trim().to_ascii_lowercase())
         .filter(|code| !code.is_empty())
         .collect::<Vec<_>>();
-    let blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let blocker_codes = normalize_blocker_codes(
+        &blocker_codes,
+        crate::contract_profile_adapter::canonical_blocker_codes,
+        Some("unsupported_blocker_code".to_string()),
+    );
     let next_actions =
         canonical_next_action_entries(&serde_json::json!(next_actions)).unwrap_or_default();
     let verdict = finalize_operator_surface_verdict(
@@ -349,7 +353,11 @@ pub(crate) fn finalize_release1_operator_truth(
     next_actions: Vec<String>,
     artifact_refs: Value,
 ) -> Result<FinalizedRelease1OperatorTruth, String> {
-    let blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let blocker_codes = normalize_blocker_codes(
+        &blocker_codes,
+        crate::contract_profile_adapter::canonical_blocker_codes,
+        Some("unsupported_blocker_code".to_string()),
+    );
     let next_actions =
         canonical_next_action_entries(&serde_json::json!(next_actions)).unwrap_or(next_actions);
     let status = if blocker_codes.is_empty() {
@@ -1206,6 +1214,51 @@ mod tests {
         assert_eq!(
             finalized.operator_contracts["blocker_codes"],
             json!(["host_tool_bridge_adapter_required"])
+        );
+    }
+
+    #[test]
+    fn finalize_release1_operator_truth_maps_unknown_only_blockers_to_unsupported() {
+        let finalized = finalize_release1_operator_truth(
+            vec!["unregistered_runtime_blocker".to_string()],
+            vec!["repair the emitting surface before continuing".to_string()],
+            json!({"surface": "unknown_blocker_regression"}),
+        )
+        .expect("unknown blocker should remain a blocked operator truth");
+
+        assert_eq!(finalized.status, "blocked");
+        assert_eq!(
+            finalized.blocker_codes,
+            vec!["unsupported_blocker_code".to_string()]
+        );
+        assert_eq!(
+            finalized.shared_fields["blocker_codes"],
+            json!(["unsupported_blocker_code"])
+        );
+        assert_eq!(
+            finalized.operator_contracts["blocker_codes"],
+            json!(["unsupported_blocker_code"])
+        );
+    }
+
+    #[test]
+    fn finalize_release1_operator_surface_with_status_maps_unknown_blockers_to_unsupported() {
+        let verdict = finalize_release1_operator_surface_verdict_with_status(
+            "blocked",
+            vec!["unregistered_runtime_blocker".to_string()],
+            vec!["repair the emitting surface before continuing".to_string()],
+            json!({"surface": "unknown_blocker_regression"}),
+        )
+        .expect("unknown blocker should not collapse an explicitly blocked surface");
+
+        assert_eq!(verdict.status, "blocked");
+        assert_eq!(
+            verdict.blocker_codes,
+            vec!["unsupported_blocker_code".to_string()]
+        );
+        assert_eq!(
+            verdict.operator_contracts["blocker_codes"],
+            json!(["unsupported_blocker_code"])
         );
     }
 
