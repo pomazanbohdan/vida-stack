@@ -2893,6 +2893,12 @@ fn normalize_coach_review_packet_contract(
     let proof_target = coach_review_proof_target(&active_packet);
     let source_dispatch_target =
         coach_review_source_dispatch_target(&active_packet, &dispatch_target);
+    let request_text = crate::runtime_dispatch_packet_text::runtime_packet_request_text(
+        packet_template_kind,
+        packet,
+    )
+    .or_else(|| packet_request_text(packet).map(str::to_string))
+    .unwrap_or_default();
     let canonical_packet = crate::runtime_dispatch_packets::runtime_coach_review_packet(
         &run_id,
         &dispatch_target,
@@ -2907,7 +2913,17 @@ fn normalize_coach_review_packet_contract(
     }
 
     let handoff_runtime_role = coach_review_prompt_runtime_role(packet, &active_packet);
-    let request_text = packet_request_text(packet).unwrap_or_default();
+    if !request_text.is_empty()
+        && packet
+            .get("request_text")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        packet["request_text"] = serde_json::json!(request_text.clone());
+        normalized = true;
+    }
     let orchestration_contract = packet
         .get("role_selection_full")
         .and_then(|value| value.get("execution_plan"))
@@ -2918,7 +2934,7 @@ fn normalize_coach_review_packet_contract(
         &run_id,
         &dispatch_target,
         &handoff_runtime_role,
-        request_text,
+        &request_text,
         &orchestration_contract,
     );
     if packet
@@ -18696,6 +18712,79 @@ agent_system:
 
         let persisted = fs::read_to_string(&packet_path).expect("normalized packet should persist");
         assert!(persisted.contains("\"read_only_paths\""));
+        let _ = fs::remove_file(packet_path);
+    }
+
+    #[test]
+    fn read_dispatch_packet_preserves_structured_coach_request_during_normalization() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let packet_path = std::env::temp_dir().join(format!(
+            "vida-stale-coach-request-packet-{}-{}.json",
+            std::process::id(),
+            nanos
+        ));
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "run_id": "run-stale-coach-request",
+                "dispatch_target": "coach",
+                "downstream_dispatch_target": "coach",
+                "activation_runtime_role": "coach",
+                "packet_template_kind": "coach_review_packet",
+                "prompt": "# VIDA downstream dispatch packet\n\nRequest: ",
+                "coach_review_packet": {
+                    "review_goal": "Validate implementer handoff evidence before coach approval.",
+                    "review_subject": "feature dev task",
+                    "blocking_question": "Does the implementer delivery include receipt-backed execution evidence?",
+                    "proof_target": "receipt-backed implementation evidence",
+                    "expected_output": "Return blocker if implementation evidence is missing.",
+                    "review_focus": [
+                        "implementation_artifacts",
+                        "source_dispatch_status",
+                        "receipt_backed"
+                    ],
+                    "read_only_paths": [
+                        "crates/vida/src/runtime_dispatch_state.rs"
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write stale coach request packet");
+
+        let packet =
+            read_dispatch_packet(packet_path.to_str().expect("packet path should be utf-8"))
+                .expect("stale coach request packet should normalize and validate");
+        let request_text = packet["request_text"]
+            .as_str()
+            .expect("normalization should preserve synthesized request_text");
+        assert!(
+            request_text.contains("Validate implementer handoff evidence"),
+            "request text should preserve legacy structured coach goal: {request_text}"
+        );
+        assert!(
+            request_text.contains("receipt-backed implementation evidence"),
+            "request text should preserve proof target: {request_text}"
+        );
+        let prompt = packet["prompt"]
+            .as_str()
+            .expect("normalization should rewrite prompt");
+        assert!(
+            prompt.contains("Validate implementer handoff evidence"),
+            "normalized prompt should carry preserved request text: {prompt}"
+        );
+        assert!(
+            !prompt.trim_end().ends_with("Request:"),
+            "normalized prompt must not leave an empty Request tail: {prompt}"
+        );
+
+        let persisted = fs::read_to_string(&packet_path).expect("normalized packet should persist");
+        assert!(persisted.contains("\"request_text\""));
+        assert!(persisted.contains("Validate implementer handoff evidence"));
         let _ = fs::remove_file(packet_path);
     }
 

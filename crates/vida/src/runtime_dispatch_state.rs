@@ -3142,14 +3142,29 @@ fn dispatch_packet_prompt_text(packet_path: &str) -> Option<String> {
     std::fs::read_to_string(packet_path)
         .ok()
         .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
-        .and_then(|packet| {
-            packet
-                .get("prompt")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
+        .map(|packet| {
+            crate::runtime_dispatch_packet_text::runtime_packet_prompt_from_packet(
+                &packet,
+                packet_path,
+            )
         })
+}
+
+fn dispatch_packet_prompt_prelaunch_blocker(packet_path: &str) -> Result<(), String> {
+    let Some(packet) = std::fs::read_to_string(packet_path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+    else {
+        return Ok(());
+    };
+    if let Some(blocker) =
+        crate::runtime_dispatch_packet_text::runtime_packet_prompt_prelaunch_blocker(&packet)
+    {
+        return Err(format!(
+            "Configured external backend refused to launch malformed dispatch packet `{packet_path}`: {blocker}"
+        ));
+    }
+    Ok(())
 }
 
 fn configured_external_activation_prompt(
@@ -3387,6 +3402,7 @@ pub(crate) fn configured_external_activation_parts(
     packet_path: &str,
     preferred_profile_id: Option<&str>,
 ) -> Result<(String, Vec<String>), String> {
+    dispatch_packet_prompt_prelaunch_blocker(packet_path)?;
     if let Some(blocker) = external_backend_dispatch_blocker(backend_id, backend_entry) {
         return Err(blocker);
     }
@@ -3446,6 +3462,7 @@ pub(crate) fn configured_external_activation_stdin_payload(
     backend_entry: &serde_yaml::Value,
     packet_path: &str,
 ) -> Result<Option<String>, String> {
+    dispatch_packet_prompt_prelaunch_blocker(packet_path)?;
     let dispatch = yaml_lookup(backend_entry, &["dispatch"])
         .ok_or_else(|| "Configured external backend is missing `dispatch`".to_string())?;
     let prompt_mode = yaml_string(yaml_lookup(dispatch, &["prompt_mode"]))
@@ -3655,6 +3672,149 @@ dispatch:
                 "Execute this concrete packet body.".to_string()
             ]
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn write_stale_empty_request_coach_packet(root: &Path) -> std::path::PathBuf {
+        let packet_path = root.join("coach-downstream.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "coach_review_packet",
+                "run_id": "feature-test",
+                "downstream_dispatch_target": "coach",
+                "activation_runtime_role": "coach",
+                "prompt": "Packet run_id=feature-test\nTarget=coach\nRequest: ",
+                "coach_review_packet": {
+                    "review_goal": "Review test-author delivery",
+                    "blocking_question": "Is the delivery receipt-backed?",
+                    "expected_output": ["decision=approve|rework|blocker"]
+                },
+                "orchestration_contract": {
+                    "replanning": {
+                        "checkpoints": ["after_review"]
+                    }
+                }
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet should write");
+        packet_path
+    }
+
+    #[test]
+    fn configured_external_activation_parts_repairs_stale_empty_request_flag_value_prompt() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: vibe
+  static_args: ["--output", "text"]
+  prompt_mode: flag_value
+  prompt_flag: -p
+"#,
+        )
+        .expect("backend entry should parse");
+        let root = std::env::temp_dir().join(format!(
+            "vida-external-stale-flag-prompt-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let packet_path = write_stale_empty_request_coach_packet(&root);
+
+        let (_command, args) = configured_external_activation_parts(
+            "vibe_cli",
+            &backend_entry,
+            &root,
+            packet_path.to_str().expect("packet path"),
+            None,
+        )
+        .expect("dispatch parts should render");
+        let prompt_arg = args
+            .iter()
+            .position(|arg| arg == "-p")
+            .and_then(|index| args.get(index + 1))
+            .expect("flag-value prompt should follow -p");
+
+        assert!(prompt_arg.contains("Request: review_goal: Review test-author delivery"));
+        assert!(prompt_arg.contains("blocking_question: Is the delivery receipt-backed?"));
+        assert!(!prompt_arg.trim_end().ends_with("Request:"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn configured_external_activation_stdin_payload_repairs_stale_empty_request_prompt() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: vida-pi-agent
+  prompt_mode: stdin
+"#,
+        )
+        .expect("backend entry should parse");
+        let root = std::env::temp_dir().join(format!(
+            "vida-external-stale-stdin-prompt-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let packet_path = write_stale_empty_request_coach_packet(&root);
+
+        let payload = configured_external_activation_stdin_payload(
+            &backend_entry,
+            packet_path.to_str().expect("packet path"),
+        )
+        .expect("stdin payload should render")
+        .expect("stdin prompt mode should return payload");
+
+        assert!(payload.contains("Request: review_goal: Review test-author delivery"));
+        assert!(payload.contains("blocking_question: Is the delivery receipt-backed?"));
+        assert!(!payload.trim_end().ends_with("Request:"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn configured_external_activation_parts_blocks_unrepairable_structured_packet_before_launch() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: vibe
+  static_args: ["--output", "text"]
+  prompt_mode: positional
+"#,
+        )
+        .expect("backend entry should parse");
+        let root = std::env::temp_dir().join(format!(
+            "vida-external-empty-structured-prompt-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let packet_path = root.join("empty.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "coach_review_packet",
+                "coach_review_packet": {},
+                "prompt": "Packet run_id=feature-test\nTarget=coach\nRequest: "
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet should write");
+
+        let error = configured_external_activation_parts(
+            "vibe_cli",
+            &backend_entry,
+            &root,
+            packet_path.to_str().expect("packet path"),
+            None,
+        )
+        .expect_err("unrepairable structured packet should fail before launch");
+
+        assert!(error.contains("refused to launch malformed dispatch packet"));
+        assert!(error.contains("empty Request"));
 
         let _ = std::fs::remove_dir_all(root);
     }

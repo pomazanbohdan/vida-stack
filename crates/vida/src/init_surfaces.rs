@@ -6667,10 +6667,28 @@ fn agent_init_packet_selection(
         "dispatch_packet_path"
     };
 
+    let packet_template_kind = packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let request_text = packet
+        .get("request_text")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            crate::runtime_dispatch_packet_text::runtime_packet_request_text(
+                packet_template_kind,
+                &packet,
+            )
+        })
+        .unwrap_or_default();
+
     Ok(serde_json::json!({
         "mode": if downstream { "downstream_packet" } else { "dispatch_packet" },
         "selected_role": selected_role,
-        "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
+        "request_text": request_text,
         "dispatch_target": packet.get(dispatch_target_key).and_then(serde_json::Value::as_str).unwrap_or_default(),
         packet_path_key: packet_path,
         "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),

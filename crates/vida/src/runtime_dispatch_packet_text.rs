@@ -1,5 +1,279 @@
 use crate::{build_design_first_tracked_flow_bootstrap, RuntimeConsumptionLaneSelection};
 
+fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn json_string_array(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn push_line(lines: &mut Vec<String>, label: &str, value: Option<String>) {
+    if let Some(value) = value {
+        lines.push(format!("{label}: {value}"));
+    }
+}
+
+fn push_list(lines: &mut Vec<String>, label: &str, values: Vec<String>) {
+    if values.is_empty() {
+        return;
+    }
+    lines.push(format!("{label}: {}", values.join("; ")));
+}
+
+fn active_packet<'a>(
+    packet_template_kind: &str,
+    packet: &'a serde_json::Value,
+) -> Option<&'a serde_json::Value> {
+    packet
+        .get(packet_template_kind)
+        .filter(|value| !value.is_null())
+}
+
+pub(crate) fn runtime_packet_request_text(
+    packet_template_kind: &str,
+    packet: &serde_json::Value,
+) -> Option<String> {
+    if let Some(request_text) = json_string(packet.get("request_text")) {
+        return Some(request_text);
+    }
+
+    let active_packet = active_packet(packet_template_kind, packet)?;
+    let mut lines = Vec::new();
+    match packet_template_kind {
+        "coach_review_packet" => {
+            push_line(
+                &mut lines,
+                "review_goal",
+                json_string(active_packet.get("review_goal")),
+            );
+            push_line(
+                &mut lines,
+                "review_subject",
+                json_string(active_packet.get("review_subject")),
+            );
+            push_line(
+                &mut lines,
+                "blocking_question",
+                json_string(active_packet.get("blocking_question")),
+            );
+            push_line(
+                &mut lines,
+                "proof_target",
+                json_string(active_packet.get("proof_target")),
+            );
+            push_list(
+                &mut lines,
+                "expected_output",
+                json_string_array(active_packet.get("expected_output")),
+            );
+            push_list(
+                &mut lines,
+                "review_focus",
+                json_string_array(active_packet.get("review_focus")),
+            );
+            push_list(
+                &mut lines,
+                "read_only_paths",
+                json_string_array(active_packet.get("read_only_paths")),
+            );
+        }
+        "verifier_proof_packet" => {
+            push_line(
+                &mut lines,
+                "proof_goal",
+                json_string(active_packet.get("proof_goal")),
+            );
+            push_line(
+                &mut lines,
+                "blocking_question",
+                json_string(active_packet.get("blocking_question")),
+            );
+            push_line(
+                &mut lines,
+                "verification_command",
+                json_string(active_packet.get("verification_command")),
+            );
+            push_line(
+                &mut lines,
+                "proof_target",
+                json_string(active_packet.get("proof_target")),
+            );
+        }
+        "delivery_task_packet" | "execution_block_packet" => {
+            push_line(&mut lines, "goal", json_string(active_packet.get("goal")));
+            push_line(
+                &mut lines,
+                "blocking_question",
+                json_string(active_packet.get("blocking_question")),
+            );
+            push_line(
+                &mut lines,
+                "proof_target",
+                json_string(active_packet.get("proof_target")),
+            );
+            push_list(
+                &mut lines,
+                "scope_in",
+                json_string_array(active_packet.get("scope_in")),
+            );
+            push_list(
+                &mut lines,
+                "definition_of_done",
+                json_string_array(active_packet.get("definition_of_done")),
+            );
+        }
+        "escalation_packet" => {
+            push_line(
+                &mut lines,
+                "decision_needed",
+                json_string(active_packet.get("decision_needed")),
+            );
+            push_line(
+                &mut lines,
+                "blocking_question",
+                json_string(active_packet.get("blocking_question")),
+            );
+            push_list(
+                &mut lines,
+                "options",
+                json_string_array(active_packet.get("options")),
+            );
+            push_list(
+                &mut lines,
+                "constraints",
+                json_string_array(active_packet.get("constraints")),
+            );
+        }
+        "tracked_flow_packet" => {
+            push_line(&mut lines, "title", json_string(active_packet.get("title")));
+            push_line(
+                &mut lines,
+                "task_id",
+                json_string(active_packet.get("task_id")),
+            );
+            push_line(
+                &mut lines,
+                "ensure_command",
+                json_string(active_packet.get("ensure_command")),
+            );
+            push_line(
+                &mut lines,
+                "request",
+                json_string(active_packet.get("request")),
+            );
+        }
+        _ => {}
+    }
+
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn prompt_has_empty_request_tail(prompt: &str) -> bool {
+    prompt.trim_end().ends_with("Request:")
+}
+
+pub(crate) fn runtime_packet_prompt_prelaunch_blocker(
+    packet: &serde_json::Value,
+) -> Option<String> {
+    let packet_kind = packet
+        .get("packet_kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        packet_kind,
+        "runtime_dispatch_packet" | "runtime_downstream_dispatch_packet"
+    ) {
+        return None;
+    }
+
+    let packet_template_kind = packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let request_text = runtime_packet_request_text(packet_template_kind, packet);
+    let prompt = packet
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if prompt.is_none() && request_text.is_none() {
+        return Some(
+            "dispatch packet has no non-empty prompt and no structured request body".to_string(),
+        );
+    }
+    if prompt.is_some_and(prompt_has_empty_request_tail) && request_text.is_none() {
+        return Some(
+            "dispatch packet prompt ends with an empty Request field and no structured request body"
+                .to_string(),
+        );
+    }
+    None
+}
+
+pub(crate) fn runtime_packet_prompt_from_packet(
+    packet: &serde_json::Value,
+    fallback_dispatch_packet_path: &str,
+) -> String {
+    let packet_template_kind = packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let request_text = runtime_packet_request_text(packet_template_kind, packet);
+    let prompt = packet
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(prompt) = prompt.filter(|prompt| !prompt_has_empty_request_tail(prompt)) {
+        return prompt.to_string();
+    }
+    if let Some(request_text) = request_text.as_deref() {
+        if let Some(prompt) = prompt {
+            return format!("{} {}", prompt.trim_end(), request_text);
+        }
+        let run_id = packet
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown-run");
+        let dispatch_target = packet
+            .get("downstream_dispatch_target")
+            .or_else(|| packet.get("dispatch_target"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown-target");
+        let runtime_role = packet
+            .get("activation_runtime_role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("worker");
+        return runtime_packet_prompt(
+            run_id,
+            dispatch_target,
+            runtime_role,
+            request_text,
+            &packet["orchestration_contract"],
+        );
+    }
+
+    format!(
+        "Read and execute the VIDA dispatch packet at {}. Return one bounded result that follows the packet.",
+        fallback_dispatch_packet_path
+    )
+}
+
 fn delegated_lane_prompt_guidance(
     dispatch_target: &str,
     handoff_runtime_role: &str,
@@ -99,7 +373,10 @@ pub(crate) fn runtime_packet_prompt(
 
 #[cfg(test)]
 mod tests {
-    use super::{runtime_packet_prompt, runtime_tracked_flow_packet};
+    use super::{
+        runtime_packet_prompt, runtime_packet_prompt_from_packet, runtime_packet_request_text,
+        runtime_tracked_flow_packet,
+    };
     use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
 
@@ -133,6 +410,72 @@ mod tests {
         ));
         assert!(!prompt.contains("Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`."));
         assert!(!prompt.contains("If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting."));
+    }
+
+    #[test]
+    fn coach_review_packet_request_text_is_synthesized_from_structured_fields() {
+        let packet = json!({
+            "packet_template_kind": "coach_review_packet",
+            "coach_review_packet": {
+                "review_goal": "Judge the bounded result",
+                "review_subject": "bounded implementation result",
+                "blocking_question": "Can this proceed?",
+                "proof_target": "implementation evidence",
+                "expected_output": ["decision=approve|rework|blocker", "checked_evidence"],
+                "review_focus": ["scope", "proof"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"]
+            }
+        });
+
+        let request = runtime_packet_request_text("coach_review_packet", &packet)
+            .expect("coach request should synthesize from structured packet");
+
+        assert!(request.contains("review_goal: Judge the bounded result"));
+        assert!(request.contains("blocking_question: Can this proceed?"));
+        assert!(
+            request.contains("expected_output: decision=approve|rework|blocker; checked_evidence")
+        );
+    }
+
+    #[test]
+    fn stale_empty_request_prompt_is_repaired_from_active_packet_body() {
+        let packet = json!({
+            "run_id": "run-1",
+            "downstream_dispatch_target": "coach",
+            "activation_runtime_role": "coach",
+            "packet_template_kind": "coach_review_packet",
+            "prompt": "Packet run_id=run-1\nTarget=coach\nRequest: ",
+            "coach_review_packet": {
+                "review_goal": "Review the result",
+                "blocking_question": "Is there receipt-backed evidence?",
+                "expected_output": ["decision=approve|rework|blocker"]
+            },
+            "orchestration_contract": {
+                "replanning": {
+                    "checkpoints": ["after review"]
+                }
+            }
+        });
+
+        let prompt = runtime_packet_prompt_from_packet(&packet, "/tmp/downstream.json");
+
+        assert!(prompt.contains("Request: review_goal: Review the result"));
+        assert!(prompt.contains("blocking_question: Is there receipt-backed evidence?"));
+        assert!(!prompt.trim_end().ends_with("Request:"));
+    }
+
+    #[test]
+    fn structured_packet_without_prompt_or_request_fails_prelaunch_validation() {
+        let packet = json!({
+            "packet_kind": "runtime_downstream_dispatch_packet",
+            "packet_template_kind": "coach_review_packet",
+            "coach_review_packet": {}
+        });
+
+        let blocker = super::runtime_packet_prompt_prelaunch_blocker(&packet)
+            .expect("empty structured packet should block external launch");
+
+        assert!(blocker.contains("no non-empty prompt"));
     }
 
     #[test]

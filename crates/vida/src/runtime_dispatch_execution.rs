@@ -1683,13 +1683,11 @@ fn dispatch_packet_prompt(dispatch_packet_path: &str) -> String {
     std::fs::read_to_string(dispatch_packet_path)
         .ok()
         .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
-        .and_then(|packet| {
-            packet
-                .get("prompt")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
+        .map(|packet| {
+            crate::runtime_dispatch_packet_text::runtime_packet_prompt_from_packet(
+                &packet,
+                dispatch_packet_path,
+            )
         })
         .unwrap_or_else(|| {
             format!(
@@ -5004,6 +5002,50 @@ dispatch:
         assert!(!external_provider_output_confirms_execution(
             parsed.as_ref()
         ));
+    }
+
+    #[test]
+    fn dispatch_packet_prompt_repairs_stale_downstream_empty_request_tail() {
+        let packet_path = std::env::temp_dir().join(format!(
+            "vida-stale-empty-request-packet-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "run_id": "run-1",
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "coach_review_packet",
+                "downstream_dispatch_target": "coach",
+                "activation_runtime_role": "coach",
+                "prompt": "Packet run_id=run-1\nTarget=coach\nRequest: ",
+                "coach_review_packet": {
+                    "review_goal": "Review test-author evidence",
+                    "blocking_question": "Is the proof receipt-backed?",
+                    "expected_output": ["decision=approve|rework|blocker"]
+                },
+                "orchestration_contract": {
+                    "replanning": {
+                        "checkpoints": ["after_review"]
+                    }
+                }
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet should write");
+
+        let prompt =
+            dispatch_packet_prompt(packet_path.to_str().expect("packet path should be utf-8"));
+
+        assert!(prompt.contains("Request: review_goal: Review test-author evidence"));
+        assert!(prompt.contains("blocking_question: Is the proof receipt-backed?"));
+        assert!(!prompt.trim_end().ends_with("Request:"));
+
+        let _ = std::fs::remove_file(packet_path);
     }
 
     #[test]

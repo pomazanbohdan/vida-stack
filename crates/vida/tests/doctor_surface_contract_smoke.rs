@@ -1336,6 +1336,104 @@ fn agent_host_bridge_outputs_default_toon_json_and_help_contracts() {
 }
 
 #[test]
+fn agent_init_downstream_packet_preview_synthesizes_request_text_from_stale_coach_packet() {
+    let state_dir = unique_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/downstream-dispatch-packets");
+    std::fs::create_dir_all(&packet_dir).expect("downstream packet dir should exist");
+    let packet_path = format!("{packet_dir}/stale-empty-request-coach.json");
+    std::fs::write(
+        &packet_path,
+        serde_json::json!({
+            "packet_kind": "runtime_downstream_dispatch_packet",
+            "run_id": "run-stale-empty-request-coach",
+            "dispatch_target": "coach",
+            "downstream_dispatch_target": "coach",
+            "activation_runtime_role": "coach",
+            "packet_template_kind": "coach_review_packet",
+            "prompt": "# VIDA downstream dispatch packet\n\nRequest: ",
+            "coach_review_packet": {
+                "review_goal": "Validate implementer handoff evidence before coach approval.",
+                "review_subject": "feature dev task",
+                "blocking_question": "Does the implementer delivery include receipt-backed execution evidence?",
+                "proof_target": "receipt-backed implementation evidence",
+                "expected_output": "Return blocker if implementation evidence is missing.",
+                "review_focus": [
+                    "implementation_artifacts",
+                    "source_dispatch_status",
+                    "receipt_backed"
+                ],
+                "read_only_paths": [
+                    "crates/vida/src/runtime_dispatch_state.rs"
+                ]
+            },
+            "role_selection_full": {
+                "ok": true,
+                "activation_source": "packet",
+                "selection_mode": "fixed",
+                "fallback_role": "orchestrator",
+                "request": "coach review",
+                "selected_role": "coach",
+                "conversational_mode": null,
+                "single_task_only": false,
+                "tracked_flow_entry": null,
+                "allow_freeform_chat": false,
+                "confidence": "high",
+                "matched_terms": [],
+                "compiled_bundle": null,
+                "execution_plan": {
+                    "backend_admissibility_matrix": [
+                        {
+                            "backend_id": "vibe_cli",
+                            "backend_class": "external",
+                            "lane_admissibility": {
+                                "coach": true
+                            }
+                        }
+                    ],
+                    "development_flow": {
+                        "coach": {
+                            "executor_backend": "vibe_cli"
+                        }
+                    }
+                },
+                "reason": "test"
+            }
+        })
+        .to_string(),
+    )
+    .expect("stale downstream packet should be written");
+
+    let output = vida()
+        .args(["agent-init", "--downstream-packet", &packet_path, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("agent-init downstream packet preview should run");
+    assert_success(&output, "agent-init downstream packet preview");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("agent-init preview json should parse");
+    assert_eq!(payload["selection"]["mode"], "downstream_packet");
+    assert_eq!(payload["selection"]["selected_role"], "coach");
+    let request_text = payload["selection"]["request_text"]
+        .as_str()
+        .expect("selection request text should be present");
+    assert!(
+        request_text.contains("Validate implementer handoff evidence"),
+        "agent-init preview should synthesize request text from structured coach packet: {request_text}"
+    );
+    assert!(
+        request_text.contains("receipt-backed implementation evidence"),
+        "agent-init preview request should carry proof target: {request_text}"
+    );
+}
+
+#[test]
 fn agent_host_bridge_trusted_missing_receipt_fails_closed_within_latency_budget() {
     let state_dir = unique_state_dir();
     let boot = vida()

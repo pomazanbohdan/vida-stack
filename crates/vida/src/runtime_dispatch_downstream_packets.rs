@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 
 use time::format_description::well_known::Rfc3339;
 
-use crate::runtime_dispatch_packet_text::{runtime_packet_prompt, runtime_tracked_flow_packet};
+use crate::runtime_dispatch_packet_text::{
+    runtime_packet_prompt, runtime_packet_request_text, runtime_tracked_flow_packet,
+};
 use crate::runtime_dispatch_packets::{
     delivery_packet_task_class_requires_owned_paths, runtime_coach_review_packet,
     runtime_delivery_task_packet_with_scope_context, runtime_escalation_packet,
@@ -236,13 +238,20 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
             serde_json::Value::Null
         },
     );
+    let packet_for_request = serde_json::Value::Object(body.clone());
+    let request_text = runtime_packet_request_text(&packet_template_kind, &packet_for_request)
+        .unwrap_or_else(|| role_selection.request.trim().to_string());
+    body.insert(
+        "request_text".to_string(),
+        serde_json::json!(request_text.clone()),
+    );
     body.insert(
         "prompt".to_string(),
         serde_json::json!(runtime_packet_prompt(
             &receipt.run_id,
             downstream_target,
             handoff_runtime_role,
-            &role_selection.request,
+            &request_text,
             &role_selection.execution_plan["orchestration_contract"],
         )),
     );
@@ -473,4 +482,119 @@ pub(crate) fn write_runtime_downstream_dispatch_packet_with_owned_paths(
     })?;
     let _ = target;
     Ok(Some(packet_path.display().to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::downstream_dispatch_packet_body_with_owned_paths;
+    use crate::RuntimeConsumptionLaneSelection;
+
+    fn role_selection_with_empty_request() -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: String::new(),
+            selected_role: "test_author".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "orchestration_contract": {
+                    "replanning": {
+                        "checkpoints": ["after_review"]
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "coach": {
+                                "packet_template_kind": "coach_review_packet",
+                                "task_class": "coach",
+                                "runtime_role": "coach",
+                                "closure_class": "review"
+                            }
+                        }
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "vibe_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "coach": true
+                        }
+                    }
+                ],
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "coach",
+                    "selected_backend_id": "vibe_cli"
+                }
+            }),
+            reason: "test".to_string(),
+        }
+    }
+
+    fn receipt_with_coach_downstream() -> crate::state_store::RunGraphDispatchReceipt {
+        crate::state_store::RunGraphDispatchReceipt {
+            run_id: "feature-test".to_string(),
+            dispatch_target: "test_author".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("dispatch.json".to_string()),
+            dispatch_result_path: Some("result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after test author evidence".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: Some("test_author".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("vibe_cli".to_string()),
+            recorded_at: "2026-06-07T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn coach_downstream_packet_synthesizes_non_empty_request_text_from_packet_body() {
+        let packet = downstream_dispatch_packet_body_with_owned_paths(
+            &role_selection_with_empty_request(),
+            &serde_json::json!({ "run_id": "feature-test" }),
+            &receipt_with_coach_downstream(),
+            None,
+            &[],
+        );
+
+        let request_text = packet["request_text"]
+            .as_str()
+            .expect("downstream packet should expose request_text");
+        let prompt = packet["prompt"]
+            .as_str()
+            .expect("downstream packet should expose prompt");
+
+        assert!(!request_text.trim().is_empty());
+        assert!(request_text.contains("review_goal:"));
+        assert!(request_text.contains("blocking_question:"));
+        assert!(prompt.contains("Request: review_goal:"));
+        assert!(!prompt.trim_end().ends_with("Request:"));
+    }
 }
