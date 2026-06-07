@@ -1147,6 +1147,13 @@ pub(crate) enum BlockerCode {
     HostBridgeDispatchReceiptInactive,
     HostBridgeDispatchReceiptMismatch,
     ImplementationArtifactsMissing,
+    ImplementationArtifactAuthorityMissing,
+    ImplementationArtifactChangedFilesMissing,
+    ImplementationArtifactAuthorityInvalid,
+    ImplementationArtifactContractInvalid,
+    ImplementationArtifactReceiptMissing,
+    ImplementationArtifactReceiptUnverified,
+    ImplementationAttemptScopeGuardViolation,
     AgentInitOrchestratorRoleForbidden,
     AgentInitRoleUnresolved,
     AgentInitExecuteDispatchMissingPacket,
@@ -1337,6 +1344,25 @@ impl BlockerCode {
             Self::HostBridgeDispatchReceiptInactive => "host_bridge_dispatch_receipt_inactive",
             Self::HostBridgeDispatchReceiptMismatch => "host_bridge_dispatch_receipt_mismatch",
             Self::ImplementationArtifactsMissing => "implementation_artifacts_missing",
+            Self::ImplementationArtifactAuthorityMissing => {
+                "implementation_artifact_authority_missing"
+            }
+            Self::ImplementationArtifactChangedFilesMissing => {
+                "implementation_artifact_changed_files_missing"
+            }
+            Self::ImplementationArtifactAuthorityInvalid => {
+                "implementation_artifact_authority_invalid"
+            }
+            Self::ImplementationArtifactContractInvalid => {
+                "implementation_artifact_contract_invalid"
+            }
+            Self::ImplementationArtifactReceiptMissing => "implementation_artifact_receipt_missing",
+            Self::ImplementationArtifactReceiptUnverified => {
+                "implementation_artifact_receipt_unverified"
+            }
+            Self::ImplementationAttemptScopeGuardViolation => {
+                "implementation_attempt_scope_guard_violation"
+            }
             Self::AgentInitOrchestratorRoleForbidden => "agent_init_orchestrator_role_forbidden",
             Self::AgentInitRoleUnresolved => "agent_init_role_unresolved",
             Self::AgentInitExecuteDispatchMissingPacket => {
@@ -1583,6 +1609,27 @@ impl BlockerCode {
                 Some(Self::HostBridgeDispatchReceiptMismatch)
             }
             "implementation_artifacts_missing" => Some(Self::ImplementationArtifactsMissing),
+            "implementation_artifact_authority_missing" => {
+                Some(Self::ImplementationArtifactAuthorityMissing)
+            }
+            "implementation_artifact_changed_files_missing" => {
+                Some(Self::ImplementationArtifactChangedFilesMissing)
+            }
+            "implementation_artifact_authority_invalid" => {
+                Some(Self::ImplementationArtifactAuthorityInvalid)
+            }
+            "implementation_artifact_contract_invalid" => {
+                Some(Self::ImplementationArtifactContractInvalid)
+            }
+            "implementation_artifact_receipt_missing" => {
+                Some(Self::ImplementationArtifactReceiptMissing)
+            }
+            "implementation_artifact_receipt_unverified" => {
+                Some(Self::ImplementationArtifactReceiptUnverified)
+            }
+            "implementation_attempt_scope_guard_violation" => {
+                Some(Self::ImplementationAttemptScopeGuardViolation)
+            }
             "agent_init_orchestrator_role_forbidden" => {
                 Some(Self::AgentInitOrchestratorRoleForbidden)
             }
@@ -2398,6 +2445,13 @@ mod tests {
             "host_bridge_dispatch_receipt_inactive",
             "host_bridge_dispatch_receipt_mismatch",
             "implementation_artifacts_missing",
+            "implementation_artifact_authority_missing",
+            "implementation_artifact_changed_files_missing",
+            "implementation_artifact_authority_invalid",
+            "implementation_artifact_contract_invalid",
+            "implementation_artifact_receipt_missing",
+            "implementation_artifact_receipt_unverified",
+            "implementation_attempt_scope_guard_violation",
             "timeout_without_takeover_authority",
             "agent_init_execute_dispatch_missing_packet",
             "internal_dispatch_timeout_without_receipt",

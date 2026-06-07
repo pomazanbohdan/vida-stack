@@ -523,6 +523,38 @@ pub(crate) struct AgentHostBridgeArgs {
     pub(crate) request: PathBuf,
 
     #[arg(
+        long = "attach-artifact",
+        help = "Attach a receipt-backed patch_proposal or isolated_worktree_manifest artifact to the host bridge request before lane completion; accepts repeated flags"
+    )]
+    pub(crate) attach_artifacts: Vec<PathBuf>,
+
+    #[arg(
+        long = "artifact-kind",
+        default_value = "patch_proposal",
+        value_parser = ["patch_proposal", "isolated_worktree_manifest"],
+        help = "Implementation artifact kind to attach when --attach-artifact is used"
+    )]
+    pub(crate) artifact_kind: String,
+
+    #[arg(
+        long = "changed-file",
+        help = "Changed file covered by the attached artifact when the artifact file does not contain changed_files; accepts repeated flags"
+    )]
+    pub(crate) changed_files: Vec<String>,
+
+    #[arg(
+        long = "attempt-id",
+        help = "Optional TaskFlow implementation attempt id to authorize the attached artifact"
+    )]
+    pub(crate) attempt_id: Option<String>,
+
+    #[arg(
+        long = "consolidation-receipt",
+        help = "Optional TaskFlow consolidation receipt id backing the attached implementation artifact"
+    )]
+    pub(crate) consolidation_receipt_id: Option<String>,
+
+    #[arg(
         long = "complete",
         help = "After parent-host execution, complete the lane through the validated lane completion surface"
     )]
@@ -3479,6 +3511,11 @@ mod tests {
         let host_bridge_help = host_bridge_error.to_string();
         assert!(host_bridge_help.contains("--request"));
         assert!(host_bridge_help.contains("--complete"));
+        assert!(host_bridge_help.contains("--attach-artifact"));
+        assert!(host_bridge_help.contains("--artifact-kind"));
+        assert!(host_bridge_help.contains("--changed-file"));
+        assert!(host_bridge_help.contains("--attempt-id"));
+        assert!(host_bridge_help.contains("--consolidation-receipt"));
         assert!(host_bridge_help.contains("--host-agent-id"));
         assert!(host_bridge_help.contains("--summary"));
         assert!(host_bridge_help.contains("--receipt-id"));
@@ -3525,6 +3562,49 @@ mod tests {
             Some("/tmp/vida-state".to_string())
         );
         assert!(host_bridge.json);
+
+        let parsed_host_bridge_attach = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "host-bridge",
+            "--request",
+            "/tmp/host-bridge-request.json",
+            "--attach-artifact",
+            "/tmp/patch-proposal.json",
+            "--artifact-kind",
+            "isolated_worktree_manifest",
+            "--changed-file",
+            "crates/vida/src/agent_dispatch_surface.rs",
+            "--attempt-id",
+            "attempt-1",
+            "--consolidation-receipt",
+            "receipt-attach-1",
+        ])
+        .expect("agent host-bridge attach should parse");
+        let Some(super::Command::Agent(agent_args)) = parsed_host_bridge_attach.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::HostBridge(host_bridge_attach) = agent_args.command else {
+            panic!("agent host-bridge command should parse");
+        };
+        assert_eq!(
+            host_bridge_attach.attach_artifacts[0].display().to_string(),
+            "/tmp/patch-proposal.json"
+        );
+        assert_eq!(
+            host_bridge_attach.changed_files,
+            vec!["crates/vida/src/agent_dispatch_surface.rs".to_string()]
+        );
+        assert_eq!(host_bridge_attach.attempt_id.as_deref(), Some("attempt-1"));
+        assert_eq!(
+            host_bridge_attach.consolidation_receipt_id.as_deref(),
+            Some("receipt-attach-1")
+        );
+        assert_eq!(
+            host_bridge_attach.artifact_kind,
+            "isolated_worktree_manifest"
+        );
+        assert!(!host_bridge_attach.complete);
     }
 
     #[test]
