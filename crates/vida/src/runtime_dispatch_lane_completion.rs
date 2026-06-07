@@ -48,15 +48,33 @@ pub(crate) fn runtime_lane_completion_summary_blocker_code(
     }
 
     let classifier_text = completion_summary_classifier_text(&normalized);
-    let has_explicit_blocker = [
+    let has_explicit_blocker_verdict = [
+        "verdict: blocker",
+        "verdict=blocker",
+        "verdict: blocked",
+        "verdict=blocked",
+        "verdict: rework_required",
+        "verdict=rework_required",
+        "completion_verdict: blocker",
+        "completion_verdict=blocker",
+        "completion_verdict: blocked",
+        "completion_verdict=blocked",
+        "completion_verdict: rework_required",
+        "completion_verdict=rework_required",
+        "status: blocked",
+        "status=blocked",
+        "blocker: true",
+        "blocked: true",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+    let has_negative_completion_semantics = [
         "not closure-ready",
         "not closure ready",
         "not approve",
         "not approved",
         "not closure_ready",
         "rework",
-        "blocker",
-        "blocked",
         "review_findings",
         "changed_scope",
         "implementation evidence absent",
@@ -69,6 +87,7 @@ pub(crate) fn runtime_lane_completion_summary_blocker_code(
     .iter()
     .any(|needle| classifier_text.contains(needle));
 
+    let has_explicit_blocker = has_explicit_blocker_verdict || has_negative_completion_semantics;
     if !has_explicit_blocker {
         return None;
     }
@@ -109,6 +128,41 @@ pub(crate) fn runtime_lane_completion_summary_blocker_code(
         }
         .to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_lane_completion_summary_blocker_code;
+
+    #[test]
+    fn summary_classifier_ignores_positive_receipt_blocker_context() {
+        let summary = "verifier proof passed focused host-bridge tests and confirmed pending receipt was the only closure blocker";
+
+        assert_eq!(
+            runtime_lane_completion_summary_blocker_code("verification", Some(summary)),
+            None
+        );
+    }
+
+    #[test]
+    fn summary_classifier_keeps_explicit_blocker_verdicts() {
+        let summary = "verdict: blocker; rework required; product implementation evidence missing";
+
+        assert_eq!(
+            runtime_lane_completion_summary_blocker_code("verification", Some(summary)),
+            Some("verification_rework_required".to_string())
+        );
+    }
+
+    #[test]
+    fn summary_classifier_keeps_strong_negative_completion_evidence() {
+        let summary = "implementation evidence missing";
+
+        assert_eq!(
+            runtime_lane_completion_summary_blocker_code("coach", Some(summary)),
+            Some("coach_rework_required".to_string())
+        );
+    }
 }
 
 fn completion_summary_classifier_text(normalized_summary: &str) -> String {

@@ -1649,14 +1649,61 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node(
 ) {
     let project_root = format!("{state_dir}/../../..");
     let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    let downstream_packet_dir =
+        format!("{state_dir}/runtime-consumption/downstream-dispatch-packets");
     let result_dir = format!("{state_dir}/runtime-consumption/dispatch-results");
     std::fs::create_dir_all(&packet_dir).expect("dispatch packet dir should exist");
+    std::fs::create_dir_all(&downstream_packet_dir)
+        .expect("downstream dispatch packet dir should exist");
     std::fs::create_dir_all(&result_dir).expect("dispatch result dir should exist");
     let dispatch_packet_path = format!("{packet_dir}/{run_id}-{dispatch_target}.json");
-    let downstream_packet_path = format!("{packet_dir}/{run_id}-{downstream_target}.json");
+    let downstream_packet_path =
+        format!("{downstream_packet_dir}/{run_id}-{downstream_target}.json");
     let result_path = format!("{result_dir}/{run_id}-{dispatch_target}.json");
-    std::fs::write(&dispatch_packet_path, "{}").expect("dispatch packet should write");
-    std::fs::write(&downstream_packet_path, "{}").expect("downstream packet should write");
+    std::fs::write(
+        &dispatch_packet_path,
+        serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": dispatch_target,
+            "packet_template_kind": "verifier_proof_packet",
+            "proof_goal": "Complete host bridge proof.",
+            "verification_command": "cargo test -p vida host_bridge_public_cli",
+            "proof_target": "host bridge completion receipt",
+            "read_only_paths": ["crates/vida/src"],
+            "blocking_question": "none",
+            "verifier_proof_packet": {
+                "proof_goal": "Complete host bridge proof.",
+                "verification_command": "cargo test -p vida host_bridge_public_cli",
+                "proof_target": "host bridge completion receipt",
+                "read_only_paths": ["crates/vida/src"],
+                "blocking_question": "none"
+            }
+        })
+        .to_string(),
+    )
+    .expect("dispatch packet should write");
+    std::fs::write(
+        &downstream_packet_path,
+        serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": downstream_target,
+            "packet_template_kind": "verifier_proof_packet",
+            "proof_goal": "Continue downstream host bridge proof.",
+            "verification_command": "cargo test -p vida host_bridge_public_cli",
+            "proof_target": "host bridge downstream packet",
+            "read_only_paths": ["crates/vida/src"],
+            "blocking_question": "none",
+            "verifier_proof_packet": {
+                "proof_goal": "Continue downstream host bridge proof.",
+                "verification_command": "cargo test -p vida host_bridge_public_cli",
+                "proof_target": "host bridge downstream packet",
+                "read_only_paths": ["crates/vida/src"],
+                "blocking_question": "none"
+            }
+        })
+        .to_string(),
+    )
+    .expect("downstream packet should write");
     std::fs::write(&result_path, "{}").expect("dispatch result should write");
 
     let helper = std::env::current_exe().expect("current test binary should resolve");
@@ -2016,6 +2063,57 @@ fn host_bridge_public_cli_completes_with_taskflow_attempt_artifacts_without_pare
         std::path::Path::new(&fixture.bridge_receipt_path).exists(),
         "bridge receipt should be materialized"
     );
+}
+
+#[test]
+fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
+    let fixture = create_host_bridge_lane_fixture(
+        "host-bridge-verification-summary",
+        "crates/vida/src/lib.rs",
+    );
+
+    let output = vida()
+        .args([
+            "lane",
+            "complete",
+            &fixture.run_id,
+            "--receipt-id",
+            "host-bridge-verification-summary-receipt",
+            "--host-bridge-request",
+            &fixture.request_path,
+            "--host-agent-id",
+            "agent-verification-proof",
+            "--host-bridge-summary",
+            "verifier proof passed focused host-bridge tests and confirmed pending receipt was the only closure blocker",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("verification lane complete should run");
+    assert_success(
+        &output,
+        "lane complete should pass with positive blocker prose",
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lane complete json should parse");
+    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["dispatch_status"], "executed");
+    assert_eq!(payload["lane_status"], "lane_completed");
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+
+    let bridge_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
+    )
+    .expect("bridge result should parse");
+    assert_eq!(bridge_result["status"], "pass");
+    assert_eq!(bridge_result["execution_state"], "executed");
+    assert_eq!(
+        bridge_result["execution_evidence"]["completion_verdict"],
+        "pass"
+    );
+    assert_eq!(bridge_result["blocker_codes"], serde_json::json!([]));
 }
 
 #[test]

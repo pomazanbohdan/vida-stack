@@ -315,6 +315,9 @@ pub(crate) fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bo
     matches!(
         blocker_code,
         "lane_completion_blocked_by_summary"
+            | "verification_rework_required"
+            | "coach_rework_required"
+            | "closure_evidence_blocked"
             | "host_bridge_request_task_mismatch"
             | "implementation_artifact_authority_missing"
             | "implementation_artifact_changed_files_missing"
@@ -927,9 +930,10 @@ pub(crate) fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        delivery_packet_owned_paths, implementation_artifact_scope_validation,
-        runtime_coach_review_packet, tracked_design_doc_owned_paths,
-        ImplementationArtifactAuthority, RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH,
+        delivery_packet_owned_paths, host_bridge_completion_retryable_blocker,
+        implementation_artifact_scope_validation, runtime_coach_review_packet,
+        tracked_design_doc_owned_paths, ImplementationArtifactAuthority,
+        RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH,
     };
 
     #[test]
@@ -945,6 +949,18 @@ mod tests {
             tracked_design_doc_owned_paths(Some(" docs/product/spec/example.md ")),
             vec!["docs/product/spec/example.md".to_string()]
         );
+    }
+
+    #[test]
+    fn host_bridge_summary_completion_blockers_are_retryable() {
+        for blocker in [
+            "lane_completion_blocked_by_summary",
+            "verification_rework_required",
+            "coach_rework_required",
+            "closure_evidence_blocked",
+        ] {
+            assert!(host_bridge_completion_retryable_blocker(blocker));
+        }
     }
 
     #[test]

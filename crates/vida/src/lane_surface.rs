@@ -8056,7 +8056,7 @@ mod tests {
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
                 "--host-bridge-summary".to_string(),
-                "internal agent completed".to_string(),
+                "verifier proof passed focused host-bridge tests and confirmed pending receipt was the only closure blocker".to_string(),
                 "--state-dir".to_string(),
                 root.display().to_string(),
                 "--json".to_string(),
@@ -8095,7 +8095,7 @@ mod tests {
         assert!(dispatch_command.contains("--host-bridge-request"));
         assert!(dispatch_command.contains("--host-agent-id agent-1"));
         assert!(dispatch_command.contains("--host-bridge-summary"));
-        assert!(dispatch_command.contains("internal agent completed"));
+        assert!(dispatch_command.contains("pending receipt was the only closure blocker"));
         assert!(dispatch_command.contains("--state-dir"));
         assert!(dispatch_command.contains("--json"));
         let bridge_result: serde_json::Value = serde_json::from_str(
@@ -8347,7 +8347,8 @@ mod tests {
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
                 "--host-bridge-summary".to_string(),
-                "read-only host evidence blocked by ambiguous summary wording".to_string(),
+                "verdict: blocker; read-only host evidence blocked by explicit rework wording"
+                    .to_string(),
                 "--json".to_string(),
             ],
         };
