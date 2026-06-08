@@ -839,7 +839,7 @@ fn build_root_session_write_guard() -> serde_json::Value {
         "saturation_recovery_required_before_local_fallback": true,
         "local_fallback_without_lane_recovery_forbidden": true,
         "host_local_write_capability_is_not_authority": true,
-        "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+        "required_exception_evidence": crate::status_surface_write_guard::root_session_write_guard_required_exception_evidence(),
         "pre_write_checkpoint_required": true,
     })
 }

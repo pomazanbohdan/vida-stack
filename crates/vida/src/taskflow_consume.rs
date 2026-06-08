@@ -2028,12 +2028,7 @@ fn canonical_dispatch_target_from_latest_status(
     if next_node.as_deref() == Some("spec-pack")
         && super::execution_plan_agent_only_development_required(&role_selection.execution_plan)
     {
-        let lane_sequence = super::dispatch_contract_lane_sequence(
-            &role_selection.execution_plan["development_flow"]["dispatch_contract"],
-        );
-        if let Some(first_lane) = lane_sequence.first().filter(|lane| !lane.trim().is_empty()) {
-            return Some(first_lane.clone());
-        }
+        return Some("specification".to_string());
     }
     next_node
         .as_deref()
@@ -2252,6 +2247,84 @@ mod tests {
             Some("business_analyst")
         );
         assert_eq!(receipt.dispatch_command.as_deref(), Some("vida agent-init"));
+    }
+
+    #[test]
+    fn runtime_consumption_dispatch_receipt_keeps_spec_pack_before_agent_only_execution_sequence() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue specification".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["scope".to_string(), "specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "autonomous_execution": {
+                    "agent_only_development": true
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_sequence": ["junior", "coach", "tester"],
+                        "lane_catalog": {
+                            "middle": {
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "business_analyst",
+                                    "selected_agent_id": "middle"
+                                }
+                            },
+                            "junior": {
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker",
+                                    "selected_agent_id": "junior"
+                                }
+                            }
+                        },
+                        "specification_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst",
+                            "selected_agent_id": "middle"
+                        },
+                        "implementer_activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker",
+                            "selected_agent_id": "junior"
+                        }
+                    }
+                },
+                "runtime_assignment": {
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-spec-pack",
+            "latest_status": {
+                "active_node": "planning",
+                "next_node": "spec-pack"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "specification");
+        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
+        assert_eq!(
+            receipt.activation_runtime_role.as_deref(),
+            Some("business_analyst")
+        );
+        assert_ne!(receipt.dispatch_target, "junior");
     }
 
     #[test]

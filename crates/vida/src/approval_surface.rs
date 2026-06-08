@@ -86,10 +86,13 @@ fn parse_approval_args<'a>(args: &'a [String]) -> Result<ApprovalCommand<'a>, St
 }
 
 fn emit_blocked_approval_envelope(as_json: bool, reason: String) -> ExitCode {
-    let next_actions = vec![
-        "Use `vida approval show --latest --json` or `vida approval show <run-id> --json` once approval evidence exists."
-            .to_string(),
-    ];
+    let latest_command =
+        crate::operator_command_text::human_command("vida approval show --latest --json");
+    let run_command =
+        crate::operator_command_text::human_command("vida approval show <run-id> --json");
+    let next_actions = vec![format!(
+        "Use `{latest_command}` or `{run_command}` once approval evidence exists."
+    )];
     let operator_contracts = render_operator_contract_envelope(
         "blocked",
         vec!["unsupported_blocker_code".to_string()],
@@ -298,10 +301,14 @@ fn build_approval_envelope(
         "waiting_for_approval" | "approval_required" => vec![
             "Use `vida taskflow run-graph update <task-id> implementation review_ensemble approved implementation` for the active run once the approval decision is ready.".to_string(),
         ],
-        "approved" => vec![
-            "Use `vida taskflow consume continue --json` to continue the active run after approval.".to_string(),
-        ],
-        _ => vec!["Use `vida approval show <run-id> --json` to inspect a specific run.".to_string()],
+        "approved" => vec![format!(
+            "Use `{}` to continue the active run after approval.",
+            crate::operator_command_text::human_command("vida taskflow consume continue --json")
+        )],
+        _ => vec![format!(
+            "Use `{}` to inspect a specific run.",
+            crate::operator_command_text::human_command("vida approval show <run-id> --json")
+        )],
     };
     if principal_delegation
         .blocker_codes

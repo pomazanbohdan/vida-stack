@@ -48,7 +48,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Canonical commands:");
             println!("  vida task list --all");
             println!("  vida task ready");
-            println!("  vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
+            println!("  vida task next [--scope <task-id>] [--state-dir <path>]");
             println!("  vida task ready --scope <task-id>");
             println!("  vida task show <task-id>");
             println!("  vida task deps <task-id>");
@@ -56,32 +56,31 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida task blocked");
             println!("  vida task tree <task-id>");
             println!("  vida task children <task-id>");
-            println!("  vida task reparent-children <from-parent-id> <to-parent-id> --json");
-            println!("  vida task critical-path --json");
-            println!("  vida task next-display-id <parent-display-id> --json");
+            println!("  vida task reparent-children <from-parent-id> <to-parent-id>");
+            println!("  vida task critical-path");
+            println!("  vida task next-display-id <parent-display-id>");
             println!(
-                "  vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
+                "  vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\""
             );
             println!(
-                "  vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels alpha,beta --json"
+                "  vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels alpha,beta"
+            );
+            println!("  vida task update <task-id> --status in_progress --notes-file <path>");
+            println!(
+                "  vida task update <task-id> --execution-mode parallel_safe --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain>"
             );
             println!(
-                "  vida task update <task-id> --status in_progress --notes-file <path> --json"
+                "  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\""
             );
             println!(
-                "  vida task update <task-id> --execution-mode parallel_safe --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain> --json"
+                "  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\""
             );
-            println!(
-                "  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json"
-            );
-            println!(
-                "  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json"
-            );
-            println!("  vida task close <task-id> --reason \"...\" --json");
+            println!("  vida task close <task-id> --reason \"...\"");
             println!("  vida task help parallelism");
-            println!("  vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json");
-            println!("  vida task replace-jsonl .vida/exports/tasks.snapshot.jsonl --json");
-            println!("  vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
+            println!("  vida task import-jsonl .vida/exports/tasks.snapshot.jsonl");
+            println!("  vida task replace-jsonl .vida/exports/tasks.snapshot.jsonl");
+            println!("  vida task export-jsonl .vida/exports/tasks.snapshot.jsonl");
+            println!("  Add --json only when machine-readable output is required.");
             println!();
             println!("Failure modes:");
             println!("  Missing or ambiguous runtime root fails closed.");
@@ -114,33 +113,32 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  Inspect the same subtree through explicit child wording: vida task children <task-id>"
             );
             println!(
-                "  Inspect the current critical path before parallelizing: vida task critical-path --json"
+                "  Inspect the current critical path before parallelizing: vida task critical-path"
             );
-            println!(
-                "  Inspect scheduler truth before parallelizing: vida taskflow graph-summary --json"
-            );
+            println!("  Inspect scheduler truth before parallelizing: vida taskflow graph-summary");
             println!("  Read the sequencing/parallelism contract: vida task help parallelism");
             println!(
-                "  Reserve the next child display id: vida task next-display-id <parent-display-id> --json"
+                "  Reserve the next child display id: vida task next-display-id <parent-display-id>"
             );
             println!(
-                "  Create one bounded child task: vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
+                "  Create one bounded child task: vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\""
             );
             println!(
-                "  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels alpha,beta --json"
+                "  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels alpha,beta"
             );
             println!(
-                "  Record real progress after a proven step: vida task update <task-id> --status <status> --notes-file <path> --json"
+                "  Record real progress after a proven step: vida task update <task-id> --status <status> --notes-file <path>"
             );
             println!(
-                "  Import one bounded backlog snapshot when explicitly needed: vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json"
+                "  Import one bounded backlog snapshot when explicitly needed: vida task import-jsonl .vida/exports/tasks.snapshot.jsonl"
             );
             println!(
-                "  Authoritatively replace the current backlog snapshot when needed: vida task replace-jsonl .vida/exports/tasks.snapshot.jsonl --json"
+                "  Authoritatively replace the current backlog snapshot when needed: vida task replace-jsonl .vida/exports/tasks.snapshot.jsonl"
             );
             println!(
-                "  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"
+                "  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl"
             );
+            println!("  Add --json only when machine-readable output is required.");
             return;
         }
         Some("parallelism") => {
@@ -191,13 +189,14 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Canonical commands:");
             println!("  vida taskflow help parallelism");
             println!("  vida task help parallelism");
-            println!("  vida taskflow graph-summary --json");
+            println!("  vida taskflow graph-summary");
             println!(
-                "  vida task update <task-id> --execution-mode <mode> --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain> --json"
+                "  vida task update <task-id> --execution-mode <mode> --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain>"
             );
             println!(
-                "  vida task create <task-id> <title> --execution-mode <mode> --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain> --json"
+                "  vida task create <task-id> <title> --execution-mode <mode> --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain>"
             );
+            println!("  Add --json only when machine-readable output is required.");
             println!();
             println!("Graph-summary fields to inspect:");
             println!("  current_task_id");
@@ -236,8 +235,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  This is a read-only launcher-owned planning surface over the authoritative TaskFlow state store."
             );
             println!();
-            println!("Canonical command:");
-            println!("  vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
+            println!("Canonical commands:");
+            println!("  vida task next [--scope <task-id>] [--state-dir <path>]");
+            println!("  vida taskflow next [--scope <task-id>] [--state-dir <path>]");
             println!("  Default human output is compact TOON; --json emits machine-readable JSON.");
             println!();
             println!("Returned semantics:");
@@ -770,18 +770,17 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Operator recipes:");
+            println!("  Inspect one routed packet by run id: vida taskflow packet render <run-id>");
             println!(
-                "  Inspect one routed packet by run id: vida taskflow packet render <run-id> --json"
+                "  Inspect the latest routed packet for one task id: vida taskflow packet task <task-id>"
             );
             println!(
-                "  Inspect the latest routed packet for one task id: vida taskflow packet task <task-id> --json"
+                "  Inspect the latest routed packet without resolving run id first: vida taskflow packet latest"
             );
             println!(
-                "  Inspect the latest routed packet without resolving run id first: vida taskflow packet latest --json"
+                "  Repair/rebind an invalid packet from canonical task metadata: vida taskflow packet repair --run-id <run-id> --from-task <task-id>"
             );
-            println!(
-                "  Repair/rebind an invalid packet from canonical task metadata: vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json"
-            );
+            println!("  Add --json only when machine-readable output is required.");
             return;
         }
         Some("artifacts" | "artifact") => {
@@ -1087,68 +1086,67 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow graph-summary");
     println!("  vida taskflow graph explain <task-id>");
     println!(
-        "  vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x --json"
+        "  vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x"
     );
-    println!("  vida taskflow plan materialize draft.json --dry-run --json");
+    println!("  vida taskflow plan materialize draft.json --dry-run");
     println!(
-        "  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json"
+        "  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\""
     );
     println!(
-        "  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json"
+        "  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\""
     );
-    println!("  vida taskflow scheduler dispatch --json");
+    println!("  vida taskflow scheduler dispatch");
     println!("  vida taskflow help dependencies");
     println!("  vida taskflow help queue");
     println!("  vida taskflow help dispatch");
     println!("  vida taskflow help parallelism");
-    println!("  vida taskflow status --summary --json");
-    println!("  vida task show <task-id> --json");
-    println!("  vida taskflow run-graph status <run-id> --json");
-    println!("  vida taskflow recovery status <run-id> --json");
-    println!("  vida taskflow continuation bind <run-id> --task-id <task-id> --json");
-    println!("  vida taskflow run-graph dispatch-init <task-id> --json");
-    println!("  vida taskflow packet render <run-id> --json");
-    println!("  vida taskflow packet task <task-id> --json");
-    println!("  vida taskflow packet latest --json");
-    println!("  vida taskflow artifacts list --json");
-    println!("  vida taskflow pricing status --json");
-    println!("  vida taskflow pricing import --source-file <path> --dry-run --json");
-    println!("  vida taskflow consume final \"proof path\" --json");
-    println!("  vida taskflow consume continue --json");
-    println!("  vida taskflow consume advance --max-rounds 4 --json");
-    println!("  vida taskflow bootstrap-spec \"feature request\" --json");
+    println!("  vida taskflow status --summary");
+    println!("  vida task show <task-id>");
+    println!("  vida taskflow run-graph status <run-id>");
+    println!("  vida taskflow recovery status <run-id>");
+    println!("  vida taskflow continuation bind <run-id> --task-id <task-id>");
+    println!("  vida taskflow run-graph dispatch-init <task-id>");
+    println!("  vida taskflow packet render <run-id>");
+    println!("  vida taskflow packet task <task-id>");
+    println!("  vida taskflow packet latest");
+    println!("  vida taskflow artifacts list");
+    println!("  vida taskflow pricing status");
+    println!("  vida taskflow pricing import --source-file <path> --dry-run");
+    println!("  vida taskflow consume final \"proof path\"");
+    println!("  vida taskflow consume continue");
+    println!("  vida taskflow consume advance --max-rounds 4");
+    println!("  vida taskflow bootstrap-spec \"feature request\"");
+    println!("  Add --json only when machine-readable output is required.");
     println!();
     println!("Operator recipes:");
-    println!("  Find the next lawful step: vida task next --json");
-    println!("  Inspect ready vs blocked pressure: vida taskflow graph-summary --json");
+    println!("  Find the next lawful step: vida task next");
+    println!("  Inspect ready vs blocked pressure: vida taskflow graph-summary");
     println!(
-        "  Draft a bounded task graph: vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x --json"
+        "  Draft a bounded task graph: vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x"
     );
-    println!("  Inspect one backlog subtree before resequencing: vida task tree <task-id> --json");
+    println!("  Inspect one backlog subtree before resequencing: vida task tree <task-id>");
     println!("  Inspect dependency ordering before resequencing: vida taskflow help dependencies");
     println!("  Inspect queue posture before dispatch: vida taskflow help queue");
     println!(
         "  Inspect sequencing and parallel-safe admission rules: vida taskflow help parallelism"
     );
-    println!("  Inspect TaskFlow-wide operator posture: vida taskflow status --summary --json");
+    println!("  Inspect TaskFlow-wide operator posture: vida taskflow status --summary");
     println!("  Inspect dispatch/packet blocker truth: vida taskflow help dispatch");
-    println!("  Inspect one active run state: vida taskflow run-graph status <run-id> --json");
+    println!("  Inspect one active run state: vida taskflow run-graph status <run-id>");
     println!(
-        "  Inspect recovery/blocker truth for one run: vida taskflow recovery status <run-id> --json"
+        "  Inspect recovery/blocker truth for one run: vida taskflow recovery status <run-id>"
     );
     println!("  Inspect the canonical backlog contract: vida task --help");
     println!("  Ask which surface to use: vida taskflow query \"what should I run next?\"");
     println!("  Bind the current bounded unit explicitly: vida taskflow help continuation");
     println!("  Inspect persisted packet evidence: vida taskflow help packet");
-    println!("  Inspect execution-preparation artifact truth: vida taskflow artifacts list --json");
-    println!(
-        "  Inspect routing/model config actuation: vida taskflow config-actuation census --json"
-    );
-    println!("  Inspect route selection: vida taskflow route explain --json");
-    println!("  Validate route/config wiring: vida taskflow validate-routing --json");
+    println!("  Inspect execution-preparation artifact truth: vida taskflow artifacts list");
+    println!("  Inspect routing/model config actuation: vida taskflow config-actuation census");
+    println!("  Inspect route selection: vida taskflow route explain");
+    println!("  Validate route/config wiring: vida taskflow validate-routing");
     println!("  Inspect resumability state: vida taskflow help run-graph");
     println!(
-        "  Bootstrap one design-first feature slice: vida taskflow bootstrap-spec \"feature request\" --json"
+        "  Bootstrap one design-first feature slice: vida taskflow bootstrap-spec \"feature request\""
     );
     println!("  Review runtime diagnostics: vida taskflow help doctor");
     println!();

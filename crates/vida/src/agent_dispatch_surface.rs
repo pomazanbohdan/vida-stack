@@ -577,7 +577,6 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         Ok(store) => store,
         Err(_) => {
             if !modern_pending_host_bridge_request(request)
-                && !pending_host_bridge_request_for_state_root(state_root, request)
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
@@ -612,7 +611,6 @@ async fn append_host_bridge_dispatch_receipt_blockers(
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
                 && !modern_pending_host_bridge_request(request)
-                && !pending_host_bridge_request_for_state_root(state_root, request)
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
@@ -623,7 +621,6 @@ async fn append_host_bridge_dispatch_receipt_blockers(
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
                 && !modern_pending_host_bridge_request(request)
-                && !pending_host_bridge_request_for_state_root(state_root, request)
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
@@ -693,21 +690,6 @@ fn modern_pending_host_bridge_request(request: &serde_json::Value) -> bool {
     };
     let normalized = request_path.replace('\\', "/");
     normalized.contains("/.vida/data/state/host-tool-bridge/requests/")
-}
-
-fn pending_host_bridge_request_for_state_root(
-    state_root: &Path,
-    request: &serde_json::Value,
-) -> bool {
-    if host_bridge_request_string(request, "status") != Some("pending")
-        || host_bridge_request_string(request, "dispatch_transport") != Some("host_tool_bridge")
-    {
-        return false;
-    }
-    let Some(request_path) = host_bridge_request_string(request, "request_path") else {
-        return false;
-    };
-    canonical_state_artifact_path(state_root, request_path, true).is_ok()
 }
 
 fn host_bridge_artifact_has_retryable_completion_blocker(artifact: &serde_json::Value) -> bool {

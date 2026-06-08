@@ -2135,9 +2135,9 @@ fn cli_help_description_inventory_covers_taskflow_proxy_topics() {
         "route",
         "validate-routing",
         "status",
-        "vida taskflow route explain --json",
-        "vida taskflow validate-routing --json",
-        "vida taskflow status --summary --json",
+        "vida taskflow route explain",
+        "vida taskflow validate-routing",
+        "vida taskflow status --summary",
     ] {
         assert!(
             root_stdout.contains(expected),
@@ -3441,7 +3441,7 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     assert_eq!(root_closed["status"], "pass");
     assert_eq!(root_closed["task"]["status"], "closed");
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     assert_eq!(status["surface"], "vida status");
     assert_no_run_id_consume_continue_command(&status, closed_task_id, "case 08 status");
 
@@ -4590,7 +4590,7 @@ fn taskflow_testing_h24_operator_budget_guard() {
             "task validate-graph",
             vec!["task", "validate-graph", "--json"],
         ),
-        ("status --json", vec!["status", "--json"]),
+        ("status --json", vec!["status", "--json", "--view", "full"]),
     ];
 
     for (surface, args) in surfaces {
@@ -6293,6 +6293,77 @@ fn stage_ensemble_operator_summary() {
 }
 
 #[test]
+fn task_proof_status_uses_default_human_commands_without_json_bias() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("proof-parent");
+    let task_id = unique_test_id("proof-task");
+    create_epic_parent(&state_dir, &parent_id, "Proof parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Proof task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let no_targets = run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(no_targets["surface"], "vida task proof status");
+    assert!(
+        !no_targets["next_required_command"]
+            .as_str()
+            .expect("proof status next command should be a string")
+            .contains("--json"),
+        "proof status json next command should use default human command: {no_targets}"
+    );
+    let default_no_targets =
+        run_and_assert_success(&["task", "proof", "status", &task_id], &state_dir);
+    assert!(default_no_targets.starts_with("vida task proof status\n"));
+    assert!(!default_no_targets.trim_start().starts_with('{'));
+    assert!(
+        !default_no_targets.contains("--json"),
+        "proof status default output should not suggest JSON-first commands: {default_no_targets}"
+    );
+
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--proof-target",
+            "cargo test -p vida --test task_smoke proof_target",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let missing_target =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(missing_target["missing_count"], 1);
+    assert!(
+        !missing_target["next_required_command"]
+            .as_str()
+            .expect("proof status next command should be a string")
+            .contains("--json"),
+        "proof status missing-target command should use default human command: {missing_target}"
+    );
+    let default_missing_target =
+        run_and_assert_success(&["task", "proof", "status", &task_id], &state_dir);
+    assert!(
+        !default_missing_target.contains("--json"),
+        "proof status default missing-target output should not suggest JSON-first commands: {default_missing_target}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn implementation_attempt_isolation() {
     let (project_root, state_dir) = project_bound_state_dir();
     init_git_repo(&project_root);
@@ -7654,7 +7725,7 @@ fn graph_summary_invalid_persisted_graph_returns_json_envelope() {
     assert!(graph_summary_json["next_actions"][0]
         .as_str()
         .expect("graph-summary next action should render")
-        .contains("vida task validate-graph --json"));
+        .contains("vida task validate-graph"));
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -7926,7 +7997,7 @@ fn task_dependency_ensure_reports_ensure_surface_in_json_results() {
         .any(|action| action
             .as_str()
             .expect("next action should be a string")
-            .contains("vida task dep ensure vida-c missing-task blocks --json")));
+            .contains("vida task dep ensure vida-c missing-task blocks")));
 
     let invalid_graph_output = vida()
         .args([
@@ -7948,7 +8019,7 @@ fn task_dependency_ensure_reports_ensure_surface_in_json_results() {
         .any(|action| action
             .as_str()
             .expect("next action should be a string")
-            .contains("vida task dep ensure vida-c vida-c blocks --json")));
+            .contains("vida task dep ensure vida-c vida-c blocks")));
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -8092,6 +8163,93 @@ fn run_graph_status_accepts_state_dir_override() {
 
     let _ = fs::remove_dir_all(&env_state_dir);
     let _ = fs::remove_dir_all(&explicit_state_dir);
+}
+
+#[test]
+fn run_graph_and_recovery_status_output_contract_matrix() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    create_run_graph_backing_task(&state_dir, "matrix-run");
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            "matrix-run",
+            "implementation",
+        ],
+        &state_dir,
+    );
+
+    for (surface, help_args, default_args, json_args, title) in [
+        (
+            "run-graph status",
+            vec!["taskflow", "run-graph", "status", "--help"],
+            vec!["taskflow", "run-graph", "status", "matrix-run"],
+            vec!["taskflow", "run-graph", "status", "matrix-run", "--json"],
+            "vida taskflow run-graph status",
+        ),
+        (
+            "recovery status",
+            vec!["taskflow", "recovery", "status", "--help"],
+            vec!["taskflow", "recovery", "status", "matrix-run"],
+            vec!["taskflow", "recovery", "status", "matrix-run", "--json"],
+            "vida taskflow recovery status",
+        ),
+    ] {
+        let help = run_command_capture(&help_args, &state_dir);
+        assert!(
+            help.status.success(),
+            "{surface} help should pass: stdout={} stderr={}",
+            String::from_utf8_lossy(&help.stdout),
+            String::from_utf8_lossy(&help.stderr)
+        );
+        let help_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&help.stdout),
+            String::from_utf8_lossy(&help.stderr)
+        );
+        assert!(
+            help_text.contains("[--json]"),
+            "{surface} help: {help_text}"
+        );
+        assert!(
+            help_text.contains("compact TOON") || help_text.contains("Usage:"),
+            "{surface} help should document operator output or usage: {help_text}"
+        );
+
+        let default_output = run_command_capture(&default_args, &state_dir);
+        assert!(
+            default_output.status.success(),
+            "{surface} default should pass: stdout={} stderr={}",
+            String::from_utf8_lossy(&default_output.stdout),
+            String::from_utf8_lossy(&default_output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&default_output.stdout);
+        assert!(
+            stdout.starts_with(title),
+            "{surface} default should start with surface title: {stdout}"
+        );
+        assert!(
+            !stdout.trim_start().starts_with('{'),
+            "{surface} default must not be JSON: {stdout}"
+        );
+        assert!(
+            !stdout.contains("--json"),
+            "{surface} default human output should not suggest JSON-first commands: {stdout}"
+        );
+
+        let payload = run_command_json(&json_args, &state_dir);
+        assert_eq!(payload["surface"], title);
+        assert!(payload.get("status").is_some(), "{surface} json: {payload}");
+        assert!(
+            payload.get("blocker_codes").is_some(),
+            "{surface} json should expose blocker_codes: {payload}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]
@@ -8327,7 +8485,7 @@ fn run_graph_task_identity_repair_public_cli_matrix() {
     assert_eq!(closed_backing_task["status"], "pass");
     assert_eq!(closed_backing_task["task"]["status"], "closed");
 
-    let status_after_closed_backing_task = run_command_json(&["status", "--json"], &state_dir);
+    let status_after_closed_backing_task = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     assert_ne!(
         status_after_closed_backing_task["continuation_binding"]["ambiguity_reason"],
         "latest_run_graph_task_closed",
@@ -11345,7 +11503,7 @@ fn dev_team_dispatch_init_uses_configured_analyst_route_for_runtime_defect() {
     );
     assert_eq!(dispatch_init["run_id"], task_id);
     assert_eq!(
-        dispatch_init["dispatch_receipt"]["dispatch_target"], "specification",
+        dispatch_init["dispatch_receipt"]["dispatch_target"], "analyst",
         "dispatch-init must use the configured dev-team first analyst route: {dispatch_init}"
     );
     assert_eq!(
@@ -11363,7 +11521,7 @@ fn dev_team_dispatch_init_uses_configured_analyst_route_for_runtime_defect() {
     let packet: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(packet_path).expect("packet should read"))
             .expect("packet should parse");
-    assert_eq!(packet["dispatch_target"], "specification");
+    assert_eq!(packet["dispatch_target"], "analyst");
     assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
     assert_ne!(packet["packet_template_kind"], "coach_review_packet");
 
@@ -11430,7 +11588,7 @@ fn dev_team_dispatch_same_task_stale_coach_run_reseeds_dispatch_init_to_analyst(
     );
     assert_eq!(dispatch_init["run_id"], task_id);
     assert_eq!(
-        dispatch_init["dispatch_receipt"]["dispatch_target"], "specification",
+        dispatch_init["dispatch_receipt"]["dispatch_target"], "analyst",
         "same-task stale coach run must reseed dispatch-init to configured analyst/specification route: {dispatch_init}"
     );
     assert_eq!(
@@ -11447,7 +11605,7 @@ fn dev_team_dispatch_same_task_stale_coach_run_reseeds_dispatch_init_to_analyst(
     let packet: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(packet_path).expect("packet should read"))
             .expect("packet should parse");
-    assert_eq!(packet["dispatch_target"], "specification");
+    assert_eq!(packet["dispatch_target"], "analyst");
     assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
     assert_ne!(packet["packet_template_kind"], "coach_review_packet");
 
@@ -11553,7 +11711,7 @@ fn dev_team_dispatch_same_task_stale_coach_run_materializes_analyst_packet() {
 }
 
 #[test]
-fn dev_team_dispatch_materialize_packets_fails_closed_when_latest_run_graph_is_blocked() {
+fn dev_team_dispatch_materialize_packets_recovers_from_same_task_stale_blocked_run() {
     let (project_root, state_dir) = project_bound_state_dir();
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
@@ -11617,24 +11775,29 @@ fn dev_team_dispatch_materialize_packets_fails_closed_when_latest_run_graph_is_b
         &state_dir,
     );
     assert!(
-        !dispatch_success,
-        "blocked materialization should fail closed: {dispatch}"
+        dispatch_success,
+        "stale same-task coach run should be reseeded into current receipt-backed packets: {dispatch}"
     );
-    assert_eq!(dispatch["status"], "blocked");
-    assert_eq!(dispatch["lanes_selected"], 0);
-    assert_eq!(dispatch["packet_materialization"]["status"], "blocked");
+    assert_eq!(dispatch["status"], "pass");
+    assert!(
+        dispatch["lanes_selected"].as_u64().unwrap_or(0) > 0,
+        "reseeded dispatch should select at least one lane: {dispatch}"
+    );
+    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
     assert_eq!(
         dispatch["packet_materialization"]["materializes_packets"],
-        false
+        true
     );
-    assert_eq!(
-        dispatch["packet_materialization"]["artifacts"],
-        serde_json::json!([])
+    assert!(
+        dispatch["packet_materialization"]["artifacts"]
+            .as_array()
+            .is_some_and(|artifacts| !artifacts.is_empty()),
+        "reseeded dispatch should materialize packet artifacts: {dispatch}"
     );
     let blockers = require_json_string_array(&dispatch["blocker_codes"], "dispatch blocker_codes");
     assert!(
-        blockers.contains(&"latest_run_graph_status_blocked".to_string()),
-        "blocked materialization must preserve latest-run gate: {dispatch}"
+        !blockers.contains(&"latest_run_graph_status_blocked".to_string()),
+        "stale same-task coach blocker must not survive reseeded materialization: {dispatch}"
     );
 
     let _ = fs::remove_dir_all(&project_root);
@@ -11906,7 +12069,7 @@ fn case11_agent_init_timeout_bridge_remains_blocked_evidence_without_impossible_
         drop(db);
     });
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     assert_eq!(
         status["latest_run_graph_dispatch_receipt"]["blocker_code"],
         "internal_dispatch_timeout_without_receipt"
@@ -11995,7 +12158,7 @@ fn agent_init_execute_dispatch_missing_packet_json_is_operator_envelope() {
     assert!(payload["next_actions"][1]
         .as_str()
         .expect("second next action should render")
-        .contains("vida agent-init --dispatch-packet <path> --execute-dispatch --json"));
+        .contains("vida agent-init --dispatch-packet <path> --execute-dispatch"));
     assert_eq!(
         payload["dispatch_mode"]["missing_execution_evidence_semantics"],
         "non_executing_bridge_blocker"
@@ -13265,7 +13428,7 @@ fn task_close_preserves_unevidenced_closed_task_active_run_projection() {
         forged_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
         "doctor must not suppress a terminal closure state that lacks receipt-backed execution evidence: {forged_doctor}"
     );
-    let forged_status = run_command_json(&["status", "--json"], &state_dir);
+    let forged_status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let forged_status_blockers =
         require_json_string_array(&forged_status["blocker_codes"], "forged status blockers");
     assert!(
@@ -13422,7 +13585,7 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
     let before = run_command_json(&["doctor", "--json"], &state_dir);
     let before_blockers = require_json_string_array(&before["blocker_codes"], "before blockers");
     assert!(before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
-    let (status_before, _) = run_command_json_allow_failure(&["status", "--json"], &state_dir);
+    let (status_before, _) = run_command_json_allow_failure(&["status", "--json", "--view", "full"], &state_dir);
     let status_before_blockers =
         require_json_string_array(&status_before["blocker_codes"], "status before blockers");
     assert!(
@@ -13540,7 +13703,7 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
         after["latest_terminal_task_active_run_graph_status"]["task_id"],
         "task-reconcile-closed-runs-b"
     );
-    let (status_after, _) = run_command_json_allow_failure(&["status", "--json"], &state_dir);
+    let (status_after, _) = run_command_json_allow_failure(&["status", "--json", "--view", "full"], &state_dir);
     let status_after_blockers =
         require_json_string_array(&status_after["blocker_codes"], "status after blockers");
     assert!(
@@ -13687,7 +13850,7 @@ fn taskflow_settle_retires_closed_task_run_and_converges_runtime_surfaces() {
 
     for (label, command) in [
         ("doctor", vec!["doctor", "--json"]),
-        ("status", vec!["status", "--json"]),
+        ("status", vec!["status", "--json", "--view", "full"]),
         ("graph-summary", vec!["taskflow", "graph-summary", "--json"]),
     ] {
         let (payload, _) = run_command_json_allow_failure(&command, &state_dir);
@@ -13823,7 +13986,7 @@ fn taskflow_settle_keeps_unsafe_closed_task_run_blocked_with_exact_inspection() 
 
     for (label, command) in [
         ("doctor", vec!["doctor", "--json"]),
-        ("status", vec!["status", "--json"]),
+        ("status", vec!["status", "--json", "--view", "full"]),
         ("graph-summary", vec!["taskflow", "graph-summary", "--json"]),
     ] {
         let (payload, _) = run_command_json_allow_failure(&command, &state_dir);
@@ -14125,7 +14288,7 @@ fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
         after["latest_terminal_task_active_run_graph_status"].is_null(),
         "canonical task close active run graph should be retired by reconcile: {after}"
     );
-    let status_after = run_command_json(&["status", "--json"], &state_dir);
+    let status_after = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_after_blockers =
         require_json_string_array(&status_after["blocker_codes"], "status after blockers");
     assert!(
@@ -14316,7 +14479,7 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
             ["closed_task_active_run_projection_mismatch"],
         false
     );
-    let status_before_reconcile = run_command_json(&["status", "--json"], &state_dir);
+    let status_before_reconcile = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_before_reconcile_blockers = require_json_string_array(
         &status_before_reconcile["blocker_codes"],
         "status before reconcile blockers",
@@ -14920,7 +15083,7 @@ fn closed_task_continuation_blocks_operator_surfaces_without_impossible_consume_
         drop(db);
     });
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let continuation = &status["continuation_binding"];
     assert_ne!(continuation["status"], "bound");
     assert_eq!(continuation["continuation_allowed"], false);
@@ -15971,7 +16134,7 @@ agent_system:
     assert!(!activator.status.success());
 
     let status = vida()
-        .args(["status", "--json"])
+        .args(["status", "--json", "--view", "full"])
         .current_dir(&project_root)
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
@@ -16070,7 +16233,7 @@ fn status_json_reports_non_default_host_agents_summary() {
     );
 
     let status = vida()
-        .args(["status", "--json"])
+        .args(["status", "--json", "--view", "full"])
         .current_dir(&project_root)
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
@@ -16204,7 +16367,7 @@ fn status_json_restores_root_session_guard_after_consume_continue_snapshot() {
     )
     .expect("final snapshot should write");
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     assert_eq!(
         status["root_session_write_guard"]["status"],
         "blocked_by_default"
@@ -16272,7 +16435,7 @@ fn status_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundl
     )
     .expect("bundle-check snapshot should write");
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     assert_eq!(
         status["root_session_write_guard"]["status"],
         "blocked_by_default"
@@ -16345,7 +16508,7 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
     );
 
     let status = vida()
-        .args(["status", "--json"])
+        .args(["status", "--json", "--view", "full"])
         .current_dir(&project_root)
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
@@ -16826,7 +16989,7 @@ fn consume_bundle_check_contract_id_stays_within_release1_canonical_enum() {
     );
 
     let status = vida()
-        .args(["status", "--json"])
+        .args(["status", "--json", "--view", "full"])
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("status should run");
@@ -17202,7 +17365,7 @@ fn task_update_parent_guard_returns_actionable_json_recovery() {
                 action
                     .as_str()
                     .unwrap()
-                    .contains("vida task update old-parent --status closed --json")
+                    .contains("vida task update old-parent --status closed")
             }),
         "{parsed}"
     );
@@ -17311,7 +17474,7 @@ fn task_update_parent_guard_quotes_shell_unsafe_issue_id_in_next_action() {
             .iter()
             .filter_map(|action| action.as_str())
             .any(|action| {
-                action.contains("vida task update 'old;echo pwned' --status closed --json")
+                action.contains("vida task update 'old;echo pwned' --status closed")
             }),
         "{parsed}"
     );
@@ -17944,7 +18107,7 @@ fn cross_surface_protocol_binding_parity() {
         "consume artifact refs latest run graph dispatch receipt id",
     );
 
-    let status_json = run_command_json(&["status", "--json"], &state_dir);
+    let status_json = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let doctor_json = run_command_json(&["doctor", "--json"], &state_dir);
 
     let status_proto_id = require_json_string(
@@ -18172,7 +18335,7 @@ fn cross_surface_protocol_binding_blocker_parity() {
 
     run_and_assert_success(&["boot"], &state_dir);
 
-    let status_json = run_command_json(&["status", "--json"], &state_dir);
+    let status_json = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let doctor_json = run_command_json(&["doctor", "--json"], &state_dir);
 
     let status_blocker_codes =
@@ -18288,7 +18451,7 @@ fn protocol_binding_operator_contract_parity() {
 
     run_and_assert_success(&["boot"], &state_dir);
 
-    let initial_status_json = run_command_json(&["status", "--json"], &state_dir);
+    let initial_status_json = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let initial_blocking_count = initial_status_json["protocol_binding"]["blocking_issue_count"]
         .as_u64()
         .expect("status protocol_binding blocking_issue_count should exist");
@@ -18334,7 +18497,7 @@ fn protocol_binding_operator_contract_parity() {
         "protocol-binding sync must produce trusted compiled payload evidence"
     );
 
-    let post_sync_status_json = run_command_json(&["status", "--json"], &state_dir);
+    let post_sync_status_json = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     assert_eq!(
         post_sync_status_json["protocol_binding"]["blocking_issue_count"]
             .as_u64()
@@ -18674,7 +18837,7 @@ fn status_and_doctor_block_on_current_session_run_graph_snapshot_inconsistency()
         .expect("packet task id should be present")
         .to_string();
 
-    let (status, _) = run_command_json_allow_failure(&["status", "--json"], &state_dir);
+    let (status, _) = run_command_json_allow_failure(&["status", "--json", "--view", "full"], &state_dir);
     let (doctor, _) = run_command_json_allow_failure(&["doctor", "--json"], &state_dir);
     let status_blockers = require_json_string_array(&status["blocker_codes"], "status blockers");
     let doctor_blockers = require_json_string_array(&doctor["blocker_codes"], "doctor blockers");
@@ -19076,7 +19239,7 @@ fn multi_session_disjoint_tasks_independent_admission_via_cli() {
     );
     assert_eq!(task_b["status"], "pass");
 
-    let session_1_status = run_command_json(&["status", "--json"], &state_dir);
+    let session_1_status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = session_1_status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -19120,7 +19283,7 @@ fn multi_session_status_contains_session_projection() {
     );
     assert_eq!(root["status"], "pass");
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -19208,7 +19371,7 @@ fn multi_session_regression_legacy_global_blocker_does_not_block_unrelated_sessi
         &state_dir,
     );
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -19287,7 +19450,7 @@ fn multi_session_same_task_exclusive_conflict_blocks_admission() {
         &state_dir,
     );
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -19374,7 +19537,7 @@ fn multi_session_same_conflict_domain_exclusive_blocks() {
         &state_dir,
     );
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -19462,7 +19625,7 @@ fn multi_session_path_intersection_blocks_admission() {
         &state_dir,
     );
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -20363,7 +20526,7 @@ fn multi_session_expired_claim_allows_new_admission() {
     assert_eq!(task["status"], "pass");
 
     // Verify status projection exists and can handle expired claims
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -20397,7 +20560,7 @@ fn multi_session_global_blocker_blocks_all() {
     );
     assert_eq!(root["status"], "pass");
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -20473,7 +20636,7 @@ fn multi_session_foreign_blocked_claim_non_blocking_for_disjoint() {
     );
     assert_eq!(task_b["status"], "pass");
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -20535,7 +20698,7 @@ fn multi_session_observe_mode_non_blocking() {
     );
     assert_eq!(orchestrator["surface"], "vida orchestrator-init");
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -20588,7 +20751,7 @@ fn multi_session_foreign_sessions_visible_in_status() {
         );
     }
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -20647,7 +20810,7 @@ fn multi_session_disjoint_parallel_admission() {
         );
     }
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),
@@ -20719,7 +20882,7 @@ fn multi_session_shared_read_vs_exclusive_conflict() {
         &state_dir,
     );
 
-    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_value = status["status"].as_str().unwrap_or("unknown");
     assert!(
         matches!(status_value, "pass" | "blocked"),

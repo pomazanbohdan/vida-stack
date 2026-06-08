@@ -1132,6 +1132,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                    normalize_status_projection_json_shape(&mut summary_json);
                     if !summary_only {
                         compact_status_projection_for_fast_operator_render(&mut summary_json);
                     }
@@ -1360,14 +1361,27 @@ fn read_state_fresh_admissible_status_json_projection(
 }
 
 fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str) -> String {
-    if summary_only {
-        return cached.to_string();
-    }
     let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(cached) else {
         return cached.to_string();
     };
+    normalize_status_projection_json_shape(&mut payload);
+    if summary_only {
+        return serde_json::to_string_pretty(&payload).unwrap_or_else(|_| cached.to_string());
+    };
     compact_status_projection_for_fast_operator_render(&mut payload);
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| cached.to_string())
+}
+
+fn normalize_status_projection_json_shape(payload: &mut serde_json::Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if !object
+        .get("host_agents")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        object.insert("host_agents".to_string(), serde_json::json!({}));
+    }
 }
 
 async fn cached_status_projection_current_runtime_admissible(
@@ -1923,7 +1937,7 @@ async fn refresh_cached_status_projection_runtime_fields(
 
 fn cached_status_projection_admissible(
     state_dir: &std::path::Path,
-    _summary_only: bool,
+    summary_only: bool,
     cached: &str,
 ) -> bool {
     serde_json::from_str::<serde_json::Value>(cached)
@@ -1937,8 +1951,27 @@ fn cached_status_projection_admissible(
                     .get("status")
                     .and_then(serde_json::Value::as_str)
                     .is_some()
+                && cached_status_projection_has_required_shape(summary_only, &payload)
                 && cached_status_projection_matches_current_session(state_dir, &payload)
         })
+}
+
+fn cached_status_projection_has_required_shape(
+    summary_only: bool,
+    payload: &serde_json::Value,
+) -> bool {
+    if summary_only {
+        return true;
+    }
+    payload
+        .get("storage_metadata")
+        .is_some_and(serde_json::Value::is_object)
+        && payload
+            .get("state_spine")
+            .is_some_and(serde_json::Value::is_object)
+        && payload
+            .get("operator_contracts")
+            .is_some_and(serde_json::Value::is_object)
 }
 
 fn cached_status_projection_matches_current_session(
@@ -3219,6 +3252,13 @@ host_environment:
             true
         );
         assert_eq!(summary["root_local_write_allowed"], false);
+        assert!(
+            !summary["required_exception_evidence"]
+                .as_str()
+                .expect("write guard evidence should be a string")
+                .contains("--json"),
+            "human write-guard evidence should use default commands: {summary}"
+        );
         assert_eq!(
             summary["activation_view_only_dispatch_blocker_active"],
             false
@@ -3275,6 +3315,13 @@ host_environment:
         assert_eq!(
             summary["activation_view_only_dispatch_blocker_active"],
             true
+        );
+        assert!(
+            !summary["required_exception_evidence"]
+                .as_str()
+                .expect("write guard evidence should be a string")
+                .contains("--json"),
+            "human write-guard evidence should use default commands: {summary}"
         );
 
         let _ = fs::remove_dir_all(&root);

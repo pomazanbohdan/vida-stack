@@ -409,7 +409,7 @@ fn seed_runtime_consumption_final_snapshot(state_dir: &str) -> String {
                             "saturation_recovery_required_before_local_fallback": true,
                             "local_fallback_without_lane_recovery_forbidden": true,
                             "host_local_write_capability_is_not_authority": true,
-                            "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+                            "required_exception_evidence": "Run `vida taskflow recovery latest` and `vida taskflow consume continue` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
                             "pre_write_checkpoint_required": true
                         },
                         "orchestration_contract": {
@@ -422,7 +422,7 @@ fn seed_runtime_consumption_final_snapshot(state_dir: &str) -> String {
                                 "saturation_recovery_required_before_local_fallback": true,
                                 "local_fallback_without_lane_recovery_forbidden": true,
                                 "host_local_write_capability_is_not_authority": true,
-                                "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+                                "required_exception_evidence": "Run `vida taskflow recovery latest` and `vida taskflow consume continue` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
                                 "pre_write_checkpoint_required": true
                             }
                         }
@@ -2072,7 +2072,7 @@ fn boot_releases_state_before_immediate_status_command() {
     );
 
     let status = vida()
-        .args(["status", "--json"])
+        .args(["status", "--json", "--view", "full"])
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("immediate status should run without external retry");
@@ -2202,18 +2202,18 @@ fn taskflow_proxy_help_supports_task_topic() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
     assert!(stdout.contains("`vida task` is the root parity surface"));
-    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
-    assert!(stdout.contains("vida task ready --scope <task-id> --json"));
-    assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
-    assert!(stdout.contains("vida task reparent-children <from-parent-id> <to-parent-id> --json"));
+    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>]"));
+    assert!(stdout.contains("vida task ready --scope <task-id>"));
+    assert!(stdout.contains("vida task next-display-id <parent-display-id>"));
+    assert!(stdout.contains("vida task reparent-children <from-parent-id> <to-parent-id>"));
     assert!(stdout.contains(
         "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description"
     ));
     assert!(stdout.contains("vida task ensure <task-id> <title> --parent-id <parent-id>"));
-    assert!(stdout
-        .contains("vida task update <task-id> --status in_progress --notes-file <path> --json"));
-    assert!(stdout.contains("vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
-    assert!(stdout.contains("vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
+    assert!(stdout.contains("vida task update <task-id> --status <status> --notes-file <path>"));
+    assert!(stdout.contains("vida task import-jsonl .vida/exports/tasks.snapshot.jsonl"));
+    assert!(stdout.contains("vida task export-jsonl .vida/exports/tasks.snapshot.jsonl"));
+    assert!(stdout.contains("Add --json only when machine-readable output is required."));
     assert!(stdout.contains("Parent-child edges preserve epic/task structure"));
 }
 
@@ -2232,14 +2232,14 @@ fn taskflow_task_help_alias_routes_to_canonical_task_help() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
-    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
-    assert!(stdout.contains("vida task ready --scope <task-id> --json"));
-    assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
-    assert!(stdout.contains("vida task reparent-children <from-parent-id> <to-parent-id> --json"));
+    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>]"));
+    assert!(stdout.contains("vida task ready --scope <task-id>"));
+    assert!(stdout.contains("vida task next-display-id <parent-display-id>"));
+    assert!(stdout.contains("vida task reparent-children <from-parent-id> <to-parent-id>"));
     assert!(stdout.contains("vida task ensure <task-id> <title> --parent-id <parent-id>"));
-    assert!(stdout.contains("vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
-    assert!(stdout
-        .contains("vida task update <task-id> --status in_progress --notes-file <path> --json"));
+    assert!(stdout.contains("vida task import-jsonl .vida/exports/tasks.snapshot.jsonl"));
+    assert!(stdout.contains("vida task update <task-id> --status <status> --notes-file <path>"));
+    assert!(stdout.contains("Add --json only when machine-readable output is required."));
 }
 
 #[test]
@@ -2257,7 +2257,7 @@ fn root_task_help_supports_next_topic() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: next"));
-    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
+    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>]"));
 }
 
 #[test]
@@ -2275,8 +2275,9 @@ fn root_task_help_routes_backlog_subcommand_topics_to_canonical_task_help() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
-    assert!(stdout.contains("vida task blocked --json"));
-    assert!(stdout.contains("vida task critical-path --json"));
+    assert!(stdout.contains("vida task blocked"));
+    assert!(stdout.contains("vida task critical-path"));
+    assert!(stdout.contains("Add --json only when machine-readable output is required."));
 }
 
 #[test]
@@ -3738,6 +3739,16 @@ fn root_lane_surface_fails_closed_with_canonical_json_envelope() {
         serde_json::json!(["unsupported_blocker_code"])
     );
     assert!(parsed["next_actions"].is_array());
+    assert!(
+        parsed["next_actions"]
+            .as_array()
+            .expect("lane next actions should be an array")
+            .iter()
+            .all(|action| action
+                .as_str()
+                .is_some_and(|action| !action.contains("--json"))),
+        "lane next actions should use default human commands: {parsed}"
+    );
 }
 
 #[test]
@@ -3767,7 +3778,7 @@ fn root_approval_surface_emits_blocked_canonical_json_envelope() {
         .contains("root surface blocks missing or invalid approval requests"));
     assert_eq!(
         parsed["next_actions"][0],
-        "Use `vida approval show --latest --json` or `vida approval show <run-id> --json` once approval evidence exists."
+        "Use `vida approval show --latest` or `vida approval show <run-id>` once approval evidence exists."
     );
 }
 
@@ -17012,7 +17023,7 @@ fn status_surface_supports_json_summary() {
     assert!(boot.status.success());
 
     let output = vida()
-        .args(["status", "--json"])
+        .args(["status", "--json", "--view", "full"])
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("status json should run");
@@ -17190,7 +17201,7 @@ fn status_surface_supports_compact_json_summary_view() {
     assert!(parsed["state_spine"].is_object());
     assert!(parsed["project_activation"].is_object());
     assert!(parsed["protocol_binding"].is_object());
-    assert!(parsed.get("host_agents").is_none());
+    assert!(parsed["host_agents"].is_object());
     assert!(parsed.get("operator_session_projection").is_none());
     assert!(parsed["current_session"].is_object());
     assert_eq!(
@@ -17216,6 +17227,13 @@ fn status_surface_supports_compact_json_summary_view() {
     assert_eq!(
         parsed["root_session_write_guard"]["local_fallback_without_lane_recovery_forbidden"],
         true
+    );
+    assert!(
+        !parsed["root_session_write_guard"]["required_exception_evidence"]
+            .as_str()
+            .expect("write guard evidence should be a string")
+            .contains("--json"),
+        "status summary write-guard evidence should use default commands: {parsed}"
     );
 }
 
@@ -17381,6 +17399,13 @@ fn doctor_surface_supports_compact_json_summary_view() {
     assert_eq!(
         parsed["root_session_write_guard"]["local_fallback_without_lane_recovery_forbidden"],
         true
+    );
+    assert!(
+        !parsed["root_session_write_guard"]["required_exception_evidence"]
+            .as_str()
+            .expect("write guard evidence should be a string")
+            .contains("--json"),
+        "doctor summary write-guard evidence should use default commands: {parsed}"
     );
 }
 

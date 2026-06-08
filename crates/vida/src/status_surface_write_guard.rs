@@ -33,9 +33,29 @@ fn canonical_root_session_write_guard_defaults() -> serde_json::Value {
         "local_write_requires_exception_path": true,
         "root_local_write_allowed": false,
         "root_local_write_allowed_for_only_these_paths": [],
-        "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+        "required_exception_evidence": root_session_write_guard_required_exception_evidence(),
         "pre_write_checkpoint_required": true,
     })
+}
+
+pub(crate) fn root_session_write_guard_required_exception_evidence() -> String {
+    format!(
+        "Run `{}` and `{}` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+        crate::operator_command_text::human_command("vida taskflow recovery latest --json"),
+        crate::operator_command_text::human_command("vida taskflow consume continue --json")
+    )
+}
+
+fn normalize_root_session_required_exception_evidence(value: &str) -> String {
+    value
+        .replace(
+            "vida taskflow recovery latest --json",
+            &crate::operator_command_text::human_command("vida taskflow recovery latest --json"),
+        )
+        .replace(
+            "vida taskflow consume continue --json",
+            &crate::operator_command_text::human_command("vida taskflow consume continue --json"),
+        )
 }
 
 fn has_nonempty_value(value: Option<&str>) -> bool {
@@ -133,6 +153,17 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
                 if missing {
                     guard_obj.insert(key.clone(), value.clone());
                 }
+            }
+            if let Some(value) = guard_obj
+                .get("required_exception_evidence")
+                .and_then(serde_json::Value::as_str)
+            {
+                guard_obj.insert(
+                    "required_exception_evidence".to_string(),
+                    serde_json::Value::String(normalize_root_session_required_exception_evidence(
+                        value,
+                    )),
+                );
             }
         }
     }

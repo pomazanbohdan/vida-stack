@@ -123,11 +123,15 @@ pub(crate) fn print_task_update_graph_blocked(issue: &TaskGraphIssue, as_json: b
     let quoted_issue_id = crate::shell_quote(issue.issue_id.trim());
     let next_actions = match issue.issue_type.as_str() {
         "open_parent_has_no_open_child" => vec![format!(
-            "Repair emptied parent `{}` with `vida task update {} --status closed --json`, then rerun the original task update.",
-            issue.issue_id, quoted_issue_id
+            "Repair emptied parent `{}` with `{}`, then rerun the original task update.",
+            issue.issue_id,
+            crate::operator_command_text::human_command(&format!(
+                "vida task update {} --status closed --json",
+                quoted_issue_id
+            ))
         )],
         _ => vec![
-            "Resolve task graph validation issues and rerun the original `vida task update ... --json` command."
+            "Resolve task graph validation issues and rerun the original `vida task update ...` command."
                 .to_string(),
         ],
     };
@@ -1275,10 +1279,10 @@ fn build_task_graph_issues_payload(issues: &[TaskGraphIssue]) -> serde_json::Val
     let next_actions = if issues.is_empty() {
         Vec::new()
     } else {
-        vec![
-            "Resolve task graph validation issues and rerun `vida task validate-graph --json`."
-                .to_string(),
-        ]
+        vec![format!(
+            "Resolve task graph validation issues and rerun `{}`.",
+            crate::operator_command_text::human_command("vida task validate-graph --json")
+        )]
     };
     build_operator_surface_payload(
         "vida task validate-graph",
@@ -1355,22 +1359,22 @@ pub(crate) fn print_task_dependency_bulk_add_result_for_surface(
                     && !edge.edge_type.trim().is_empty()
             })
             .map(|edge| {
-                format!(
+                crate::operator_command_text::human_command(&format!(
                     "{} {} {} {} --json",
                     surface,
                     crate::shell_quote(edge.issue_id.trim()),
                     crate::shell_quote(edge.depends_on_id.trim()),
                     crate::shell_quote(edge.edge_type.trim())
-                )
+                ))
             })
-            .unwrap_or_else(|| format!("{surface} <task-id> <depends-on-id> <edge-type> --json"));
+            .unwrap_or_else(|| format!("{surface} <task-id> <depends-on-id> <edge-type>"));
         vec![format!(
             "Inspect the failed dependency edge, repair missing tasks or invalid graph edges, then rerun `{retry_command}`."
         )]
     } else {
         vec![
             format!(
-                "Inspect failed and unapplied edges, repair missing tasks or invalid graph edges, then rerun `{surface} --json` with only the missing edges."
+                "Inspect failed and unapplied edges, repair missing tasks or invalid graph edges, then rerun `{surface}` with only the missing edges."
             ),
         ]
     };
@@ -1794,14 +1798,14 @@ mod tests {
             proof_blocked_by_runtime: false,
             blocked_by_runtime: false,
             next_required_command: Some(
-                "vida task close epic-ready --reason \"all descendants closed\" --json"
+                "vida task close epic-ready --reason \"all descendants closed\""
                     .to_string(),
             ),
             recommended_next_action:
-                "Close container with `vida task close epic-ready --reason \"all descendants closed\" --json`."
+                "Close container with `vida task close epic-ready --reason \"all descendants closed\"`."
                     .to_string(),
             canonical_commands: vec![
-                "vida task close epic-ready --reason \"all descendants closed\" --json"
+                "vida task close epic-ready --reason \"all descendants closed\""
                     .to_string(),
             ],
         };

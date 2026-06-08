@@ -667,15 +667,21 @@ fn task_proof_status_payload(
     let quoted_task_id = crate::shell_quote(&task.id);
     let next_required_command = if configured_count == 0 {
         format!(
-            "Add proof targets with `vida task update {} --proof-target <command-or-artifact> --json`.",
-            quoted_task_id
+            "Add proof targets with `{}`.",
+            crate::operator_command_text::human_command(&format!(
+                "vida task update {} --proof-target <command-or-artifact> --json",
+                quoted_task_id
+            ))
         )
     } else if missing_count == 0 {
         "No proof action required; all configured proof targets have close evidence.".to_string()
     } else {
         format!(
-            "Run or attach missing proof evidence, then inspect again with `vida task proof status {} --json`.",
-            quoted_task_id
+            "Run or attach missing proof evidence, then inspect again with `{}`.",
+            crate::operator_command_text::human_command(&format!(
+                "vida task proof status {} --json",
+                quoted_task_id
+            ))
         )
     };
     serde_json::json!({
@@ -792,11 +798,13 @@ async fn task_takeover_status_receipt(
             takeover_ready_state: "not_ready".to_string(),
             recommended_surface: Some("vida lane show".to_string()),
             reason: "no run-graph lane evidence is available for takeover status".to_string(),
-            recommended_command: Some("vida lane show --latest --json".to_string()),
-            next_actions: vec![
-                "Run `vida lane show --latest --json` to inspect lane evidence before attempting exception takeover."
-                    .to_string(),
-            ],
+            recommended_command: Some(crate::operator_command_text::human_command(
+                "vida lane show --latest --json",
+            )),
+            next_actions: vec![format!(
+                "Run `{}` to inspect lane evidence before attempting exception takeover.",
+                crate::operator_command_text::human_command("vida lane show --latest --json")
+            )],
             blocker_codes: vec!["missing_latest_lane_receipt".to_string()],
         };
     };
@@ -840,18 +848,24 @@ async fn task_takeover_status_receipt(
     let (reason, blocker_codes, next_actions, recommended_command, recommended_surface) =
         if !task_matches_lane {
             (
-            format!(
-                "latest lane task `{}` does not match requested task `{}`",
-                status.task_id, task.id
-            ),
-            vec!["latest_lane_task_mismatch".to_string()],
-            vec![format!(
-                "Bind or inspect the correct bounded unit before local writes: `vida task show {} --json` and `vida lane show --latest --json`.",
-                crate::shell_quote(&task.id)
-            )],
-            Some("vida lane show --latest --json".to_string()),
-            Some("vida lane show".to_string()),
-        )
+                format!(
+                    "latest lane task `{}` does not match requested task `{}`",
+                    status.task_id, task.id
+                ),
+                vec!["latest_lane_task_mismatch".to_string()],
+                vec![format!(
+                    "Bind or inspect the correct bounded unit before local writes: `{}` and `{}`.",
+                    crate::operator_command_text::human_command(&format!(
+                        "vida task show {} --json",
+                        crate::shell_quote(&task.id)
+                    )),
+                    crate::operator_command_text::human_command("vida lane show --latest --json")
+                )],
+                Some(crate::operator_command_text::human_command(
+                    "vida lane show --latest --json",
+                )),
+                Some("vida lane show".to_string()),
+            )
         } else if allowed {
             (
             "exception takeover is active for this task; local writes are lawful only inside listed paths"
@@ -882,13 +896,15 @@ async fn task_takeover_status_receipt(
             vec!["supersession_required".to_string()],
             command
                 .iter()
-                .cloned()
+                .map(|command| crate::operator_command_text::human_command(command))
                 .chain([
-                    "Run `vida lane show --latest --json` if the receipt id is missing or stale."
-                        .to_string(),
+                    format!(
+                        "Run `{}` if the receipt id is missing or stale.",
+                        crate::operator_command_text::human_command("vida lane show --latest --json")
+                    ),
                 ])
                 .collect(),
-            command,
+            command.map(|command| crate::operator_command_text::human_command(&command)),
             Some("vida lane supersede".to_string()),
         )
         } else if takeover_state.is_active() && paths.is_empty() {
@@ -897,12 +913,18 @@ async fn task_takeover_status_receipt(
                     .to_string(),
                 vec!["exception_takeover_scope_missing".to_string()],
                 vec![format!(
-                    "Inspect the lane receipt and exception metadata: `vida lane show {} --json`.",
-                    crate::shell_quote(&status.run_id)
+                    "Inspect the lane receipt and exception metadata: `{}`.",
+                    crate::operator_command_text::human_command(&format!(
+                        "vida lane show {} --json",
+                        crate::shell_quote(&status.run_id)
+                    ))
                 )],
                 Some(format!(
-                    "vida lane show {} --json",
-                    crate::shell_quote(&status.run_id)
+                    "{}",
+                    crate::operator_command_text::human_command(&format!(
+                        "vida lane show {} --json",
+                        crate::shell_quote(&status.run_id)
+                    ))
                 )),
                 Some("vida lane show".to_string()),
             )
@@ -2227,8 +2249,11 @@ fn task_close_progress_next_action(
     }
     if task.issue_type == "epic" {
         return format!(
-            "Inspect nested epic progress with `vida task progress {} --json`.",
-            task.id
+            "Inspect nested epic progress with `{}`.",
+            crate::operator_command_text::human_command(&format!(
+                "vida task progress {} --json",
+                task.id
+            ))
         );
     }
     format!(
@@ -2463,13 +2488,13 @@ fn task_close_feedback_blocker_summary(
     };
     let next_action = match canonical_status {
         "blocked" => {
-            "Resolve the blocked condition described in the close reason, then rerun `vida task close ... --json`."
+            "Resolve the blocked condition described in the close reason, then rerun `vida task close ...`."
         }
         "awaiting_approval" => {
-            "Satisfy the approval requirement described in the close reason, then rerun `vida task close ... --json`."
+            "Satisfy the approval requirement described in the close reason, then rerun `vida task close ...`."
         }
         _ => {
-            "Resolve the deferred canonical close condition, then rerun `vida task close ... --json`."
+            "Resolve the deferred canonical close condition, then rerun `vida task close ...`."
         }
     };
     Some((
@@ -4039,12 +4064,12 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                     "status": "blocked",
                     "blocker_codes": ["invalid_task_title_input"],
                     "reason": error,
-                    "usage": "vida task create <task-id> <title> --json OR vida task create <task-id> --title <title> --json",
+                    "usage": "vida task create <task-id> <title> OR vida task create <task-id> --title <title>",
                 }));
             } else {
                 eprintln!("{error}");
                 eprintln!(
-                    "Usage: vida task create <task-id> <title> --json OR vida task create <task-id> --title <title> --json"
+                    "Usage: vida task create <task-id> <title> OR vida task create <task-id> --title <title>"
                 );
             }
             return ExitCode::from(2);
@@ -4052,9 +4077,15 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
     };
     if let Some(path) = command.notes_file.as_deref() {
         let action = format!(
-            "Use `vida task {} <task-id> <title> --notes <text> --json` for trusted inline create-time notes, or create the task first and then run `vida task update <task-id> --notes-file {} --json` when recording operator-owned progress.",
-            if ensure_existing { "ensure" } else { "create" },
-            crate::shell_quote(&path.display().to_string())
+            "Use `{}` for trusted inline create-time notes, or create the task first and then run `{}` when recording operator-owned progress.",
+            crate::operator_command_text::human_command(&format!(
+                "vida task {} <task-id> <title> --notes <text> --json",
+                if ensure_existing { "ensure" } else { "create" }
+            )),
+            crate::operator_command_text::human_command(&format!(
+                "vida task update <task-id> --notes-file {} --json",
+                crate::shell_quote(&path.display().to_string())
+            )),
         );
         if command.json {
             crate::print_json_pretty(&serde_json::json!({
@@ -4280,7 +4311,7 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                             "status": "blocked",
                             "blocker_codes": ["foreign_claim_conflict_blocked"],
                             "reason": "Another orchestrator session holds an active exclusive claim on the same task, run, conflict domain, or intersecting paths. Wait for that session to complete or explicitly reclaim/supersede the claim before continuing.",
-                            "next_action": "vida orchestrator-session show --json",
+                            "next_action": crate::operator_command_text::human_command("vida orchestrator-session show --json"),
                             "blocking_surface": "vida orchestrator-session show",
                             "current_session_id": current_session_id,
                         }));
@@ -4289,7 +4320,7 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                             "Another orchestrator session holds an active exclusive claim on this work scope."
                         );
                         eprintln!(
-                            "Inspect active sessions and claims with `vida orchestrator-session show --json`"
+                            "Inspect active sessions and claims with `vida orchestrator-session show`"
                         );
                     }
                     return ExitCode::from(1);
@@ -4578,10 +4609,10 @@ fn task_close_automation_receipt(
         let receipt = crate::release_surface::release_build_receipt(false);
         if receipt.status != "pass" {
             blocker_codes.push("release_build_failed".to_string());
-            next_actions.push(
-                "Fix release build failures, then rerun `vida task close --release --json`."
-                    .to_string(),
-            );
+            next_actions.push(format!(
+                "Fix release build failures, then rerun `{}`.",
+                crate::operator_command_text::human_command("vida task close --release --json")
+            ));
         }
         Some(receipt)
     } else {
@@ -8179,10 +8210,18 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 recommended_surface: Some("vida lane show".to_string()),
                                 reason: "no task id was supplied and no latest lane task id is available"
                                     .to_string(),
-                                recommended_command: Some("vida lane show --latest --json".to_string()),
+                                recommended_command: Some(
+                                    crate::operator_command_text::human_command(
+                                        "vida lane show --latest --json",
+                                    ),
+                                ),
                                 next_actions: vec![
-                                    "Supply --task-id or inspect lane evidence with `vida lane show --latest --json`."
-                                        .to_string(),
+                                    format!(
+                                        "Supply --task-id or inspect lane evidence with `{}`.",
+                                        crate::operator_command_text::human_command(
+                                            "vida lane show --latest --json"
+                                        )
+                                    ),
                                 ],
                                 blocker_codes: vec!["missing_task_and_lane_evidence".to_string()],
                             };
@@ -9965,16 +10004,23 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
                 Err(error) => {
                     if command.json {
+                        let next_action = format!(
+                            "Run `{}` to inspect graph cycles or reduce traversal scope with `{}`.",
+                            crate::operator_command_text::human_command(
+                                "vida task validate-graph --json"
+                            ),
+                            crate::operator_command_text::human_command(
+                                "vida task children <task-id> --json"
+                            )
+                        );
                         crate::print_json_pretty(&serde_json::json!({
                             "status": "blocked",
                             "surface": "vida task children",
                             "blocker_codes": ["task_tree_traversal_failed"],
                             "task_id": command.task_id,
                             "reason": error.to_string(),
-                            "next_action": "Run `vida task validate-graph --json` to inspect graph cycles or reduce traversal scope with `vida task children <task-id> --json`.",
-                            "next_actions": [
-                                "Run `vida task validate-graph --json` to inspect graph cycles or reduce traversal scope with `vida task children <task-id> --json`."
-                            ],
+                            "next_action": next_action.clone(),
+                            "next_actions": [next_action],
                         }));
                     } else {
                         eprintln!("Failed to read task direct children: {error}");
@@ -9994,16 +10040,23 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
                 Err(error) => {
                     if command.json {
+                        let next_action = format!(
+                            "Run `{}` to inspect graph cycles or reduce traversal scope with `{}`.",
+                            crate::operator_command_text::human_command(
+                                "vida task validate-graph --json"
+                            ),
+                            crate::operator_command_text::human_command(
+                                "vida task children <task-id> --json"
+                            )
+                        );
                         crate::print_json_pretty(&serde_json::json!({
                             "status": "blocked",
                             "surface": "vida task tree",
                             "blocker_codes": ["task_tree_traversal_failed"],
                             "task_id": command.task_id,
                             "reason": error.to_string(),
-                            "next_action": "Run `vida task validate-graph --json` to inspect graph cycles or reduce traversal scope with `vida task children <task-id> --json`.",
-                            "next_actions": [
-                                "Run `vida task validate-graph --json` to inspect graph cycles or reduce traversal scope with `vida task children <task-id> --json`."
-                            ],
+                            "next_action": next_action.clone(),
+                            "next_actions": [next_action],
                         }));
                     } else {
                         eprintln!("Failed to read task dependency tree: {error}");
@@ -14163,7 +14216,7 @@ mod tests {
         let mut summary_json = serde_json::json!({
             "status": task_json_success_status(),
             "blocker_codes": ["   "],
-            "next_actions": ["Run `vida task import-jsonl --json`"],
+            "next_actions": ["Run `vida task import-jsonl`"],
         });
 
         assert!(normalize_task_json_contract_arrays(&mut summary_json).is_err());

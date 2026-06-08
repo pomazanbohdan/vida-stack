@@ -4203,6 +4203,16 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                 }
             }
         }
+        [head, subcommand, flag]
+            if head == "recovery"
+                && subcommand == "status"
+                && matches!(flag.as_str(), "--help" | "-h") =>
+        {
+            eprintln!(
+                "Usage: vida taskflow recovery status <run-id> [--state-dir <path>] [--json]\n\nOutput:\n  default              Emit compact TOON operator output.\n  --json               Emit machine-readable JSON output."
+            );
+            ExitCode::SUCCESS
+        }
         [head, subcommand, run_id] if head == "recovery" && subcommand == "status" => {
             run_taskflow_recovery_status_from_state_dir(proxy_state_dir(), run_id, false).await
         }
@@ -4901,8 +4911,16 @@ fn run_graph_status_missing_run_id_json_payload() -> serde_json::Value {
         "blocker_codes": ["missing_run_id"],
         "error": "Missing required <run-id> for `vida taskflow run-graph status`.",
         "next_actions": [
-            "Run `vida taskflow run-graph status <run-id> --json` with the concrete run id.",
-            "Use `vida taskflow run-graph latest --json` to inspect the latest run when the run id is unknown."
+            format!(
+                "Run `{}` with the concrete run id.",
+                crate::operator_command_text::human_command(
+                    "vida taskflow run-graph status <run-id> --json"
+                )
+            ),
+            format!(
+                "Use `{}` to inspect the latest run when the run id is unknown.",
+                crate::operator_command_text::human_command("vida taskflow run-graph latest --json")
+            )
         ],
     })
 }
@@ -4979,7 +4997,10 @@ fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Val
     }
     if error.contains("recovery_ready is false") {
         let run_id = run_graph_resume_gate_error_run_id(error)?;
-        let command = format!("vida lane show {} --json", shell_quote(&run_id));
+        let command = crate::operator_command_text::human_command(&format!(
+            "vida lane show {} --json",
+            shell_quote(&run_id)
+        ));
         let next_action = RecoveryNextAction {
             command: command.clone(),
             surface: recommended_surface_for_command(&command),
@@ -4988,8 +5009,11 @@ fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Val
         let next_actions = vec![
             next_action.reason.clone(),
             format!(
-                "Inspect recovery details with `vida taskflow recovery status {} --json`.",
-                shell_quote(&run_id)
+                "Inspect recovery details with `{}`.",
+                crate::operator_command_text::human_command(&format!(
+                    "vida taskflow recovery status {} --json",
+                    shell_quote(&run_id)
+                ))
             ),
         ];
         return build_run_graph_operator_surface_payload(
@@ -9282,7 +9306,7 @@ mod tests {
             "next_action": null,
             "recommended_command": null,
             "projection_truth": {
-                "next_lawful_operator_action": "vida lane show run-action-cache --json"
+                "next_lawful_operator_action": "vida lane show run-action-cache"
             }
         })
         .to_string();
@@ -9290,11 +9314,11 @@ mod tests {
             "status": "pass",
             "blocker_codes": [],
             "next_action": {
-                "command": "vida lane show run-action-cache --json"
+                "command": "vida lane show run-action-cache"
             },
-            "recommended_command": "vida lane show run-action-cache --json",
+            "recommended_command": "vida lane show run-action-cache",
             "projection_truth": {
-                "next_lawful_operator_action": "vida lane show run-action-cache --json"
+                "next_lawful_operator_action": "vida lane show run-action-cache"
             }
         })
         .to_string();
@@ -9309,11 +9333,11 @@ mod tests {
             "status": "pass",
             "blocker_codes": [],
             "next_action": {
-                "command": "vida lane show run-action-cache --json"
+                "command": "vida lane show run-action-cache"
             },
-            "recommended_command": "vida lane show run-action-cache --json",
+            "recommended_command": "vida lane show run-action-cache",
             "projection_truth": {
-                "next_lawful_operator_action": "vida lane show run-action-cache --json",
+                "next_lawful_operator_action": "vida lane show run-action-cache",
                 "dispatch_receipt": {
                     "dispatch_status": "executed",
                     "blocker_code": null,
@@ -15900,6 +15924,13 @@ mod tests {
             .iter()
             .any(|value| value
                 .as_str()
-                .is_some_and(|action| action.contains("run-graph latest --json"))));
+                .is_some_and(|action| action.contains("run-graph latest"))));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .all(|value| value
+                .as_str()
+                .is_some_and(|action| !action.contains("--json"))));
     }
 }

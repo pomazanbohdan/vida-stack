@@ -289,6 +289,18 @@
     ]
   },
   {
+    "operation": "vida.orchestration.control_plane.summary.get",
+    "scope": "project",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "orchestration_control_plane_read"
+    ]
+  },
+  {
     "operation": "vida.jobs.get",
     "scope": "service",
     "posture": "read_only",

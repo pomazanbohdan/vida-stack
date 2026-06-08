@@ -462,19 +462,14 @@ impl StateStore {
             next_required_command,
         ) = if closure_candidate {
             let quoted_root_task_id = shell_quote(&root_task.id);
-            let close_command = format!(
+            let close_command = crate::operator_command_text::human_command(&format!(
                 "vida task close {} --reason \"all descendants closed\" --json",
                 quoted_root_task_id
-            );
+            ));
             (
                 "ready_to_close".to_string(),
-                Some(
-                    "root container is open while all descendants are closed-like".to_string(),
-                ),
-                format!(
-                    "Close container with `vida task close {} --reason \"all descendants closed\" --json`.",
-                    quoted_root_task_id
-                ),
+                Some("root container is open while all descendants are closed-like".to_string()),
+                format!("Close container with `{}`.", close_command),
                 vec![close_command.clone()],
                 Some(close_command),
             )
@@ -508,10 +503,10 @@ impl StateStore {
                         .to_string(),
                 )
             } else if leaf_ready_for_close {
-                let close_command = format!(
+                let close_command = crate::operator_command_text::human_command(&format!(
                     "vida task close {} --reason \"verified\" --json",
                     shell_quote(&root_task.id)
-                );
+                ));
                 Some(close_command)
             } else {
                 Some("Continue the leaf task until verification evidence is available.".to_string())
