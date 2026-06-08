@@ -1352,9 +1352,24 @@ fn canonical_dispatch_target_for_backend_resolution(dispatch_target: &str) -> St
     }
 }
 
-fn dispatch_target_requires_strict_backend_admissibility(dispatch_target: &str) -> bool {
+pub(crate) fn backend_policy_dispatch_target_for_resolution(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> String {
+    resolve_runtime_dispatch_target(execution_plan, dispatch_target)
+        .and_then(|resolution| resolution.lane_id)
+        .unwrap_or_else(|| dispatch_target.trim().to_string())
+}
+
+fn dispatch_target_requires_strict_backend_admissibility(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> bool {
     matches!(
-        canonical_dispatch_target_for_backend_resolution(dispatch_target).as_str(),
+        canonical_dispatch_target_for_backend_resolution(
+            &backend_policy_dispatch_target_for_resolution(execution_plan, dispatch_target),
+        )
+        .as_str(),
         "implementation" | "verification"
     )
 }
@@ -1364,8 +1379,12 @@ pub(crate) fn backend_is_admissible_for_dispatch_target(
     backend_id: &str,
     dispatch_target: &str,
 ) -> bool {
-    let canonical_target = canonical_dispatch_target_for_backend_resolution(dispatch_target);
-    let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
+    let policy_dispatch_target =
+        backend_policy_dispatch_target_for_resolution(execution_plan, dispatch_target);
+    let canonical_target =
+        canonical_dispatch_target_for_backend_resolution(&policy_dispatch_target);
+    let strict_required =
+        dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target);
     let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
         return !strict_required;
     };
@@ -1528,7 +1547,8 @@ fn admissible_backend_candidates_for_dispatch_target(
     activation_agent_type: Option<&str>,
 ) -> Vec<String> {
     let route_is_backend_agnostic = !route_has_backend_hints(execution_plan, route);
-    let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
+    let strict_required =
+        dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target);
     let mut candidates = Vec::new();
     let inherited = inherited_selected_backend.map(str::to_string);
     let activation = activation_agent_type.map(str::to_string);
@@ -1645,13 +1665,16 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
     activation_agent_type: Option<&str>,
     inherited_selected_backend: Option<&str>,
 ) -> Option<String> {
-    let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
-    let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
+    let policy_dispatch_target =
+        backend_policy_dispatch_target_for_resolution(execution_plan, dispatch_target);
+    let strict_required =
+        dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target);
+    let route = execution_plan_route_for_dispatch_target(execution_plan, &policy_dispatch_target);
     let (candidates, route_is_backend_agnostic) = if let Some(route) = route {
         (
             admissible_backend_candidates_for_dispatch_target(
                 execution_plan,
-                dispatch_target,
+                &policy_dispatch_target,
                 route,
                 inherited_selected_backend,
                 activation_agent_type,
@@ -18424,6 +18447,79 @@ host_environment:
         );
         assert_eq!(
             downstream_selected_backend(&role_selection, "writer", Some("junior"), None),
+            Some("internal_subagents".to_string())
+        );
+    }
+
+    #[test]
+    fn downstream_selected_backend_preserves_lane_policy_for_noncanonical_dispatch_target() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer"],
+                        "lane_catalog": {
+                            "implementer": {
+                                "dispatch_target": "dev",
+                                "task_class": "implementation",
+                                "runtime_role": "worker",
+                                "closure_class": "implementation"
+                            }
+                        }
+                    },
+                    "implementer": {
+                        "executor_backend": "opencode_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "opencode_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "implementation": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+
+        let resolution = first_runtime_dispatch_target_after_dev_pack(&role_selection)
+            .expect("configured dispatch target should resolve");
+
+        assert_eq!(resolution.dispatch_target, "dev");
+        assert_eq!(resolution.lane_id.as_deref(), Some("implementer"));
+        assert!(
+            !backend_is_admissible_for_dispatch_target(
+                &role_selection.execution_plan,
+                "opencode_cli",
+                "dev",
+            ),
+            "raw configured aliases must keep the implementer lane policy class",
+        );
+        assert_eq!(
+            downstream_selected_backend(&role_selection, "dev", Some("junior"), None),
             Some("internal_subagents".to_string())
         );
     }

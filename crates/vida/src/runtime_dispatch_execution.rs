@@ -21,9 +21,25 @@ fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String 
     }
 }
 
-fn dispatch_target_requires_strict_admissibility(dispatch_target: &str) -> bool {
+fn policy_dispatch_target_for_admissibility(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> String {
+    crate::runtime_dispatch_state::resolve_runtime_dispatch_target(execution_plan, dispatch_target)
+        .and_then(|resolution| resolution.lane_id)
+        .unwrap_or_else(|| dispatch_target.trim().to_string())
+}
+
+fn dispatch_target_requires_strict_admissibility(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> bool {
     matches!(
-        canonical_dispatch_target_for_admissibility(dispatch_target).as_str(),
+        canonical_dispatch_target_for_admissibility(&policy_dispatch_target_for_admissibility(
+            execution_plan,
+            dispatch_target,
+        ))
+        .as_str(),
         "implementation" | "architecture"
     )
 }
@@ -37,8 +53,11 @@ fn backend_is_admissible_for_dispatch_target(
     backend_id: &str,
     dispatch_target: &str,
 ) -> bool {
-    let canonical_target = canonical_dispatch_target_for_admissibility(dispatch_target);
-    let strict_required = dispatch_target_requires_strict_admissibility(dispatch_target);
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
+    let canonical_target = canonical_dispatch_target_for_admissibility(&policy_dispatch_target);
+    let strict_required =
+        dispatch_target_requires_strict_admissibility(execution_plan, dispatch_target);
     let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
         return !strict_required;
     };
@@ -8896,6 +8915,57 @@ agent_system:
                 "implementation"
             ),
             "internal_subagents should be admissible for implementation lane"
+        );
+    }
+
+    #[test]
+    fn backend_is_admissible_for_dispatch_target_preserves_lane_policy_for_configured_alias() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "implementer": {
+                            "dispatch_target": "dev",
+                            "task_class": "implementation",
+                            "runtime_role": "worker",
+                            "closure_class": "implementation"
+                        }
+                    }
+                }
+            },
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "opencode_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "implementation": false
+                    }
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
+                }
+            ]
+        });
+
+        assert!(
+            !super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "opencode_cli",
+                "dev",
+            ),
+            "execution must not treat a raw configured alias as a non-strict lane"
+        );
+        assert!(
+            super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "internal_subagents",
+                "dev",
+            ),
+            "admissible internal fallback should remain available for the aliased lane"
         );
     }
 
