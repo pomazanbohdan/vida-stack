@@ -13,7 +13,8 @@ This protocol defines:
 3. how one backlog item is decomposed into delivery-task packets,
 4. how orchestrator, implementer, coach, verifier, and escalation cooperate,
 5. closure rules for packet-level work,
-6. how packet shapes, prompt-stack precedence, and boot-readiness rules stay explicit.
+6. how packet shapes, prompt-stack precedence, and boot-readiness rules stay explicit,
+7. how orchestrators phrase delegated packets so low-cost agents preserve source facts, scope, and proof evidence on the first attempt.
 
 This protocol does not define:
 
@@ -156,6 +157,54 @@ Template rule:
 
 1. render project packets using `docs/process/project-development-packet-template-protocol.md`,
 2. do not treat prose-only delegation as a valid substitute for the canonical packet family.
+
+## Delegated Prompt Quality Rule
+
+When a task is delegated to a low-cost or small implementation carrier, the orchestrator must bias the packet toward exactness rather than broad interpretation.
+
+Small-agent packet requirements:
+
+1. name exactly one bounded task id and title,
+2. name the model or carrier constraint only when the operator explicitly requires it or runtime selection already selected it,
+3. list the complete write scope and say that all other files are out of scope,
+4. name the source-of-truth file and required source sections or line ranges,
+5. state whether the lane should copy source wording closely, summarize, refactor, or implement new behavior,
+6. include source-fidelity rules for copied commands, fixture specs, blocker codes, paths, and negative assertions,
+7. include forbidden shorthand when compression would damage the artifact, such as `cur`, `src`, `req`, `impl`, `cmd`, `cfg`, or unexplained single-letter markers,
+8. require honest status language for unexecuted work, such as `pending`, `not run`, or `not created`,
+9. include a self-check block that the lane must run before its final response,
+10. require a final response with changed files, exact summary, verification, and remaining gaps.
+
+Source-derived documentation packets must add an acceptance gate that names mandatory copied lines. For example, if the source contains proof commands or fixture invariants, the packet must list the exact commands, paths, blocker codes, and negative assertions that must appear in the target artifact. A delegated lane that omits any mandatory copied line is not closure-ready; route it back as rework instead of accepting a polished summary.
+
+Use this compact packet addendum when shaping small-agent documentation or spec-sync work:
+
+```text
+Source fidelity:
+- Prefer exact copying from the source document over summarizing.
+- Preserve command order and fixture structure.
+- Preserve Surface, Setup, Expected, blocker codes, paths, and negative assertions.
+- Do not invent labels, severities, or terminology unless the packet explicitly asks for derived tracking labels.
+- Use normal professional wording. Forbidden shorthand: cur, src, req, impl, cmd, cfg, C from source.
+
+Acceptance gate:
+- Required copied lines:
+  - <exact command, path, blocker code, or invariant>
+  - <exact command, path, blocker code, or invariant>
+- If any required line is missing, fix before final.
+
+Self-check before final:
+1. Search the changed files for forbidden shorthand.
+2. Verify every required copied line exists in the target.
+3. Run `git diff --check -- <changed_files>`.
+4. Read the final changed sections and compare them with the named source range.
+
+Final response:
+- files changed
+- exact changes made
+- verification commands and results
+- remaining gaps or risks
+```
 
 ## Decomposition Rule
 
@@ -419,6 +468,13 @@ A packet is closure-ready only when:
 3. the declared verification command or proof target passed,
 4. no unresolved scope widening occurred,
 5. residual risks are recorded explicitly.
+
+After each closure-ready task:
+
+1. update the TaskFlow task state with the completion, rework, or blocker result,
+2. run the declared debug build for the touched workspace or the broader workspace when no narrower debug build is declared,
+3. commit only the bounded closed scope after the task state update and debug build pass,
+4. leave unfinished red-test or rework files unstaged unless they are the explicit closed scope.
 
 If any of those fail:
 
