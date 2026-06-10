@@ -458,18 +458,10 @@ async fn host_bridge_request_provenance_blockers(
     request: &serde_json::Value,
     state_root: Option<&Path>,
 ) -> Vec<String> {
-    let provided_state_root = state_root.map(Path::to_path_buf);
-    let inferred_state_root = infer_host_bridge_state_root_from_request_path(request_path);
-    let state_root = match (provided_state_root, inferred_state_root) {
-        (Some(provided), Some(_inferred))
-            if host_bridge_request_path_is_under_state_root(request_path, &provided) =>
-        {
-            provided
-        }
-        (Some(_provided), Some(inferred)) => inferred,
-        (Some(provided), None) => provided,
-        (None, Some(inferred)) => inferred,
-        (None, None) => crate::taskflow_task_bridge::proxy_state_dir(),
+    let state_root = match state_root {
+        Some(provided) => provided.to_path_buf(),
+        None => infer_host_bridge_state_root_from_request_path(request_path)
+            .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir),
     };
     host_bridge_request_provenance_blockers_for_state_root(&state_root, request_path, request).await
 }
@@ -4566,6 +4558,7 @@ mod tests {
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, host_bridge_adapter_payload,
         host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
+        host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path,
         resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
@@ -4576,7 +4569,7 @@ mod tests {
         TaskSchedulingCandidate, TaskSchedulingProjection,
     };
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{cli, EnvVarGuard};
+    use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::{AgentDispatchNextArgs, AgentHostBridgeArgs};
     use std::process::ExitCode;
 
@@ -4806,6 +4799,115 @@ mod tests {
         ));
 
         assert!(blockers.contains(&"host_bridge_request_untrusted_path".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_request_untrusted_path_explicit_state_dir_is_authoritative() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-authority-{}-{nanos}",
+            std::process::id()
+        ));
+        let trusted_state_root = root.join("trusted/.vida/data/state");
+        let attacker_state_root = root.join("attacker/.vida/data/state");
+        let request_path = attacker_state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            trusted_state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+        let result_path = trusted_state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = trusted_state_root.join("host-tool-bridge/receipts/receipt.json");
+        std::fs::create_dir_all(&trusted_state_root).expect("trusted state root");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("packet parent");
+        std::fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("result parent");
+        std::fs::create_dir_all(receipt_path.parent().expect("receipt parent"))
+            .expect("receipt parent");
+        std::fs::write(&packet_path, b"{}").expect("packet");
+        std::fs::write(&result_path, b"{}").expect("result");
+        std::fs::write(&receipt_path, b"{}").expect("receipt");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-hb-001",
+            "run_id": "run-hb-001",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("write request");
+
+        let _cwd = guard_current_dir(&root);
+        let _env = EnvVarGuard::unset("VIDA_ROOT");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let exit = runtime.block_on(run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: Vec::new(),
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: None,
+            consolidation_receipt_id: None,
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(trusted_state_root.clone()),
+        }));
+
+        assert_eq!(exit, ExitCode::from(1));
+        let persisted_request: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&request_path).expect("read request"))
+                .expect("request should remain json");
+        assert_eq!(persisted_request, request);
+        let persisted_result = std::fs::read_to_string(&result_path).expect("read result artifact");
+        assert_eq!(persisted_result, "{}");
+        let persisted_receipt =
+            std::fs::read_to_string(&receipt_path).expect("read receipt artifact");
+        assert_eq!(persisted_receipt, "{}");
+
+        let blockers = runtime.block_on(host_bridge_request_provenance_blockers(
+            &request_path,
+            &request,
+            Some(&trusted_state_root),
+        ));
+        assert!(blockers
+            .iter()
+            .any(|code| code == "host_bridge_request_untrusted_path"));
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            blockers,
+            Some(&trusted_state_root),
+        );
+        assert_eq!(payload["surface"], "vida agent host-bridge");
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes")
+            .iter()
+            .any(|code| code == "host_bridge_request_untrusted_path"));
+        assert!(payload["host_bridge"]["host_tool_calls"]
+            .as_array()
+            .expect("host tool calls")
+            .is_empty());
+
         let _ = std::fs::remove_dir_all(&root);
     }
 

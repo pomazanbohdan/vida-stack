@@ -28,6 +28,10 @@ This file is intentionally a tracker, not a rewrite of the plan. The wave defini
 - DOC-001 now hardens `docflow closeout --changed` / `docflow-cli closeout --changed`
   against repo-local `core.fsmonitor` helpers by disabling fsmonitor and
   untracked-cache in the git status invocation.
+- HB-001 now proves the public `vida agent host-bridge --request ... --state-dir ...`
+  path fail-closes on an attacker request path outside the explicit trusted
+  state root; the public run exit and shared payload helper keep
+  `host_tool_calls = []`.
 - Validation rework tightened the DOC-001 proof: a plain `git status`
   precondition now proves the repo-local helper executes before the
   `docflow closeout --changed` assertion checks that the helper stays idle.
@@ -346,10 +350,17 @@ These are the source-plan anchors this tracker is tied to:
 
 - IO-001 is complete at focused proof level; the full Wave 0 baseline proof
   batch remains pending.
+- HB-001 red-test proof is now covered in
+  `crates/vida/src/agent_dispatch_surface.rs` on the public host-bridge path
+  with explicit trusted-state-dir authority over an attacker request path;
+  the blocked exit is asserted directly and `host_tool_calls = []` remains
+  asserted through the shared payload helper.
 - Delegation scorecard for IO-001 / DOC-001:
   - executor `gpt-5.4-mini`: useful for bounded edits and repetitive proof
     runs, but required an additional pass to harden the docflow git-status
     boundary against repo-local fsmonitor execution.
+  - HB-001 note: `gpt-5.4-mini` handled the public-path proof and the
+    production state-root authority fix after validator rework.
   - validator `gpt-5.5-medium`: caught the semantic gap after focused tests
     were green and is effective as the minimum validator for authority-sensitive
     runtime paths.
