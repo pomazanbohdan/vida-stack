@@ -1,6 +1,6 @@
 # META Runtime Boundary Refactor Baseline Tracking Document
 
-Status: `IO-001 hardened; targeted proofs green; broader Wave 0 batch still pending`
+Status: `IO-001 and DOC-001 hardened; targeted proofs green; broader Wave 0 batch still pending`
 
 ## Purpose
 
@@ -25,6 +25,12 @@ This file is intentionally a tracker, not a rewrite of the plan. The wave defini
   explicit `state_root` from callers instead of `std::env::current_dir()`.
 - The silent-skip path for relevant invalid implementation artifacts now
   fail-closes with `Result` propagation.
+- DOC-001 now hardens `docflow closeout --changed` / `docflow-cli closeout --changed`
+  against repo-local `core.fsmonitor` helpers by disabling fsmonitor and
+  untracked-cache in the git status invocation.
+- Validation rework tightened the DOC-001 proof: a plain `git status`
+  precondition now proves the repo-local helper executes before the
+  `docflow closeout --changed` assertion checks that the helper stays idle.
 - Focused proof runs are green for the current rework batch:
   - `cargo fmt --all -- --check`
   - `cargo test -p vida --test task_smoke task_attempt_collect_rejects -- --nocapture`
@@ -276,16 +282,26 @@ Expected:
 
 Copied from the source plan and kept pending until execution:
 
+### IO-001 proof commands
+
 ```bash
 cargo fmt --all -- --check
 git diff --check
 cargo test -p vida --test doctor_surface_contract_smoke -- --nocapture
 cargo test -p vida --test boot_smoke -- --nocapture
 cargo test -p vida --test task_smoke -- --nocapture
-cargo test -p docflow-cli --test cli_smoke -- --nocapture
 cargo test -p vida host_bridge -- --nocapture
 cargo test -p vida status_surface -- --nocapture
 cargo test -p vida taskflow_consume_resume -- --nocapture
+```
+
+### DOC-001 proof commands
+
+```bash
+cargo test -p docflow-cli --test cli_smoke -- --nocapture
+cargo test -p docflow-cli --test cli_smoke closeout_changed_ignores_repo_local_fsmonitor_helper -- --nocapture
+cargo test -p docflow-cli --test cli_smoke closeout_changed -- --nocapture
+cargo build
 ```
 
 ## Wave Tracking Table
@@ -294,7 +310,7 @@ Fill this after each wave. Current baseline row remains pending because no proof
 
 | Wave | Name | Goal | Required artifact / tests | Proof commands | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | Baseline freeze and defect fixtures | Freeze current behavior and create failing fixtures for all known bug classes before large movement. | `crates/vida/tests/host_bridge_authority_smoke.rs`, `crates/vida/tests/runtime_authority_smoke.rs`, `crates/vida/tests/taskflow_routing_smoke.rs`, `crates/vida/tests/artifact_io_smoke.rs`, `crates/docflow-cli/tests/git_hardening_smoke.rs` or the approved existing smoke files. | `cargo fmt --all -- --check`; `git diff --check`; Wave 0 baseline proof batch from above | partial | IO-001 artifact IO hardening is green; the broader Wave 0 proof batch still needs execution. |
+| 0 | Baseline freeze and defect fixtures | Freeze current behavior and create failing fixtures for all known bug classes before large movement. | `crates/vida/tests/host_bridge_authority_smoke.rs`, `crates/vida/tests/runtime_authority_smoke.rs`, `crates/vida/tests/taskflow_routing_smoke.rs`, `crates/vida/tests/artifact_io_smoke.rs`, `crates/docflow-cli/tests/git_hardening_smoke.rs` or the approved existing smoke files. | `cargo fmt --all -- --check`; `git diff --check`; Wave 0 baseline proof batch from above | partial | IO-001 artifact IO hardening is green; DOC-001 validation rework now proves the helper executes before closeout; the broader Wave 0 proof batch still needs execution. |
 | 1 | `runtime-path-policy` | Create a single safe IO/path boundary and remove direct unsafe reads/writes from authority-sensitive runtime paths. | `crates/runtime-path-policy/*` plus targeted call-site migration. | Wave 1 proof batch from the source plan. | pending |  |
 | 2 | `operator-output` | Extract shared operator rendering and envelope logic. | `crates/operator-output/*` and moved human output code. | Wave 2 proof batch from the source plan. | pending |  |
 | 3 | `taskflow-host-bridge` | Move host bridge request / provenance / completion logic behind a bounded boundary. | Host bridge request, provenance, completion, artifact scope modules. | Wave 3 proof batch from the source plan. | pending |  |
@@ -330,10 +346,10 @@ These are the source-plan anchors this tracker is tied to:
 
 - IO-001 is complete at focused proof level; the full Wave 0 baseline proof
   batch remains pending.
-- Delegation scorecard for IO-001:
+- Delegation scorecard for IO-001 / DOC-001:
   - executor `gpt-5.4-mini`: useful for bounded edits and repetitive proof
-    runs, but required two rework loops after missing state-root and
-    fail-closed semantics.
+    runs, but required an additional pass to harden the docflow git-status
+    boundary against repo-local fsmonitor execution.
   - validator `gpt-5.5-medium`: caught the semantic gap after focused tests
     were green and is effective as the minimum validator for authority-sensitive
     runtime paths.

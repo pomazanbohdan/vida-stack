@@ -532,6 +532,90 @@ fn closeout_changed_outputs_default_toon_and_explicit_json() {
 }
 
 #[test]
+fn closeout_changed_ignores_repo_local_fsmonitor_helper() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("closeout-fsmonitor");
+    write_task_doc(&root, "TASK-FSMON");
+    let git_init = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("init")
+        .output()
+        .expect("git init should run");
+    assert!(
+        git_init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_init.stderr)
+    );
+
+    let sentinel = root.join("fsmonitor-sentinel.txt");
+    let helper = root.join("fsmonitor-helper.cmd");
+    let helper_path = helper.to_string_lossy().replace('\\', "/");
+    fs::write(
+        &helper,
+        format!(
+            "@echo off\r\necho invoked>\"{}\"\r\nexit /b 0\r\n",
+            sentinel.display()
+        ),
+    )
+    .expect("fsmonitor helper should be written");
+    let git_config = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["config", "core.fsmonitor", &helper_path])
+        .output()
+        .expect("git config should run");
+    assert!(
+        git_config.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_config.stderr)
+    );
+
+    let git_status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["status", "--short", "--", ":(glob)**/*.md"])
+        .output()
+        .expect("git status should run");
+    assert!(
+        git_status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git_status.stderr)
+    );
+    assert!(
+        sentinel.exists(),
+        "repo-local fsmonitor helper should execute during plain git status"
+    );
+    fs::remove_file(&sentinel).expect("sentinel should be removable before closeout");
+
+    let closeout = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args([
+            "closeout",
+            "--root",
+            root.to_str().expect("root should be utf8"),
+            "--profile",
+            "",
+            "--changed",
+        ])
+        .output()
+        .expect("docflow closeout changed should run");
+    assert!(
+        closeout.status.success(),
+        "{}",
+        context.diagnostics(&closeout)
+    );
+    let stdout = String::from_utf8_lossy(&closeout.stdout);
+    assert!(stdout.starts_with("closeout\n  mode: changed"));
+    assert!(stdout.contains("changed_doc_count: 1"));
+    assert!(
+        !sentinel.exists(),
+        "repo-local fsmonitor helper should not execute during docflow closeout"
+    );
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
+#[test]
 fn closeout_and_proofcheck_report_missing_evidence_blockers() {
     let context = vida_test_support::CommandContext::empty();
     let root = unique_docflow_root("missing-evidence");

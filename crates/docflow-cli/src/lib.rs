@@ -1809,6 +1809,12 @@ fn changed_markdown_paths(root: Option<&str>) -> Result<Vec<String>, String> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(&root_path)
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+        ])
         .args(["status", "--short", "--", ":(glob)**/*.md"])
         .output()
         .map_err(|error| format!("git_status_failed:{error}"))?;
