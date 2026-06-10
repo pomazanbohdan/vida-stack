@@ -474,10 +474,65 @@ pub(crate) struct TaskflowImplementationArtifactAuthority {
     pub consolidation_receipt_id: String,
 }
 
+const MAX_ATTEMPT_ARTIFACT_BYTES: u64 = 64 * 1024;
+
+pub(crate) fn validate_attempt_artifact_ref(
+    artifact_ref: &str,
+    state_root: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let artifact_ref = artifact_ref.trim();
+    if artifact_ref.is_empty() {
+        return Err("attempt_artifact_refs_missing".to_string());
+    }
+
+    let candidate_path = {
+        let path = std::path::Path::new(artifact_ref);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            state_root.join(path)
+        }
+    };
+
+    let metadata = std::fs::symlink_metadata(&candidate_path)
+        .map_err(|error| format!("attempt artifact `{artifact_ref}` is not readable: {error}"))?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() || !file_type.is_file() {
+        return Err(format!(
+            "attempt artifact `{artifact_ref}` must be a regular file within `{}`",
+            state_root.display()
+        ));
+    }
+    if metadata.len() > MAX_ATTEMPT_ARTIFACT_BYTES {
+        return Err(format!(
+            "attempt artifact `{artifact_ref}` exceeds {MAX_ATTEMPT_ARTIFACT_BYTES} bytes"
+        ));
+    }
+
+    let canonical_candidate = candidate_path
+        .canonicalize()
+        .map_err(|error| format!("attempt artifact `{artifact_ref}` is not accessible: {error}"))?;
+    let canonical_root = state_root.canonicalize().map_err(|error| {
+        format!(
+            "attempt artifact root `{}` is not accessible: {error}",
+            state_root.display()
+        )
+    })?;
+    if !canonical_candidate.starts_with(&canonical_root) {
+        return Err(format!(
+            "attempt artifact `{artifact_ref}` must stay within `{}`",
+            state_root.display()
+        ));
+    }
+
+    Ok(canonical_candidate)
+}
+
 pub(crate) fn taskflow_attempt_implementation_artifacts(
     attempts: &[crate::state_store::TaskAttemptRecord],
     task_updated_at: &str,
-) -> TaskflowImplementationArtifacts {
+    state_root: &std::path::Path,
+) -> Result<TaskflowImplementationArtifacts, String> {
     const IMPLEMENTATION_STAGE_ID: &str = "implementation";
     let mut collected = TaskflowImplementationArtifacts::default();
     for attempt in attempts.iter().filter(|attempt| {
@@ -491,31 +546,26 @@ pub(crate) fn taskflow_attempt_implementation_artifacts(
             && taskflow_attempt_status_can_supply_implementation_artifact(&attempt.status)
     }) {
         for artifact_ref in &attempt.artifact_refs {
-            let path = std::path::Path::new(artifact_ref);
-            if !path.exists() {
-                continue;
+            let path =
+                validate_attempt_artifact_ref(artifact_ref, state_root).map_err(|error| {
+                    format!("implementation artifact `{artifact_ref}` is invalid: {error}")
+                })?;
+            let raw = std::fs::read_to_string(&path).map_err(|error| {
+                format!("implementation artifact `{artifact_ref}` could not be read: {error}")
+            })?;
+            let json = serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
+                format!("implementation artifact `{artifact_ref}` is not valid json: {error}")
+            })?;
+            let artifact =
+                normalize_taskflow_attempt_implementation_artifact(attempt, artifact_ref, &json)?;
+            push_unique_string(&mut collected.artifact_refs, artifact_ref);
+            if let Some(authority_key) = taskflow_attempt_implementation_authority(attempt) {
+                push_unique_implementation_authority(&mut collected.authority_keys, authority_key);
             }
-            let Ok(raw) = std::fs::read_to_string(path) else {
-                continue;
-            };
-            let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
-                continue;
-            };
-            if let Some(artifact) =
-                normalize_taskflow_attempt_implementation_artifact(attempt, artifact_ref, &json)
-            {
-                push_unique_string(&mut collected.artifact_refs, artifact_ref);
-                if let Some(authority_key) = taskflow_attempt_implementation_authority(attempt) {
-                    push_unique_implementation_authority(
-                        &mut collected.authority_keys,
-                        authority_key,
-                    );
-                }
-                collected.artifacts.push(artifact);
-            }
+            collected.artifacts.push(artifact);
         }
     }
-    collected
+    Ok(collected)
 }
 
 fn taskflow_attempt_implementation_authority(
@@ -546,10 +596,16 @@ fn normalize_taskflow_attempt_implementation_artifact(
     attempt: &crate::state_store::TaskAttemptRecord,
     artifact_ref: &str,
     json: &serde_json::Value,
-) -> Option<serde_json::Value> {
-    let changed_files = json
+) -> Result<serde_json::Value, String> {
+    let Some(changed_files) = json
         .get("changed_files")
-        .and_then(serde_json::Value::as_array)?
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Err(format!(
+            "implementation artifact `{artifact_ref}` is missing changed_files evidence"
+        ));
+    };
+    let changed_files = changed_files
         .iter()
         .filter_map(serde_json::Value::as_str)
         .map(str::trim)
@@ -557,16 +613,25 @@ fn normalize_taskflow_attempt_implementation_artifact(
         .map(str::to_string)
         .collect::<Vec<_>>();
     if changed_files.is_empty() {
-        return None;
+        return Err(format!(
+            "implementation artifact `{artifact_ref}` is missing changed_files evidence"
+        ));
     }
     if json_identity_conflicts_attempt(json, attempt) {
-        return None;
+        return Err(format!(
+            "implementation artifact `{artifact_ref}` conflicts with attempt identity"
+        ));
     }
     let consolidation_receipt_id = attempt
         .consolidation_receipt_id
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "implementation artifact `{artifact_ref}` is missing consolidation receipt evidence"
+            )
+        })?;
     let artifact_kind = json
         .get("artifact_kind")
         .and_then(serde_json::Value::as_str)
@@ -583,7 +648,7 @@ fn normalize_taskflow_attempt_implementation_artifact(
     } else {
         artifact_kind
     };
-    Some(serde_json::json!({
+    Ok(serde_json::json!({
         "artifact_kind": normalized_kind,
         "schema_version": "stage-attempt-implementation-artifact-v1",
         "attempt_id": attempt.attempt_id,

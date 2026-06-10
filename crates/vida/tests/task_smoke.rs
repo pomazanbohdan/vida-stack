@@ -4934,6 +4934,57 @@ fn create_task_attempt_fixture_with_owned_paths(
     assert_eq!(task["status"], "pass");
 }
 
+fn assert_task_attempt_collect_blocks_artifact_ref(
+    state_dir: &str,
+    task_id: &str,
+    attempt_id: &str,
+    artifact_ref: &str,
+) {
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            task_id,
+            "--attempt-id",
+            attempt_id,
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--isolation",
+            "readonly",
+            "--status",
+            "produced",
+            "--artifact-ref",
+            artifact_ref,
+            "--json",
+        ],
+        state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task", "attempt", "collect", task_id, "--stage", "analysis", "--json",
+        ],
+        state_dir,
+    );
+    assert!(!success);
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(
+        blocked["blocker_codes"],
+        serde_json::json!(["dispatch_packet_contract_invalid"])
+    );
+    assert!(blocked["error"]
+        .as_str()
+        .expect("blocked artifact error should render")
+        .contains("attempt_artifact_validation_failed"));
+    assert_eq!(blocked["canonical_task_notes_mutated"], false);
+}
+
 #[test]
 fn task_attempt_ledger_persists_backend_model_isolation_freshness_status_and_artifacts() {
     let state_dir = unique_state_dir();
@@ -6145,6 +6196,95 @@ fn task_attempt_implementation_artifact_validation() {
         .expect("consolidate artifact error should render")
         .contains("outside task owned_paths"));
     assert_eq!(consolidate_blocked["canonical_task_notes_mutated"], false);
+}
+
+#[test]
+fn task_attempt_collect_rejects_out_of_root_artifact_ref() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-collect-out-of-root-artifact");
+    create_task_attempt_fixture_with_notes(&state_dir, &task_id);
+
+    let outside_dir = unique_state_dir();
+    fs::create_dir_all(&outside_dir).expect("create outside artifact dir");
+    let outside_artifact = format!("{outside_dir}/analysis-a.json");
+    fs::write(
+        &outside_artifact,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-collect-out-of-root",
+            "task_id": &task_id,
+            "stage_id": "analysis",
+            "observed_facts": ["artifact reads must stay fail-closed"],
+            "hypotheses": [],
+            "proof_results": [],
+            "risks": [],
+            "limitations": [],
+            "conflicts": []
+        })
+        .to_string(),
+    )
+    .expect("write outside artifact");
+
+    assert_task_attempt_collect_blocks_artifact_ref(
+        &state_dir,
+        &task_id,
+        "attempt-collect-out-of-root",
+        &outside_artifact,
+    );
+}
+
+#[test]
+fn task_attempt_collect_rejects_oversized_artifact_ref() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-collect-oversized-artifact");
+    create_task_attempt_fixture_with_notes(&state_dir, &task_id);
+
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+    let oversized_artifact = format!("{artifact_dir}/analysis-oversized.json");
+    let oversized_body = "x".repeat(70 * 1024);
+    fs::write(
+        &oversized_artifact,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-collect-oversized",
+            "task_id": &task_id,
+            "stage_id": "analysis",
+            "observed_facts": ["oversized artifact reads must stay fail-closed"],
+            "notes": oversized_body,
+            "hypotheses": [],
+            "proof_results": [],
+            "risks": [],
+            "limitations": [],
+            "conflicts": []
+        })
+        .to_string(),
+    )
+    .expect("write oversized artifact");
+
+    assert_task_attempt_collect_blocks_artifact_ref(
+        &state_dir,
+        &task_id,
+        "attempt-collect-oversized",
+        &oversized_artifact,
+    );
+}
+
+#[test]
+fn task_attempt_collect_rejects_directory_artifact_ref() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-collect-directory-artifact");
+    create_task_attempt_fixture_with_notes(&state_dir, &task_id);
+
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+
+    assert_task_attempt_collect_blocks_artifact_ref(
+        &state_dir,
+        &task_id,
+        "attempt-collect-directory",
+        &artifact_dir,
+    );
 }
 
 #[test]
@@ -8485,7 +8625,8 @@ fn run_graph_task_identity_repair_public_cli_matrix() {
     assert_eq!(closed_backing_task["status"], "pass");
     assert_eq!(closed_backing_task["task"]["status"], "closed");
 
-    let status_after_closed_backing_task = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
+    let status_after_closed_backing_task =
+        run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     assert_ne!(
         status_after_closed_backing_task["continuation_binding"]["ambiguity_reason"],
         "latest_run_graph_task_closed",
@@ -13585,7 +13726,8 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
     let before = run_command_json(&["doctor", "--json"], &state_dir);
     let before_blockers = require_json_string_array(&before["blocker_codes"], "before blockers");
     assert!(before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
-    let (status_before, _) = run_command_json_allow_failure(&["status", "--json", "--view", "full"], &state_dir);
+    let (status_before, _) =
+        run_command_json_allow_failure(&["status", "--json", "--view", "full"], &state_dir);
     let status_before_blockers =
         require_json_string_array(&status_before["blocker_codes"], "status before blockers");
     assert!(
@@ -13703,7 +13845,8 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
         after["latest_terminal_task_active_run_graph_status"]["task_id"],
         "task-reconcile-closed-runs-b"
     );
-    let (status_after, _) = run_command_json_allow_failure(&["status", "--json", "--view", "full"], &state_dir);
+    let (status_after, _) =
+        run_command_json_allow_failure(&["status", "--json", "--view", "full"], &state_dir);
     let status_after_blockers =
         require_json_string_array(&status_after["blocker_codes"], "status after blockers");
     assert!(
@@ -14479,7 +14622,8 @@ fn task_reconcile_closed_runs_retires_receipt_backed_terminal_closure_run() {
             ["closed_task_active_run_projection_mismatch"],
         false
     );
-    let status_before_reconcile = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
+    let status_before_reconcile =
+        run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let status_before_reconcile_blockers = require_json_string_array(
         &status_before_reconcile["blocker_codes"],
         "status before reconcile blockers",
@@ -17473,9 +17617,7 @@ fn task_update_parent_guard_quotes_shell_unsafe_issue_id_in_next_action() {
             .unwrap()
             .iter()
             .filter_map(|action| action.as_str())
-            .any(|action| {
-                action.contains("vida task update 'old;echo pwned' --status closed")
-            }),
+            .any(|action| { action.contains("vida task update 'old;echo pwned' --status closed") }),
         "{parsed}"
     );
 
@@ -18497,7 +18639,8 @@ fn protocol_binding_operator_contract_parity() {
         "protocol-binding sync must produce trusted compiled payload evidence"
     );
 
-    let post_sync_status_json = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
+    let post_sync_status_json =
+        run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     assert_eq!(
         post_sync_status_json["protocol_binding"]["blocking_issue_count"]
             .as_u64()
@@ -18837,7 +18980,8 @@ fn status_and_doctor_block_on_current_session_run_graph_snapshot_inconsistency()
         .expect("packet task id should be present")
         .to_string();
 
-    let (status, _) = run_command_json_allow_failure(&["status", "--json", "--view", "full"], &state_dir);
+    let (status, _) =
+        run_command_json_allow_failure(&["status", "--json", "--view", "full"], &state_dir);
     let (doctor, _) = run_command_json_allow_failure(&["doctor", "--json"], &state_dir);
     let status_blockers = require_json_string_array(&status["blocker_codes"], "status blockers");
     let doctor_blockers = require_json_string_array(&doctor["blocker_codes"], "doctor blockers");

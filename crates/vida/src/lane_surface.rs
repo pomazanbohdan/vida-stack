@@ -3022,18 +3022,30 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
             }
         }
     };
+    let authority = HostBridgeImplementationAuthority {
+        task_id: task.id.clone(),
+        task_updated_at: task.updated_at.clone(),
+    };
     let taskflow_artifacts = match store.task_stage_attempts(run_id, "implementation").await {
-        Ok(attempts) => crate::runtime_dispatch_packets::taskflow_attempt_implementation_artifacts(
-            &attempts,
-            &task.updated_at,
-        ),
+        Ok(attempts) => {
+            match crate::runtime_dispatch_packets::taskflow_attempt_implementation_artifacts(
+                &attempts,
+                &task.updated_at,
+                store.root(),
+            ) {
+                Ok(artifacts) => artifacts,
+                Err(_) => return HostBridgeTaskflowImplementationEvidence {
+                    authority: Some(authority),
+                    taskflow_artifacts:
+                        crate::runtime_dispatch_packets::TaskflowImplementationArtifacts::default(),
+                    blocker_codes: vec!["implementation_artifact_contract_invalid".to_string()],
+                },
+            }
+        }
         Err(_) => crate::runtime_dispatch_packets::TaskflowImplementationArtifacts::default(),
     };
     HostBridgeTaskflowImplementationEvidence {
-        authority: Some(HostBridgeImplementationAuthority {
-            task_id: task.id,
-            task_updated_at: task.updated_at,
-        }),
+        authority: Some(authority),
         taskflow_artifacts,
         blocker_codes: Vec::new(),
     }
@@ -9055,6 +9067,100 @@ mod tests {
             evidence.blocker_codes,
             vec!["implementation_artifact_authority_missing".to_string()]
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_taskflow_implementation_artifacts_blocks_invalid_artifact_evidence() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-invalid-artifact-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-host-bridge-invalid-artifact";
+        let _task = store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge invalid artifact",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/lane_surface.rs".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+
+        let artifact_path = root.join("attempt-artifacts/invalid-artifact.json");
+        std::fs::create_dir_all(artifact_path.parent().expect("artifact parent"))
+            .expect("create artifact parent");
+        std::fs::write(&artifact_path, "not json").expect("write invalid artifact");
+        store
+            .record_task_attempt(crate::state_store::RecordTaskAttemptRequest {
+                attempt_id: Some("attempt-invalid".to_string()),
+                task_id: run_id.to_string(),
+                stage_id: "implementation".to_string(),
+                backend: "internal_subagents".to_string(),
+                model_profile: "middle".to_string(),
+                isolation: "patch_proposal".to_string(),
+                freshness: None,
+                status: "accepted".to_string(),
+                artifact_refs: vec![artifact_path.display().to_string()],
+                consolidation_receipt_id: Some("attempt-invalid-consolidation-receipt".to_string()),
+                selected_model_profile_readiness_status: None,
+                budget_posture: None,
+                cap_posture: None,
+                write_scope_classification: None,
+            })
+            .await
+            .expect("record accepted attempt");
+
+        let request_path = root.join("host-tool-bridge/requests/invalid-artifact.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "invalid-artifact",
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": "implementer",
+                "implementation_artifacts": []
+            })
+            .to_string(),
+        )
+        .expect("write request");
+
+        let evidence = taskflow_implementation_artifacts_for_host_bridge_request(
+            &store,
+            &request_path.display().to_string(),
+            run_id,
+        )
+        .await;
+
+        assert_eq!(
+            evidence.blocker_codes,
+            vec!["implementation_artifact_contract_invalid".to_string()]
+        );
+        assert!(evidence.taskflow_artifacts.artifacts.is_empty());
+        assert!(evidence.taskflow_artifacts.artifact_refs.is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 

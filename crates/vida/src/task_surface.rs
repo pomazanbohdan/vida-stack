@@ -6385,6 +6385,7 @@ async fn run_task_attempt_collect(command: TaskAttemptCollectArgs) -> ExitCode {
         .state_dir
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
+    let state_root = std::path::PathBuf::from(&state_dir);
     match StateStore::open_existing(state_dir).await {
         Ok(store) => {
             let attempt_id = match command.attempt_id.clone() {
@@ -6438,6 +6439,7 @@ async fn run_task_attempt_collect(command: TaskAttemptCollectArgs) -> ExitCode {
                 &store,
                 &existing_attempt,
                 &artifact_refs,
+                state_root.as_path(),
             )
             .await
             {
@@ -6527,31 +6529,36 @@ async fn run_task_attempt_consolidate(command: TaskAttemptConsolidateArgs) -> Ex
         .state_dir
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
+    let state_root = std::path::PathBuf::from(&state_dir);
     match StateStore::open_existing(state_dir).await {
-        Ok(store) => match task_attempt_consolidation_for_command(&store, &command).await {
-            Ok((receipt, summary)) => print_task_attempt_payload(
-                "vida task attempt consolidate",
-                command.render,
-                command.json,
-                task_attempt_consolidation_payload(
+        Ok(store) => {
+            match task_attempt_consolidation_for_command(&store, &command, state_root.as_path())
+                .await
+            {
+                Ok((receipt, summary)) => print_task_attempt_payload(
                     "vida task attempt consolidate",
-                    receipt,
-                    summary,
+                    command.render,
+                    command.json,
+                    task_attempt_consolidation_payload(
+                        "vida task attempt consolidate",
+                        receipt,
+                        summary,
+                    ),
                 ),
-            ),
-            Err(error) => print_task_attempt_payload(
-                "vida task attempt consolidate",
-                command.render,
-                command.json,
-                task_attempt_error_payload(
+                Err(error) => print_task_attempt_payload(
                     "vida task attempt consolidate",
-                    Some(command.task_id.as_str()),
-                    Some(command.stage_id.as_str()),
-                    None,
-                    &error,
+                    command.render,
+                    command.json,
+                    task_attempt_error_payload(
+                        "vida task attempt consolidate",
+                        Some(command.task_id.as_str()),
+                        Some(command.stage_id.as_str()),
+                        None,
+                        &error,
+                    ),
                 ),
-            ),
-        },
+            }
+        }
         Err(error) => print_task_attempt_payload(
             "vida task attempt consolidate",
             command.render,
@@ -6645,6 +6652,7 @@ struct TaskAttemptArtifactConsolidation {
 async fn task_attempt_consolidation_for_command(
     store: &StateStore,
     command: &TaskAttemptConsolidateArgs,
+    state_root: &std::path::Path,
 ) -> Result<
     (
         state_store::TaskStageConsolidationReceipt,
@@ -6657,11 +6665,10 @@ async fn task_attempt_consolidation_for_command(
         .await?;
     let task = store.show_task(&command.task_id).await?;
     let mut consolidated =
-        consolidate_attempt_artifacts(&attempts, &task.planner_metadata.owned_paths).map_err(
-            |reason| state_store::StateStoreError::InvalidTaskRecord {
+        consolidate_attempt_artifacts(&attempts, &task.planner_metadata.owned_paths, state_root)
+            .map_err(|reason| state_store::StateStoreError::InvalidTaskRecord {
                 reason: format!("attempt_artifact_validation_failed: {reason}"),
-            },
-        )?;
+            })?;
     merge_repeated_values(&mut consolidated.facts, &command.facts);
     merge_repeated_values(&mut consolidated.hypotheses, &command.hypotheses);
     merge_repeated_values(&mut consolidated.conflicts, &command.conflicts);
@@ -6703,10 +6710,12 @@ async fn task_attempt_consolidation_for_command(
 fn consolidate_attempt_artifacts(
     attempts: &[state_store::TaskAttemptRecord],
     owned_paths: &[String],
+    state_root: &std::path::Path,
 ) -> Result<TaskAttemptArtifactConsolidation, String> {
     let mut consolidated = TaskAttemptArtifactConsolidation::default();
     for attempt in attempts {
-        let artifacts = validate_attempt_artifacts(&attempt.artifact_refs, attempt, owned_paths)?;
+        let artifacts =
+            validate_attempt_artifacts(&attempt.artifact_refs, attempt, owned_paths, state_root)?;
         for (artifact_ref, json) in artifacts {
             if !consolidated.artifact_refs.contains(&artifact_ref) {
                 consolidated.artifact_refs.push(artifact_ref.clone());
@@ -6741,36 +6750,40 @@ async fn validate_attempt_artifacts_for_task(
     store: &StateStore,
     attempt: &state_store::TaskAttemptRecord,
     artifact_refs: &[String],
+    state_root: &std::path::Path,
 ) -> Result<Vec<String>, String> {
     let task = store
         .show_task(&attempt.task_id)
         .await
         .map_err(|error| format!("failed to read task owned_paths: {error}"))?;
-    validate_attempt_artifacts(artifact_refs, attempt, &task.planner_metadata.owned_paths).map(
-        |artifacts| {
-            artifacts
-                .into_iter()
-                .map(|(artifact_ref, _)| artifact_ref)
-                .collect()
-        },
+    validate_attempt_artifacts(
+        artifact_refs,
+        attempt,
+        &task.planner_metadata.owned_paths,
+        state_root,
     )
+    .map(|artifacts| {
+        artifacts
+            .into_iter()
+            .map(|(artifact_ref, _)| artifact_ref)
+            .collect()
+    })
 }
 
 fn validate_attempt_artifacts(
     values: &[String],
     attempt: &state_store::TaskAttemptRecord,
     owned_paths: &[String],
+    state_root: &std::path::Path,
 ) -> Result<Vec<(String, serde_json::Value)>, String> {
     let refs = validate_attempt_artifact_refs(values)?;
     refs.into_iter()
         .map(|artifact_ref| {
-            let path = std::path::Path::new(&artifact_ref);
-            if !path.exists() {
-                return Err(format!(
-                    "task attempt artifacts require local JSON artifact refs; `{artifact_ref}` does not exist"
-                ));
-            }
-            let raw = std::fs::read_to_string(path).map_err(|error| {
+            let path = crate::runtime_dispatch_packets::validate_attempt_artifact_ref(
+                &artifact_ref,
+                state_root,
+            )?;
+            let raw = std::fs::read_to_string(&path).map_err(|error| {
                 format!("failed to read attempt artifact `{artifact_ref}`: {error}")
             })?;
             let json: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {

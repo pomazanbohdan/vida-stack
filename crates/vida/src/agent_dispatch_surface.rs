@@ -5363,7 +5363,9 @@ mod tests {
             crate::runtime_dispatch_packets::taskflow_attempt_implementation_artifacts(
                 &attempts,
                 &task_updated_at,
-            );
+                root.as_path(),
+            )
+            .expect("collect implementation artifacts");
         assert_eq!(taskflow_artifacts.artifacts.len(), 1);
         assert_eq!(
             taskflow_artifacts.artifacts[0]["artifact_kind"],
