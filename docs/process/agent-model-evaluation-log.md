@@ -3,6 +3,48 @@
 Purpose: record per-task executor/validator efficiency evidence so the next VIDA
 task can choose a cheaper or stronger model deliberately.
 
+## 2026-06-11 - pr356-dispatch-target-alias-policy
+
+Scope:
+- Task: `pr356-dispatch-target-alias-policy`
+- PR: `#356`
+- Files: `crates/vida/src/runtime_dispatch_execution.rs`,
+  `crates/vida/src/runtime_dispatch_state.rs`
+- Proof:
+  - `cargo test -p vida preserves_lane_policy -- --nocapture`
+  - `cargo test -p vida configured_dev_team_route_selects_current_task_class_slice_for_generic_task -- --nocapture`
+  - `cargo build`
+  - `git diff --check -- crates/vida/src/runtime_dispatch_execution.rs crates/vida/src/runtime_dispatch_state.rs`
+  - `vida task validate-graph --json`
+  - `vida task closure-ready pr356-dispatch-target-alias-policy --json`
+
+Observed model results:
+- Executor `gpt-5.4-mini` with `xhigh` reasoning: 8.5/10. It took a long wait
+  and needed a checkpoint request, but produced a correct two-file patch,
+  focused tests, build proof, and diff-check proof. Tokens were not exposed by
+  the host. The final report listed tool categories instead of a numeric tool
+  call count, so the orchestrator records tool-call telemetry as partial.
+- Orchestrator adjustment: removed one `unused_mut` warning before final proof.
+  No logic rework was needed after the mini patch.
+- Validator `gpt-5.5` with `medium` reasoning: 8/10. It accepted the patch,
+  reran the focused alias test and diff-check, added one ROUTE/task-class guard
+  test, and identified a non-blocking gap: no positive launch test proving an
+  admissible backend receives executable `dev`. The negative launch test plus
+  downstream receipt test were sufficient for PR #356 closure.
+
+Next-task selection rule:
+- `gpt-5.4-mini xhigh` is efficient for two-file runtime policy work when the
+  prompt names exact files, invariant, proof commands, and non-goals. Wait longer
+  before classifying timeout; this task completed after extended waiting.
+- Require numeric `tool_calls_used`; if an agent reports only tool categories,
+  score telemetry completeness down even when implementation quality is high.
+- Keep `gpt-5.5 medium` validator for routing/admissibility policy because it
+  catches false-green risk and can add a targeted guard test without broadening
+  implementation scope.
+- For the next runtime PR slice, use mini-high/xhigh executor only if the target
+  file is clean. If the file has unrelated dirty hunks, first create a hunk-safe
+  isolation task or choose a clean PR.
+
 ## 2026-06-11 - pr342-packet-repair-binding-contract
 
 Scope:
@@ -260,5 +302,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-11T21:45:00+03:00
+updated_at: 2026-06-11T22:31:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
