@@ -242,6 +242,57 @@ Next-task selection rule:
 - When a validator finds a real adjacent issue in a dirty file, create a new
   bounded TaskFlow item rather than silently expanding the current commit.
 
+## 2026-06-12 - pr355-agent-dispatch-host-bridge-read-path-safety
+
+Scope:
+- Task: `pr355-agent-dispatch-host-bridge-read-path-safety`
+- PR: `#355`
+- File: `crates/vida/src/agent_dispatch_surface.rs`
+- Proof:
+  - `cargo +1.95.0 test -p vida host_bridge_provenance_blocks_request_outside_state_root -- --nocapture`
+  - `cargo +1.95.0 test -p vida host_bridge_request_untrusted_path_explicit_state_dir_is_authoritative -- --nocapture`
+  - `cargo +1.95.0 test -p vida host_bridge_missing_receipt_blocks_pending_request -- --nocapture`
+  - `cargo +1.95.0 test -p vida host_bridge_provenance_accepts_pending_bridge_receipt -- --nocapture`
+  - `cargo +1.95.0 test -p vida host_bridge_request_read_rejects_state_root_escape_and_oversized_files -- --nocapture`
+  - `cargo +1.95.0 test -p vida host_bridge_packet_reader_rejects_non_regular_files_and_oversized_packets -- --nocapture`
+  - `cargo +1.95.0 build`
+  - `rustfmt +1.95.0 --edition 2021 --check crates/vida/src/agent_dispatch_surface.rs`
+  - `git diff --check -- crates/vida/src/agent_dispatch_surface.rs`
+  - `git diff --cached --check`
+  - `vida task validate-graph --json`
+  - `vida task closure-ready pr355-agent-dispatch-host-bridge-read-path-safety --json`
+
+Observed model results:
+- Preflight analyst `gpt-5.4-mini` with `xhigh` reasoning: 8/10. It correctly
+  split on-task read-path hunks from unrelated dirty hunks, named the missing
+  containment/non-regular/oversize proof cases, and supplied a hunk-safe staging
+  plan. Reported token usage was not exposed; observed tool-call count was about
+  36.
+- Executor `gpt-5.4-mini` with `xhigh` reasoning: 9/10. It implemented the
+  bounded read-path invariant in one production file, added focused regression
+  tests, ran focused tests plus build and rustfmt proof, and preserved unrelated
+  worktree hunks. Reported token and tool-call usage were not exposed.
+- Validator `gpt-5.5-medium`: 8/10. It accepted the implementation, confirmed
+  state-root containment before JSON parsing, capped artifact reads, and checked
+  reconciled packet/receipt reads. It left one non-blocking residual risk: no
+  dedicated symlink regression test beyond the shared `symlink_metadata` guard.
+- Orchestrator action: repaired the staged index so the commit excluded an
+  unrelated `attach_artifacts` provenance hunk, closed the TaskFlow item, ran
+  graph and closure gates, committed, and pushed.
+
+Next-task selection rule:
+- Keep `gpt-5.4-mini xhigh` as the default executor for one-file read-path
+  safety work when the orchestrator supplies exact invariants, proof commands,
+  and dirty-hunk boundaries.
+- Keep `gpt-5.4-mini xhigh` as a cheap preflight reviewer for hunk
+  classification before coding in a dirty worktree.
+- Keep `gpt-5.5-medium` as the validator for host-bridge artifact intake,
+  receipt/provenance authority, and path-safety work; require it to state
+  residual risk separately from closure blockers.
+- In dirty files, stage by invariant rather than by file. If an executor returns
+  an adjacent valid-looking hunk, split it into a separate TaskFlow item unless
+  the active bounded unit explicitly owns it.
+
 ## 2026-06-11 - lane-surface-host-bridge-receipt-authority
 
 Scope:
