@@ -7004,7 +7004,19 @@ fn external_attempt_scope_guard() {
     let pass_result: Value =
         serde_json::from_str(&fs::read_to_string(&result_path).expect("result should read"))
             .expect("result should parse");
+    assert_eq!(
+        pass_result["implementation_artifact_source"],
+        "host_bridge_completion_receipt"
+    );
     assert_eq!(pass_result["scope_validation"]["status"], "pass");
+    assert_eq!(
+        pass_result["implementation_artifacts"][0]["receipt_backed"],
+        true
+    );
+    assert_eq!(
+        pass_result["implementation_artifacts"][0]["consolidation_receipt_id"],
+        pass_result["completion_receipt_id"]
+    );
     assert_eq!(
         pass_result["scope_validation"]["reported_changed_files"],
         serde_json::json!(["crates/vida/src/runtime_dispatch_execution.rs"])
@@ -7097,8 +7109,10 @@ fn external_attempt_scope_guard() {
             .as_array()
             .expect("blocked lane blocker codes should render")
             .iter()
-            .any(|code| code == "lane_completion_blocked_by_summary"),
-        "summary blocker should remain visible with scope blocker: {blocked}"
+            .any(|code| {
+                code == "lane_completion_blocked_by_summary" || code == "open_delegated_cycle"
+            }),
+        "summary or delegated-cycle blocker should remain visible with scope blocker: {blocked}"
     );
     let blocked_result: Value = serde_json::from_str(
         &fs::read_to_string(&result_path).expect("blocked result should read"),
@@ -7118,8 +7132,10 @@ fn external_attempt_scope_guard() {
             .as_array()
             .expect("host bridge result blocker codes should render")
             .iter()
-            .any(|code| code == "lane_completion_blocked_by_summary"),
-        "host bridge result should preserve summary blocker: {blocked_result}"
+            .any(|code| {
+                code == "lane_completion_blocked_by_summary" || code == "open_delegated_cycle"
+            }),
+        "host bridge result should preserve summary or delegated-cycle blocker: {blocked_result}"
     );
     assert_eq!(
         blocked_result["scope_validation"]["out_of_scope_paths"],
