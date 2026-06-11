@@ -39,6 +39,7 @@ it is clearly labeled as approximate.
 Scope:
 - Task: `todo-agent-optimization-top-level-docs`
 - Parent: `pr-open-runtime-hardening-342-343-349-352-355-356-358-360-361`
+- Commit: `01f4b14fe`
 - Files: `AGENTS.sidecar.md`,
   `docs/process/project-orchestrator-operating-protocol.md`,
   `docs/process/team-development-and-orchestration-protocol.md`,
@@ -98,11 +99,13 @@ Twenty criteria outcome:
 12. Public/release proof: not applicable, no public CLI behavior changed.
 13. Debug build: pass, `cargo +1.95.0 build`.
 14. TaskFlow state: pass, graph valid and closure-ready checked before close.
-15. Staging by invariant: pending until commit, docs-only files must be staged.
+15. Staging by invariant: pass, docs-only files staged; unrelated Rust and
+    untracked files remained unstaged.
 16. Publication authorization: pass, active epic has repeatable task push
     instruction.
 17. Evaluation docs: pass, this scorecard records the rule change.
-18. Parent/wave metrics: pending after task close.
+18. Parent/wave metrics: pass, epic progress after close is 86/215 tasks
+    closed, 40.0%; waves closed remain 0/13.
 19. New defects/follow-ups: none required after this docs pass.
 20. Next routing rule: pass, self-analysis STOP gate blocks future task starts
     until complete.
