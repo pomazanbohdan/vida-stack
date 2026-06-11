@@ -702,6 +702,12 @@ fn receipt_has_ready_downstream_packet(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
     receipt.downstream_dispatch_ready
+        && receipt.downstream_dispatch_blockers.is_empty()
+        && receipt
+            .downstream_dispatch_status
+            .as_deref()
+            .map(|status| canonical_resume_dispatch_status(Some(status)))
+            == Some("packet_ready")
         && receipt
             .downstream_dispatch_packet_path
             .as_deref()
@@ -749,13 +755,6 @@ async fn validate_run_graph_resume_state(
     if receipt_backed_terminal_closure_resume(store, &status, run_id).await {
         return Ok(());
     }
-    if status.resume_target == "none" {
-        if let Some(receipt) = active_receipt.as_ref() {
-            if receipt_has_ready_downstream_packet(receipt) {
-                return Ok(());
-            }
-        }
-    }
     let task_authority =
         crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(store, &status)
             .await
@@ -764,7 +763,36 @@ async fn validate_run_graph_resume_state(
                     "Failed to verify TaskFlow authority for run `{run_id}` before resume: {error}"
                 )
             })?;
-    if task_authority.task_missing() {
+    let task_missing = task_authority.task_missing();
+    if status.resume_target == "none" {
+        if let Some(receipt) = active_receipt.as_ref() {
+            if receipt_has_ready_downstream_packet(receipt) {
+                return Ok(());
+            }
+        }
+    }
+    if !task_missing
+        && active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await
+    {
+        return Ok(());
+    }
+    if active_receipt.is_some() && resume_from_persisted_final_snapshot(store, run_id)? {
+        return Ok(());
+    }
+    if active_receipt
+        .as_ref()
+        .and_then(|receipt| status_with_active_exception_dispatch_replay(&status, receipt))
+        .as_ref()
+        .is_some_and(|replay_status| validate_run_graph_resume_gate(replay_status).is_ok())
+    {
+        return Ok(());
+    }
+    if let Some(error) =
+        active_exception_takeover_resume_blocker_error(&status, active_receipt.as_ref())
+    {
+        return Err(error);
+    }
+    if task_missing {
         return Err(stale_missing_task_run_graph_resume_error(
             &status,
             active_receipt.as_ref(),
@@ -774,9 +802,6 @@ async fn validate_run_graph_resume_state(
         .as_ref()
         .is_some_and(|receipt| dispatch_receipt_records_completed_lane(receipt, run_id))
     {
-        return Ok(());
-    }
-    if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
         return Ok(());
     }
     if active_receipt
@@ -790,14 +815,6 @@ async fn validate_run_graph_resume_state(
                 .as_ref()
                 .expect("active receipt checked by materialization-only guard"),
         ));
-    }
-    if active_receipt
-        .as_ref()
-        .and_then(|receipt| status_with_active_exception_dispatch_replay(&status, receipt))
-        .as_ref()
-        .is_some_and(|replay_status| validate_run_graph_resume_gate(replay_status).is_ok())
-    {
-        return Ok(());
     }
     match validate_run_graph_resume_gate(&status) {
         Ok(()) => Ok(()),
@@ -839,7 +856,29 @@ async fn validate_run_graph_resume_state_strict(
                     "Failed to verify TaskFlow authority for run `{run_id}` before strict resume: {error}"
                 )
             })?;
-    if task_authority.task_missing() {
+    let task_missing = task_authority.task_missing();
+    if !task_missing
+        && active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await
+    {
+        return Ok(());
+    }
+    if active_receipt.is_some() && resume_from_persisted_final_snapshot(store, run_id)? {
+        return Ok(());
+    }
+    if active_receipt
+        .as_ref()
+        .and_then(|receipt| status_with_active_exception_dispatch_replay(&status, receipt))
+        .as_ref()
+        .is_some_and(|replay_status| validate_run_graph_resume_gate(replay_status).is_ok())
+    {
+        return Ok(());
+    }
+    if let Some(error) =
+        active_exception_takeover_resume_blocker_error(&status, active_receipt.as_ref())
+    {
+        return Err(error);
+    }
+    if task_missing {
         return Err(stale_missing_task_run_graph_resume_error(
             &status,
             active_receipt.as_ref(),
@@ -849,9 +888,6 @@ async fn validate_run_graph_resume_state_strict(
         .as_ref()
         .is_some_and(|receipt| dispatch_receipt_records_completed_lane(receipt, run_id))
     {
-        return Ok(());
-    }
-    if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
         return Ok(());
     }
     if active_receipt
@@ -865,14 +901,6 @@ async fn validate_run_graph_resume_state_strict(
                 .as_ref()
                 .expect("active receipt checked by materialization-only guard"),
         ));
-    }
-    if active_receipt
-        .as_ref()
-        .and_then(|receipt| status_with_active_exception_dispatch_replay(&status, receipt))
-        .as_ref()
-        .is_some_and(|replay_status| validate_run_graph_resume_gate(replay_status).is_ok())
-    {
-        return Ok(());
     }
     validate_run_graph_resume_gate(&status).map_err(|error| {
         active_exception_takeover_resume_blocker_error(&status, active_receipt.as_ref())
@@ -2307,13 +2335,6 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
     {
         return Ok(());
     }
-    if status.resume_target == "none" {
-        if let Some(receipt) = active_receipt.as_ref() {
-            if receipt_has_ready_downstream_packet(receipt) {
-                return Ok(());
-            }
-        }
-    }
     let task_authority =
         crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(store, &status)
             .await
@@ -2322,13 +2343,20 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
                     "Failed to verify TaskFlow authority for run `{run_id}` before downstream packet resume: {error}"
                 )
             })?;
-    if task_authority.task_missing() {
-        return Err(stale_missing_task_run_graph_resume_error(
-            &status,
-            active_receipt.as_ref(),
-        ));
+    let task_missing = task_authority.task_missing();
+    if status.resume_target == "none" {
+        if let Some(receipt) = active_receipt.as_ref() {
+            if receipt_has_ready_downstream_packet(receipt) {
+                return Ok(());
+            }
+        }
     }
-    if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
+    if !task_missing
+        && active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await
+    {
+        return Ok(());
+    }
+    if active_receipt.is_some() && resume_from_persisted_final_snapshot(store, run_id)? {
         return Ok(());
     }
     if let Some((packet, packet_path)) = candidate_packet {
@@ -2339,6 +2367,22 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
         ) {
             return Ok(());
         }
+    }
+    if active_receipt.as_ref().is_some_and(|receipt| {
+        receipt.run_id == run_id
+            && receipt.downstream_dispatch_ready
+            && receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty())
+    }) {
+        return Ok(());
+    }
+    if task_missing {
+        return Err(stale_missing_task_run_graph_resume_error(
+            &status,
+            active_receipt.as_ref(),
+        ));
     }
     validate_run_graph_resume_gate(&status)
 }
@@ -2394,10 +2438,10 @@ fn downstream_packet_candidate_has_receipt_backed_ready_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return !packet_path.trim().is_empty();
+        return false;
     };
     let Ok(result) = read_downstream_dispatch_result(result_path) else {
-        return !packet_path.trim().is_empty();
+        return false;
     };
     if result
         .get("run_id")
@@ -4885,8 +4929,10 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
     store: &super::StateStore,
     run_id: &str,
 ) -> Result<ResumeInputs, String> {
-    resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(store, run_id, true, false)
-        .await
+    resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
+        store, run_id, true, false, false,
+    )
+    .await
 }
 
 async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
@@ -4894,11 +4940,14 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     run_id: &str,
     strict_blocked_receipts: bool,
     allow_explicit_binding_redirect: bool,
+    followed_explicit_task_graph_binding_redirect: bool,
 ) -> Result<ResumeInputs, String> {
     const MAX_BOUND_TASK_RESUME_REDIRECTS: usize = 64;
     let mut resolved_run_id = run_id.to_string();
     let mut visited_run_ids = std::collections::HashSet::from([resolved_run_id.clone()]);
     let mut redirects = 0usize;
+    let mut followed_explicit_task_graph_binding_redirect =
+        followed_explicit_task_graph_binding_redirect;
     if allow_explicit_binding_redirect {
         while let Some(bound_run_id) =
             explicit_bound_task_graph_resume_run_id(store, &resolved_run_id).await?
@@ -4910,6 +4959,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                 ));
             }
             redirects += 1;
+            followed_explicit_task_graph_binding_redirect = true;
             if redirects > MAX_BOUND_TASK_RESUME_REDIRECTS {
                 return Err(format!(
                     "Explicit continuation binding redirect limit exceeded while resolving resume inputs for `{run_id}` (limit: {MAX_BOUND_TASK_RESUME_REDIRECTS})."
@@ -4918,7 +4968,9 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             resolved_run_id = bound_run_id;
         }
     }
-    if let Ok(status) = store.run_graph_status(&resolved_run_id).await {
+    let missing_task_run_graph_status = if let Ok(status) =
+        store.run_graph_status(&resolved_run_id).await
+    {
         let task_authority =
             crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
                 store, &status,
@@ -4931,17 +4983,13 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                 )
             })?;
         if task_authority.task_missing() {
-            let dispatch_receipt = store
-                .run_graph_dispatch_receipt(&resolved_run_id)
-                .await
-                .ok()
-                .flatten();
-            return Err(stale_missing_task_run_graph_resume_error(
-                &status,
-                dispatch_receipt.as_ref(),
-            ));
+            Some(status)
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
     let mut receipt = match store.run_graph_dispatch_receipt(&resolved_run_id).await {
         Ok(Some(receipt)) => receipt,
         Ok(None) => match recover_missing_first_dispatch_receipt(store, &resolved_run_id).await? {
@@ -5312,6 +5360,14 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         .await?;
         return Ok(resume);
     }
+    if !explicit_task_graph_task_binding && !followed_explicit_task_graph_binding_redirect {
+        if let Some(status) = missing_task_run_graph_status.as_ref() {
+            return Err(stale_missing_task_run_graph_resume_error(
+                status,
+                Some(&receipt),
+            ));
+        }
+    }
     let active_executable_receipt =
         matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
             && receipt.blocker_code.is_none();
@@ -5483,8 +5539,22 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
             }
         }
         let run_id = resolve_default_resume_run_id(store).await?;
+        let followed_explicit_task_graph_binding_redirect =
+            explicit_binding.as_ref().is_some_and(|binding| {
+                binding.status == "bound"
+                    && binding.active_bounded_unit["kind"].as_str() == Some("task_graph_task")
+                    && binding.active_bounded_unit["task_id"]
+                        .as_str()
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or(binding.task_id.as_str())
+                        == run_id
+            });
         return resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
-            store, &run_id, false, true,
+            store,
+            &run_id,
+            false,
+            true,
+            followed_explicit_task_graph_binding_redirect,
         )
         .await;
     };
@@ -12323,6 +12393,25 @@ agent_system:
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
         let run_id = "run-retry-eligible-resume";
+        let labels: Vec<String> = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: run_id,
+                title: "Retry eligible resume",
+                display_id: None,
+                description: "retry eligible resume",
+                issue_type: "epic",
+                status: "blocked",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create task authority");
         let mut status =
             crate::taskflow_run_graph::default_run_graph_status(run_id, "coach", "delivery");
         status.status = "blocked".to_string();
@@ -12544,7 +12633,7 @@ agent_system:
         let error = validate_run_graph_resume_state(&store, run_id)
             .await
             .expect_err("unsuperseded exception takeover must still fail closed");
-        assert!(error.contains("recovery_ready is false"));
+        assert!(error.contains("Stale missing-task run graph"));
 
         let _ = fs::remove_dir_all(&root);
     }
