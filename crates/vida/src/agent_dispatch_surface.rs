@@ -330,21 +330,55 @@ fn host_bridge_normalized_implementation_artifact_path(
 }
 
 fn write_host_bridge_normalized_implementation_artifact(
+    state_root: &Path,
     path: &Path,
     artifact: &serde_json::Value,
 ) -> Result<(), String> {
+    let canonical_state_root = std::fs::canonicalize(state_root).map_err(|error| {
+        format!(
+            "Failed to canonicalize VIDA state root `{}`: {error}",
+            state_root.display()
+        )
+    })?;
     let parent = path.parent().ok_or_else(|| {
         format!(
             "Implementation artifact path `{}` has no parent directory.",
             path.display()
         )
     })?;
-    std::fs::create_dir_all(parent).map_err(|error| {
+    if std::fs::symlink_metadata(parent).is_err() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create implementation artifact directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let metadata = std::fs::symlink_metadata(parent).map_err(|error| {
         format!(
-            "Failed to create implementation artifact directory `{}`: {error}",
+            "Failed to inspect implementation artifact directory `{}`: {error}",
             parent.display()
         )
     })?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Implementation artifact directory `{}` is a symlink; refusing to write through it.",
+            parent.display()
+        ));
+    }
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+        format!(
+            "Failed to canonicalize implementation artifact directory `{}`: {error}",
+            parent.display()
+        )
+    })?;
+    if !canonical_parent.starts_with(&canonical_state_root) {
+        return Err(format!(
+            "Implementation artifact directory `{}` escapes VIDA state root `{}`.",
+            canonical_parent.display(),
+            canonical_state_root.display()
+        ));
+    }
     if let Ok(metadata) = std::fs::symlink_metadata(path) {
         if metadata.file_type().is_symlink() {
             return Err(format!(
@@ -1285,6 +1319,7 @@ async fn attach_host_bridge_implementation_artifacts(
             &command.artifact_kind,
         );
         if let Err(error) = write_host_bridge_normalized_implementation_artifact(
+            &state_dir,
             &normalized_artifact_path,
             &normalized_artifact,
         ) {
@@ -4525,7 +4560,8 @@ mod tests {
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
         host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
-        host_bridge_completion_lane_args, host_bridge_request_provenance_blockers,
+        host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
+        host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path,
         resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
@@ -5713,6 +5749,191 @@ mod tests {
         assert_eq!(scope_validation["status"], "pass");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_bridge_attach_artifact_blocks_symlinked_normalized_artifact_directory() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-attach-symlink-parent-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-attach-symlink-parent";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge attach symlink parent",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/agent_dispatch_surface.rs".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let packet_path = root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        let artifact_path = root.join("attempt-artifacts/patch-proposal.json");
+        for path in [
+            &request_path,
+            &packet_path,
+            &result_path,
+            &receipt_path,
+            &artifact_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(&packet_path, "{}").expect("write packet");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": ["crates/vida/src/agent_dispatch_surface.rs"]
+            })
+            .to_string(),
+        )
+        .expect("write artifact");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-attach-symlink-parent",
+            "run_id": run_id,
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string(),
+            "implementation_isolation": {
+                "owned_paths": ["crates/vida/src/agent_dispatch_surface.rs"]
+            }
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("write request");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "bridge_request_pending".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "implementation".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                dispatch_packet_path: Some(packet_path.display().to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("internal_subagents".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-11T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("seed host bridge dispatch receipt");
+
+        let normalized_artifact_path = host_bridge_normalized_implementation_artifact_path(
+            &root,
+            "attach-attempt-1",
+            0,
+            "patch_proposal",
+        );
+        let normalized_artifact_name = normalized_artifact_path
+            .file_name()
+            .expect("normalized artifact name")
+            .to_owned();
+        let outside_dir = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-outside-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&outside_dir).expect("create outside dir");
+        let outside_artifact_path = outside_dir.join(&normalized_artifact_name);
+        std::fs::write(&outside_artifact_path, "outside-sentinel").expect("seed outside artifact");
+        std::os::unix::fs::symlink(
+            &outside_dir,
+            normalized_artifact_path
+                .parent()
+                .expect("normalized artifact parent"),
+        )
+        .expect("create symlinked normalized artifact directory");
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: vec![artifact_path.clone()],
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: Some("attach-attempt-1".to_string()),
+            consolidation_receipt_id: Some("attach-receipt-1".to_string()),
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::from(1));
+        assert_eq!(
+            std::fs::read_to_string(&outside_artifact_path).expect("read outside artifact"),
+            "outside-sentinel"
+        );
+        let updated: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read updated request"),
+        )
+        .expect("request should remain json");
+        assert!(updated.get("implementation_artifacts").is_none());
+        assert!(updated.get("implementation_artifact_refs").is_none());
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("reopen store");
+        let attempts = store
+            .task_stage_attempts(run_id, "implementation")
+            .await
+            .expect("read implementation attempts");
+        assert!(attempts.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside_dir);
     }
 
     #[tokio::test]
