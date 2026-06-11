@@ -3167,18 +3167,8 @@ fn fail_closed_flow_projection_for_continuation_gate(preview: &mut AgentDispatch
     }
 }
 
-pub(crate) fn dispatch_target_for_dev_team_task_class(task_class: &str) -> &'static str {
-    match task_class {
-        "specification" | "planning" | "analysis" => "specification",
-        "execution_preparation" | "architecture" => "execution_preparation",
-        "coach" | "review" | "validation" => "coach",
-        "verification" | "quality_gate" | "release_readiness" => "verification",
-        _ => "implementer",
-    }
-}
-
-fn dispatch_target_for_agent_dispatch_lane(lane: &AgentDispatchLanePreview) -> &'static str {
-    dispatch_target_for_dev_team_task_class(&lane.task_class)
+fn dispatch_target_for_agent_dispatch_lane(lane: &AgentDispatchLanePreview) -> &str {
+    lane.role_label.as_str()
 }
 
 fn validate_materialized_agent_dispatch_packet(
@@ -4533,13 +4523,15 @@ mod tests {
     use super::{
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
-        dev_team_sequence_for_work_item, host_bridge_adapter_payload,
-        host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
-        host_bridge_request_provenance_blockers,
+        dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
+        host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
+        host_bridge_completion_lane_args, host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path,
         resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
         single_in_progress_task_id_from_rows, state_store,
+        validate_materialized_agent_dispatch_packet, AgentDispatchLanePreview,
+        AgentDispatchLaneSelectionTruth,
     };
     use crate::state_store::{
         CreateTaskRequest, RunGraphDispatchReceipt, TaskExecutionSemantics, TaskRecord,
@@ -4549,6 +4541,147 @@ mod tests {
     use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::{AgentDispatchNextArgs, AgentHostBridgeArgs};
     use std::process::ExitCode;
+
+    fn coach_dispatch_lane_preview(role_label: &str, task_id: &str) -> AgentDispatchLanePreview {
+        AgentDispatchLanePreview {
+            lane_index: 1,
+            task_id: task_id.to_string(),
+            title: format!("{role_label} task"),
+            role_label: role_label.to_string(),
+            runtime_role: "coach".to_string(),
+            task_class: "coach".to_string(),
+            dispatch_command: format!("vida agent-init --role coach {task_id} --json"),
+            dispatch_command_kind: "startup_activation_view_only".to_string(),
+            receipt_backed_execution_command: format!(
+                "vida agent-init --dispatch-packet {task_id}.json --execute-dispatch"
+            ),
+            ready_parallel_safe: true,
+            selection_reason: format!("configured_dev_team_lane:{role_label}"),
+            selection_truth: AgentDispatchLaneSelectionTruth {
+                selected_carrier: "coach-seat".to_string(),
+                selected_backend: "internal_subagents".to_string(),
+                selected_model_profile: "coach-profile".to_string(),
+                selected_model_ref: "gpt-5.5-coach".to_string(),
+                selected_reasoning_effort: "low".to_string(),
+                rate: 3,
+                estimated_task_price_units: 3,
+                budget_verdict: "admissible".to_string(),
+                selected_over_budget: false,
+                selected_model_profile_readiness_status: "ready".to_string(),
+                pricing_freshness_status: "fresh".to_string(),
+                selected_external_backend_readiness_status: "ready".to_string(),
+                selection_source_paths: serde_json::json!(["dev_team_readiness.roles"]),
+                pricing_readiness: serde_json::json!({"status": "ready"}),
+                runtime_role: "coach".to_string(),
+                task_class: "coach".to_string(),
+            },
+            requires_user_approval: false,
+            approval_gate: serde_json::json!({
+                "required": false,
+                "status": "not_required"
+            }),
+        }
+    }
+
+    #[test]
+    fn configured_dev_team_materialization_targets_keep_distinct_coach_gate_labels() {
+        let coach_test_gate = coach_dispatch_lane_preview("coach_test_gate", "routing-proof-a");
+        let coach_implementation_gate =
+            coach_dispatch_lane_preview("coach_implementation_gate", "routing-proof-b");
+
+        assert_eq!(
+            dispatch_target_for_agent_dispatch_lane(&coach_test_gate),
+            "coach_test_gate"
+        );
+        assert_eq!(
+            dispatch_target_for_agent_dispatch_lane(&coach_implementation_gate),
+            "coach_implementation_gate"
+        );
+        assert_ne!(
+            dispatch_target_for_agent_dispatch_lane(&coach_test_gate),
+            dispatch_target_for_agent_dispatch_lane(&coach_implementation_gate)
+        );
+        assert_eq!(coach_test_gate.task_class, "coach");
+        assert_eq!(coach_implementation_gate.task_class, "coach");
+    }
+
+    #[test]
+    fn configured_dev_team_packet_validation_uses_configured_coach_gate_targets() {
+        let temp =
+            std::env::temp_dir().join(format!("vida-dispatch-target-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("create temp dir");
+        let coach_test_gate = coach_dispatch_lane_preview("coach_test_gate", "routing-proof-a");
+        let coach_implementation_gate =
+            coach_dispatch_lane_preview("coach_implementation_gate", "routing-proof-b");
+
+        for lane in [&coach_test_gate, &coach_implementation_gate] {
+            let dispatch_target = dispatch_target_for_agent_dispatch_lane(lane);
+            let packet_path = temp.join(format!("{}-packet.json", lane.task_id));
+            std::fs::write(
+                &packet_path,
+                serde_json::json!({
+                    "run_id": lane.task_id,
+                    "dispatch_target": dispatch_target,
+                    "packet_template_kind": "coach_review_packet"
+                })
+                .to_string(),
+            )
+            .expect("write packet");
+            let receipt = RunGraphDispatchReceipt {
+                run_id: lane.task_id.clone(),
+                dispatch_target: dispatch_target.to_string(),
+                dispatch_status: "routed".to_string(),
+                lane_status: "active".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "configured_dev_team".to_string(),
+                dispatch_surface: None,
+                dispatch_command: None,
+                dispatch_packet_path: Some(packet_path.display().to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: None,
+                activation_runtime_role: Some("coach".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: format!("{}-receipt", lane.task_id),
+            };
+
+            let packet = validate_materialized_agent_dispatch_packet(
+                lane,
+                dispatch_target,
+                &packet_path.display().to_string(),
+                &receipt,
+            )
+            .expect("configured gate target validates");
+            assert_eq!(packet["dispatch_target"].as_str(), Some(dispatch_target));
+            assert_eq!(
+                packet["packet_template_kind"].as_str(),
+                Some("coach_review_packet")
+            );
+            assert!(validate_materialized_agent_dispatch_packet(
+                lane,
+                "coach",
+                &packet_path.display().to_string(),
+                &receipt,
+            )
+            .expect_err("legacy coach collapse must fail")
+            .contains("expected `coach`"));
+        }
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 
     #[test]
     fn host_bridge_adapter_payload_renders_parent_host_tool_contract() {

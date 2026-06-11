@@ -11240,7 +11240,7 @@ fn dev_team_dispatch_current_task_ignores_unrelated_blocked_run_gate() {
     assert_eq!(dispatch["packet_materialization"]["status"], "pass");
     assert_eq!(
         dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
-        "specification"
+        "analyst"
     );
     assert!(
         !dispatch["blocker_codes"]
@@ -11392,7 +11392,7 @@ fn dev_team_dispatch_resolved_active_binding_ignores_unrelated_blocked_run_gate(
     assert_eq!(dispatch["packet_materialization"]["status"], "pass");
     assert_eq!(
         dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
-        "specification"
+        "analyst"
     );
     assert!(
         !dispatch["blocker_codes"]
@@ -11489,7 +11489,7 @@ fn dev_team_dispatch_materialize_packets_writes_persisted_analyst_packet_with_st
     let artifact = &dispatch["packet_materialization"]["artifacts"][0];
     assert_eq!(artifact["task_id"], task_id);
     assert_eq!(artifact["role_label"], "analyst");
-    assert_eq!(artifact["dispatch_target"], "specification");
+    assert_eq!(artifact["dispatch_target"], "analyst");
     assert_eq!(artifact["packet_template_kind"], "delivery_task_packet");
     assert_eq!(artifact["receipt_backed"], true);
     let packet_path = artifact["dispatch_packet_path"]
@@ -11503,7 +11503,7 @@ fn dev_team_dispatch_materialize_packets_writes_persisted_analyst_packet_with_st
         serde_json::from_str(&fs::read_to_string(packet_path).expect("packet should read"))
             .expect("packet should parse");
     assert_eq!(packet["run_id"], task_id);
-    assert_eq!(packet["dispatch_target"], "specification");
+    assert_eq!(packet["dispatch_target"], "analyst");
     assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
     assert_ne!(packet["packet_template_kind"], "coach_review_packet");
     assert!(
@@ -11605,7 +11605,7 @@ fn dev_team_dispatch_config_default_materializes_packets_without_flag() {
     assert_eq!(materialized["packet_materialization"]["status"], "pass");
     assert_eq!(
         materialized["packet_materialization"]["artifacts"][0]["dispatch_target"],
-        "specification"
+        "analyst"
     );
     let packet_path = materialized["packet_materialization"]["artifacts"][0]
         ["dispatch_packet_path"]
@@ -11850,7 +11850,7 @@ fn dev_team_dispatch_same_task_stale_coach_run_materializes_analyst_packet() {
     assert_eq!(dispatch["packet_materialization"]["status"], "pass");
     assert_eq!(
         dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
-        "specification"
+        "analyst"
     );
     assert_eq!(
         dispatch["packet_materialization"]["artifacts"][0]["packet_template_kind"],
