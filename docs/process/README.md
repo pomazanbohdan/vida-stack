@@ -86,7 +86,9 @@ Canonical entrypoints:
 36. `docs/framework/templates/feature-design-document.template.md`
     - framework-owned reusable feature/change design template with stable sections and bounded variable fields
 37. `docs/process/runtime-defect-function-option-matrix-protocol.md`
-    - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
+     - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
+38. `docs/process/agent-model-evaluation-log.md`
+     - project-owned log for per-task agent model quality, routing, validation, token/tool telemetry, and next-task model-selection evidence
 
 -----
 artifact_path: process/readme

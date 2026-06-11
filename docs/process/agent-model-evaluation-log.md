@@ -57,3 +57,76 @@ Next-task selection rule:
   test or one resolver path, not as the only broad reviewer.
 - Use `gpt-5.5 medium` validator for predicate/authority reviews where
   false-green risk matters.
+
+## 2026-06-11 - wave-0-runtime-authority-rt001-rt004
+
+Scope:
+- Parent: `wave-0-runtime-tests`
+- Closed tasks:
+  - `wave-0-red-tests-rt001`
+  - `wave-0-red-tests-rt002`
+  - `wave-0-red-tests-rt003`
+  - `wave-0-red-tests-rt004`
+- Proof families:
+  - focused public CLI smoke tests for the changed operator surface,
+  - focused unit/module tests for the shared authority helper,
+  - `cargo fmt --all -- --check`,
+  - `cargo build`,
+  - `git diff --check`.
+
+Observed model results:
+- `gpt-5.4-mini` with `xhigh` reasoning is useful as a cheap executor only
+  when the packet has one narrow file/surface cluster, named acceptance lines,
+  one explicit proof command, and a hard stop. Across RT-001..RT-004 it produced
+  useful decomposition or partial patches, but timed out or under-covered
+  closure often enough that it should not self-close authority-sensitive work.
+- `gpt-5.4-mini` with `xhigh` reasoning is useful as a cheap focused validator
+  for one failing test, one resolver path, or one source-fidelity check. It is
+  not sufficient as the only broad validator for TaskFlow, receipt authority,
+  host-bridge, projection-cache, or public operator-surface changes.
+- `gpt-5.5-low` is the preferred bounded rework executor after mini timeout,
+  shutdown, partial patch, or validator rejection. It is cheaper than medium
+  while still strong enough for narrow runtime implementation when the
+  orchestrator provides exact files, invariants, proof commands, and non-goals.
+- `gpt-5.5-medium` is the preferred authority validator. It caught false-green
+  risks, scope limits, adjacent failures, and closure evidence gaps more
+  consistently than mini validators. Keep prompts short and risk-specific
+  because long broad validation prompts can still time out.
+- Root orchestrator remains the consolidator. It may accept cheap-agent work as
+  evidence, but closure requires local proof, TaskFlow update, debug build,
+  commit, push when currently authorized, and a recorded scorecard.
+
+Current routing recommendation:
+- Executor first pass: `gpt-5.4-mini` with highest available reasoning for
+  read-only decomposition, source-sync docs, exact regression-test authoring, or
+  one small implementation packet with a single proof command.
+- Executor rework: `gpt-5.5-low` when mini output is partial, times out, misses
+  acceptance, or touches production runtime authority.
+- Validator: `gpt-5.5-medium` for authority-sensitive code, public operator
+  JSON, TaskFlow state, receipt logic, host bridge, release closure, and PR
+  integration.
+- Extra cheap validator: `gpt-5.4-mini` with highest reasoning only for a narrow
+  second opinion over one named risk.
+- Triple validation: use only when validators disagree, the patch changes a
+  shared authority predicate, or the task would close a wave/epic/release gate.
+
+Required agent final report:
+- `changed_files` or reviewed read-only scope,
+- exact proof commands with pass/fail/not-run status,
+- residual risks and blockers,
+- `tokens_used` or `not_exposed_by_host`,
+- `steps_taken`,
+- `tool_calls_used`,
+- `agent_score_10` assigned by the orchestrator after validation.
+
+-----
+artifact_path: process/agent-model-evaluation-log
+artifact_type: process_doc
+artifact_version: '1'
+artifact_revision: 2026-06-11
+schema_version: '1'
+status: active
+source_path: docs/process/agent-model-evaluation-log.md
+created_at: 2026-06-11T00:00:00+03:00
+updated_at: 2026-06-11T13:34:00+03:00
+changelog_ref: agent-model-evaluation-log.changelog.jsonl

@@ -171,6 +171,24 @@ model unconditionally:
    failure signal; the next attempt must either narrow the packet or escalate
    the executor model.
 
+Runtime-authority task defaults from the 2026-06-11 wave-0 evaluation:
+
+1. Start with `gpt-5.4-mini` at the highest available reasoning effort for
+   narrow decomposition, source-sync documentation, or one exact regression-test
+   packet.
+2. Use `gpt-5.5-low` as the first rework executor when mini output is partial,
+   times out, or misses acceptance but the scope remains bounded.
+3. Use `gpt-5.5-medium` as the default validator for authority predicates,
+   receipt semantics, TaskFlow/DocFlow state, host bridge, projection cache,
+   release closure, and public operator JSON.
+4. Add a second cheap mini validator only for one named risk. Add triple
+   validation only for shared authority predicates, validator disagreement, or
+   wave/epic/release closure.
+5. Split broad validation prompts by concrete risk owner instead of asking one
+   validator to review the entire repository or epic.
+6. The orchestrator assigns an `agent_score_10` after synthesis and records it
+   in the model evaluation log or task note before the next agent selection.
+
 ## Attempt Artifact Contract
 
 Every attempt must return structured output:

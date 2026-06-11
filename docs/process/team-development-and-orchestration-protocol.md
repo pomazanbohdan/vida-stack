@@ -174,7 +174,8 @@ Small-agent packet requirements:
 7. include forbidden shorthand when compression would damage the artifact, such as `cur`, `src`, `req`, `impl`, `cmd`, `cfg`, or unexplained single-letter markers,
 8. require honest status language for unexecuted work, such as `pending`, `not run`, or `not created`,
 9. include a self-check block that the lane must run before its final response,
-10. require a final response with changed files, exact summary, verification, remaining gaps, token usage, step count, and tool-call count.
+10. require a final response with changed files, exact summary, verification, remaining gaps, token usage, step count, and tool-call count,
+11. include the intended validation lane and the rework trigger before dispatch, so the small executor knows that partial output is acceptable only as evidence and not as self-approval.
 
 Small-agent reasoning rule:
 
@@ -188,7 +189,8 @@ Dynamic model-routing rule:
 2. escalate implementation to `gpt-5.5-low` when a mini attempt times out, shuts down, under-covers acceptance criteria, touches production/runtime authority code, or a validator rejects closure,
 3. use `gpt-5.5-medium` as the default closure validator for authority-sensitive runtime, TaskFlow, DocFlow, host-bridge, path-policy, receipt, release, or public operator-surface work,
 4. use only one strong validator by default; add parallel or triple validation only when the patch changes production authority paths, validators disagree, or the first validator reports medium-high residual risk,
-5. close or delete each completed or failed agent handle immediately after classifying it as accepted evidence, partial evidence, process failure, false-green, or stale.
+5. close or delete each completed or failed agent handle immediately after classifying it as accepted evidence, partial evidence, process failure, false-green, or stale,
+6. score every executor and validator attempt on a 10-point scale after synthesis, record the reason, and use the score only as local routing evidence for future packets, not as proof that the current task is closed.
 
 Delegated final-report telemetry rule:
 
@@ -231,6 +233,31 @@ Final response:
 - tokens_used
 - steps_taken
 - tool_calls_used
+- whether the lane considers the packet closure-ready or partial evidence only
+```
+
+Use this compact packet addendum when shaping cheap executor work:
+
+```text
+Execution packet controls:
+- One task id:
+- One goal:
+- Owned paths:
+- Out-of-scope paths:
+- Required source facts:
+- Required proof command:
+- Stop immediately if:
+  - the proof target requires unrelated files,
+  - the task needs a broader authority decision,
+  - the patch changes outside owned paths,
+  - or the proof fails for a reason not explained by the patch.
+
+Validation contract:
+- The executor must not self-close the task.
+- The orchestrator will validate locally and route one focused validator.
+- For authority-sensitive work the validator default is `gpt-5.5-medium`.
+- Mini output may be accepted as evidence, rejected, or sent to `gpt-5.5-low`
+  rework.
 ```
 
 ## Decomposition Rule
