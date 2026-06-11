@@ -88,10 +88,10 @@ Companion rule:
 7. [meta-refactor-runtime-boundary-execution-plan.md](meta-refactor-runtime-boundary-execution-plan.md)
    Config families: staged VIDA runtime boundary refactor tracking, Wave 0 proof status, delegated agent scorecards, release-install wave closure gates, and TaskFlow/PR processing evidence for the active META epic
    Registered path: `docs/product/spec/meta-refactor-runtime-boundary-execution-plan.md`
-7. [codex-host-agent-boundary-and-cli-bridge-design.md](codex-host-agent-boundary-and-cli-bridge-design.md)
+8. [codex-host-agent-boundary-and-cli-bridge-design.md](codex-host-agent-boundary-and-cli-bridge-design.md)
    Config families: `vida.config.yaml -> host_environment.systems.codex`, `agent_system.subagents.internal_subagents`, `agent_system.subagents.codex_cli_exec`, TaskFlow host-bridge dispatch requests
    Registered path: `docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md`
-8. [host-agent-bridge-adapter-contract-design.md](host-agent-bridge-adapter-contract-design.md)
+9. [host-agent-bridge-adapter-contract-design.md](host-agent-bridge-adapter-contract-design.md)
    Config families: `vida.config.yaml -> host_environment.host_agent_bridge_contract`, `host_environment.systems.<system>.host_tool_bridge`, TaskFlow host-bridge request/result/receipt adapters for Codex, Claude Code, Pi, Vibe Kanban, OpenCode, and custom host adapters
    Registered path: `docs/product/spec/host-agent-bridge-adapter-contract-design.md`
 9. [vida-coder-service-mode-executor-design.md](vida-coder-service-mode-executor-design.md)

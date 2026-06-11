@@ -424,13 +424,15 @@ validation agent.
   `tool_calls_used`; if exact token usage is unavailable, use
   `tokens_used: not_exposed_by_host`.
 - Require focused tests first, then `cargo build` debug proof before closure.
-- Require TaskFlow state update, commit, and push after every completed task.
+- Require TaskFlow state update and commit after every completed task; push
+  when authorized by the current explicit operator instruction.
 - Treat invalid, empty, stale, schema-missing, or scope-widening agent reports
   as non-evidence; do not use them for task closure.
 - Validate cheap-agent implementation with root review plus a stronger
   validator for runtime authority paths; current minimum is `gpt-5.5-medium`.
 - After a wave parent closes, run the VIDA runtime self-diagnostic and then
-  `docs/process/github-pr-processing-protocol.md`.
+  `docs/process/github-pr-processing-protocol.md` when authorized by the
+  current explicit operator instruction.
 
 ## Source Plan Anchors
 
