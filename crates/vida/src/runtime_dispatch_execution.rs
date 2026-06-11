@@ -2392,6 +2392,8 @@ fn host_tool_bridge_request_id(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     dispatch_packet_path: &str,
 ) -> String {
+    let run_segment = host_tool_bridge_request_id_segment(&receipt.run_id);
+    let dispatch_target_segment = host_tool_bridge_request_id_segment(&receipt.dispatch_target);
     let packet_segment = Path::new(dispatch_packet_path)
         .file_stem()
         .and_then(|value| value.to_str())
@@ -2400,7 +2402,17 @@ fn host_tool_bridge_request_id(
         .unwrap_or_else(|| "packet".to_string());
     format!(
         "{}-{}-{}-host-tool-bridge",
-        receipt.run_id, receipt.dispatch_target, packet_segment
+        if run_segment.is_empty() {
+            "run"
+        } else {
+            run_segment.as_str()
+        },
+        if dispatch_target_segment.is_empty() {
+            "dispatch-target"
+        } else {
+            dispatch_target_segment.as_str()
+        },
+        packet_segment
     )
 }
 
@@ -5670,6 +5682,143 @@ host_tool_bridge:
         );
 
         assert_eq!(resolved, state_root.join("host-tool-bridge/results"));
+    }
+
+    #[test]
+    fn host_tool_bridge_request_sanitizes_dispatch_target_before_path_join() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-sanitize-target-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = project_root.join(".vida/data/state");
+        let dispatch_packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(dispatch_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(&dispatch_packet_path, r#"{"owned_paths":["src/lib.rs"]}"#)
+            .expect("write dispatch packet");
+
+        let mut receipt = internal_codex_fallback_receipt(
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        receipt.run_id = "../../../../poc-outside-run".to_string();
+        receipt.dispatch_target = "../../../../poc-outside-state/leaf".to_string();
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            None,
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &internal_codex_fallback_role_selection(serde_json::json!({})),
+        )
+        .expect("host bridge request should sanitize dispatch target and materialize");
+
+        let request_id = request["request_id"]
+            .as_str()
+            .expect("request id should render");
+        let request_path = PathBuf::from(
+            request["request_path"]
+                .as_str()
+                .expect("request path should render"),
+        );
+        let result_path = PathBuf::from(
+            request["result_path"]
+                .as_str()
+                .expect("result path should render"),
+        );
+        let receipt_path = PathBuf::from(
+            request["receipt_path"]
+                .as_str()
+                .expect("receipt path should render"),
+        );
+        assert!(!request_id.contains('/'));
+        assert!(!request_id.contains('\\'));
+        assert!(request_id.contains("poc-outside-run"));
+        assert!(request_id.contains("poc-outside-state-leaf"));
+        assert!(request_path.starts_with(&state_root));
+        assert!(result_path.starts_with(&state_root));
+        assert!(receipt_path.starts_with(&state_root));
+        assert!(
+            !project_root.join(".vida/data/poc-outside-state").exists(),
+            "malicious dispatch target must not create directories outside the state root"
+        );
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn host_tool_bridge_request_falls_back_to_default_segments_when_sanitized_segments_are_empty() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-empty-segment-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = project_root.join(".vida/data/state");
+        let dispatch_packet_path = project_root.join(".vida/packet.json");
+        std::fs::create_dir_all(dispatch_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(&dispatch_packet_path, r#"{"owned_paths":["src/lib.rs"]}"#)
+            .expect("write dispatch packet");
+
+        let mut receipt = internal_codex_fallback_receipt(
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        receipt.run_id = "///".to_string();
+        receipt.dispatch_target = "???".to_string();
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            None,
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &internal_codex_fallback_role_selection(serde_json::json!({})),
+        )
+        .expect("host bridge request should fall back to default request-id segments");
+
+        let request_id = request["request_id"]
+            .as_str()
+            .expect("request id should render");
+        let request_path = PathBuf::from(
+            request["request_path"]
+                .as_str()
+                .expect("request path should render"),
+        );
+        let result_path = PathBuf::from(
+            request["result_path"]
+                .as_str()
+                .expect("result path should render"),
+        );
+        let receipt_path = PathBuf::from(
+            request["receipt_path"]
+                .as_str()
+                .expect("receipt path should render"),
+        );
+
+        assert!(
+            request_id.starts_with("run-dispatch-target-"),
+            "expected empty sanitized run_id and dispatch_target to fall back to run-dispatch-target, got {request_id}"
+        );
+        assert!(request_path.starts_with(&state_root));
+        assert!(result_path.starts_with(&state_root));
+        assert!(receipt_path.starts_with(&state_root));
+        let _ = std::fs::remove_dir_all(&project_root);
     }
 
     #[test]
