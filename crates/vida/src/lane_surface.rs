@@ -2513,12 +2513,47 @@ struct HostBridgeCompletionRequestContext {
     packet_path: String,
 }
 
-fn read_host_bridge_request(path: &str) -> Result<serde_json::Value, String> {
+const MAX_HOST_BRIDGE_REQUEST_BYTES: u64 = 1024 * 1024;
+
+fn read_host_bridge_request_at_path(path: &Path) -> Result<serde_json::Value, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Failed to inspect host bridge request `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "Host bridge request `{}` is not a regular file.",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_HOST_BRIDGE_REQUEST_BYTES {
+        return Err(format!(
+            "Host bridge request `{}` exceeds {} bytes.",
+            path.display(),
+            MAX_HOST_BRIDGE_REQUEST_BYTES
+        ));
+    }
+    let raw = std::fs::read(path).map_err(|error| {
+        format!(
+            "Failed to read host bridge request `{}`: {error}",
+            path.display()
+        )
+    })?;
+    serde_json::from_slice(&raw).map_err(|error| {
+        format!(
+            "Failed to decode host bridge request `{}` as JSON: {error}",
+            path.display()
+        )
+    })
+}
+
+fn read_host_bridge_request(state_root: &Path, path: &str) -> Result<serde_json::Value, String> {
     let normalized_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
-    let raw = std::fs::read_to_string(&normalized_path)
-        .map_err(|error| format!("Failed to read host bridge request `{path}`: {error}"))?;
-    serde_json::from_str(&raw)
-        .map_err(|error| format!("Failed to decode host bridge request `{path}`: {error}"))
+    let canonical_path =
+        canonicalize_existing_state_path(state_root, Path::new(&normalized_path), "request")?;
+    read_host_bridge_request_at_path(&canonical_path)
 }
 
 fn host_bridge_path_string<'a>(
@@ -2543,7 +2578,7 @@ fn trusted_host_bridge_completion_request_context(
     let Some(status) = status else {
         return Ok(None);
     };
-    let request = read_host_bridge_request(request_path)?;
+    let request = read_host_bridge_request(state_root, request_path)?;
     if request.get("run_id").and_then(serde_json::Value::as_str) != Some(run_id) {
         return Ok(None);
     }
@@ -2778,11 +2813,7 @@ fn validated_host_bridge_paths_from_receipt(
             canonical_paths_request_path.display()
         ));
     }
-    let request = read_host_bridge_request(
-        canonical_request_path
-            .to_str()
-            .ok_or_else(|| "Host bridge request path is not valid UTF-8.".to_string())?,
-    )?;
+    let request = read_host_bridge_request_at_path(&canonical_request_path)?;
     let request_result_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
         host_bridge_path_string(&request, "result_path")?,
     );
@@ -3010,7 +3041,7 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
     request_path: &str,
     run_id: &str,
 ) -> HostBridgeTaskflowImplementationEvidence {
-    let request = match read_host_bridge_request(request_path) {
+    let request = match read_host_bridge_request(store.root(), request_path) {
         Ok(request) => request,
         Err(_) => return HostBridgeTaskflowImplementationEvidence::default(),
     };
@@ -3095,7 +3126,7 @@ fn host_bridge_request_has_retryable_completion_evidence(
     state_root: &Path,
     request_path: &str,
 ) -> bool {
-    let Ok(request) = read_host_bridge_request(request_path) else {
+    let Ok(request) = read_host_bridge_request(state_root, request_path) else {
         return false;
     };
     for field in ["receipt_path", "result_path"] {
@@ -3158,11 +3189,7 @@ fn materialize_host_bridge_completion_evidence(
         persisted_receipt,
         replace_existing_evidence,
     )?;
-    let mut request = read_host_bridge_request(
-        canonical_request_path
-            .to_str()
-            .ok_or_else(|| "Host bridge request path is not valid UTF-8.".to_string())?,
-    )?;
+    let mut request = read_host_bridge_request_at_path(&canonical_request_path)?;
     if request.get("run_id").and_then(serde_json::Value::as_str) != Some(run_id) {
         return Err(format!(
             "Host bridge request `{request_path}` does not belong to run `{run_id}`."
@@ -9045,6 +9072,104 @@ mod tests {
             evidence.blocker_codes,
             vec!["host_bridge_request_task_mismatch".to_string()]
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn read_host_bridge_request_quickly(
+        state_root: std::path::PathBuf,
+        request_path: std::path::PathBuf,
+    ) -> Result<serde_json::Value, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let request_path = request_path
+                .to_str()
+                .expect("host bridge request path should be UTF-8")
+                .to_string();
+            let result = read_host_bridge_request(&state_root, &request_path);
+            let _ = tx.send(result);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .expect("host bridge request read should return quickly")
+    }
+
+    #[test]
+    fn host_bridge_request_rejects_out_of_root_or_oversized_file() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-request-read-{pid}-{nanos}"
+        ));
+        std::fs::create_dir_all(root.join("host-tool-bridge/requests"))
+            .expect("create request root");
+
+        let outside_root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-request-outside-{pid}-{nanos}"
+        ));
+        let outside_request_path = outside_root.join("host-tool-bridge/requests/outside.json");
+        std::fs::create_dir_all(outside_request_path.parent().expect("outside parent"))
+            .expect("create outside request parent");
+        std::fs::write(
+            &outside_request_path,
+            serde_json::json!({
+                "request_id": "outside-root",
+                "status": "pending"
+            })
+            .to_string(),
+        )
+        .expect("write outside request");
+        let outside_error =
+            read_host_bridge_request_quickly(root.clone(), outside_request_path.clone())
+                .expect_err("outside-root request should fail");
+        assert!(
+            outside_error.contains("outside VIDA state root"),
+            "{outside_error}"
+        );
+
+        let oversized_request_path = root.join("host-tool-bridge/requests/oversized.json");
+        let oversized_request = serde_json::json!({
+            "request_id": "oversized",
+            "status": "pending",
+            "pad": "x".repeat((MAX_HOST_BRIDGE_REQUEST_BYTES as usize) + 1),
+        });
+        std::fs::write(
+            &oversized_request_path,
+            serde_json::to_vec(&oversized_request).expect("serialize oversized request"),
+        )
+        .expect("write oversized request");
+        let oversized_error =
+            read_host_bridge_request_quickly(root.clone(), oversized_request_path)
+                .expect_err("oversized request should fail");
+        assert!(oversized_error.contains("exceeds"), "{oversized_error}");
+        assert!(
+            oversized_error.contains(&MAX_HOST_BRIDGE_REQUEST_BYTES.to_string()),
+            "{oversized_error}"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::ffi::CString;
+            use std::os::unix::ffi::OsStrExt;
+
+            let fifo_request_path = root.join("host-tool-bridge/requests/fifo.json");
+            let fifo_c_path = CString::new(fifo_request_path.as_os_str().as_bytes())
+                .expect("fifo path should be a valid C string");
+            let fifo_result = unsafe { libc::mkfifo(fifo_c_path.as_ptr(), 0o644) };
+            assert_eq!(
+                fifo_result,
+                0,
+                "mkfifo failed: {}",
+                std::io::Error::last_os_error()
+            );
+            let fifo_error = read_host_bridge_request_quickly(root.clone(), fifo_request_path)
+                .expect_err("fifo request should fail");
+            assert!(fifo_error.contains("regular file"), "{fifo_error}");
+        }
+
+        let _ = std::fs::remove_dir_all(&outside_root);
         let _ = std::fs::remove_dir_all(&root);
     }
 

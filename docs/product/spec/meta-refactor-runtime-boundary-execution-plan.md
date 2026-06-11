@@ -154,6 +154,15 @@ Expected:
   no read hang
 ```
 
+Implementation status:
+  covered by `crates/vida/src/lane_surface.rs::read_host_bridge_request_at_path`
+  `vida lane complete` now canonicalizes the mutable request path under the
+  state root, rejects non-regular and oversized request files before JSON
+  parse, and fail-closes on out-of-root request paths.
+  regression coverage:
+  `host_bridge_request_rejects_out_of_root_or_oversized_file`
+  (FIFO subcase on Unix)
+
 #### HB-005: implementation scope comes from immutable packet
 
 ```text
