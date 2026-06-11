@@ -1101,6 +1101,31 @@ pub(crate) fn resolve_runtime_dispatch_target(
     None
 }
 
+pub(crate) fn backend_policy_dispatch_target_for_resolution(
+    resolution: &RuntimeDispatchTargetResolution,
+) -> &str {
+    resolution
+        .lane_id
+        .as_deref()
+        .unwrap_or(resolution.dispatch_target.as_str())
+}
+
+pub(crate) fn policy_dispatch_target_for_admissibility(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> String {
+    resolve_runtime_dispatch_target(execution_plan, dispatch_target)
+        .map(|resolution| {
+            let policy_dispatch_target = backend_policy_dispatch_target_for_resolution(&resolution);
+            dispatch_contract_lane(execution_plan, policy_dispatch_target)
+                .and_then(|lane| lane["task_class"].as_str())
+                .and_then(backend_admissibility_key_for_task_class)
+                .map(str::to_string)
+                .unwrap_or_else(|| policy_dispatch_target.to_string())
+        })
+        .unwrap_or_else(|| dispatch_target.trim().to_string())
+}
+
 pub(crate) fn first_runtime_dispatch_target_after_dev_pack(
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Result<RuntimeDispatchTargetResolution, String> {
@@ -1122,14 +1147,14 @@ pub(crate) fn downstream_activation_fields(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
 ) -> (String, Option<String>, Option<String>, Option<String>) {
-    let resolved_dispatch_target =
-        resolve_runtime_dispatch_target(&role_selection.execution_plan, dispatch_target)
-            .map(|resolution| resolution.dispatch_target)
-            .unwrap_or_else(|| dispatch_target.trim().to_string());
-    match resolved_dispatch_target.as_str() {
+    let policy_dispatch_target = policy_dispatch_target_for_admissibility(
+        &role_selection.execution_plan,
+        dispatch_target,
+    );
+    match policy_dispatch_target.as_str() {
         "spec-pack" | "work-pool-pack" | "dev-pack" => (
             "taskflow_pack".to_string(),
-            match resolved_dispatch_target.as_str() {
+            match policy_dispatch_target.as_str() {
                 "spec-pack" => Some("vida taskflow bootstrap-spec".to_string()),
                 "work-pool-pack" => Some("vida task ensure".to_string()),
                 "dev-pack" => Some("vida task ensure".to_string()),
@@ -1140,11 +1165,8 @@ pub(crate) fn downstream_activation_fields(
         ),
         "closure" => ("closure".to_string(), None, None, None),
         _ => {
-            let lane =
-                dispatch_contract_lane(&role_selection.execution_plan, &resolved_dispatch_target)
-                    .or_else(|| {
-                        dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)
-                    });
+            let lane = dispatch_contract_lane(&role_selection.execution_plan, &policy_dispatch_target)
+                .or_else(|| dispatch_contract_lane(&role_selection.execution_plan, dispatch_target));
             (
                 "agent_lane".to_string(),
                 Some("vida agent-init".to_string()),
@@ -1165,6 +1187,8 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
     execution_plan: &'a serde_json::Value,
     dispatch_target: &str,
 ) -> Option<&'a serde_json::Value> {
+    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
+    let dispatch_target = dispatch_target.as_str();
     let development_flow = &execution_plan["development_flow"];
     if dispatch_target == "analysis" {
         if let Some(route) = development_flow
@@ -1293,6 +1317,8 @@ pub(crate) fn dispatch_target_runtime_assignment(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> (serde_json::Value, &'static str) {
+    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
+    let dispatch_target = dispatch_target.as_str();
     if let Some((assignment, source)) =
         execution_plan_route_for_dispatch_target(execution_plan, dispatch_target).and_then(
             |route| {
@@ -1348,13 +1374,14 @@ fn backend_admissibility_key_for_dispatch_target(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> String {
-    let canonical_target = canonical_dispatch_target_name(dispatch_target);
+    let policy_dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
+    let canonical_target = canonical_dispatch_target_name(&policy_dispatch_target);
     match canonical_target.as_str() {
         "implementer" | "writer" => "implementation".to_string(),
         "execution_preparation" => "architecture".to_string(),
         "implementation" | "verification" | "architecture" | "specification" | "coach"
         | "analysis" | "review" => canonical_target,
-        other => dispatch_contract_lane(execution_plan, dispatch_target)
+        other => dispatch_contract_lane(execution_plan, &policy_dispatch_target)
             .and_then(|lane| lane["task_class"].as_str())
             .and_then(backend_admissibility_key_for_task_class)
             .unwrap_or(other)
@@ -1979,9 +2006,12 @@ pub(crate) fn sync_receipt_configured_activation_assignment(
         return;
     }
     let execution_plan = &role_selection.execution_plan;
-    let canonical_target =
-        dispatch_target_for_runtime_role(execution_plan, &receipt.dispatch_target)
-            .unwrap_or_else(|| receipt.dispatch_target.clone());
+    let policy_target = policy_dispatch_target_for_admissibility(
+        execution_plan,
+        &receipt.dispatch_target,
+    );
+    let canonical_target = dispatch_target_for_runtime_role(execution_plan, &policy_target)
+        .unwrap_or(policy_target);
     let lane_activation = dispatch_contract_lane(execution_plan, &canonical_target)
         .map(dispatch_contract_lane_activation);
     let (assignment, _) =
@@ -2129,6 +2159,8 @@ pub(crate) fn route_selected_model_profile_for_backend(
     if backend_id.is_empty() {
         return None;
     }
+    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
+    let dispatch_target = dispatch_target.as_str();
     if dispatch_target == "analysis" {
         if let Some(profile) = execution_plan["development_flow"]
             .get("analysis")
@@ -2175,11 +2207,15 @@ pub(crate) fn preferred_selected_model_profile_for_dispatch_target(
     dispatch_target: &str,
     selected_backend: Option<&str>,
 ) -> Option<String> {
+    let dispatch_target = policy_dispatch_target_for_admissibility(
+        &role_selection.execution_plan,
+        dispatch_target,
+    );
     selected_backend
         .and_then(|backend_id| {
             route_selected_model_profile_for_backend(
                 &role_selection.execution_plan,
-                dispatch_target,
+                &dispatch_target,
                 backend_id,
             )
         })
@@ -6417,10 +6453,11 @@ pub(crate) fn runtime_dispatch_packet_kind(
     dispatch_target: &str,
     dispatch_kind: &str,
 ) -> String {
+    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
     if dispatch_kind == "taskflow_pack" {
         return "tracked_flow_packet".to_string();
     }
-    dispatch_contract_lane(execution_plan, dispatch_target)
+    dispatch_contract_lane(execution_plan, &dispatch_target)
         .and_then(|lane| json_string(lane.get("packet_template_kind")))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "delivery_task_packet".to_string())
@@ -7105,13 +7142,14 @@ pub(crate) fn runtime_packet_handoff_task_class_for_plan(
     dispatch_target: &str,
     handoff_runtime_role: &str,
 ) -> String {
-    dispatch_contract_lane(execution_plan, dispatch_target)
+    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
+    dispatch_contract_lane(execution_plan, &dispatch_target)
         .and_then(|lane| lane["task_class"].as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| {
-            runtime_packet_handoff_task_class(dispatch_target, handoff_runtime_role).to_string()
+            runtime_packet_handoff_task_class(&dispatch_target, handoff_runtime_role).to_string()
         })
 }
 
@@ -22871,6 +22909,49 @@ agent_system:
             Some("verifier")
         );
         assert_eq!(verification_receipt.dispatch_status, "routed");
+    }
+
+    #[test]
+    fn preserves_lane_policy_for_dispatch_target_alias_build_downstream_receipt() {
+        let mut role_selection = mixed_backend_role_selection();
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] =
+            json!({
+                "implementer": {
+                    "dispatch_target": "dev",
+                    "task_class": "implementation",
+                    "activation": {
+                        "activation_agent_type": "junior",
+                        "activation_runtime_role": "worker"
+                    }
+                }
+            });
+
+        let receipt = executed_agent_lane_receipt(
+            "implementer",
+            "opencode_cli",
+            "junior",
+            "worker",
+            Some("dev"),
+        );
+
+        let downstream =
+            build_downstream_dispatch_receipt(&role_selection, &receipt)
+                .expect("alias downstream receipt should build");
+
+        assert_eq!(downstream.dispatch_target, "dev");
+        assert_eq!(
+            downstream.selected_backend.as_deref(),
+            Some("internal_subagents")
+        );
+        assert_eq!(
+            downstream.activation_agent_type.as_deref(),
+            Some("junior")
+        );
+        assert_eq!(
+            downstream.activation_runtime_role.as_deref(),
+            Some("worker")
+        );
+        assert_eq!(downstream.dispatch_kind, "agent_lane");
     }
 
     #[test]

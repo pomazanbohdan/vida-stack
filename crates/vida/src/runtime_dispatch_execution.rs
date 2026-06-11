@@ -27,11 +27,16 @@ fn backend_admissibility_key_for_dispatch_target(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> String {
-    let canonical_target = canonical_dispatch_target_for_admissibility(dispatch_target);
+    let policy_dispatch_target =
+        crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
+            execution_plan,
+            dispatch_target,
+        );
+    let canonical_target = canonical_dispatch_target_for_admissibility(&policy_dispatch_target);
     match canonical_target.as_str() {
         "implementation" | "verification" | "architecture" | "specification" | "coach"
         | "analysis" | "review" => canonical_target,
-        other => crate::dispatch_contract_lane(execution_plan, dispatch_target)
+        other => crate::dispatch_contract_lane(execution_plan, &policy_dispatch_target)
             .and_then(|lane| lane["task_class"].as_str())
             .and_then(backend_admissibility_key_for_task_class)
             .unwrap_or(other)
@@ -330,7 +335,7 @@ fn selected_profile_for_backend(
 fn ready_external_profile_for_dispatch_target(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
-    dispatch_target: &str,
+    policy_dispatch_target: &str,
     packet_has_concrete_owned_paths: bool,
     excluded_profile_id: Option<&str>,
 ) -> Option<(serde_json::Value, String)> {
@@ -359,12 +364,12 @@ fn ready_external_profile_for_dispatch_target(
         if excluded_profile_id == Some(candidate_profile_id) {
             continue;
         }
-        if !profile_supports_dispatch_target(&profile, dispatch_target) {
+        if !profile_supports_dispatch_target(&profile, &policy_dispatch_target) {
             continue;
         }
         if !profile_compatible_with_packet_scope(
             &profile,
-            dispatch_target,
+            &policy_dispatch_target,
             packet_has_concrete_owned_paths,
         ) {
             continue;
@@ -386,7 +391,7 @@ fn external_cli_dispatch_readiness_verdict(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
     selected_model_profile_id: Option<String>,
-    dispatch_target: &str,
+    policy_dispatch_target: &str,
     packet_has_concrete_owned_paths: bool,
 ) -> (serde_json::Value, Option<String>) {
     let selected_readiness =
@@ -409,7 +414,7 @@ fn external_cli_dispatch_readiness_verdict(
         .is_some_and(|profile| {
             !profile_compatible_with_packet_scope(
                 profile,
-                dispatch_target,
+                policy_dispatch_target,
                 packet_has_concrete_owned_paths,
             )
         });
@@ -418,7 +423,7 @@ fn external_cli_dispatch_readiness_verdict(
             ready_external_profile_for_dispatch_target(
                 backend_id,
                 backend_entry,
-                dispatch_target,
+                policy_dispatch_target,
                 packet_has_concrete_owned_paths,
                 selected_profile.as_deref(),
             )
@@ -429,7 +434,7 @@ fn external_cli_dispatch_readiness_verdict(
                     serde_json::json!({
                         "selected_model_profile": selected_profile,
                         "reason": "selected_profile_requires_owned_paths_but_packet_has_no_owned_scope",
-                        "dispatch_target": dispatch_target,
+                        "dispatch_target": policy_dispatch_target,
                     }),
                 );
             }
@@ -467,7 +472,7 @@ fn external_cli_dispatch_readiness_verdict(
         ready_external_profile_for_dispatch_target(
             backend_id,
             backend_entry,
-            dispatch_target,
+            policy_dispatch_target,
             packet_has_concrete_owned_paths,
             selected_profile.as_deref(),
         )
@@ -521,6 +526,11 @@ pub(crate) fn internal_host_external_fallback_backend(
         &role_selection.execution_plan,
         dispatch_target,
     )?;
+    let policy_dispatch_target =
+        crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
+            &role_selection.execution_plan,
+            dispatch_target,
+        );
     let mut candidates = Vec::new();
     push_unique_backend_candidate(
         &mut candidates,
@@ -578,8 +588,8 @@ pub(crate) fn internal_host_external_fallback_backend(
             candidate,
             backend_entry,
             selected_model_profile_id,
-            dispatch_target,
-            dispatch_target_requires_owned_scope(dispatch_target),
+            &policy_dispatch_target,
+            dispatch_target_requires_owned_scope(&policy_dispatch_target),
         );
         !readiness["blocked"].as_bool().unwrap_or(false)
     })
@@ -596,6 +606,10 @@ fn ready_external_readiness_fallback_backend(
         &role_selection.execution_plan,
         dispatch_target,
     )?;
+    let policy_dispatch_target = crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
+        &role_selection.execution_plan,
+        dispatch_target,
+    );
     let mut candidates = Vec::new();
     push_unique_backend_candidate(
         &mut candidates,
@@ -657,8 +671,8 @@ fn ready_external_readiness_fallback_backend(
             candidate,
             backend_entry,
             selected_model_profile_id,
-            dispatch_target,
-            dispatch_target_requires_owned_scope(dispatch_target),
+            &policy_dispatch_target,
+            dispatch_target_requires_owned_scope(&policy_dispatch_target),
         );
         !readiness["blocked"].as_bool().unwrap_or(false)
     })
@@ -4395,11 +4409,16 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             .is_some_and(
                 crate::runtime_dispatch_state::runtime_dispatch_packet_has_concrete_owned_paths,
             );
+    let policy_dispatch_target =
+        crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
+            &role_selection.execution_plan,
+            &receipt.dispatch_target,
+        );
     let (readiness_verdict, selected_model_profile_id) = external_cli_dispatch_readiness_verdict(
         &backend_id,
         &backend_entry,
         route_selected_model_profile_id,
-        &receipt.dispatch_target,
+        &policy_dispatch_target,
         packet_has_concrete_owned_paths,
     );
     if readiness_verdict["blocked"].as_bool().unwrap_or(false) {
@@ -9289,6 +9308,150 @@ agent_system:
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "run-1".to_string(),
             dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                execute_external_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    "/tmp/dispatch-packet.json",
+                    Some("hermes_cli"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "external"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return blocked result");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "backend_inadmissible_for_lane");
+        assert_eq!(result["backend_dispatch"]["backend_id"], "hermes_cli");
+        assert_eq!(
+            result["backend_dispatch"]["provider_error"],
+            serde_json::Value::Null
+        );
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn preserves_lane_policy_for_dispatch_target_alias_before_launch() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-external-dispatch-alias-policy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: qwen
+  systems:
+    qwen:
+      enabled: true
+      execution_class: external
+      external_backend_id: hermes_cli
+agent_system:
+  subagents:
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: sh
+        static_args: ["-c", "echo SHOULD_NOT_LAUNCH >&2; exit 99"]
+        prompt_mode: positional
+"#,
+        )
+        .expect("write overlay");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement the task".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "hermes_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "analysis": true,
+                            "coach": true,
+                            "implementation": false
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "implementer": {
+                                "dispatch_target": "dev",
+                                "task_class": "implementation",
+                                "activation": {
+                                    "activation_agent_type": "worker",
+                                    "activation_runtime_role": "worker"
+                                }
+                            }
+                        }
+                    },
+                    "implementation": {
+                        "executor_backend": "hermes_cli"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-1-dev".to_string(),
+            dispatch_target: "dev".to_string(),
             dispatch_status: "routed".to_string(),
             lane_status: "lane_running".to_string(),
             supersedes_receipt_id: None,
