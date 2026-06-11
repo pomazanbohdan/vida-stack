@@ -3,6 +3,62 @@
 Purpose: record per-task executor/validator efficiency evidence so the next VIDA
 task can choose a cheaper or stronger model deliberately.
 
+## 2026-06-11 - pr342-packet-repair-binding-contract
+
+Scope:
+- Task: `pr342-packet-repair-binding-contract`
+- Child rework task: `pr342-packet-repair-binding-contract-tests`
+- PR: `#342`
+- File: `crates/vida/src/taskflow_packet.rs`
+- Proof:
+  - `cargo test -p vida packet_repair_rejects_binding_mismatches_without_mutating_packet -- --nocapture`
+  - `cargo test -p vida packet_repair_rejects_missing_or_invalid_template_kind_and_active_body -- --nocapture`
+  - `cargo test -p vida packet_repair_json_cli_rejects_binding_mismatch_without_mutating_packet -- --nocapture`
+  - `cargo test -p vida packet_repair -- --nocapture`
+  - `cargo build`
+  - `git diff --check -- crates/vida/src/taskflow_packet.rs`
+  - `vida task validate-graph --json`
+  - `vida task closure-ready pr342-packet-repair-binding-contract --json`
+
+Observed model results:
+- Initial executor `gpt-5.4-mini` with `high` reasoning: 7/10 for bounded
+  production patching. It implemented the right ordering invariant: validate
+  receipt/status/task/packet binding before mutation, then validate the repaired
+  packet contract before persistence. Local proof passed before validator review.
+- Validator `gpt-5.5` with `medium` reasoning: 8/10 on the first pass. It
+  correctly rejected closure for missing mismatch matrix coverage and requested
+  public CLI JSON proof. One rejection reason counted pre-existing dirty files as
+  scope risk, so the orchestrator kept that as context rather than a blocker.
+- Rework executor `gpt-5.4-mini` with `high` reasoning: 6/10. It added useful
+  matrix and CLI test structure, but returned without build/diff-check and left
+  two test-harness defects: overlapping `StateStore`/raw `SurrealKv` handles
+  caused Windows lock failures, and the CLI JSON test initially passed through
+  the missing-task load-error path instead of the packet mismatch path.
+- Orchestrator repair: fixed the Windows datastore lock by scoping raw DB seeding
+  before reopening `StateStore`, seeded a canonical task for the public CLI test,
+  asserted JSON projection fields, and reran the proof bundle.
+- Final validator `gpt-5.5` with `medium` reasoning: 9/10. It accepted closure,
+  independently reran `cargo test -p vida packet_repair -- --nocapture`,
+  `git diff --check -- crates/vida/src/taskflow_packet.rs`, and
+  `vida task closure-ready pr342-packet-repair-binding-contract-tests --json`.
+  Reported tokens were unavailable; reported validator work was 14 steps and 32
+  underlying tool invocations.
+
+Next-task selection rule:
+- Keep `gpt-5.4-mini high` as executor for one-file runtime packets when the
+  orchestrator supplies exact invariant, owned file, and proof commands, but do
+  not let it self-close public CLI or Windows datastore-harness changes.
+- Use `gpt-5.4-mini high` for test-matrix rework only after the validator names
+  exact missing cases. Require local rerun because it may create false-green tests
+  or leave harness locks.
+- Keep `gpt-5.5 medium` as validator for packet repair, receipt authority, and
+  public operator JSON. It was worth the cost here because it caught missing
+  coverage before close and accepted quickly after focused rework.
+- For the next PR slice, prefer mini-high executor with a smaller prompt and a
+  mandatory final checklist: changed files, exact tests run, build status,
+  diff-check status, `tokens_used` or `not_exposed_by_host`, `steps_taken`, and
+  `tool_calls_used`.
+
 ## 2026-06-11 - pr352-358-dispatch-packet-read-path-safety
 
 Scope:
@@ -204,5 +260,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-11T13:34:00+03:00
+updated_at: 2026-06-11T21:45:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
