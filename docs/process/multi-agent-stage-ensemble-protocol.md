@@ -192,6 +192,29 @@ Runtime-authority task defaults from the 2026-06-11 wave-0 evaluation:
 6. The orchestrator assigns an `agent_score_10` after synthesis and records it
    in the model evaluation log or task note before the next agent selection.
 
+Three-step stage loop:
+
+1. Executor attempt:
+   - one bounded cheap executor owns one write scope,
+   - the attempt returns a patch plus its focused proof bundle,
+   - the orchestrator waits long enough for the cheap lane before classifying
+     timeout.
+2. Bundled validation:
+   - the orchestrator runs one compact proof bundle,
+   - one stronger validator checks the diff, proof, false-green risk, and closure
+     readiness,
+   - a rejection becomes one exact rework packet with the validator's blocking
+     finding, not a new broad discovery cycle.
+3. Consolidation and publication:
+   - accepted work is recorded in TaskFlow,
+   - scoped files are committed and pushed,
+   - PR state and the agent model evaluation log are updated before the next
+     implementation task starts.
+
+Use broader ensembles only when the three-step loop produces conflicting
+evidence, repeated validator rejection, dirty-file overlap, missing public proof,
+or an architectural ownership question.
+
 Operational launch playbook:
 
 1. Mini first pass:

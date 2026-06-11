@@ -213,6 +213,31 @@ Dynamic model-routing rule:
    synthesis, record the reason, and use the score only as local routing evidence
    for future packets, not as proof that the current task is closed.
 
+Three-step task execution rule:
+
+1. Delegate and self-proof:
+   - dispatch one bounded executor lane with exact task id, owned paths, invariant,
+     non-goals, proof bundle, and final-report telemetry requirements,
+   - wait long enough for cheap models before classifying timeout,
+   - require the executor to run the focused proof bundle before returning.
+2. Bundle validation:
+   - the orchestrator runs one compact local proof bundle instead of repeated
+     per-command micro-gates,
+   - run one stronger validator over the diff and proof evidence,
+   - if the validator rejects, send one exact blocker-focused rework packet
+     instead of reopening broad research.
+3. Close and publish:
+   - when proof and validator pass, record TaskFlow evidence, close the task,
+     commit only scoped files, push, update PR state, and update agent evaluation
+     documentation in one continuous pass,
+   - do not add extra exploratory checks unless new evidence contradicts closure.
+
+Escalate out of the three-step loop only when validators disagree, the same
+invariant is rejected twice, dirty-file overlap blocks scoped commits, the
+executor skipped required public proof, or the task needs a shared architectural
+decision. The three-step loop preserves quality gates while reducing
+root-session micro-operations.
+
 Optimized packet launch rule:
 
 1. every small-agent packet must include exactly one task id, one goal, one
