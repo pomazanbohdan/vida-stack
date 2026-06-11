@@ -579,6 +579,26 @@ These are the source-plan anchors this tracker is tied to:
     small fixture/test repair; do not rely on either mini or low executor for
     closure when the final patch combines partial agent edits across production
     authority code. Require medium validation plus root proof for these slices.
+- RT-003 delegation scorecard:
+  - `gpt-5.4-mini/xhigh` explorer `Hypatia` timed out and then shut down after
+    a narrowed interrupt, score 3/10 for this slice; no usable final evidence,
+    token/tool usage not exposed.
+  - `gpt-5.5-low` executor `Popper` delivered the bounded cache helper and two
+    module tests for `status-full-latest` and `taskflow-graph-summary-latest`
+    state-stale pass-cache rejection, score 8/10, 28 tool calls, token usage not
+    exposed.
+  - `gpt-5.5-medium` validator `James` approved the shared cache invariant as
+    narrow and non-breaking but blocked full CLI-surface closure until
+    graph-summary public cache binding/smoke is added or explicitly scoped as a
+    follow-up; validator score 9/10, 33 tool invocations across 9 batches, token
+    usage not exposed.
+  - Root follow-up `rt003-graph-summary-cache-public-smoke` records that current
+    evidence did not find a production graph-summary read/write binding for
+    `taskflow-graph-summary-latest`; RT-003 remains scoped to the shared cache
+    invariant plus the existing status route use of `read_state_stale_recent_json_projection`.
+  - Proof passed: `cargo test -p vida operator_projection_cache -- --nocapture`
+    with 18 tests, `cargo fmt --all -- --check`, `cargo build`, and
+    `git diff --check`.
 
 -----
 artifact_path: product/spec/meta-refactor-runtime-boundary-execution-plan

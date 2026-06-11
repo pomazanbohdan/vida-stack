@@ -211,6 +211,11 @@ fn read_recent_json_projection_allowing_state_marker(
     if !projection_task_snapshot_marker_matches(state_dir, &body) {
         return None;
     }
+    if state_marker_newer
+        && pass_projection_requires_recompute_without_operator_evidence(projection_name, &body)
+    {
+        return None;
+    }
     annotate_recent_projection_with_status(
         &body,
         projection_name,
@@ -228,6 +233,31 @@ fn read_recent_json_projection_allowing_state_marker(
         },
     )
     .or(Some(body))
+}
+
+fn pass_projection_requires_recompute_without_operator_evidence(
+    projection_name: &str,
+    body: &str,
+) -> bool {
+    if !matches!(
+        projection_name,
+        "status-full-latest" | "taskflow-graph-summary-latest"
+    ) {
+        return false;
+    }
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(body) else {
+        return true;
+    };
+    if payload.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
+        return false;
+    }
+    let Some(dependencies) = payload
+        .get("projection_cache_dependencies")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return true;
+    };
+    !dependencies.keys().any(|key| key != "task_snapshot_marker")
 }
 
 pub(crate) fn write_json_projection(
@@ -1111,6 +1141,63 @@ mod tests {
         assert_eq!(
             stale_json["projection_cache"]["status"],
             "state_marker_stale_recent_projection"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn state_stale_recent_status_pass_cache_with_only_task_marker_is_rejected() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-status-pass-state-stale-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let payload = serde_json::json!({"surface": "vida status", "status": "pass"});
+        write_json_projection(&root, "status-full-latest", &payload);
+
+        std::thread::sleep(Duration::from_millis(10));
+        touch_state_mutation_marker(&root);
+        assert!(
+            read_state_stale_recent_json_projection(
+                &root,
+                "status-full-latest",
+                Duration::from_secs(60)
+            )
+            .is_none(),
+            "state-stale status pass cache with only task marker must recompute"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn state_stale_recent_graph_summary_pass_cache_with_only_task_marker_is_rejected() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-graph-pass-state-stale-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let payload =
+            serde_json::json!({"surface": "vida taskflow graph-summary", "status": "pass"});
+        write_json_projection(&root, "taskflow-graph-summary-latest", &payload);
+
+        std::thread::sleep(Duration::from_millis(10));
+        touch_state_mutation_marker(&root);
+        assert!(
+            read_state_stale_recent_json_projection(
+                &root,
+                "taskflow-graph-summary-latest",
+                Duration::from_secs(60)
+            )
+            .is_none(),
+            "state-stale graph-summary pass cache with only task marker must recompute"
         );
         let _ = fs::remove_dir_all(root);
     }
