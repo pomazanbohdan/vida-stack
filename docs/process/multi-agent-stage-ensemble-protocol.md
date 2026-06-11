@@ -87,7 +87,8 @@ Every task research stage must model the two external advisory modes separately:
 2. `external_patch_proposal`: an external carrier prepares a patch proposal,
    proposed diff or file plan, verification commands, and rollback notes. The
    root orchestrator applies or rejects the proposal, runs proof, commits,
-   pushes, and closes TaskFlow.
+   performs only publication authorized by a current explicit operator
+   instruction, and closes TaskFlow.
 
 The research intake record must include both mode decisions for the task. A mode
 may be `submitted`, `running`, `produced`, `accepted`, `rejected`, `stale`,
