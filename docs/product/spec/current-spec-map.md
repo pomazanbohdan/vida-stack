@@ -84,6 +84,10 @@ Companion rule:
    Config families: `vida.config.yaml`, `vida/config/instructions/**`, TaskFlow routing and autonomous execution behavior
 6. [taskflow-v1-runtime-modernization-plan.md](taskflow-v1-runtime-modernization-plan.md)
    Config families: TaskFlow runtime-family implementation surfaces, `vida/config/instructions/**`, runtime feature registration, shared runtime kernel, provider registry, modular config validation, and the active TaskFlow modernization backlog
+   Registered path: `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
+7. [meta-refactor-runtime-boundary-execution-plan.md](meta-refactor-runtime-boundary-execution-plan.md)
+   Config families: staged VIDA runtime boundary refactor tracking, Wave 0 proof status, delegated agent scorecards, release-install wave closure gates, and TaskFlow/PR processing evidence for the active META epic
+   Registered path: `docs/product/spec/meta-refactor-runtime-boundary-execution-plan.md`
 7. [codex-host-agent-boundary-and-cli-bridge-design.md](codex-host-agent-boundary-and-cli-bridge-design.md)
    Config families: `vida.config.yaml -> host_environment.systems.codex`, `agent_system.subagents.internal_subagents`, `agent_system.subagents.codex_cli_exec`, TaskFlow host-bridge dispatch requests
    Registered path: `docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md`

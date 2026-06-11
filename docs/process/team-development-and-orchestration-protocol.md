@@ -500,8 +500,10 @@ After each closure-ready wave:
 
 1. close or update every child TaskFlow item before closing the wave parent,
 2. run the declared wave proof and debug build,
-3. push the wave closure state only when a current explicit operator instruction authorizes that specific wave, publication batch, or repeatable publication pattern; wave closure and a clean commit are not authorization by themselves,
-4. run `docs/process/github-pr-processing-protocol.md` from wave closure only when a current explicit operator instruction authorizes that specific PR-processing batch or repeatable PR-processing pattern.
+3. build and install the release binary with `vida release install --json` or the current project-approved equivalent so the system `vida` on the normal PATH matches the closed wave,
+4. smoke-check the installed binary through the normal PATH with a bounded runtime read such as `vida status --json` or the wave-declared installed-runtime smoke,
+5. push the wave closure state only when a current explicit operator instruction authorizes that specific wave, publication batch, or repeatable publication pattern; wave closure and a clean commit are not authorization by themselves,
+6. run `docs/process/github-pr-processing-protocol.md` from wave closure only when a current explicit operator instruction authorizes that specific PR-processing batch or repeatable PR-processing pattern.
 
 If any of those fail:
 

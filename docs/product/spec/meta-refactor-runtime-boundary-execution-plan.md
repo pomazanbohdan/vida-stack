@@ -400,11 +400,14 @@ Use this checklist after each wave and record the exact proof result in the note
 - [ ] Baseline proof commands recorded
 - [ ] Document updated with wave outcome
 - [ ] Debug build passed
+- [ ] Release binary installed to the system `vida` path
+- [ ] Installed `vida` smoke passed through the normal PATH
 - [ ] TaskFlow state updated
 - [ ] Commit created
-- [ ] Push completed
+- [ ] Push completed when authorized by current explicit operator instruction
 - [ ] VIDA runtime self-diagnostic run after closure
-- [ ] GitHub PR processing protocol run after wave close
+- [ ] GitHub PR processing protocol run after wave close when authorized by
+      current explicit operator instruction
 
 ## Delegated Task Packet Checklist
 
@@ -497,8 +500,9 @@ These are the source-plan anchors this tracker is tied to:
   - `gpt-5.5-medium` is currently effective as the authority-path validator
     because it caught source-fidelity, false-green, and residual-risk issues.
   - Root orchestrator remains responsible for accepting evidence, updating
-    TaskFlow, running debug build, committing, pushing, self-diagnostic, and
-    PR protocol.
+    TaskFlow, running debug build, installing the release binary after wave
+    parent closure, committing, authorized push/PR protocol, and
+    self-diagnostic.
 - Delegation scorecard for ROUTE-001 / ROUTE-002:
   - `gpt-5.4-mini` was useful for PR triage/exploration with concrete mapping
     quality around 8-9/10, but write-agent runs for this slice timed out or
@@ -508,8 +512,21 @@ These are the source-plan anchors this tracker is tied to:
     score 8.5/10, validator self-score 8/10, 42 tool calls/steps, and token
     usage not exposed by host.
   - Root orchestrator performed the accepted code integration, focused proof,
-    docs update, TaskFlow update, commit, push, and PR closure protocol.
+    docs update, TaskFlow update, commit, authorized push, and authorized PR
+    closure protocol.
 - Next task routing recommendation: keep `gpt-5.4-mini` for narrow
   implementation packets only when the prompt names exact caller roots,
   fail-closed behavior, TaskFlow metadata updates, proof commands, and commit
   boundaries; keep `gpt-5.5-medium` as validator for runtime/authority code.
+
+-----
+artifact_path: product/spec/meta-refactor-runtime-boundary-execution-plan
+artifact_type: document
+artifact_version: 1
+artifact_revision: 2026-06-11
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/meta-refactor-runtime-boundary-execution-plan.md
+created_at: 2026-06-11T07:33:01.9883639Z
+updated_at: 2026-06-11T07:33:01.9883639Z
+changelog_ref: meta-refactor-runtime-boundary-execution-plan.changelog.jsonl
