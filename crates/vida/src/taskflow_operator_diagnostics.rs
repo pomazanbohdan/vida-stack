@@ -182,10 +182,13 @@ fn consume_resume_error_packet_path(error: &str) -> Option<String> {
 }
 
 pub(crate) fn dispatch_packet_repair_refs_from_path(path: &str) -> DispatchPacketRepairRefs {
-    let Ok(body) = std::fs::read_to_string(path) else {
+    let Ok(project_root) = std::env::current_dir() else {
         return DispatchPacketRepairRefs::default();
     };
-    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&body) else {
+    let Some(packet) = crate::status_surface::dispatch_packet_json_from_project_path(
+        &project_root,
+        path,
+    ) else {
         return DispatchPacketRepairRefs::default();
     };
     DispatchPacketRepairRefs {
@@ -321,6 +324,17 @@ fn consume_resume_next_actions(
 mod tests {
     use super::*;
 
+    fn unique_dispatch_packet_test_root(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
     #[test]
     fn consume_resume_error_payload_uses_release1_operator_contract_builder() {
         let payload = consume_resume_error_payload(
@@ -372,13 +386,10 @@ mod tests {
 
     #[test]
     fn consume_resume_error_payload_builds_packet_repair_action_from_packet_refs() {
-        let dir = std::env::temp_dir().join(format!(
-            "vida-taskflow-diagnostics-packet-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir should create");
+        let dir = unique_dispatch_packet_test_root("vida-taskflow-diagnostics-packet");
         let packet_path = dir.join("packet.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("packet dir should create");
         std::fs::write(
             &packet_path,
             serde_json::json!({
@@ -410,5 +421,48 @@ mod tests {
             .contains("vida taskflow packet repair --run-id run-packet --from-task task-packet"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn consume_resume_error_payload_does_not_read_outside_packet_refs() {
+        let project_root = std::env::current_dir().expect("current dir");
+        let outside_root = project_root
+            .parent()
+            .expect("project parent")
+            .join(format!("vida-taskflow-diagnostics-outside-{}", std::process::id()));
+        std::fs::create_dir_all(&outside_root).expect("outside root should create");
+        let packet_path = outside_root.join("packet.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-outside",
+                "delivery_task_packet": {
+                    "task_id": "task-outside"
+                }
+            })
+            .to_string(),
+        )
+        .expect("outside packet should write");
+        let payload = consume_resume_error_payload(
+            &format!(
+                "dispatch packet contract invalid; dispatch packet `{}`",
+                packet_path.display()
+            ),
+            "vida taskflow consume continue",
+        );
+
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["dispatch_packet_contract_invalid"])
+        );
+        assert_eq!(payload["artifact_refs"]["dispatch_packet_path"], packet_path.display().to_string());
+        assert!(payload["artifact_refs"]["run_id"].is_null());
+        assert!(payload["artifact_refs"]["task_id"].is_null());
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action should be text")
+            .contains("canonical task metadata"));
+
+        let _ = std::fs::remove_dir_all(&outside_root);
     }
 }

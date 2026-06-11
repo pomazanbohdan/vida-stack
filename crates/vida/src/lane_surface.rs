@@ -1094,14 +1094,16 @@ fn pending_host_bridge_next_action(
             return Some(host_bridge_next_action_for_request_path(request_path));
         }
     }
+    let state_root = host_bridge_state_root_from_receipt_summary(summary)?;
     let dispatch_result_path = summary.dispatch_result_path.as_deref()?.trim();
     if dispatch_result_path.is_empty() {
         return None;
     }
     let result_path =
         crate::runtime_dispatch_state::normalize_persisted_runtime_path(dispatch_result_path);
-    let raw = std::fs::read_to_string(result_path).ok()?;
-    let result: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let result_path =
+        canonicalize_existing_regular_state_path(&state_root, &result_path, "dispatch result").ok()?;
+    let result = read_host_bridge_request_at_path(&result_path).ok()?;
     let request = host_bridge_request_object(&result)?;
     let request_path = host_bridge_path_string(request, "request_path")
         .ok()?
@@ -1145,8 +1147,9 @@ fn host_bridge_request_path_for_run_target(
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 return None;
             }
-            let raw = std::fs::read_to_string(&path).ok()?;
-            let request: serde_json::Value = serde_json::from_str(&raw).ok()?;
+            let canonical_path =
+                canonicalize_existing_regular_state_path(&state_root, &path, "request").ok()?;
+            let request = read_host_bridge_request_at_path(&canonical_path).ok()?;
             let run_matches = request
                 .get("run_id")
                 .and_then(serde_json::Value::as_str)
@@ -1251,9 +1254,9 @@ fn blocked_source_target_from_summary_packet(
     if packet_path.is_empty() {
         return None;
     }
-    let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
-    let raw = std::fs::read_to_string(packet_path).ok()?;
-    let packet: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let project_root = std::env::current_dir().ok()?;
+    let packet =
+        crate::status_surface::dispatch_packet_json_from_project_path(&project_root, packet_path)?;
     let source_dispatch_target = packet
         .get("source_dispatch_target")
         .and_then(serde_json::Value::as_str)
@@ -2370,12 +2373,37 @@ pub(crate) fn missing_task_stale_blocked_run_can_retire(
         || exception_takeover_bridge_request_stale_blocked
 }
 
-fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
+const MAX_LANE_PACKET_READ_BYTES: u64 = 1024 * 1024;
+
+fn read_lane_packet(state_root: &Path, path: &str) -> Result<serde_json::Value, String> {
     let normalized_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
-    let raw = std::fs::read_to_string(&normalized_path)
-        .map_err(|error| format!("Failed to read persisted lane packet `{path}`: {error}"))?;
-    serde_json::from_str(&raw)
-        .map_err(|error| format!("Failed to decode persisted lane packet `{path}`: {error}"))
+    let canonical_path =
+        canonicalize_existing_regular_state_path(state_root, &normalized_path, "lane packet")?;
+    let metadata = std::fs::symlink_metadata(&canonical_path).map_err(|error| {
+        format!(
+            "Failed to inspect persisted lane packet `{}`: {error}",
+            canonical_path.display()
+        )
+    })?;
+    if metadata.len() > MAX_LANE_PACKET_READ_BYTES {
+        return Err(format!(
+            "Persisted lane packet `{}` exceeds {} bytes.",
+            canonical_path.display(),
+            MAX_LANE_PACKET_READ_BYTES
+        ));
+    }
+    let raw = std::fs::read(&canonical_path).map_err(|error| {
+        format!(
+            "Failed to read persisted lane packet `{}`: {error}",
+            canonical_path.display()
+        )
+    })?;
+    serde_json::from_slice(&raw).map_err(|error| {
+        format!(
+            "Failed to decode persisted lane packet `{}`: {error}",
+            canonical_path.display()
+        )
+    })
 }
 
 fn canonicalize_for_lane_packet_validation(
@@ -2551,8 +2579,11 @@ fn read_host_bridge_request_at_path(path: &Path) -> Result<serde_json::Value, St
 
 fn read_host_bridge_request(state_root: &Path, path: &str) -> Result<serde_json::Value, String> {
     let normalized_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
-    let canonical_path =
-        canonicalize_existing_state_path(state_root, Path::new(&normalized_path), "request")?;
+    let canonical_path = canonicalize_existing_regular_state_path(
+        state_root,
+        Path::new(&normalized_path),
+        "request",
+    )?;
     read_host_bridge_request_at_path(&canonical_path)
 }
 
@@ -2573,10 +2604,7 @@ fn host_bridge_packet_confirms_active_request(
     run_id: &str,
     dispatch_target: &str,
 ) -> bool {
-    let Ok(body) = std::fs::read_to_string(packet_path) else {
-        return false;
-    };
-    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&body) else {
+    let Ok(packet) = read_host_bridge_request_at_path(packet_path) else {
         return false;
     };
     if packet.get("run_id").and_then(serde_json::Value::as_str) != Some(run_id) {
@@ -2631,7 +2659,8 @@ fn trusted_host_bridge_completion_request_context(
     let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
         host_bridge_path_string(&request, "packet_path")?,
     );
-    let packet_path = canonicalize_existing_state_path(state_root, &packet_path, "packet")?;
+    let packet_path =
+        canonicalize_existing_regular_state_path(state_root, &packet_path, "packet")?;
     if let Some(selected_backend) = receipt.selected_backend.as_deref() {
         let backend_id = host_bridge_path_string(&request, "backend_id")?;
         if backend_id != selected_backend {
@@ -2674,12 +2703,10 @@ fn trusted_host_bridge_completion_request_context(
 }
 
 fn path_has_dot_segment(path: &Path) -> bool {
-    path.components().any(|component| {
-        matches!(
-            component,
-            std::path::Component::CurDir | std::path::Component::ParentDir
-        )
-    })
+    path.as_os_str()
+        .to_string_lossy()
+        .split(['/', '\\'])
+        .any(|segment| matches!(segment, "." | ".."))
 }
 
 fn canonical_state_root(state_root: &Path) -> Result<PathBuf, String> {
@@ -2717,6 +2744,26 @@ fn canonicalize_existing_state_path(
         ));
     }
     Ok(canonical_path)
+}
+
+fn canonicalize_existing_regular_state_path(
+    state_root: &Path,
+    path: &Path,
+    label: &str,
+) -> Result<PathBuf, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Failed to inspect host bridge {label} path `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "Host bridge {label} path `{}` is not a regular file.",
+            path.display()
+        ));
+    }
+    canonicalize_existing_state_path(state_root, path, label)
 }
 
 fn validate_new_state_artifact_path(
@@ -2835,19 +2882,8 @@ fn validated_host_bridge_paths_from_receipt(
     let dispatch_result_path =
         crate::runtime_dispatch_state::normalize_persisted_runtime_path(dispatch_result_path);
     let dispatch_result_path =
-        canonicalize_existing_state_path(state_root, &dispatch_result_path, "dispatch result")?;
-    let raw = std::fs::read_to_string(&dispatch_result_path).map_err(|error| {
-        format!(
-            "Failed to read persisted host bridge dispatch result `{}`: {error}",
-            dispatch_result_path.display()
-        )
-    })?;
-    let result: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
-        format!(
-            "Failed to decode persisted host bridge dispatch result `{}`: {error}",
-            dispatch_result_path.display()
-        )
-    })?;
+        canonicalize_existing_regular_state_path(state_root, &dispatch_result_path, "dispatch result")?;
+    let result = read_host_bridge_request_at_path(&dispatch_result_path)?;
     let paths = match host_bridge_request_paths_from_dispatch_result(&result) {
         Ok(paths) => paths,
         Err(error) if allow_reconciled_request_paths => {
@@ -2859,7 +2895,7 @@ fn validated_host_bridge_paths_from_receipt(
         Err(error) => return Err(error),
     };
     let canonical_paths_request_path =
-        canonicalize_existing_state_path(state_root, &paths.request_path, "request")?;
+        canonicalize_existing_regular_state_path(state_root, &paths.request_path, "request")?;
     if canonical_request_path != canonical_paths_request_path {
         return Err(format!(
             "Host bridge request `{}` does not match persisted dispatch receipt request `{}`.",
@@ -2885,9 +2921,12 @@ fn validated_host_bridge_paths_from_receipt(
             host_bridge_path_string(&request, "packet_path")?,
         );
         let request_packet_path =
-            canonicalize_existing_state_path(state_root, &request_packet_path, "packet")?;
-        let authoritative_packet_path =
-            canonicalize_existing_state_path(state_root, authoritative_packet_path, "packet")?;
+            canonicalize_existing_regular_state_path(state_root, &request_packet_path, "packet")?;
+        let authoritative_packet_path = canonicalize_existing_regular_state_path(
+            state_root,
+            authoritative_packet_path,
+            "packet",
+        )?;
         if request_packet_path != authoritative_packet_path {
             return Err(
                 "Host bridge request packet path does not match persisted dispatch receipt evidence."
@@ -3285,13 +3324,10 @@ fn host_bridge_request_has_retryable_completion_evidence(
             continue;
         };
         let path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(raw_path);
-        let Ok(path) = canonicalize_existing_state_path(state_root, &path, field) else {
+        let Ok(path) = canonicalize_existing_regular_state_path(state_root, &path, field) else {
             continue;
         };
-        let Ok(raw) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Ok(artifact) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        let Ok(artifact) = read_host_bridge_request_at_path(&path) else {
             continue;
         };
         if artifact.get("status").and_then(serde_json::Value::as_str) == Some("blocked")
@@ -4157,7 +4193,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 }
             };
             let validated_packet_path = validated_packet_path.display().to_string();
-            let mut packet = match read_lane_packet(&validated_packet_path) {
+            let mut packet = match read_lane_packet(store.root(), &validated_packet_path) {
                 Ok(packet) => packet,
                 Err(error) => {
                     eprintln!("{error}");
@@ -9299,6 +9335,28 @@ mod tests {
             "{outside_error}"
         );
 
+        let dot_segment_request_path = root.join("host-tool-bridge/requests/dot-segment.json");
+        std::fs::write(
+            &dot_segment_request_path,
+            serde_json::json!({
+                "request_id": "dot-segment",
+                "status": "pending"
+            })
+            .to_string(),
+        )
+        .expect("write dot-segment request");
+        let dot_segment_path = root
+            .join("host-tool-bridge")
+            .join("requests")
+            .join(".")
+            .join("dot-segment.json");
+        let dot_segment_error = read_host_bridge_request_quickly(root.clone(), dot_segment_path)
+            .expect_err("dot-segment request should fail");
+        assert!(
+            dot_segment_error.contains("dot-segment"),
+            "{dot_segment_error}"
+        );
+
         let oversized_request_path = root.join("host-tool-bridge/requests/oversized.json");
         let oversized_request = serde_json::json!({
             "request_id": "oversized",
@@ -9337,6 +9395,112 @@ mod tests {
             let fifo_error = read_host_bridge_request_quickly(root.clone(), fifo_request_path)
                 .expect_err("fifo request should fail");
             assert!(fifo_error.contains("regular file"), "{fifo_error}");
+
+            let symlink_request_path = root.join("host-tool-bridge/requests/symlink.json");
+            std::os::unix::fs::symlink(&outside_request_path, &symlink_request_path)
+                .expect("create symlink request");
+            let symlink_error = read_host_bridge_request_quickly(root.clone(), symlink_request_path)
+                .expect_err("symlink request should fail");
+            assert!(symlink_error.contains("regular file"), "{symlink_error}");
+        }
+
+        let _ = std::fs::remove_dir_all(&outside_root);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_lane_packet_reads_contained_packet_and_rejects_traversal_symlink_and_oversized_file()
+    {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-lane-packet-read-{pid}-{nanos}"
+        ));
+        std::fs::create_dir_all(&root).expect("create packet root");
+
+        let packet_path = root.join("runtime-consumption/packets/packet.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-contained",
+                "delivery_task_packet": { "task_id": "task-contained" }
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        let packet = read_lane_packet(&root, packet_path.to_str().expect("utf-8"))
+            .expect("contained packet should read");
+        assert_eq!(packet["run_id"], "run-contained");
+        assert_eq!(
+            packet["delivery_task_packet"]["task_id"],
+            "task-contained"
+        );
+
+        let outside_root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-lane-packet-outside-{pid}-{nanos}"
+        ));
+        let outside_packet_path = outside_root.join("runtime-consumption/packets/outside.json");
+        std::fs::create_dir_all(outside_packet_path.parent().expect("outside parent"))
+            .expect("create outside parent");
+        std::fs::write(
+            &outside_packet_path,
+            serde_json::json!({
+                "run_id": "run-outside",
+                "delivery_task_packet": { "task_id": "task-outside" }
+            })
+            .to_string(),
+        )
+        .expect("write outside packet");
+        let outside_error =
+            read_lane_packet(&root, outside_packet_path.to_str().expect("utf-8"))
+                .expect_err("outside-root packet should fail");
+        assert!(
+            outside_error.contains("outside VIDA state root"),
+            "{outside_error}"
+        );
+
+        let dot_segment_path = root
+            .join("runtime-consumption")
+            .join("packets")
+            .join(".")
+            .join("dot-segment.json");
+        let dot_segment_error =
+            read_lane_packet(&root, dot_segment_path.to_str().expect("utf-8"))
+                .expect_err("dot-segment packet should fail");
+        assert!(
+            dot_segment_error.contains("dot-segment"),
+            "{dot_segment_error}"
+        );
+
+        let oversized_path = root.join("runtime-consumption/packets/oversized.json");
+        std::fs::write(
+            &oversized_path,
+            serde_json::json!({
+                "run_id": "run-oversized",
+                "payload": "x".repeat((MAX_LANE_PACKET_READ_BYTES as usize) + 1)
+            })
+            .to_string(),
+        )
+        .expect("write oversized packet");
+        let oversized_error = read_lane_packet(&root, oversized_path.to_str().expect("utf-8"))
+            .expect_err("oversized packet should fail");
+        assert!(oversized_error.contains("exceeds"), "{oversized_error}");
+
+        #[cfg(unix)]
+        {
+            let symlink_path = root.join("runtime-consumption/packets/symlink.json");
+            let symlink_target = root.join("runtime-consumption/packets/packet.json");
+            std::os::unix::fs::symlink(&symlink_target, &symlink_path)
+                .expect("create symlink packet");
+            let symlink_error = read_lane_packet(&root, symlink_path.to_str().expect("utf-8"))
+                .expect_err("symlink packet should fail");
+            assert!(symlink_error.contains("regular file"), "{symlink_error}");
         }
 
         let _ = std::fs::remove_dir_all(&outside_root);

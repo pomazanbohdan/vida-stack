@@ -1781,8 +1781,7 @@ async fn latest_dispatch_packet_contract_error_for_resume_gate(
 
 fn raw_dispatch_packet_contract_error_for_resume_gate(packet_path: &Path) -> Option<String> {
     let packet_path_text = packet_path.display().to_string();
-    let body = std::fs::read_to_string(packet_path).ok()?;
-    let packet = serde_json::from_str::<serde_json::Value>(&body).ok()?;
+    let packet = dispatch_packet_json_from_current_project(packet_path_text.as_str())?;
     let contract_error =
         crate::validate_runtime_dispatch_packet_contract(&packet, "Persisted dispatch packet")
             .err()
@@ -2879,11 +2878,15 @@ fn normalize_top_level_packet_scope_mirrors(
     normalized
 }
 
+fn dispatch_packet_json_from_current_project(path: &str) -> Option<serde_json::Value> {
+    let project_root = std::env::current_dir().ok()?;
+    crate::status_surface::dispatch_packet_json_from_project_path(&project_root, path)
+}
+
 pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, String> {
-    let body = std::fs::read_to_string(path)
-        .map_err(|error| format!("Failed to read persisted dispatch packet: {error}"))?;
-    let mut packet: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|error| format!("Failed to parse persisted dispatch packet: {error}"))?;
+    let Some(mut packet) = dispatch_packet_json_from_current_project(path) else {
+        return Err(format!("Failed to read persisted dispatch packet `{path}`"));
+    };
     if normalize_runtime_dispatch_packet(&mut packet) {
         std::fs::write(
             path,
@@ -3511,7 +3514,7 @@ fn retry_backend_from_dispatch_packet(
 ) -> Option<String> {
     let packet = read_dispatch_packet(packet_path)
         .ok()
-        .or_else(|| crate::read_json_file_if_present(std::path::Path::new(packet_path)))?;
+        .or_else(|| dispatch_packet_json_from_current_project(packet_path))?;
     let execution_plan = &packet["role_selection_full"]["execution_plan"];
     let route = super::execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
     if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
@@ -4053,7 +4056,7 @@ async fn maybe_resume_inputs_from_ready_downstream_packet(
         return Ok(None);
     };
     let packet = read_dispatch_packet(packet_path).or_else(|_| {
-        crate::read_json_file_if_present(std::path::Path::new(packet_path))
+        dispatch_packet_json_from_current_project(packet_path)
             .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))
     })?;
     let packet_ready = packet
@@ -4141,7 +4144,7 @@ fn downstream_result_packet_path(result: &serde_json::Value) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    let source_packet = crate::read_json_file_if_present(std::path::Path::new(source_path))?;
+    let source_packet = dispatch_packet_json_from_current_project(source_path)?;
     if source_packet
         .get("packet_kind")
         .and_then(serde_json::Value::as_str)
@@ -5673,10 +5676,10 @@ fn rewrite_retry_dispatch_packet_if_downstream_carrier(
     else {
         return Ok(false);
     };
-    let packet = read_dispatch_packet(packet_path).or_else(|_| {
-        crate::read_json_file_if_present(std::path::Path::new(packet_path))
-            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))
-    })?;
+    let packet = read_dispatch_packet(packet_path)
+        .ok()
+        .or_else(|| dispatch_packet_json_from_current_project(packet_path))
+        .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))?;
     let packet_kind = packet
         .get("packet_kind")
         .and_then(serde_json::Value::as_str)
@@ -15137,15 +15140,10 @@ agent_system:
 
     #[test]
     fn retry_backend_for_dispatch_receipt_falls_back_to_persisted_packet_route() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let packet_path = std::env::temp_dir().join(format!(
-            "vida-retry-backend-packet-{}-{}.json",
-            std::process::id(),
-            nanos
-        ));
+        let packet_root = unique_dispatch_packet_test_root("vida-retry-backend-packet");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
         fs::write(
             &packet_path,
             serde_json::to_string_pretty(&serde_json::json!({
@@ -15218,20 +15216,15 @@ agent_system:
         let fallback = retry_backend_for_dispatch_receipt(&role_selection, &receipt);
 
         assert_eq!(fallback.as_deref(), Some("internal_subagents"));
-        let _ = fs::remove_file(packet_path);
+        let _ = fs::remove_dir_all(packet_root);
     }
 
     #[test]
     fn retry_backend_for_dispatch_receipt_uses_persisted_packet_review_fanout_before_fallback() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let packet_path = std::env::temp_dir().join(format!(
-            "vida-retry-review-fanout-packet-{}-{}.json",
-            std::process::id(),
-            nanos
-        ));
+        let packet_root = unique_dispatch_packet_test_root("vida-retry-review-fanout-packet");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
         fs::write(
             &packet_path,
             serde_json::to_string_pretty(&serde_json::json!({
@@ -15316,7 +15309,7 @@ agent_system:
         let fallback = retry_backend_for_dispatch_receipt(&role_selection, &receipt);
 
         assert_eq!(fallback.as_deref(), Some("opencode_cli"));
-        let _ = fs::remove_file(packet_path);
+        let _ = fs::remove_dir_all(packet_root);
     }
 
     #[test]
@@ -16950,11 +16943,9 @@ agent_system:
 
     #[test]
     fn consume_continue_resume_error_payload_classifies_dispatch_packet_contract_invalid() {
-        let root = std::env::temp_dir().join(format!(
-            "vida-consume-resume-invalid-packet-action-{}",
-            std::process::id()
-        ));
-        let packet_path = root.join("runtime-consumption/dispatch-packets/run-1.json");
+        let packet_root =
+            unique_dispatch_packet_test_root("vida-consume-resume-invalid-packet-action");
+        let packet_path = packet_root.join("runtime-consumption/dispatch-packets/run-1.json");
         fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
             .expect("create packet dir");
         fs::write(
@@ -17016,7 +17007,58 @@ agent_system:
                 .all(|action| !action.as_str().unwrap_or_default().contains("--json")),
             "default dispatch-packet repair projection must not bias operators toward --json: {default_projection}"
         );
-        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(packet_root);
+    }
+
+    #[test]
+    fn consume_continue_resume_error_payload_does_not_read_outside_packet_refs() {
+        let project_root = std::env::current_dir().expect("current dir");
+        let outside_root = project_root
+            .parent()
+            .expect("project parent")
+            .join(format!(
+                "vida-consume-resume-outside-packet-{}",
+                std::process::id()
+            ));
+        let packet_path = outside_root.join("runtime-consumption/dispatch-packets/run-1.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-outside",
+                "delivery_task_packet": {
+                    "task_id": "task-outside"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write outside packet");
+
+        let payload = consume_continue_resume_error_payload(
+            &format!(
+                "dispatch packet contract invalid; dispatch packet `{}`",
+                packet_path.display()
+            ),
+            "vida taskflow consume continue",
+        );
+
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["dispatch_packet_contract_invalid"])
+        );
+        assert_eq!(
+            payload["artifact_refs"]["dispatch_packet_path"],
+            packet_path.display().to_string()
+        );
+        assert!(payload["artifact_refs"]["run_id"].is_null());
+        assert!(payload["artifact_refs"]["task_id"].is_null());
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action should be text")
+            .contains("canonical task metadata"));
+
+        let _ = fs::remove_dir_all(&outside_root);
     }
 
     #[test]
@@ -17239,15 +17281,9 @@ agent_system:
     #[tokio::test]
     async fn resolve_runtime_consumption_resume_inputs_for_run_id_fails_closed_when_explicit_task_graph_binding_mismatches_dispatch_packet_lineage(
     ) {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-consume-resume-explicit-binding-mismatch-{}-{}",
-            std::process::id(),
-            nanos
-        ));
+        let root = unique_dispatch_packet_test_root(
+            "vida-consume-resume-explicit-binding-mismatch",
+        );
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let run_id = "run-explicit-binding-mismatch";
@@ -17958,15 +17994,8 @@ agent_system:
     #[tokio::test]
     async fn resolve_runtime_consumption_resume_inputs_for_run_id_allows_matching_explicit_task_graph_binding_lineage(
     ) {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-consume-resume-explicit-binding-match-{}-{}",
-            std::process::id(),
-            nanos
-        ));
+        let root =
+            unique_dispatch_packet_test_root("vida-consume-resume-explicit-binding-match");
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let run_id = "run-explicit-binding-match";
@@ -18168,15 +18197,9 @@ agent_system:
     #[tokio::test]
     async fn resolve_runtime_consumption_resume_inputs_without_run_id_switches_to_fresh_bound_task_run(
     ) {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-consume-resume-explicit-binding-fresh-bound-task-{}-{}",
-            std::process::id(),
-            nanos
-        ));
+        let root = unique_dispatch_packet_test_root(
+            "vida-consume-resume-explicit-binding-fresh-bound-task",
+        );
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let old_run_id = "github-116-orchestrator-session-identity";
@@ -18873,17 +18896,23 @@ agent_system:
         );
     }
 
-    #[test]
-    fn read_dispatch_packet_repairs_legacy_packet_scope_before_validation() {
+    fn unique_dispatch_packet_test_root(name: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let packet_path = std::env::temp_dir().join(format!(
-            "vida-legacy-dispatch-packet-{}-{}.json",
-            std::process::id(),
-            nanos
-        ));
+        std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn read_dispatch_packet_repairs_legacy_packet_scope_before_validation() {
+        let packet_root = unique_dispatch_packet_test_root("vida-legacy-dispatch-packet");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
         fs::write(
             &packet_path,
             serde_json::json!({
@@ -18916,15 +18945,10 @@ agent_system:
 
     #[test]
     fn read_dispatch_packet_preserves_structured_coach_request_during_normalization() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let packet_path = std::env::temp_dir().join(format!(
-            "vida-stale-coach-request-packet-{}-{}.json",
-            std::process::id(),
-            nanos
-        ));
+        let packet_root = unique_dispatch_packet_test_root("vida-stale-coach-request-packet");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
         fs::write(
             &packet_path,
             serde_json::json!({
@@ -18989,15 +19013,11 @@ agent_system:
 
     #[test]
     fn read_dispatch_packet_repairs_stale_top_level_scope_mirror_before_validation() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let packet_path = std::env::temp_dir().join(format!(
-            "vida-stale-top-level-scope-mirror-packet-{}-{}.json",
-            std::process::id(),
-            nanos
-        ));
+        let packet_root =
+            unique_dispatch_packet_test_root("vida-stale-top-level-scope-mirror-packet");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
         fs::write(
             &packet_path,
             serde_json::json!({
@@ -19037,15 +19057,11 @@ agent_system:
 
     #[test]
     fn read_dispatch_packet_repairs_legacy_implementer_delivery_owned_scope_from_request_text() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let packet_path = std::env::temp_dir().join(format!(
-            "vida-legacy-implementer-owned-scope-packet-{}-{}.json",
-            std::process::id(),
-            nanos
-        ));
+        let packet_root =
+            unique_dispatch_packet_test_root("vida-legacy-implementer-owned-scope-packet");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
         fs::write(
             &packet_path,
             serde_json::json!({
@@ -19089,15 +19105,8 @@ agent_system:
     #[test]
     fn latest_dispatch_packet_contract_error_for_resume_gate_rejects_raw_missing_owned_paths_before_normalization(
     ) {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let state_root = std::env::temp_dir().join(format!(
-            "vida-raw-dispatch-packet-contract-state-{}-{}",
-            std::process::id(),
-            nanos
-        ));
+        let state_root =
+            unique_dispatch_packet_test_root("vida-raw-dispatch-packet-contract-state");
         let packet_dir = state_root
             .join("runtime-consumption")
             .join("dispatch-packets");
@@ -19152,15 +19161,12 @@ agent_system:
 
     #[test]
     fn read_dispatch_packet_repairs_legacy_implementer_scope_from_delivery_packet_request_text() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let packet_path = std::env::temp_dir().join(format!(
-            "vida-legacy-implementer-delivery-body-owned-scope-packet-{}-{}.json",
-            std::process::id(),
-            nanos
-        ));
+        let packet_root = unique_dispatch_packet_test_root(
+            "vida-legacy-implementer-delivery-body-owned-scope-packet",
+        );
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
         fs::write(
             &packet_path,
             serde_json::json!({
@@ -19202,15 +19208,11 @@ agent_system:
 
     #[test]
     fn read_dispatch_packet_repairs_mismatched_specification_owned_scope_before_validation() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let packet_path = std::env::temp_dir().join(format!(
-            "vida-specification-owned-scope-packet-{}-{}.json",
-            std::process::id(),
-            nanos
-        ));
+        let packet_root =
+            unique_dispatch_packet_test_root("vida-specification-owned-scope-packet");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
         fs::write(
             &packet_path,
             serde_json::json!({
@@ -19263,15 +19265,11 @@ agent_system:
 
     #[test]
     fn read_dispatch_packet_rejects_widened_single_task_move_scope() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let packet_path = std::env::temp_dir().join(format!(
-            "vida-widened-single-task-move-packet-{}-{}.json",
-            std::process::id(),
-            nanos
-        ));
+        let packet_root =
+            unique_dispatch_packet_test_root("vida-widened-single-task-move-packet");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
         fs::write(
             &packet_path,
             serde_json::json!({
