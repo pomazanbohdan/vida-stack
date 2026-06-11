@@ -3007,25 +3007,24 @@ fn host_bridge_implementation_scope_validation(
 }
 
 fn owned_paths_from_lane_packet(packet: &serde_json::Value) -> Vec<String> {
-    let packet_kind = packet
+    packet
         .get("packet_template_kind")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty());
-    packet
-        .get("owned_paths")
-        .or_else(|| {
-            packet_kind.and_then(|kind| packet.get(kind).and_then(|body| body.get("owned_paths")))
-        })
+        .filter(|value| !value.is_empty())
+        .and_then(|kind| packet.get(kind))
+        .and_then(|body| body.get("owned_paths"))
         .and_then(serde_json::Value::as_array)
-        .map(|paths| {
+        .and_then(|paths| {
             paths
                 .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
+                .map(|path| {
+                    path.as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                })
+                .collect::<Option<Vec<_>>>()
         })
         .unwrap_or_default()
 }
@@ -9362,6 +9361,29 @@ mod tests {
             .expect("blocker codes")
             .iter()
             .any(|code| code == "implementation_artifact_contract_invalid"));
+    }
+
+    #[test]
+    fn owned_paths_from_lane_packet_uses_active_packet_body_scope_only() {
+        let packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["secret", 0],
+            "delivery_task_packet": {
+                "owned_paths": ["allowed"]
+            }
+        });
+
+        assert_eq!(owned_paths_from_lane_packet(&packet), vec!["allowed"]);
+
+        let malformed_active_scope = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["secret"],
+            "delivery_task_packet": {
+                "owned_paths": ["allowed", 0]
+            }
+        });
+
+        assert!(owned_paths_from_lane_packet(&malformed_active_scope).is_empty());
     }
 
     #[tokio::test]
