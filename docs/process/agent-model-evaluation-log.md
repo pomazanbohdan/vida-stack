@@ -109,15 +109,50 @@ Current routing recommendation:
   second opinion over one named risk.
 - Triple validation: use only when validators disagree, the patch changes a
   shared authority predicate, or the task would close a wave/epic/release gate.
+- PR/open-source intake: use the same ladder as any source-neutral work item;
+  bind an explicit TaskFlow item first, split by non-conflicting PR families, and
+  keep GitHub mutation authority in the orchestrator.
+- Timeout/shutdown/no-artifact: classify as `process_failure`, close the handle,
+  score the attempt low, and either narrow the packet or escalate to
+  `gpt-5.5-low`/`gpt-5.5-medium` according to executor or validator role.
 
 Required agent final report:
 - `changed_files` or reviewed read-only scope,
+- `verification`,
+- `gaps`,
 - exact proof commands with pass/fail/not-run status,
 - residual risks and blockers,
 - `tokens_used` or `not_exposed_by_host`,
 - `steps_taken`,
 - `tool_calls_used`,
 - `agent_score_10` assigned by the orchestrator after validation.
+
+## 2026-06-11 - todo-agent-routing-optimization-docs
+
+Scope:
+- Task: `todo-agent-routing-optimization-docs`
+- Files: `docs/process/team-development-and-orchestration-protocol.md`,
+  `docs/process/multi-agent-stage-ensemble-protocol.md`,
+  `docs/process/agent-model-evaluation-log.md`, `docs/process/agent-system.md`
+
+Observed model results:
+- Analyst `gpt-5.4-mini` with `xhigh` reasoning: 7/10. The first 120-second
+  wait timed out and the orchestrator closed the handle too early, but after
+  resume and an explicit compact final-report request the agent returned a
+  useful section-level edit plan with `tokens_used`, `steps_taken`, and
+  `tool_calls_used`.
+- Orchestrator action: classified the attempt as `process_failure`, closed the
+  host handle too early, resumed it after operator correction, accepted the
+  returned handoff as evidence, activated a docs-only exception takeover, and
+  updated the process docs directly.
+
+Next-task selection rule:
+- Use mini for read-only analysis when its result can arrive in parallel and the
+  critical path can proceed without waiting, or when the orchestrator is willing
+  to wait a longer interval and request a compact partial/final report before
+  cleanup.
+- For blocker-critical analysis, use `gpt-5.5-medium` or split mini prompts into
+  smaller single-question probes with shorter expected artifacts.
 
 -----
 artifact_path: process/agent-model-evaluation-log

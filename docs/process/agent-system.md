@@ -22,6 +22,10 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - Pi projected agents must carry no-recursion, no-self-dispatch, and no-closure-authority semantics; canonical delegated execution remains TaskFlow/`vida agent-init` with receipt-backed runtime assignment
 - project activation materializes host templates using the configured `materialization_mode` per system
 - runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`
+- local score guard evidence comes from orchestrator-classified attempts; low
+  scores from timeout, shutdown, empty artifact, missing telemetry, or
+  false-green validation should narrow or escalate the next packet, but do not
+  by themselves close, fail, or mutate the current TaskFlow item
 - project-local agent extensions remain under `.vida/project/agent-extensions/`
 - research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists
 - delegated worker dispatch still materializes through `vida agent-init` until the operator-surface promotion slice closes

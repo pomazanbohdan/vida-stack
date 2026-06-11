@@ -185,12 +185,53 @@ Small-agent reasoning rule:
 
 Dynamic model-routing rule:
 
-1. use `gpt-5.4-mini` with the highest available reasoning effort for read-only decomposition, PR/task mapping, and exact test-only patches when the write scope is one small surface and the proof command is explicit,
-2. escalate implementation to `gpt-5.5-low` when a mini attempt times out, shuts down, under-covers acceptance criteria, touches production/runtime authority code, or a validator rejects closure,
-3. use `gpt-5.5-medium` as the default closure validator for authority-sensitive runtime, TaskFlow, DocFlow, host-bridge, path-policy, receipt, release, or public operator-surface work,
-4. use only one strong validator by default; add parallel or triple validation only when the patch changes production authority paths, validators disagree, or the first validator reports medium-high residual risk,
-5. close or delete each completed or failed agent handle immediately after classifying it as accepted evidence, partial evidence, process failure, false-green, or stale,
-6. score every executor and validator attempt on a 10-point scale after synthesis, record the reason, and use the score only as local routing evidence for future packets, not as proof that the current task is closed.
+1. keep `vida.config.yaml` and runtime assignment as the carrier owner; concrete
+   model names below are operator-selected or observed defaults, not permanent
+   framework law,
+2. use `gpt-5.4-mini` with the highest available reasoning effort for read-only
+   decomposition, PR/task mapping, source-sync documentation, and exact
+   test-only patches when the write scope is one small surface and the proof
+   command is explicit,
+3. dispatch mini with a hard timeout, one expected artifact, and a required
+   final-report telemetry block; timeout, shutdown, empty artifact, missing
+   telemetry, or self-approval without proof is `process_failure`,
+4. escalate implementation to `gpt-5.5-low` when a mini attempt times out, shuts
+   down, under-covers acceptance criteria, touches production/runtime authority
+   code, or a validator rejects closure,
+5. use `gpt-5.5-medium` as the default closure validator for
+   authority-sensitive runtime, TaskFlow, DocFlow, host-bridge, path-policy,
+   receipt, release, or public operator-surface work,
+6. use only one strong validator by default; add a focused cheap validator only
+   for one named risk, and add parallel or triple validation only when the patch
+   changes production authority paths, validators disagree, the first validator
+   reports medium-high residual risk, or the packet closes a wave, epic, or
+   release gate,
+7. close or delete each completed or failed agent handle immediately after
+   classifying it as accepted evidence, partial evidence, process failure,
+   false-green, or stale,
+8. score every executor and validator attempt on a 10-point scale after
+   synthesis, record the reason, and use the score only as local routing evidence
+   for future packets, not as proof that the current task is closed.
+
+Optimized packet launch rule:
+
+1. every small-agent packet must include exactly one task id, one goal, one
+   owned/read-only scope, one proof target, one timeout, one artifact schema, and
+   one stop condition,
+2. prompts must say whether the expected output is `read_only_analysis`,
+   `test_patch`, `implementation_patch`, `validation_report`, or
+   `pr_disposition_report`,
+3. prompts must explicitly forbid closure authority unless the runtime packet is
+   a closure lane,
+4. prompts must require `tokens_used`, `steps_taken`, `tool_calls_used`, changed
+   files or reviewed scope, proof status, blockers, and residual risks,
+5. the orchestrator must classify each return as `accepted_evidence`,
+   `partial_evidence`, `rework_required`, `process_failure`, `false_green`, or
+   `stale` before launching another agent for the same stage.
+6. when a mini attempt is still consuming tokens, producing progress, or can be
+   resumed by the host, do not close it on the first short wait timeout; wait at
+   least one longer interval or send a compact final-report request before
+   classifying `process_failure`.
 
 Delegated final-report telemetry rule:
 
@@ -199,7 +240,10 @@ Delegated final-report telemetry rule:
 3. if exact token usage is not exposed, write `tokens_used: not_exposed_by_host` and do not invent a number,
 4. `steps_taken` must count meaningful reasoning/action stages completed by the lane,
 5. `tool_calls_used` must count shell, read/search, edit, test, build, VCS, browser, MCP, or host-tool calls made by that lane,
-6. missing telemetry makes the lane report incomplete and requires rework or orchestrator notation before the result can be accepted.
+6. every delegated lane final report must also include `changed_files` or
+   reviewed scope, `verification`, `gaps`, blockers, and residual risks,
+7. missing telemetry makes the lane report incomplete and requires rework or
+   orchestrator notation before the result can be accepted.
 
 Source-derived documentation packets must add an acceptance gate that names mandatory copied lines. For example, if the source contains proof commands or fixture invariants, the packet must list the exact commands, paths, blocker codes, and negative assertions that must appear in the target artifact. A delegated lane that omits any mandatory copied line is not closure-ready; route it back as rework instead of accepting a polished summary.
 
@@ -230,6 +274,9 @@ Final response:
 - exact changes made
 - verification commands and results
 - remaining gaps or risks
+- changed_files or reviewed scope
+- verification
+- gaps
 - tokens_used
 - steps_taken
 - tool_calls_used
@@ -258,6 +305,10 @@ Validation contract:
 - For authority-sensitive work the validator default is `gpt-5.5-medium`.
 - Mini output may be accepted as evidence, rejected, or sent to `gpt-5.5-low`
   rework.
+- Timeout, missing artifact, missing telemetry, or proof-free self-approval is a
+  process failure, not partial success.
+- After synthesis, close the host-agent handle before dispatching a replacement
+  for the same packet stage.
 ```
 
 ## Decomposition Rule
@@ -452,6 +503,17 @@ Delegated-closure rule:
 5. a pre-write exception-path receipt alone does not bypass an otherwise still-lawful delegated cycle,
 6. progress reporting during rework or post-dispatch in-flight state remains non-blocking only,
 7. when one packet closes and synthesized team evidence already names the next lawful packet, use that result for immediate rerouting/continuation rather than closure-style reporting.
+8. after each closure-ready task packet, the orchestrator must run the declared
+   debug build/proof gate, update TaskFlow state, commit, and push when the
+   operator has authorized the current publication pattern; failed or blocked
+   packets still require TaskFlow state update and handle cleanup.
+9. after a wave parent closes, release-build and install the system `vida`
+   binary through the normal release path, then smoke the PATH-resolved `vida`
+   before treating the wave as operationally closed.
+10. open pull requests are source-neutral work items; process them in parallel to
+   epic work only when they are bound to an explicit TaskFlow item and their
+   write scopes, GitHub mutations, and proof gates do not conflict with the
+   active epic packet.
 
 For read-heavy or proof-only packets, the orchestrator may use:
 

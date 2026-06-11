@@ -139,10 +139,13 @@ that includes:
 1. changed files or read-only scope reviewed,
 2. production change summary or explicit `production_changed: false`,
 3. tests/proofs run with pass/fail/not-run status,
-4. residual risks,
-5. `tokens_used`,
-6. `steps_taken`,
-7. `tool_calls_used`.
+4. `verification`,
+5. `changed_files` or reviewed scope,
+6. `gaps`,
+7. residual risks,
+8. `tokens_used`,
+9. `steps_taken`,
+10. `tool_calls_used`.
 
 If exact token usage is not exposed by the host runtime, the attempt must write
 `tokens_used: not_exposed_by_host`. It must not estimate tokens unless the
@@ -188,6 +191,35 @@ Runtime-authority task defaults from the 2026-06-11 wave-0 evaluation:
    validator to review the entire repository or epic.
 6. The orchestrator assigns an `agent_score_10` after synthesis and records it
    in the model evaluation log or task note before the next agent selection.
+
+Operational launch playbook:
+
+1. Mini first pass:
+   - use `gpt-5.4-mini` with highest available reasoning only when the packet
+     has one bounded task id, explicit scope, one expected artifact, one proof
+     target, and a timeout.
+2. Rework executor:
+   - use `gpt-5.5-low` when mini returns partial work, no artifact, no
+     telemetry, timeout/shutdown, or validator-rejected output, while the scope
+     is still bounded enough for one patch.
+3. Closure validator:
+   - use `gpt-5.5-medium` for authority-sensitive runtime, TaskFlow, DocFlow,
+     host-bridge, path-policy, receipt, release, PR integration, and public
+     operator-surface decisions.
+4. Triple validation:
+   - use it only for shared authority predicates, validator disagreement,
+     medium-high residual risk, or wave/epic/release closure.
+5. Cleanup:
+   - after each completed or failed attempt, close/delete the host handle before
+     launching a replacement attempt for the same stage.
+   - do not close an active mini attempt after only a short wait timeout when it
+     can still be resumed or asked for a compact partial report; first wait one
+     longer interval or send a final-report request.
+6. Publication:
+   - after accepted implementation evidence, TaskFlow update, debug build,
+     commit, and authorized push remain orchestrator duties, not attempt duties.
+   - after a wave closes, the system `vida` binary must be release-installed and
+     PATH-smoked before the wave is operationally closed.
 
 ## Attempt Artifact Contract
 
