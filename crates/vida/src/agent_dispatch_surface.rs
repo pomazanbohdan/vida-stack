@@ -119,31 +119,17 @@ fn host_bridge_required_string<'a>(
     value
 }
 
-fn read_host_bridge_request(path: &Path) -> Result<serde_json::Value, String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "Failed to inspect host bridge request `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "Host bridge request `{}` is a symlink; refusing to follow it.",
-            path.display()
-        ));
-    }
-    let raw = std::fs::read_to_string(path).map_err(|error| {
-        format!(
-            "Failed to read host bridge request `{}`: {error}",
-            path.display()
-        )
-    })?;
-    serde_json::from_str(&raw).map_err(|error| {
-        format!(
-            "Failed to decode host bridge request `{}` as JSON: {error}",
-            path.display()
-        )
-    })
+fn read_host_bridge_request(
+    path: &Path,
+    state_root: Option<&Path>,
+) -> Result<serde_json::Value, String> {
+    let state_root = state_root
+        .map(Path::to_path_buf)
+        .or_else(|| infer_host_bridge_state_root_from_request_path(path))
+        .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
+    let canonical_path =
+        canonical_state_artifact_path(&state_root, &path.display().to_string(), true)?;
+    read_canonical_host_bridge_json_artifact(&canonical_path, "host bridge request")
 }
 
 fn write_host_bridge_request(path: &Path, request: &serde_json::Value) -> Result<(), String> {
@@ -410,6 +396,48 @@ fn path_contains_dot_segment(path: &Path) -> bool {
     })
 }
 
+const MAX_HOST_BRIDGE_ARTIFACT_BYTES: u64 = 1024 * 1024;
+
+fn read_canonical_host_bridge_json_artifact(
+    path: &Path,
+    label: &str,
+) -> Result<serde_json::Value, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("Failed to inspect {label} `{}`: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Host bridge artifact `{}` is a symlink; refusing to follow it.",
+            path.display()
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "Host bridge artifact `{}` is not a regular file.",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_HOST_BRIDGE_ARTIFACT_BYTES {
+        return Err(format!(
+            "Host bridge artifact `{}` is {} bytes, exceeding the {} byte intake cap.",
+            path.display(),
+            metadata.len(),
+            MAX_HOST_BRIDGE_ARTIFACT_BYTES
+        ));
+    }
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("Failed to open {label} `{}`: {error}", path.display()))?;
+    let mut raw = String::new();
+    let mut limited = std::io::Read::take(file, MAX_HOST_BRIDGE_ARTIFACT_BYTES + 1);
+    std::io::Read::read_to_string(&mut limited, &mut raw)
+        .map_err(|error| format!("Failed to read {label} `{}`: {error}", path.display()))?;
+    serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "Failed to decode {label} `{}` as JSON: {error}",
+            path.display()
+        )
+    })
+}
+
 fn canonical_state_artifact_path(
     state_root: &Path,
     raw_path: &str,
@@ -438,6 +466,12 @@ fn canonical_state_artifact_path(
         if metadata.file_type().is_symlink() {
             return Err(format!(
                 "Host bridge artifact `{}` is a symlink; refusing to follow it.",
+                path.display()
+            ));
+        }
+        if !metadata.is_file() {
+            return Err(format!(
+                "Host bridge artifact `{}` is not a regular file.",
                 path.display()
             ));
         }
@@ -594,7 +628,8 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     let Some(run_id) = host_bridge_request_string(request, "run_id") else {
         return blockers;
     };
-    let store = match StateStore::open_existing_structural_read_only_with_timeout(
+    let request_target = host_bridge_request_string(request, "dispatch_target");
+    let store = match StateStore::open_existing_read_only_with_timeout(
         canonical_state_root,
         HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT,
     )
@@ -602,7 +637,11 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     {
         Ok(store) => store,
         Err(_) => {
-            if !retryable_host_bridge_completion_request_for_state_root(state_root, request) {
+            if !host_bridge_packet_matches_reconciled_active_request(
+                canonical_packet_path.as_deref(),
+                request_target,
+            ) && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
+            {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
             return blockers;
@@ -632,13 +671,27 @@ async fn append_host_bridge_dispatch_receipt_blockers(
     let receipt = match store.run_graph_dispatch_receipt(run_id).await {
         Ok(Some(receipt)) => receipt,
         Err(_) => {
-            if !retryable_host_bridge_completion_request_for_state_root(state_root, request) {
+            if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
+                .await
+                && !host_bridge_packet_matches_reconciled_active_request(
+                    canonical_packet_path,
+                    request_target,
+                )
+                && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
+            {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
             return;
         }
         Ok(None) => {
-            if !retryable_host_bridge_completion_request_for_state_root(state_root, request) {
+            if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
+                .await
+                && !host_bridge_packet_matches_reconciled_active_request(
+                    canonical_packet_path,
+                    request_target,
+                )
+                && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
+            {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
             return;
@@ -690,9 +743,45 @@ async fn host_bridge_request_matches_reconciled_blocked_status(
     let Ok(status) = store.run_graph_status(run_id).await else {
         return false;
     };
-    status.status == "blocked"
-        && status.active_node.trim() == request_target
-        && status.policy_gate == "host_tool_bridge_adapter_required"
+    (status.active_node.trim() == request_target
+        || status.resume_target == format!("dispatch.{request_target}"))
+        && (status.policy_gate == "host_tool_bridge_adapter_required"
+            || status.lifecycle_stage == format!("{request_target}_blocked"))
+}
+
+fn host_bridge_packet_matches_reconciled_active_request(
+    canonical_packet_path: Option<&Path>,
+    request_target: Option<&str>,
+) -> bool {
+    let Some(request_target) = request_target else {
+        return false;
+    };
+    let Some(packet_path) = canonical_packet_path else {
+        return false;
+    };
+    let Ok(packet) = read_canonical_host_bridge_json_artifact(packet_path, "host bridge packet")
+    else {
+        return false;
+    };
+    let downstream_active_target = packet
+        .get("downstream_dispatch_active_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let downstream_status = packet
+        .get("downstream_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let source_target = packet
+        .get("source_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let source_status = packet
+        .get("source_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    (downstream_active_target == Some(request_target) && downstream_status == Some("blocked"))
+        || (source_target == Some(request_target)
+            && source_status == Some("bridge_request_pending"))
 }
 
 fn host_bridge_artifact_has_retryable_completion_blocker(artifact: &serde_json::Value) -> bool {
@@ -731,10 +820,12 @@ fn retryable_host_bridge_completion_request_for_state_root(
         let Ok(path) = canonical_state_artifact_path(state_root, raw_path, true) else {
             continue;
         };
-        let Ok(raw) = std::fs::read_to_string(path) else {
-            continue;
+        let artifact_label = match field {
+            "receipt_path" => "host bridge receipt",
+            "result_path" => "host bridge result",
+            _ => "host bridge artifact",
         };
-        let Ok(artifact) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        let Ok(artifact) = read_canonical_host_bridge_json_artifact(&path, artifact_label) else {
             continue;
         };
         if artifact.get("status").and_then(serde_json::Value::as_str) == Some("blocked")
@@ -4029,7 +4120,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
         });
         return emit_host_bridge_payload(&payload, command.json);
     }
-    match read_host_bridge_request(&command.request) {
+    match read_host_bridge_request(&command.request, command.state_dir.as_deref()) {
         Ok(request) => {
             let payload = host_bridge_adapter_payload(
                 &command.request,
@@ -4561,13 +4652,14 @@ mod tests {
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
         host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
         host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
+        host_bridge_packet_matches_reconciled_active_request,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
-        infer_host_bridge_state_root_from_request_path,
-        resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
-        single_in_progress_task_id_from_rows, state_store,
+        infer_host_bridge_state_root_from_request_path, read_canonical_host_bridge_json_artifact,
+        read_host_bridge_request, resolve_agent_dispatch_next_current_task_ids,
+        run_agent_host_bridge, single_in_progress_task_id_from_rows, state_store,
         validate_materialized_agent_dispatch_packet, AgentDispatchLanePreview,
-        AgentDispatchLaneSelectionTruth,
+        AgentDispatchLaneSelectionTruth, MAX_HOST_BRIDGE_ARTIFACT_BYTES,
     };
     use crate::state_store::{
         CreateTaskRequest, RunGraphDispatchReceipt, TaskExecutionSemantics, TaskRecord,
@@ -4945,6 +5037,89 @@ mod tests {
         ));
 
         assert!(blockers.contains(&"host_bridge_request_untrusted_path".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_request_read_rejects_state_root_escape_and_oversized_files() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-read-path-safety-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_dir = state_root.join("host-tool-bridge/requests");
+        std::fs::create_dir_all(&request_dir).expect("request dir");
+
+        let dot_segment_path = request_dir.join("../requests/request.json");
+        std::fs::write(request_dir.join("request.json"), b"{}").expect("request");
+        let dot_segment_error = read_host_bridge_request(&dot_segment_path, Some(&state_root))
+            .expect_err("dot-segment request should be rejected");
+        assert!(dot_segment_error.contains("dot-segment"));
+
+        let outside_path = root.join("outside/request.json");
+        std::fs::create_dir_all(outside_path.parent().expect("outside parent"))
+            .expect("outside parent");
+        std::fs::write(&outside_path, b"{}").expect("outside request");
+        let outside_error = read_host_bridge_request(&outside_path, Some(&state_root))
+            .expect_err("outside request should be rejected");
+        assert!(outside_error.contains("escapes VIDA state root"));
+
+        let oversized_request_path = request_dir.join("oversized-request.json");
+        std::fs::write(
+            &oversized_request_path,
+            vec![b'{'; (MAX_HOST_BRIDGE_ARTIFACT_BYTES as usize) + 1],
+        )
+        .expect("oversized request");
+        let oversized_error = read_host_bridge_request(&oversized_request_path, Some(&state_root))
+            .expect_err("oversized request should be rejected");
+        assert!(oversized_error.contains("exceeding"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_packet_reader_rejects_non_regular_files_and_oversized_packets() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-packet-read-safety-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("state root");
+
+        let request_dir =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/request-dir");
+        std::fs::create_dir_all(&request_dir).expect("request dir");
+        let request_error =
+            read_canonical_host_bridge_json_artifact(&request_dir, "host bridge request")
+                .expect_err("request directory should be rejected");
+        assert!(request_error.contains("not a regular file"));
+
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("packet parent");
+        std::fs::write(
+            &packet_path,
+            vec![b'x'; (MAX_HOST_BRIDGE_ARTIFACT_BYTES as usize) + 1],
+        )
+        .expect("oversized packet");
+        let packet_error =
+            read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet")
+                .expect_err("oversized packet should be rejected");
+        assert!(packet_error.contains("exceeding"));
+        assert!(!host_bridge_packet_matches_reconciled_active_request(
+            Some(&packet_path),
+            Some("implementer"),
+        ));
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
