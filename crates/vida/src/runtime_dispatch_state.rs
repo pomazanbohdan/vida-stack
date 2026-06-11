@@ -7181,6 +7181,37 @@ fn packet_string_array(packet: &serde_json::Value, key: &str) -> Option<Vec<Stri
         .flatten()
 }
 
+fn packet_string_array_contract(
+    packet: &serde_json::Value,
+    key: &str,
+    packet_label: &str,
+    packet_template_kind: &str,
+    scope_location: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = packet.get(key) else {
+        return Ok(None);
+    };
+    let Some(rows) = value.as_array() else {
+        return Err(format!(
+            "{packet_label} `{packet_template_kind}` {scope_location} {key} must be an array of non-empty strings"
+        ));
+    };
+    rows.iter()
+        .map(|row| {
+            row.as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            format!(
+                "{packet_label} `{packet_template_kind}` {scope_location} {key} must be an array of non-empty strings"
+            )
+        })
+        .map(Some)
+}
+
 fn packet_has_owned_or_read_only_paths(packet: &serde_json::Value) -> bool {
     packet_nonempty_string_array(packet, "owned_paths")
         || packet_nonempty_string_array(packet, "read_only_paths")
@@ -7535,10 +7566,21 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
         }
     }
     for key in ["owned_paths", "read_only_paths"] {
-        if let (Some(top_level), Some(active)) = (
-            packet_string_array(packet, key),
-            packet_string_array(active_packet, key),
-        ) {
+        let top_level = packet_string_array_contract(
+            packet,
+            key,
+            packet_label,
+            packet_template_kind,
+            "top-level",
+        )?;
+        let active = packet_string_array_contract(
+            active_packet,
+            key,
+            packet_label,
+            packet_template_kind,
+            "active packet body",
+        )?;
+        if let (Some(top_level), Some(active)) = (top_level, active) {
             if top_level != active {
                 return Err(format!(
                     "{packet_label} `{packet_template_kind}` top-level {key} must mirror the active packet body; expected {:?}, got {:?}",
@@ -10655,6 +10697,103 @@ host_environment:
         let error = validate_runtime_dispatch_packet_contract(&packet, "test packet")
             .expect_err("top-level owned_paths drift should fail closed");
         assert!(error.contains("top-level owned_paths must mirror"));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_rejects_malformed_top_level_scope() {
+        let packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["secret", 0],
+            "read_only_paths": ["docs/process"],
+            "delivery_task_packet": {
+                "packet_id": "run-1::implementer::delivery",
+                "goal": "Execute bounded implementer handoff",
+                "scope_in": ["dispatch_target:implementer"],
+                "owned_paths": ["allowed"],
+                "read_only_paths": ["docs/process"],
+                "definition_of_done": ["done"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "proof",
+                "stop_rules": ["stop"],
+                "blocking_question": "what next?",
+                "handoff_task_class": "implementation"
+            }
+        });
+
+        let error = validate_runtime_dispatch_packet_contract(&packet, "test packet")
+            .expect_err("malformed top-level owned_paths should fail closed");
+        assert!(error.contains("top-level owned_paths must be an array of non-empty strings"));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_rejects_malformed_top_level_read_only_paths_scope() {
+        let packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["allowed"],
+            "read_only_paths": ["docs/process", 0],
+            "delivery_task_packet": {
+                "packet_id": "run-1::implementer::delivery",
+                "goal": "Execute bounded implementer handoff",
+                "scope_in": ["dispatch_target:implementer"],
+                "owned_paths": ["allowed"],
+                "read_only_paths": ["docs/process"],
+                "definition_of_done": ["done"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "proof",
+                "stop_rules": ["stop"],
+                "blocking_question": "what next?",
+                "handoff_task_class": "implementation"
+            }
+        });
+
+        let error = validate_runtime_dispatch_packet_contract(&packet, "test packet")
+            .expect_err("malformed top-level read_only_paths should fail closed");
+        assert!(error.contains(
+            "top-level read_only_paths must be an array of non-empty strings"
+        ));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_rejects_malformed_active_packet_body_scope_arrays() {
+        let packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["allowed"],
+            "read_only_paths": ["docs/process"],
+            "delivery_task_packet": {
+                "packet_id": "run-1::implementer::delivery",
+                "goal": "Execute bounded implementer handoff",
+                "scope_in": ["dispatch_target:implementer"],
+                "owned_paths": ["allowed"],
+                "read_only_paths": ["docs/process"],
+                "definition_of_done": ["done"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "proof",
+                "stop_rules": ["stop"],
+                "blocking_question": "what next?",
+                "handoff_task_class": "implementation"
+            }
+        });
+
+        let mut malformed_owned_paths = packet.clone();
+        malformed_owned_paths["delivery_task_packet"]["owned_paths"] =
+            serde_json::json!(["allowed", 0]);
+        let error = validate_runtime_dispatch_packet_contract(&malformed_owned_paths, "test packet")
+            .expect_err("malformed active packet body owned_paths should fail closed");
+        assert!(error.contains(
+            "active packet body owned_paths must be an array of non-empty strings"
+        ));
+
+        let mut malformed_read_only_paths = packet;
+        malformed_read_only_paths["delivery_task_packet"]["read_only_paths"] =
+            serde_json::json!(["docs/process", 0]);
+        let error = validate_runtime_dispatch_packet_contract(
+            &malformed_read_only_paths,
+            "test packet",
+        )
+        .expect_err("malformed active packet body read_only_paths should fail closed");
+        assert!(error.contains(
+            "active packet body read_only_paths must be an array of non-empty strings"
+        ));
     }
 
     #[test]
