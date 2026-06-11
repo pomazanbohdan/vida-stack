@@ -5806,6 +5806,10 @@ fn normalized_packet_arg_path(packet_path: &str) -> std::path::PathBuf {
                 .and_then(|value| value.strip_suffix('"'))
         })
         .unwrap_or(trimmed);
+    let direct_path = std::path::PathBuf::from(unquoted);
+    if direct_path.exists() {
+        return direct_path;
+    }
     super::runtime_dispatch_state::normalize_persisted_runtime_path(unquoted)
 }
 

@@ -2884,8 +2884,17 @@ fn dispatch_packet_json_from_current_project(path: &str) -> Option<serde_json::V
 }
 
 pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, String> {
-    let Some(mut packet) = dispatch_packet_json_from_current_project(path) else {
-        return Err(format!("Failed to read persisted dispatch packet `{path}`"));
+    let direct_path = std::path::Path::new(path);
+    let mut packet = if direct_path.exists() {
+        let raw = std::fs::read_to_string(direct_path).map_err(|error| {
+            format!("Failed to read persisted dispatch packet `{path}`: {error}")
+        })?;
+        serde_json::from_str(&raw).map_err(|error| {
+            format!("Failed to decode persisted dispatch packet `{path}`: {error}")
+        })?
+    } else {
+        dispatch_packet_json_from_current_project(path)
+            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{path}`"))?
     };
     if normalize_runtime_dispatch_packet(&mut packet) {
         std::fs::write(
@@ -4987,7 +4996,12 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         Ok(Some(receipt)) => receipt,
         Ok(None) => match recover_missing_first_dispatch_receipt(store, &resolved_run_id).await? {
             Some(inputs) => return Ok(inputs),
-            None => return Err(missing_dispatch_receipt_error(&resolved_run_id)),
+            None => {
+                if let Some(status) = missing_task_run_graph_status.as_ref() {
+                    return Err(stale_missing_task_run_graph_resume_error(status, None));
+                }
+                return Err(missing_dispatch_receipt_error(&resolved_run_id));
+            }
         },
         Err(error) => {
             return Err(format!(
@@ -6150,6 +6164,41 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             let role_selection;
             let run_graph_bootstrap;
             let state_root = store.root().to_path_buf();
+            if let Some(run_id) = requested_run_id.as_deref() {
+                if let Ok(status) = store.run_graph_status(run_id).await {
+                    match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                        &store, &status,
+                    )
+                    .await
+                    {
+                        Ok(verdict)
+                            if verdict.task_missing()
+                                && (status.active_node == "host_bridge"
+                                    || status.policy_gate == "host_tool_bridge_adapter_required") =>
+                        {
+                            let receipt = store.run_graph_dispatch_receipt(run_id).await.ok().flatten();
+                            let error =
+                                stale_missing_task_run_graph_resume_error(&status, receipt.as_ref());
+                            if emit_output {
+                                eprintln!("{error}");
+                                emit_consume_continue_resume_error(&error, surface_name, as_json);
+                            }
+                            return ExitCode::from(1);
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            let error = format!(
+                                "Failed to verify TaskFlow authority for run `{run_id}` before consume continue: {error}"
+                            );
+                            if emit_output {
+                                eprintln!("{error}");
+                                emit_consume_continue_resume_error(&error, surface_name, as_json);
+                            }
+                            return ExitCode::from(1);
+                        }
+                    }
+                }
+            }
             if requested_run_id.is_none()
                 && requested_dispatch_packet_path.is_none()
                 && requested_downstream_packet_path.is_none()

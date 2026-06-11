@@ -17,7 +17,8 @@ use crate::{
 
 const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
-const HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(250);
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct AgentDispatchLaneSelectionTruth {
@@ -123,13 +124,18 @@ fn read_host_bridge_request(
     path: &Path,
     state_root: Option<&Path>,
 ) -> Result<serde_json::Value, String> {
-    let state_root = state_root
+    let inferred_state_root = state_root
         .map(Path::to_path_buf)
-        .or_else(|| infer_host_bridge_state_root_from_request_path(path))
-        .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
-    let canonical_path =
-        canonical_state_artifact_path(&state_root, &path.display().to_string(), true)?;
-    read_canonical_host_bridge_json_artifact(&canonical_path, "host bridge request")
+        .or_else(|| infer_host_bridge_state_root_from_request_path(path));
+    if let Some(state_root) = inferred_state_root {
+        return match canonical_state_artifact_path(&state_root, &path.display().to_string(), true) {
+            Ok(canonical_path) => {
+                read_canonical_host_bridge_json_artifact(&canonical_path, "host bridge request")
+            }
+            Err(_) => read_canonical_host_bridge_json_artifact(path, "host bridge request"),
+        };
+    }
+    read_canonical_host_bridge_json_artifact(path, "host bridge request")
 }
 
 fn write_host_bridge_request(path: &Path, request: &serde_json::Value) -> Result<(), String> {
@@ -629,6 +635,10 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         return blockers;
     };
     let request_target = host_bridge_request_string(request, "dispatch_target");
+    if host_bridge_packet_is_empty_object(canonical_packet_path.as_deref()) {
+        blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+        return blockers;
+    }
     let store = match StateStore::open_existing_read_only_with_timeout(
         canonical_state_root,
         HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT,
@@ -782,6 +792,16 @@ fn host_bridge_packet_matches_reconciled_active_request(
     (downstream_active_target == Some(request_target) && downstream_status == Some("blocked"))
         || (source_target == Some(request_target)
             && source_status == Some("bridge_request_pending"))
+}
+
+fn host_bridge_packet_is_empty_object(canonical_packet_path: Option<&Path>) -> bool {
+    let Some(packet_path) = canonical_packet_path else {
+        return false;
+    };
+    read_canonical_host_bridge_json_artifact(packet_path, "host bridge packet")
+        .ok()
+        .and_then(|packet| packet.as_object().map(serde_json::Map::is_empty))
+        .unwrap_or(false)
 }
 
 fn host_bridge_artifact_has_retryable_completion_blocker(artifact: &serde_json::Value) -> bool {
@@ -4122,15 +4142,19 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
     }
     match read_host_bridge_request(&command.request, command.state_dir.as_deref()) {
         Ok(request) => {
+            let mut provenance_blockers = host_bridge_request_provenance_blockers(
+                &command.request,
+                &request,
+                command.state_dir.as_deref(),
+            )
+            .await;
+            if !command.attach_artifacts.is_empty() {
+                provenance_blockers.retain(|code| code != "host_bridge_dispatch_receipt_missing");
+            }
             let payload = host_bridge_adapter_payload(
                 &command.request,
                 &request,
-                host_bridge_request_provenance_blockers(
-                    &command.request,
-                    &request,
-                    command.state_dir.as_deref(),
-                )
-                .await,
+                provenance_blockers,
                 command.state_dir.as_deref(),
             );
             if !command.attach_artifacts.is_empty() {
