@@ -1,6 +1,6 @@
 # META Runtime Boundary Refactor Baseline Tracking Document
 
-Status: `IO-001, DOC-001, and HB-005 hardened; targeted proofs green; broader Wave 0 batch still pending`
+Status: `IO-001, DOC-001, and HB-001 through HB-005 hardened; targeted proofs green; broader Wave 0 batch still pending`
 
 ## Purpose
 
@@ -31,6 +31,12 @@ This file is intentionally a tracker, not a rewrite of the plan. The wave defini
 - HB-005 now hardens `vida lane complete` so implementation scope validation
   derives allowed `owned_paths` from the immutable dispatch packet / TaskFlow
   authority instead of mutable host bridge request JSON.
+- HB-003 now hardens `vida lane complete` so persisted dispatch
+  result/receipt evidence is authoritative and mutable request JSON cannot
+  redirect completion artifacts.
+- HB-004 now hardens host bridge request reads so retryable request paths are
+  canonicalized under the state root and rejected before JSON parse when the
+  target is out-of-root, non-regular, or oversized.
 - HB-001 now proves the public `vida agent host-bridge --request ... --state-dir ...`
   path fail-closes on an attacker request path outside the explicit trusted
   state root; the public run exit and shared payload helper keep
@@ -343,7 +349,7 @@ Fill this after each wave. Current baseline row remains pending because no proof
 
 | Wave | Name | Goal | Required artifact / tests | Proof commands | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | Baseline freeze and defect fixtures | Freeze current behavior and create failing fixtures for all known bug classes before large movement. | `crates/vida/tests/host_bridge_authority_smoke.rs`, `crates/vida/tests/runtime_authority_smoke.rs`, `crates/vida/tests/taskflow_routing_smoke.rs`, `crates/vida/tests/artifact_io_smoke.rs`, `crates/docflow-cli/tests/git_hardening_smoke.rs` or the approved existing smoke files. | `cargo fmt --all -- --check`; `git diff --check`; Wave 0 baseline proof batch from above | partial | IO-001 artifact IO hardening is green; DOC-001 validation rework now proves the helper executes before closeout; the broader Wave 0 proof batch still needs execution. |
+| 0 | Baseline freeze and defect fixtures | Freeze current behavior and create failing fixtures for all known bug classes before large movement. | `crates/vida/tests/host_bridge_authority_smoke.rs`, `crates/vida/tests/runtime_authority_smoke.rs`, `crates/vida/tests/taskflow_routing_smoke.rs`, `crates/vida/tests/artifact_io_smoke.rs`, `crates/docflow-cli/tests/git_hardening_smoke.rs` or the approved existing smoke files. | `cargo fmt --all -- --check`; `git diff --check`; Wave 0 baseline proof batch from above | partial | IO-001, DOC-001, and HB-001 through HB-005 targeted proofs are green; the host-bridge test group task is closed; broader Wave 0 baseline proof and remaining RT/ROUTE fixtures still need execution. |
 | 1 | `runtime-path-policy` | Create a single safe IO/path boundary and remove direct unsafe reads/writes from authority-sensitive runtime paths. | `crates/runtime-path-policy/*` plus targeted call-site migration. | Wave 1 proof batch from the source plan. | pending |  |
 | 2 | `operator-output` | Extract shared operator rendering and envelope logic. | `crates/operator-output/*` and moved human output code. | Wave 2 proof batch from the source plan. | pending |  |
 | 3 | `taskflow-host-bridge` | Move host bridge request / provenance / completion logic behind a bounded boundary. | Host bridge request, provenance, completion, artifact scope modules. | Wave 3 proof batch from the source plan. | pending |  |
@@ -360,6 +366,35 @@ Use this checklist after each wave and record the exact proof result in the note
 - [ ] Adjacent public smoke passed
 - [ ] Baseline proof commands recorded
 - [ ] Document updated with wave outcome
+- [ ] Debug build passed
+- [ ] TaskFlow state updated
+- [ ] Commit created
+- [ ] Push completed
+- [ ] VIDA runtime self-diagnostic run after closure
+- [ ] GitHub PR processing protocol run after wave close
+
+## Delegated Task Packet Checklist
+
+Use this checklist when handing the next bounded task to an implementation or
+validation agent.
+
+- Name the exact TaskFlow id, parent/wave, source-of-truth document, copied
+  source anchors, and owned paths.
+- State whether the packet must copy source wording exactly, summarize it, or
+  implement behavior from it.
+- For `gpt-5.4-mini` executor packets, use the highest available reasoning
+  effort by default and keep the task narrow, sequential, and proof-explicit.
+- Require the final report to include `tokens_used`, `steps_taken`, and
+  `tool_calls_used`; if exact token usage is unavailable, use
+  `tokens_used: not_exposed_by_host`.
+- Require focused tests first, then `cargo build` debug proof before closure.
+- Require TaskFlow state update, commit, and push after every completed task.
+- Treat invalid, empty, stale, schema-missing, or scope-widening agent reports
+  as non-evidence; do not use them for task closure.
+- Validate cheap-agent implementation with root review plus a stronger
+  validator for runtime authority paths; current minimum is `gpt-5.5-medium`.
+- After a wave parent closes, run the VIDA runtime self-diagnostic and then
+  `docs/process/github-pr-processing-protocol.md`.
 
 ## Source Plan Anchors
 
@@ -389,6 +424,15 @@ These are the source-plan anchors this tracker is tied to:
   with a real `.vida/data/state` root, bounded packet/result/receipt paths,
   and no persisted dispatch receipt; the blocked exit is asserted directly and
   `host_tool_calls = []` remains asserted through the shared payload helper.
+- HB-003 production authority fix is now covered in
+  `crates/vida/src/lane_surface.rs::host_bridge_no_request_redirect`; persisted
+  dispatch result/receipt paths stay authoritative over mutable request JSON.
+- HB-004 request-read guard is now covered in
+  `crates/vida/src/lane_surface.rs::read_host_bridge_request_at_path` and the
+  focused oversized/out-of-root/non-regular request-path regression test.
+- HB-005 immutable-scope guard is now covered in
+  `crates/vida/src/lane_surface.rs::host_bridge_implementation_scope_uses_immutable_packet`;
+  mutable request `owned_paths` cannot widen TaskFlow packet scope.
 - Delegation scorecard for IO-001 / DOC-001:
   - executor `gpt-5.4-mini`: useful for bounded edits and repetitive proof
     runs, but required an additional pass to harden the docflow git-status
@@ -400,6 +444,15 @@ These are the source-plan anchors this tracker is tied to:
     runtime paths.
   - orchestrator self-review: required to reconcile TaskFlow state, staging,
     docs tracking, and commit scope.
+- Delegation scorecard for HB-003 / HB-004 / HB-005:
+  - `gpt-5.4-mini` works as a cheap executor only when the packet is narrow,
+    source-anchored, and proof-explicit; recent host-bridge packets produced
+    useful drafts but still timed out or needed root correction.
+  - `gpt-5.5-medium` is currently effective as the authority-path validator
+    because it caught source-fidelity, false-green, and residual-risk issues.
+  - Root orchestrator remains responsible for accepting evidence, updating
+    TaskFlow, running debug build, committing, pushing, self-diagnostic, and
+    PR protocol.
 - Next task routing recommendation: keep `gpt-5.4-mini` for narrow
   implementation packets only when the prompt names exact caller roots,
   fail-closed behavior, TaskFlow metadata updates, proof commands, and commit
