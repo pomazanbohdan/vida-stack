@@ -154,6 +154,23 @@ reasoning effort by default. The consolidator still treats the attempt as
 untrusted until a stronger validator or root orchestrator verifies source
 fidelity, public-surface proof, and false-green risk.
 
+Use the cheapest model that is reliable for the packet class, not the cheapest
+model unconditionally:
+
+1. `gpt-5.4-mini` is the default for narrow read-only decomposition and exact
+   test-only edits with explicit proof commands.
+2. `gpt-5.5-low` is the default rework executor after a mini false-green,
+   timeout, shutdown, or validator rejection, and for bounded source/runtime
+   implementation.
+3. `gpt-5.5-medium` is the default validator for authority-sensitive runtime,
+   TaskFlow, DocFlow, host-bridge, path-policy, receipt, release, and public
+   operator-surface changes.
+4. A mini result can be accepted as partial evidence, but cannot close an
+   authority-sensitive task without stronger validation and root proof.
+5. Repeated timeout or shutdown from the same carrier class is a process
+   failure signal; the next attempt must either narrow the packet or escalate
+   the executor model.
+
 ## Attempt Artifact Contract
 
 Every attempt must return structured output:

@@ -182,6 +182,14 @@ Small-agent reasoning rule:
 2. do not lower the mini executor's reasoning effort for runtime authority, TaskFlow, DocFlow, host-bridge, path-policy, receipt, or release-gate work unless the operator explicitly overrides this rule for that bounded packet,
 3. the higher reasoning budget does not authorize self-approval; root orchestration and an independent stronger validator remain required for authority-sensitive work.
 
+Dynamic model-routing rule:
+
+1. use `gpt-5.4-mini` with the highest available reasoning effort for read-only decomposition, PR/task mapping, and exact test-only patches when the write scope is one small surface and the proof command is explicit,
+2. escalate implementation to `gpt-5.5-low` when a mini attempt times out, shuts down, under-covers acceptance criteria, touches production/runtime authority code, or a validator rejects closure,
+3. use `gpt-5.5-medium` as the default closure validator for authority-sensitive runtime, TaskFlow, DocFlow, host-bridge, path-policy, receipt, release, or public operator-surface work,
+4. use only one strong validator by default; add parallel or triple validation only when the patch changes production authority paths, validators disagree, or the first validator reports medium-high residual risk,
+5. close or delete each completed or failed agent handle immediately after classifying it as accepted evidence, partial evidence, process failure, false-green, or stale.
+
 Delegated final-report telemetry rule:
 
 1. every delegated lane final report must include `tokens_used`, `steps_taken`, and `tool_calls_used`,

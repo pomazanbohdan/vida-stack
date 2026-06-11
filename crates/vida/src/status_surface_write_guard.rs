@@ -502,6 +502,32 @@ mod tests {
         }
     }
 
+    fn assert_stale_task_authority_blocks_root_local_write(
+        latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+        latest_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    ) {
+        let merged = merge_live_exception_takeover_write_guard_with_task_authority(
+            canonical_root_session_write_guard_defaults(),
+            Path::new("."),
+            latest_receipt,
+            latest_recovery,
+            true,
+        );
+
+        assert_eq!(merged["status"], "blocked_by_default");
+        assert_eq!(merged["root_local_write_allowed"], false);
+        assert_eq!(
+            merged["root_local_write_allowed_for_only_these_paths"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            merged["local_exception_takeover_state"],
+            "stale_task_blocked"
+        );
+        assert_eq!(merged["latest_run_graph_task_stale"], true);
+        assert_eq!(merged["reason"], "latest_run_graph_task_stale");
+    }
+
     #[test]
     fn merge_live_exception_takeover_write_guard_keeps_recorded_receipts_blocked() {
         let guard = canonical_root_session_write_guard_defaults();
@@ -616,31 +642,23 @@ mod tests {
     }
 
     #[test]
-    fn merge_live_exception_takeover_write_guard_blocks_stale_task_authority() {
-        let guard = canonical_root_session_write_guard_defaults();
-        let mut receipt = sample_receipt();
-        receipt.lane_status = "lane_exception_takeover".to_string();
-        receipt.supersedes_receipt_id = Some("supersede-1".to_string());
+    fn merge_live_exception_takeover_write_guard_blocks_stale_task_authority_receipt_matrix() {
+        assert_stale_task_authority_blocks_root_local_write(None, None);
 
-        let merged = merge_live_exception_takeover_write_guard_with_task_authority(
-            guard,
-            Path::new("."),
-            Some(&receipt),
-            Some(&sample_recovery("delegated_cycle_clear")),
-            true,
+        let recorded_receipt = sample_receipt();
+        let recorded_recovery = sample_recovery("blocked_open_delegated_cycle");
+        assert_stale_task_authority_blocks_root_local_write(
+            Some(&recorded_receipt),
+            Some(&recorded_recovery),
         );
 
-        assert_eq!(merged["status"], "blocked_by_default");
-        assert_eq!(merged["root_local_write_allowed"], false);
-        assert_eq!(
-            merged["local_exception_takeover_state"],
-            "stale_task_blocked"
-        );
-        assert_eq!(merged["latest_run_graph_task_stale"], true);
-        assert_eq!(merged["reason"], "latest_run_graph_task_stale");
-        assert_eq!(
-            merged["root_local_write_allowed_for_only_these_paths"],
-            serde_json::json!([])
+        let mut active_receipt = sample_receipt();
+        active_receipt.lane_status = "lane_exception_takeover".to_string();
+        active_receipt.supersedes_receipt_id = Some("supersede-1".to_string());
+        let active_recovery = sample_recovery("delegated_cycle_clear");
+        assert_stale_task_authority_blocks_root_local_write(
+            Some(&active_receipt),
+            Some(&active_recovery),
         );
     }
 }

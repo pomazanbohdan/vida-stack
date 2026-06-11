@@ -13585,12 +13585,32 @@ fn task_close_preserves_unevidenced_closed_task_active_run_projection() {
         forged_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
         "doctor must not suppress a terminal closure state that lacks receipt-backed execution evidence: {forged_doctor}"
     );
+    assert_eq!(
+        forged_doctor["root_session_write_guard"]["latest_run_graph_task_stale"],
+        true,
+        "doctor must keep the stale write guard active for forged terminal closure evidence: {forged_doctor}"
+    );
+    assert_eq!(
+        forged_doctor["root_session_write_guard"]["root_local_write_allowed"],
+        false,
+        "doctor must not grant root-local write authority for forged terminal closure evidence: {forged_doctor}"
+    );
     let forged_status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
     let forged_status_blockers =
         require_json_string_array(&forged_status["blocker_codes"], "forged status blockers");
     assert!(
         forged_status_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
         "status must stay aligned with doctor for forged terminal closure evidence: {forged_status}"
+    );
+    assert_eq!(
+        forged_status["root_session_write_guard"]["latest_run_graph_task_stale"],
+        true,
+        "status must keep the stale write guard active for forged terminal closure evidence: {forged_status}"
+    );
+    assert_eq!(
+        forged_status["root_session_write_guard"]["root_local_write_allowed"],
+        false,
+        "status must not grant root-local write authority for forged terminal closure evidence: {forged_status}"
     );
     let (forged_diagnostics, forged_diagnostics_success) = run_command_json_allow_failure(
         &[

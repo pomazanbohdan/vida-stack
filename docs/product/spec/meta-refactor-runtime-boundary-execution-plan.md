@@ -494,6 +494,12 @@ These are the source-plan anchors this tracker is tied to:
 - ROUTE-002 is now covered in `crates/vida/src/init_surfaces.rs`; explicit
   agent-init role aliases cannot resolve to `orchestrator`, and requested
   human labels remain the selection `dispatch_target`.
+- RT-001 is now covered at helper and public-surface proof level:
+  `crates/vida/src/status_surface_write_guard.rs` keeps stale task authority
+  dominant over missing, recorded, and active exception-takeover receipt
+  variants, and `crates/vida/tests/task_smoke.rs` asserts both `vida doctor`
+  and `vida status --json --view full` keep the stale write guard active and
+  `root_local_write_allowed = false` for forged terminal closure evidence.
 - Open PR intake mapping:
   - PR #340: integrated as ROUTE-002.
   - PR #350: integrated as ROUTE-001.
@@ -535,6 +541,21 @@ These are the source-plan anchors this tracker is tied to:
   implementation packets only when the prompt names exact caller roots,
   fail-closed behavior, TaskFlow metadata updates, proof commands, and commit
   boundaries; keep `gpt-5.5-medium` as validator for runtime/authority code.
+- RT-001 delegation scorecard:
+  - `gpt-5.4-mini/xhigh` was useful for a narrow public-surface assertion patch
+    but under-covered the receipt-authority matrix on first pass; raw closure
+    score 6/10, useful-patch score 8/10 after validator guidance.
+  - `gpt-5.5-low` was the best rework executor for the bounded helper matrix;
+    it completed the missing receipt, recorded/non-active receipt, and active
+    exception-takeover receipt variants with proof, score 9/10.
+  - `gpt-5.5-medium` validators were the best quality gate: one rejected the
+    false-green mini closure and one approved the completed matrix/public
+    parity patch, validator score 9/10.
+  - Next-task launch rule: start with one `gpt-5.4-mini/xhigh` read-only
+    decomposition lane; use `gpt-5.4-mini/xhigh` executor only for exact
+    test-only patches; escalate source/runtime implementation or any validator
+    rejection to `gpt-5.5-low`; keep `gpt-5.5-medium` as the default closure
+    validator for authority-sensitive runtime work.
 
 -----
 artifact_path: product/spec/meta-refactor-runtime-boundary-execution-plan
