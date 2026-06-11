@@ -3,6 +3,52 @@
 Purpose: record per-task executor/validator efficiency evidence so the next VIDA
 task can choose a cheaper or stronger model deliberately.
 
+## 2026-06-11 - pr343-lane-retire-closure-proof-bypass
+
+Scope:
+- Task: `pr343-lane-retire-closure-proof-bypass`
+- PR: `#343`
+- File: `crates/vida/src/lane_surface.rs`
+- Proof:
+  - `cargo test -p vida lane_retire_rejects -- --nocapture`
+  - `cargo test -p vida lane_retire_rejects_exception_takeover_missing_task_stale_blocked_run_without_closed_unit -- --nocapture`
+  - `cargo test -p vida lane_retire_uses_exception_metadata_closed_unit_when_run_task_is_runtime_id -- --nocapture`
+  - `cargo build`
+  - `git diff --check -- crates/vida/src/lane_surface.rs`
+  - `vida task validate-graph --json`
+  - `vida task closure-ready pr343-lane-retire-closure-proof-bypass --json`
+
+Observed model results:
+- Initial executor `gpt-5.4-mini` with `xhigh` reasoning: 7/10. It removed the
+  bridge/open bypass and added useful tests, but left the
+  `exception_takeover_stale_blocked` bypass active and even had a positive test
+  preserving that false-green path. Tokens were not exposed by the host; the
+  final report listed 22 tool calls.
+- Validator `gpt-5.5` with `medium` reasoning: 8/10. It correctly rejected
+  closure because stale blocked exception takeover could still retire a lane
+  without a closed TaskFlow unit. The validator reported 27 tool calls; tokens
+  were not exposed by the host.
+- Rework executor `gpt-5.4-mini` with `xhigh` reasoning: 9/10. It converted the
+  validator finding into one exact rework packet, removed the stale-blocked
+  bypass, renamed the negative regression test, and kept the metadata-backed
+  positive path. Tokens were not exposed; the final report listed 27 tool calls.
+- Final validator `gpt-5.5` with `medium` reasoning: 9/10 with 9/10 confidence.
+  It accepted the diff and focused proof, with residual risk limited to the
+  orchestrator-owned full build proof.
+
+Next-task selection rule:
+- Keep the three-step loop as the default for authority-sensitive runtime tasks:
+  cheap executor with self-proof, one compact proof bundle plus one stronger
+  validator, then one close/commit/push/PR/docs publication pass.
+- If the validator rejects, do not reopen broad discovery. Convert the single
+  blocking finding into one exact mini rework packet and rerun the compact proof
+  bundle.
+- Use `gpt-5.5 medium` as validator for lane, TaskFlow, exception-takeover, and
+  closure-proof semantics because it caught the false-green path the cheap
+  executor missed.
+- Before PR #355 or any same-file dirty-target work, run a hunk-isolation
+  preflight instead of giving a broad write packet to the mini executor.
+
 ## 2026-06-11 - pr356-dispatch-target-alias-policy
 
 Scope:
