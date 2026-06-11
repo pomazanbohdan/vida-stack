@@ -2502,6 +2502,7 @@ struct HostBridgeTaskflowImplementationEvidence {
 
 struct HostBridgeReceiptPaths {
     request_path: PathBuf,
+    packet_path: Option<PathBuf>,
     result_path: PathBuf,
     receipt_path: PathBuf,
 }
@@ -2537,6 +2538,7 @@ fn trusted_host_bridge_completion_request_context(
     run_id: &str,
     request_path: &str,
     status: Option<&crate::state_store::RunGraphStatus>,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<Option<HostBridgeCompletionRequestContext>, String> {
     let Some(status) = status else {
         return Ok(None);
@@ -2556,6 +2558,21 @@ fn trusted_host_bridge_completion_request_context(
     if status.active_node.trim() != dispatch_target {
         return Ok(None);
     }
+    if receipt.dispatch_target.trim() != dispatch_target {
+        return Err(
+            "Host bridge request dispatch target does not match persisted dispatch receipt evidence."
+                .to_string(),
+        );
+    }
+    if let Some(selected_backend) = receipt.selected_backend.as_deref() {
+        let backend_id = host_bridge_path_string(&request, "backend_id")?;
+        if backend_id != selected_backend {
+            return Err(
+                "Host bridge request backend does not match persisted dispatch receipt evidence."
+                    .to_string(),
+            );
+        }
+    }
     if status.status != "blocked" || status.policy_gate != "host_tool_bridge_adapter_required" {
         return Ok(None);
     }
@@ -2563,6 +2580,20 @@ fn trusted_host_bridge_completion_request_context(
         host_bridge_path_string(&request, "packet_path")?,
     );
     let packet_path = canonicalize_existing_state_path(state_root, &packet_path, "packet")?;
+    if let Some(authoritative_packet_path) = receipt.downstream_dispatch_packet_path.as_deref() {
+        let authoritative_packet_path =
+            crate::runtime_dispatch_state::normalize_persisted_runtime_path(
+                authoritative_packet_path,
+            );
+        let authoritative_packet_path =
+            canonicalize_existing_state_path(state_root, &authoritative_packet_path, "packet")?;
+        if packet_path != authoritative_packet_path {
+            return Err(
+                "Host bridge request packet path does not match persisted dispatch receipt evidence."
+                    .to_string(),
+            );
+        }
+    }
     Ok(Some(HostBridgeCompletionRequestContext {
         dispatch_target: dispatch_target.to_string(),
         packet_path: packet_path.display().to_string(),
@@ -2693,6 +2724,12 @@ fn host_bridge_request_paths_from_dispatch_result(
         request_path: crate::runtime_dispatch_state::normalize_persisted_runtime_path(
             host_bridge_path_string(request, "request_path")?,
         ),
+        packet_path: request
+            .get("packet_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(crate::runtime_dispatch_state::normalize_persisted_runtime_path),
         result_path: crate::runtime_dispatch_state::normalize_persisted_runtime_path(
             host_bridge_path_string(request, "result_path")?,
         ),
@@ -2707,38 +2744,9 @@ fn validated_host_bridge_paths_from_receipt(
     request_path: &Path,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     replace_existing_evidence: bool,
-    request_paths_authoritative: bool,
 ) -> Result<HostBridgeReceiptPaths, String> {
     let canonical_request_path =
         canonicalize_existing_state_path(state_root, request_path, "request")?;
-    if request_paths_authoritative {
-        let request = read_host_bridge_request(
-            canonical_request_path
-                .to_str()
-                .ok_or_else(|| "Host bridge request path is not valid UTF-8.".to_string())?,
-        )?;
-        let result_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
-            host_bridge_path_string(&request, "result_path")?,
-        );
-        let receipt_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
-            host_bridge_path_string(&request, "receipt_path")?,
-        );
-        return Ok(HostBridgeReceiptPaths {
-            request_path: canonical_request_path,
-            result_path: validate_state_artifact_path_for_host_bridge_write(
-                state_root,
-                &result_path,
-                "result",
-                replace_existing_evidence,
-            )?,
-            receipt_path: validate_state_artifact_path_for_host_bridge_write(
-                state_root,
-                &receipt_path,
-                "receipt",
-                replace_existing_evidence,
-            )?,
-        });
-    }
     let Some(dispatch_result_path) = receipt.dispatch_result_path.as_deref() else {
         return Err(
             "Lane receipt is missing persisted host bridge dispatch result evidence.".into(),
@@ -2760,31 +2768,7 @@ fn validated_host_bridge_paths_from_receipt(
             dispatch_result_path.display()
         )
     })?;
-    let paths = match host_bridge_request_paths_from_dispatch_result(&result) {
-        Ok(paths) => paths,
-        Err(_error)
-            if result
-                .get("artifact_kind")
-                .and_then(serde_json::Value::as_str)
-                == Some("host_tool_bridge_result") =>
-        {
-            let request = read_host_bridge_request(
-                canonical_request_path
-                    .to_str()
-                    .ok_or_else(|| "Host bridge request path is not valid UTF-8.".to_string())?,
-            )?;
-            HostBridgeReceiptPaths {
-                request_path: canonical_request_path.clone(),
-                result_path: crate::runtime_dispatch_state::normalize_persisted_runtime_path(
-                    host_bridge_path_string(&request, "result_path")?,
-                ),
-                receipt_path: crate::runtime_dispatch_state::normalize_persisted_runtime_path(
-                    host_bridge_path_string(&request, "receipt_path")?,
-                ),
-            }
-        }
-        Err(error) => return Err(error),
-    };
+    let paths = host_bridge_request_paths_from_dispatch_result(&result)?;
     let canonical_paths_request_path =
         canonicalize_existing_state_path(state_root, &paths.request_path, "request")?;
     if canonical_request_path != canonical_paths_request_path {
@@ -2794,8 +2778,41 @@ fn validated_host_bridge_paths_from_receipt(
             canonical_paths_request_path.display()
         ));
     }
+    let request = read_host_bridge_request(
+        canonical_request_path
+            .to_str()
+            .ok_or_else(|| "Host bridge request path is not valid UTF-8.".to_string())?,
+    )?;
+    let request_result_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
+        host_bridge_path_string(&request, "result_path")?,
+    );
+    let request_receipt_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
+        host_bridge_path_string(&request, "receipt_path")?,
+    );
+    if request_result_path != paths.result_path || request_receipt_path != paths.receipt_path {
+        return Err(
+            "Host bridge request result/receipt paths do not match persisted dispatch receipt evidence."
+                .to_string(),
+        );
+    }
+    if let Some(authoritative_packet_path) = paths.packet_path.as_ref() {
+        let request_packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
+            host_bridge_path_string(&request, "packet_path")?,
+        );
+        let request_packet_path =
+            canonicalize_existing_state_path(state_root, &request_packet_path, "packet")?;
+        let authoritative_packet_path =
+            canonicalize_existing_state_path(state_root, authoritative_packet_path, "packet")?;
+        if request_packet_path != authoritative_packet_path {
+            return Err(
+                "Host bridge request packet path does not match persisted dispatch receipt evidence."
+                    .to_string(),
+            );
+        }
+    }
     Ok(HostBridgeReceiptPaths {
         request_path: canonical_request_path,
+        packet_path: paths.packet_path,
         result_path: validate_state_artifact_path_for_host_bridge_write(
             state_root,
             &paths.result_path,
@@ -3130,7 +3147,6 @@ fn materialize_host_bridge_completion_evidence(
     summary: Option<&str>,
     taskflow_evidence: HostBridgeTaskflowImplementationEvidence,
     replace_existing_evidence: bool,
-    request_paths_authoritative: bool,
 ) -> Result<HostBridgeCompletionEvidence, String> {
     let normalized_request_path =
         crate::runtime_dispatch_state::normalize_persisted_runtime_path(request_path);
@@ -3141,7 +3157,6 @@ fn materialize_host_bridge_completion_evidence(
         &canonical_request_path,
         persisted_receipt,
         replace_existing_evidence,
-        request_paths_authoritative,
     )?;
     let mut request = read_host_bridge_request(
         canonical_request_path
@@ -3295,6 +3310,17 @@ fn materialize_host_bridge_completion_evidence(
         "implementation_artifact_refs": implementation_artifacts.artifact_refs.clone(),
         "scope_validation": implementation_scope_validation.clone(),
         "source_dispatch_packet_path": packet_path,
+        "host_tool_bridge_request": {
+            "request_path": canonical_request_path.display().to_string(),
+            "packet_path": packet_path,
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string(),
+            "backend_id": backend_id,
+            "request_id": request_id,
+            "run_id": run_id,
+            "dispatch_target": dispatch_target,
+            "dispatch_transport": "host_tool_bridge"
+        },
         "activation_semantics": {
             "activation_kind": "execution_evidence",
             "view_only": false,
@@ -3908,6 +3934,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         run_id,
                         request_path,
                         status.as_ref(),
+                        &receipt,
                     ) {
                         Ok(context) => context,
                         Err(error) => {
@@ -4029,7 +4056,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     host_bridge_summary,
                     taskflow_artifacts,
                     retrying_summary_guard || retrying_request_guard,
-                    host_bridge_completion_context.is_some(),
                 ) {
                     Ok(evidence) => Some(evidence),
                     Err(error) => {
@@ -9938,6 +9964,218 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn host_bridge_no_request_redirect() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-no-request-redirect-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-host-bridge-no-request-redirect";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "verification".to_string();
+        status.next_node = Some("closure".to_string());
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "verification_blocked".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "dispatch.verification".to_string();
+        status.recovery_ready = false;
+        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let packet_path = root.join(
+            "runtime-consumption/downstream-dispatch-packets/run-host-bridge-verification.json",
+        );
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": "verification",
+                "activation_runtime_role": "verifier",
+                "packet_template_kind": "delivery_task_packet",
+                "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                "read_only_paths": ["crates/vida/src"],
+                "delivery_task_packet": {
+                    "goal": "Verify implementation evidence.",
+                    "scope_in": ["dispatch_target:verification"],
+                    "handoff_task_class": "implementation",
+                    "handoff_runtime_role": "verifier",
+                    "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                    "read_only_paths": ["crates/vida/src"],
+                    "definition_of_done": ["verification either approves closure or blocks rework"],
+                    "verification_command": "cargo test -p vida lane_complete",
+                    "proof_target": "verification receipt",
+                    "stop_rules": ["stop if implementation evidence is missing"],
+                    "blocking_question": "none"
+                },
+                "downstream_dispatch_target": "closure",
+                "downstream_dispatch_active_target": "verification",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_verification_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked"
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+
+        let request_path = root.join("host-tool-bridge/requests/run-host-bridge-verification.json");
+        let authoritative_result_path =
+            root.join("host-tool-bridge/results/run-host-bridge-authoritative.json");
+        let authoritative_receipt_path =
+            root.join("host-tool-bridge/receipts/run-host-bridge-authoritative.json");
+        let redirected_result_path =
+            root.join("host-tool-bridge/results/run-host-bridge-redirected.json");
+        let redirected_receipt_path =
+            root.join("host-tool-bridge/receipts/run-host-bridge-redirected.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request dir");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "run-host-bridge-no-request-redirect",
+                "run_id": run_id,
+                "dispatch_target": "verification",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "carrier_id": "verifier",
+                "execution_boundary": "parent_host_session",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": redirected_result_path.display().to_string(),
+                "receipt_path": redirected_receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write host bridge request");
+
+        let activation_result_path = root.join(
+            "runtime-consumption/dispatch-results/run-host-bridge-no-request-redirect-activation.json",
+        );
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": authoritative_result_path.display().to_string(),
+                    "receipt_path": authoritative_receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "verification".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+        receipt.downstream_dispatch_target = Some("closure".to_string());
+        receipt.downstream_dispatch_command = Some("vida taskflow dispatch closure".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_verification_evidence".to_string()];
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_active_target = Some("verification".to_string());
+        receipt.selected_backend = Some("internal_subagents".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        let persisted_receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read persisted receipt")
+            .expect("persisted receipt should exist");
+        let activation_result_path_string = activation_result_path.display().to_string();
+        store.close().await;
+        wait_for_state_unlock(&root);
+
+        let error = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            run_id,
+            "verification",
+            &persisted_receipt,
+            "host-bridge-no-request-redirect",
+            Some("verifier-1"),
+            Some("internal agent completed"),
+            HostBridgeTaskflowImplementationEvidence::default(),
+            false,
+        )
+        .expect_err("redirected request should fail closed");
+        assert!(
+            error.contains("do not match persisted dispatch receipt evidence"),
+            "unexpected error: {error}"
+        );
+
+        let exit = run_lane(ProxyArgs {
+            args: vec![
+                "complete".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "host-bridge-no-request-redirect".to_string(),
+                "--host-bridge-request".to_string(),
+                request_path.display().to_string(),
+                "--host-agent-id".to_string(),
+                "verifier-1".to_string(),
+                "--host-bridge-summary".to_string(),
+                "internal agent completed".to_string(),
+                "--state-dir".to_string(),
+                root.display().to_string(),
+                "--json".to_string(),
+            ],
+        })
+        .await;
+        assert_eq!(exit, ExitCode::from(2));
+
+        assert!(!redirected_result_path.exists());
+        assert!(!redirected_receipt_path.exists());
+        assert!(!authoritative_result_path.exists());
+        assert!(!authoritative_receipt_path.exists());
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert_eq!(
+            after.dispatch_result_path.as_deref(),
+            Some(activation_result_path_string.as_str())
+        );
+        assert_eq!(after.dispatch_status, "bridge_request_pending");
+        store.close().await;
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn host_bridge_completion_accepts_configured_state_root_subdirectories() {
         let _guard = acquire_lane_surface_test_lock();
@@ -10005,7 +10243,6 @@ mod tests {
             None,
             None,
             HostBridgeTaskflowImplementationEvidence::default(),
-            false,
             false,
         )
         .expect("configured in-state bridge paths should be accepted");
@@ -10087,7 +10324,6 @@ mod tests {
             None,
             None,
             HostBridgeTaskflowImplementationEvidence::default(),
-            false,
             false,
         )
         .expect_err("outside result path should be rejected");

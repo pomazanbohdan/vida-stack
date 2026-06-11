@@ -132,6 +132,11 @@ Expected:
   exit non-zero
   no write to B
   blocker/error mentions persisted dispatch receipt evidence mismatch
+
+Implementation status:
+  covered by crates/vida/src/lane_surface.rs::host_bridge_no_request_redirect
+  vida lane complete validates mutable request result/receipt paths against persisted dispatch result evidence before writing completion artifacts
+  persisted dispatch result host_tool_bridge_request is authoritative for request/result/receipt paths; mutable request path redirection fails closed
 ```
 
 #### HB-004: retryable request path rejects FIFO/out-of-root/huge file
