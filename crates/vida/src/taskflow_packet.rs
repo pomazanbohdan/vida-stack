@@ -259,10 +259,88 @@ fn repair_delivery_task_packet_identity(dispatch_packet_body: &mut serde_json::V
     repaired
 }
 
+#[derive(Debug)]
 struct PacketRepairMutation {
     dispatch_packet_path: String,
     repaired: bool,
     contract_validated: bool,
+}
+
+fn packet_trimmed_string<'a>(packet: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    packet
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn active_repair_packet<'a>(
+    packet: &'a serde_json::Value,
+) -> Result<(&'a str, &'a serde_json::Value), String> {
+    let packet_template_kind = packet_trimmed_string(packet, "packet_template_kind")
+        .ok_or_else(|| "Persisted dispatch packet is missing packet_template_kind.".to_string())?;
+    let active_packet = packet
+        .get(packet_template_kind)
+        .filter(|value| value.is_object())
+        .ok_or_else(|| {
+            format!("Persisted dispatch packet is missing active `{packet_template_kind}` body.")
+        })?;
+    Ok((packet_template_kind, active_packet))
+}
+
+fn validate_packet_repair_binding(
+    run_id: &str,
+    task: &TaskRecord,
+    status: &crate::state_store::RunGraphStatus,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    packet: &serde_json::Value,
+) -> Result<(), String> {
+    if receipt.run_id != run_id {
+        return Err(format!(
+            "Persisted dispatch receipt key `{run_id}` contains mismatched run_id `{}`.",
+            receipt.run_id
+        ));
+    }
+    if status.run_id != run_id {
+        return Err(format!(
+            "Persisted run-graph status for `{run_id}` contains mismatched run_id `{}`.",
+            status.run_id
+        ));
+    }
+    if status.task_id != task.id {
+        return Err(format!(
+            "packet repair task binding mismatch: run_id `{run_id}` is bound to task `{}`, not --from-task `{}`.",
+            status.task_id, task.id
+        ));
+    }
+    if packet_trimmed_string(packet, "run_id") != Some(receipt.run_id.as_str()) {
+        return Err(format!(
+            "Persisted dispatch packet run_id does not match receipt run_id `{}`.",
+            receipt.run_id
+        ));
+    }
+    if packet_trimmed_string(packet, "dispatch_target") != Some(receipt.dispatch_target.as_str()) {
+        return Err(format!(
+            "Persisted dispatch packet dispatch_target does not match receipt dispatch_target `{}`.",
+            receipt.dispatch_target
+        ));
+    }
+    let (_packet_template_kind, active_packet) = active_repair_packet(packet)?;
+    if packet_trimmed_string(active_packet, "backlog_id") != Some(receipt.run_id.as_str()) {
+        return Err(format!(
+            "Persisted dispatch packet active body backlog_id does not match receipt run_id `{}`.",
+            receipt.run_id
+        ));
+    }
+    let expected_packet_prefix = format!("{}::{}::", receipt.run_id, receipt.dispatch_target);
+    let packet_id = packet_trimmed_string(active_packet, "packet_id")
+        .ok_or_else(|| "Persisted dispatch packet active body is missing packet_id.".to_string())?;
+    if !packet_id.starts_with(&expected_packet_prefix) {
+        return Err(format!(
+            "Persisted dispatch packet packet_id `{packet_id}` is not bound to `{expected_packet_prefix}*`."
+        ));
+    }
+    Ok(())
 }
 
 async fn repair_persisted_dispatch_packet_from_task(
@@ -287,11 +365,20 @@ async fn repair_persisted_dispatch_packet_from_task(
         .ok_or_else(|| {
             format!("Persisted dispatch receipt for `{run_id}` is missing dispatch_packet_path.")
         })?;
+    let status = store.run_graph_status(run_id).await.map_err(|error| {
+        format!("Failed to read persisted run-graph status for `{run_id}`: {error}")
+    })?;
     let resolved_path = canonicalize_packet_path(dispatch_packet_path)?;
     let display_path = resolved_path.display().to_string();
     let mut packet = read_packet_body(dispatch_packet_path)?;
+    validate_packet_repair_binding(run_id, task, &status, &receipt, &packet)?;
     let mut repaired = repair_delivery_task_packet_identity(&mut packet);
     repaired |= hydrate_dispatch_packet_owned_paths_from_task(&mut packet, task);
+    crate::validate_runtime_dispatch_packet_contract(&packet, "Repaired dispatch packet").map_err(
+        |error| {
+            format!("execution_preparation_gate_blocked: {error}; dispatch packet `{display_path}`")
+        },
+    )?;
     if repaired {
         std::fs::write(
             &resolved_path,
@@ -301,7 +388,6 @@ async fn repair_persisted_dispatch_packet_from_task(
         )
         .map_err(|error| format!("Failed to write repaired packet `{display_path}`: {error}"))?;
     }
-    crate::taskflow_consume_resume::read_dispatch_packet(&display_path)?;
     Ok(PacketRepairMutation {
         dispatch_packet_path: display_path,
         repaired,
@@ -862,12 +948,17 @@ mod tests {
     use super::{
         build_taskflow_packet_render_payload, build_taskflow_packet_repair_payload,
         hydrate_dispatch_packet_owned_paths_from_task, parse_packet_repair_args,
-        repair_delivery_task_packet_identity, resolve_latest_packet_run_id,
-        resolve_packet_render_run_id,
+        packet_repair_projection_name, repair_delivery_task_packet_identity,
+        repair_persisted_dispatch_packet_from_task, resolve_latest_packet_run_id,
+        resolve_packet_render_run_id, run_taskflow_packet,
     };
-    use crate::state_store::{StateStore, TaskPlannerMetadata, TaskRecord};
+    use crate::state_store::{
+        CreateTaskRequest, ExecutionPlanStateRow, RunGraphDispatchReceiptStored, StateStore,
+        TaskExecutionSemantics, TaskPlannerMetadata, TaskRecord, STATE_DATABASE, STATE_NAMESPACE,
+    };
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::process::ExitCode;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn packet_render_payload_preserves_persisted_selected_backend_truth() {
@@ -1025,6 +1116,211 @@ mod tests {
         }
     }
 
+    fn packet_repair_temp_root(label: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "vida-packet-repair-{label}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    fn packet_repair_status(run_id: &str, task_id: &str) -> crate::state_store::RunGraphStatus {
+        crate::state_store::RunGraphStatus {
+            run_id: run_id.to_string(),
+            task_id: task_id.to_string(),
+            task_class: "delivery_task".to_string(),
+            active_node: "implementer".to_string(),
+            next_node: None,
+            status: "in_progress".to_string(),
+            route_task_class: "delivery_task".to_string(),
+            selected_backend: "opencode_cli".to_string(),
+            lane_id: format!("lane-{run_id}"),
+            lifecycle_stage: "implementer_ready".to_string(),
+            policy_gate: "none".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "dispatch.implementer".to_string(),
+            recovery_ready: false,
+        }
+    }
+
+    fn packet_repair_receipt(
+        run_id: &str,
+        packet_path: &std::path::Path,
+    ) -> crate::state_store::RunGraphDispatchReceipt {
+        crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "ready".to_string(),
+            lane_status: "lane_ready".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida taskflow run-graph dispatch-init".to_string()),
+            dispatch_command: Some(format!(
+                "vida taskflow consume continue --run-id {run_id} --json"
+            )),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("opencode_cli".to_string()),
+            recorded_at: "2026-04-19T12:00:02Z".to_string(),
+        }
+    }
+
+    fn packet_repair_dispatch_packet(run_id: &str) -> serde_json::Value {
+        let mut delivery_task_packet = crate::runtime_dispatch_packets::runtime_delivery_task_packet(
+            run_id,
+            "implementer",
+            "worker",
+            "implementation",
+            "delivery",
+            "bounded repair test",
+        );
+        delivery_task_packet["owned_paths"] = serde_json::json!([]);
+        serde_json::json!({
+            "packet_kind": "runtime_dispatch_packet",
+            "packet_template_kind": "delivery_task_packet",
+            "run_id": run_id,
+            "dispatch_target": "implementer",
+            "owned_paths": [],
+            "delivery_task_packet": delivery_task_packet,
+        })
+    }
+
+    async fn packet_repair_binding_assert_rejection(
+        label: &str,
+        lookup_run_id: &str,
+        status_row_run_id: &str,
+        receipt_row_run_id: &str,
+        task_id: &str,
+        packet: serde_json::Value,
+        expected_fragment: &str,
+    ) {
+        let root = packet_repair_temp_root(label);
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(root.clone()));
+        let result = async {
+            fs::create_dir_all(&root).expect("create state root");
+            let mut task = packet_repair_task_with_metadata();
+            task.id = task_id.to_string();
+            let packet_path = root.join("runtime-consumption").join(format!("{lookup_run_id}.json"));
+            fs::create_dir_all(packet_path.parent().expect("packet parent"))
+                .expect("create packet parent");
+            let original_packet = packet.clone();
+            fs::write(
+                &packet_path,
+                serde_json::to_vec_pretty(&original_packet).expect("encode packet"),
+            )
+            .expect("write packet");
+            {
+                let raw_db: surrealdb::Surreal<surrealdb::engine::local::Db> =
+                    surrealdb::Surreal::new::<surrealdb::engine::local::SurrealKv>(root.clone())
+                        .await
+                        .expect("open raw db");
+                raw_db
+                    .use_ns(STATE_NAMESPACE)
+                    .use_db(STATE_DATABASE)
+                    .await
+                    .expect("bind raw db");
+                let _: Option<ExecutionPlanStateRow> = raw_db
+                    .upsert(("execution_plan_state", lookup_run_id))
+                    .content(ExecutionPlanStateRow {
+                        run_id: status_row_run_id.to_string(),
+                        task_id: task.id.clone(),
+                        task_class: "delivery_task".to_string(),
+                        active_node: "implementer".to_string(),
+                        next_node: None,
+                        status: "in_progress".to_string(),
+                        updated_at: "2026-04-19T12:00:01Z".to_string(),
+                    })
+                    .await
+                    .expect("persist status row");
+                let mut receipt_row = RunGraphDispatchReceiptStored::from(
+                    packet_repair_receipt(receipt_row_run_id, &packet_path),
+                );
+                receipt_row.run_id = receipt_row_run_id.to_string();
+                let _: Option<RunGraphDispatchReceiptStored> = raw_db
+                    .upsert(("run_graph_dispatch_receipt", lookup_run_id))
+                    .content(receipt_row)
+                    .await
+                    .expect("persist receipt row");
+            }
+            let store = StateStore::open(root.clone()).await.expect("open store");
+
+            let error = repair_persisted_dispatch_packet_from_task(&store, lookup_run_id, &task)
+                .await
+                .expect_err("expected rejection");
+
+            assert!(error.contains(expected_fragment), "{error}");
+            let persisted: serde_json::Value =
+                serde_json::from_slice(&fs::read(&packet_path).expect("read packet"))
+                    .expect("decode packet");
+            assert_eq!(persisted, original_packet);
+        }
+        .await;
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        let _ = fs::remove_dir_all(&root);
+        result
+    }
+
+    fn packet_repair_binding_apply(packet: &mut serde_json::Value, mutation: &PacketMutation) {
+        match mutation {
+            PacketMutation::None => {}
+            PacketMutation::TopLevelRunId(value) => packet["run_id"] = serde_json::json!(value),
+            PacketMutation::DispatchTarget(value) => {
+                packet["dispatch_target"] = serde_json::json!(value)
+            }
+            PacketMutation::BacklogId(value) => {
+                packet["delivery_task_packet"]["backlog_id"] = serde_json::json!(value)
+            }
+            PacketMutation::PacketId(value) => {
+                packet["delivery_task_packet"]["packet_id"] = serde_json::json!(value)
+            }
+            PacketMutation::InvalidTemplateKind(value) => {
+                packet["packet_template_kind"] = serde_json::json!(value)
+            }
+            PacketMutation::MissingTemplateKind => {
+                packet.as_object_mut()
+                    .expect("packet object")
+                    .remove("packet_template_kind");
+            }
+            PacketMutation::MissingActiveBody => {
+                packet.as_object_mut()
+                    .expect("packet object")
+                    .remove("delivery_task_packet");
+            }
+        }
+    }
+
+    enum PacketMutation {
+        None,
+        TopLevelRunId(&'static str),
+        DispatchTarget(&'static str),
+        BacklogId(&'static str),
+        PacketId(&'static str),
+        InvalidTemplateKind(usize),
+        MissingTemplateKind,
+        MissingActiveBody,
+    }
+
     #[test]
     fn packet_repair_args_require_run_id_and_from_task() {
         let args = vec![
@@ -1060,6 +1356,358 @@ mod tests {
             payload["task_metadata"]["planner_metadata"]["owned_paths"][0],
             "crates/vida/src/taskflow_packet.rs"
         );
+    }
+
+    #[tokio::test]
+    async fn packet_repair_rejects_binding_mismatches_without_mutating_packet() {
+        struct Case {
+            label: &'static str,
+            status_row_run_id: &'static str,
+            receipt_row_run_id: &'static str,
+            expected_fragment: &'static str,
+            mutation: PacketMutation,
+        }
+
+        let cases = [
+            Case {
+                label: "receipt-run-id-mismatch",
+                status_row_run_id: "run-packet-binding",
+                receipt_row_run_id: "run-receipt-mismatch",
+                expected_fragment: "Persisted dispatch receipt key",
+                mutation: PacketMutation::None,
+            },
+            Case {
+                label: "status-run-id-mismatch",
+                status_row_run_id: "run-status-mismatch",
+                receipt_row_run_id: "run-packet-binding",
+                expected_fragment: "Persisted run-graph status",
+                mutation: PacketMutation::None,
+            },
+            Case {
+                label: "packet-run-id-mismatch",
+                status_row_run_id: "run-packet-binding",
+                receipt_row_run_id: "run-packet-binding",
+                expected_fragment: "Persisted dispatch packet run_id does not match",
+                mutation: PacketMutation::TopLevelRunId("run-packet-mismatch"),
+            },
+            Case {
+                label: "dispatch-target-mismatch",
+                status_row_run_id: "run-packet-binding",
+                receipt_row_run_id: "run-packet-binding",
+                expected_fragment: "Persisted dispatch packet dispatch_target does not match",
+                mutation: PacketMutation::DispatchTarget("orchestrator"),
+            },
+            Case {
+                label: "backlog-id-mismatch",
+                status_row_run_id: "run-packet-binding",
+                receipt_row_run_id: "run-packet-binding",
+                expected_fragment: "backlog_id does not match receipt run_id",
+                mutation: PacketMutation::BacklogId("run-other"),
+            },
+            Case {
+                label: "packet-id-prefix-mismatch",
+                status_row_run_id: "run-packet-binding",
+                receipt_row_run_id: "run-packet-binding",
+                expected_fragment: "is not bound to `run-packet-binding::implementer::",
+                mutation: PacketMutation::PacketId("run-other::implementer::delivery"),
+            },
+        ];
+
+        for case in cases {
+            let mut packet = packet_repair_dispatch_packet("run-packet-binding");
+            packet_repair_binding_apply(&mut packet, &case.mutation);
+            packet_repair_binding_assert_rejection(
+                case.label,
+                "run-packet-binding",
+                case.status_row_run_id,
+                case.receipt_row_run_id,
+                "task-binding",
+                packet,
+                case.expected_fragment,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn packet_repair_rejects_missing_or_invalid_template_kind_and_active_body() {
+        struct Case {
+            label: &'static str,
+            expected_fragment: &'static str,
+            mutation: PacketMutation,
+        }
+
+        let cases = [
+            Case {
+                label: "missing-template-kind",
+                expected_fragment: "missing packet_template_kind",
+                mutation: PacketMutation::MissingTemplateKind,
+            },
+            Case {
+                label: "invalid-template-kind",
+                expected_fragment: "missing packet_template_kind",
+                mutation: PacketMutation::InvalidTemplateKind(123),
+            },
+            Case {
+                label: "missing-active-body",
+                expected_fragment: "missing active `delivery_task_packet` body",
+                mutation: PacketMutation::MissingActiveBody,
+            },
+        ];
+
+        for case in cases {
+            let mut packet = packet_repair_dispatch_packet("run-template");
+            packet_repair_binding_apply(&mut packet, &case.mutation);
+            packet_repair_binding_assert_rejection(
+                case.label,
+                "run-template",
+                "run-template",
+                "run-template",
+                "task-template",
+                packet,
+                case.expected_fragment,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn packet_repair_hydrates_only_receipt_task_bound_packet() {
+        let root = packet_repair_temp_root("bound-success");
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(root.clone()));
+        let result = async {
+            fs::create_dir_all(&root).expect("create state root");
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let mut task = packet_repair_task_with_metadata();
+            task.id = "task-bound".to_string();
+            let run_id = "run-bound";
+            store
+                .record_run_graph_status(&packet_repair_status(run_id, &task.id))
+                .await
+                .expect("persist status");
+            let packet_path = root.join("runtime-consumption").join("run-bound.json");
+            fs::create_dir_all(packet_path.parent().expect("packet parent"))
+                .expect("create packet parent");
+            fs::write(
+                &packet_path,
+                serde_json::to_vec_pretty(&packet_repair_dispatch_packet(run_id))
+                    .expect("encode packet"),
+            )
+            .expect("write packet");
+            store
+                .record_run_graph_dispatch_receipt(&packet_repair_receipt(run_id, &packet_path))
+                .await
+                .expect("persist receipt");
+
+            let mutation = repair_persisted_dispatch_packet_from_task(&store, run_id, &task)
+                .await
+                .expect("repair bound packet");
+
+            assert!(mutation.repaired);
+            assert!(mutation.contract_validated);
+            let repaired: serde_json::Value =
+                serde_json::from_slice(&fs::read(&packet_path).expect("read repaired packet"))
+                    .expect("decode repaired packet");
+            assert_eq!(
+                repaired["owned_paths"],
+                serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+            );
+            assert_eq!(
+                repaired["delivery_task_packet"]["owned_paths"],
+                serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+            );
+        }
+        .await;
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        let _ = fs::remove_dir_all(&root);
+        result
+    }
+
+    #[tokio::test]
+    async fn packet_repair_json_cli_rejects_binding_mismatch_without_mutating_packet() {
+        let root = packet_repair_temp_root("json-cli-mismatch");
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(root.clone()));
+        let result = async {
+            fs::create_dir_all(&root).expect("create state root");
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let mut task = packet_repair_task_with_metadata();
+            task.id = "task-cli".to_string();
+            let run_id = "run-cli";
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: &task.id,
+                    title: &task.title,
+                    display_id: None,
+                    description: &task.description,
+                    issue_type: "epic",
+                    status: &task.status,
+                    priority: task.priority,
+                    parent_id: None,
+                    labels: &task.labels,
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: task.planner_metadata.clone(),
+                    created_by: "test",
+                    source_repo: &task.source_repo,
+                })
+                .await
+                .expect("create canonical task");
+            store
+                .record_run_graph_status(&packet_repair_status(run_id, &task.id))
+                .await
+                .expect("persist status");
+            let packet_path = root.join("runtime-consumption").join("run-cli.json");
+            fs::create_dir_all(packet_path.parent().expect("packet parent"))
+                .expect("create packet parent");
+            let mut original_packet = packet_repair_dispatch_packet(run_id);
+            original_packet["run_id"] = serde_json::json!("run-cli-mismatch");
+            fs::write(
+                &packet_path,
+                serde_json::to_vec_pretty(&original_packet).expect("encode packet"),
+            )
+            .expect("write packet");
+            store
+                .record_run_graph_dispatch_receipt(&packet_repair_receipt(run_id, &packet_path))
+                .await
+                .expect("persist receipt");
+            drop(store);
+
+            let args = vec![
+                "packet".to_string(),
+                "repair".to_string(),
+                "--run-id".to_string(),
+                run_id.to_string(),
+                "--from-task".to_string(),
+                task.id.clone(),
+                "--json".to_string(),
+            ];
+            let exit_code = run_taskflow_packet(&args).await;
+
+            assert_eq!(exit_code, ExitCode::from(1));
+            let projection = crate::operator_projection_cache::read_state_recent_json_projection(
+                &root,
+                &packet_repair_projection_name(run_id, &task.id),
+                Duration::from_secs(60),
+            )
+            .expect("read packet repair projection");
+            let payload: serde_json::Value =
+                serde_json::from_str(&projection).expect("decode projection");
+            assert_eq!(payload["status"], "blocked");
+            assert_eq!(payload["from_task"], task.id);
+            assert!(
+                payload["blocker_codes"]
+                    .as_array()
+                    .expect("blocker codes")
+                    .iter()
+                    .any(|code| code == "dispatch_packet_repair_failed")
+            );
+            let repair_error = payload["repair_error"].as_str().expect("repair error");
+            assert!(
+                repair_error.contains("Persisted dispatch packet run_id does not match"),
+                "{repair_error}"
+            );
+            let persisted: serde_json::Value =
+                serde_json::from_slice(&fs::read(&packet_path).expect("read packet"))
+                    .expect("decode packet");
+            assert_eq!(persisted, original_packet);
+        }
+        .await;
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        let _ = fs::remove_dir_all(&root);
+        result
+    }
+
+    #[tokio::test]
+    async fn packet_repair_rejects_from_task_mismatch_without_mutating_packet() {
+        let root = packet_repair_temp_root("task-mismatch");
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(root.clone()));
+        let result = async {
+            fs::create_dir_all(&root).expect("create state root");
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let mut task = packet_repair_task_with_metadata();
+            task.id = "attacker-task".to_string();
+            let run_id = "run-victim";
+            store
+                .record_run_graph_status(&packet_repair_status(run_id, "victim-task"))
+                .await
+                .expect("persist status");
+            let packet_path = root.join("runtime-consumption").join("run-victim.json");
+            fs::create_dir_all(packet_path.parent().expect("packet parent"))
+                .expect("create packet parent");
+            let original_packet = packet_repair_dispatch_packet(run_id);
+            fs::write(
+                &packet_path,
+                serde_json::to_vec_pretty(&original_packet).expect("encode packet"),
+            )
+            .expect("write packet");
+            store
+                .record_run_graph_dispatch_receipt(&packet_repair_receipt(run_id, &packet_path))
+                .await
+                .expect("persist receipt");
+
+            let error = repair_persisted_dispatch_packet_from_task(&store, run_id, &task)
+                .await
+                .expect_err("mismatched from-task must be rejected");
+
+            assert!(error.contains("task binding mismatch"), "{error}");
+            let persisted: serde_json::Value =
+                serde_json::from_slice(&fs::read(&packet_path).expect("read packet"))
+                    .expect("decode packet");
+            assert_eq!(persisted, original_packet);
+        }
+        .await;
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        let _ = fs::remove_dir_all(&root);
+        result
+    }
+
+    #[tokio::test]
+    async fn packet_repair_validates_repaired_contract_before_persisting_owned_paths() {
+        let root = packet_repair_temp_root("contract-before-write");
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(root.clone()));
+        let result = async {
+            fs::create_dir_all(&root).expect("create state root");
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let mut task = packet_repair_task_with_metadata();
+            task.id = "task-invalid-packet".to_string();
+            let run_id = "run-invalid-packet";
+            store
+                .record_run_graph_status(&packet_repair_status(run_id, &task.id))
+                .await
+                .expect("persist status");
+            let packet_path = root
+                .join("runtime-consumption")
+                .join("run-invalid-packet.json");
+            fs::create_dir_all(packet_path.parent().expect("packet parent"))
+                .expect("create packet parent");
+            let mut original_packet = packet_repair_dispatch_packet(run_id);
+            original_packet["delivery_task_packet"]["proof_target"] = serde_json::Value::Null;
+            fs::write(
+                &packet_path,
+                serde_json::to_vec_pretty(&original_packet).expect("encode packet"),
+            )
+            .expect("write packet");
+            store
+                .record_run_graph_dispatch_receipt(&packet_repair_receipt(run_id, &packet_path))
+                .await
+                .expect("persist receipt");
+
+            let error = repair_persisted_dispatch_packet_from_task(&store, run_id, &task)
+                .await
+                .expect_err("invalid repaired packet must not be persisted");
+
+            assert!(
+                error.contains("execution_preparation_gate_blocked"),
+                "{error}"
+            );
+            let persisted: serde_json::Value =
+                serde_json::from_slice(&fs::read(&packet_path).expect("read packet"))
+                    .expect("decode packet");
+            assert_eq!(persisted, original_packet);
+        }
+        .await;
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        let _ = fs::remove_dir_all(&root);
+        result
     }
 
     #[test]
