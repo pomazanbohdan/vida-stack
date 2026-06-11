@@ -599,6 +599,24 @@ These are the source-plan anchors this tracker is tied to:
   - Proof passed: `cargo test -p vida operator_projection_cache -- --nocapture`
     with 18 tests, `cargo fmt --all -- --check`, `cargo build`, and
     `git diff --check`.
+- RT-004 delegation scorecard:
+  - `gpt-5.4-mini/xhigh` explorer `Kierkegaard` timed out on first wait but
+    returned a useful narrowed owner map after interrupt: runtime-consumption
+    fallback was minting receipt authority from final snapshots and status/doctor
+    inherited it. Score 8/10, token/tool usage not exposed.
+  - `gpt-5.5-low` executor `Curie` delivered the bounded
+    `runtime_consumption_state` test/fix, score 8/10 after root hardening;
+    its report did not expose exact tool counts or tokens.
+  - Root hardening removed nested StateStore access from the sync fallback and
+    made final runtime-consumption snapshots return no dispatch receipt summary;
+    persisted receipt authority must come from the StateStore caller path.
+  - `gpt-5.5-medium` validator `Mencius` approved closure, score 9/10, 31 shell
+    calls across 6 batches, token usage not exposed. It classified three broader
+    doctor-surface smoke failures as adjacent host-bridge/missing-task projection
+    issues outside RT-004 scope.
+  - Proof passed: exact public status/doctor forged-snapshot smoke, `cargo test
+    -p vida runtime_consumption_state -- --nocapture` with 19 tests,
+    `cargo fmt --all -- --check`, `cargo build`, and `git diff --check`.
 
 -----
 artifact_path: product/spec/meta-refactor-runtime-boundary-execution-plan

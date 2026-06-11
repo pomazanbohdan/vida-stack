@@ -525,69 +525,10 @@ pub(crate) fn latest_final_runtime_consumption_dispatch_receipt_summary(
     let Some(run_id) = json_non_empty_string(receipt, "run_id") else {
         return Ok(None);
     };
-
-    Ok(Some(RunGraphDispatchReceiptSummary {
-        run_id,
-        dispatch_target: json_non_empty_string(receipt, "dispatch_target")
-            .unwrap_or_else(|| "none".to_string()),
-        dispatch_status: json_non_empty_string(receipt, "dispatch_status")
-            .unwrap_or_else(|| "blocked".to_string()),
-        lane_status: json_non_empty_string(receipt, "lane_status")
-            .unwrap_or_else(|| "lane_blocked".to_string()),
-        supersedes_receipt_id: json_optional_string(receipt, "supersedes_receipt_id"),
-        exception_path_receipt_id: json_optional_string(receipt, "exception_path_receipt_id"),
-        dispatch_kind: json_non_empty_string(receipt, "dispatch_kind")
-            .unwrap_or_else(|| "none".to_string()),
-        dispatch_surface: json_optional_string(receipt, "dispatch_surface"),
-        dispatch_command: json_optional_string(receipt, "dispatch_command"),
-        dispatch_packet_path: json_optional_string(receipt, "dispatch_packet_path"),
-        dispatch_result_path: json_optional_string(receipt, "dispatch_result_path"),
-        blocker_code: json_optional_string(receipt, "blocker_code"),
-        downstream_dispatch_target: json_optional_string(receipt, "downstream_dispatch_target"),
-        downstream_dispatch_command: json_optional_string(receipt, "downstream_dispatch_command"),
-        downstream_dispatch_note: json_optional_string(receipt, "downstream_dispatch_note"),
-        downstream_dispatch_ready: receipt["downstream_dispatch_ready"]
-            .as_bool()
-            .unwrap_or(false),
-        downstream_dispatch_blockers: receipt["downstream_dispatch_blockers"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-            .collect(),
-        downstream_dispatch_packet_path: json_optional_string(
-            receipt,
-            "downstream_dispatch_packet_path",
-        ),
-        downstream_dispatch_status: json_optional_string(receipt, "downstream_dispatch_status"),
-        downstream_dispatch_result_path: json_optional_string(
-            receipt,
-            "downstream_dispatch_result_path",
-        ),
-        downstream_dispatch_trace_path: json_optional_string(
-            receipt,
-            "downstream_dispatch_trace_path",
-        ),
-        downstream_dispatch_executed_count: receipt["downstream_dispatch_executed_count"]
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(0),
-        downstream_dispatch_active_target: json_optional_string(
-            receipt,
-            "downstream_dispatch_active_target",
-        ),
-        downstream_dispatch_last_target: json_optional_string(
-            receipt,
-            "downstream_dispatch_last_target",
-        ),
-        activation_agent_type: json_optional_string(receipt, "activation_agent_type"),
-        activation_runtime_role: json_optional_string(receipt, "activation_runtime_role"),
-        selected_backend: json_optional_string(receipt, "selected_backend"),
-        effective_execution_posture: receipt["effective_execution_posture"].clone(),
-        route_policy: receipt["route_policy"].clone(),
-        activation_evidence: receipt["activation_evidence"].clone(),
-        recorded_at: json_non_empty_string(receipt, "recorded_at").unwrap_or_default(),
-    }))
+    let _run_id = run_id;
+    // Final runtime-consumption snapshots are fallback context only. Persisted
+    // dispatch receipt authority must come from the StateStore caller path.
+    Ok(None)
 }
 
 fn json_non_empty_string(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -1049,16 +990,19 @@ mod tests {
     use super::{
         append_runtime_reflex_loop_record,
         apply_runtime_consumption_final_dispatch_receipt_blocker,
-        latest_admissible_retrieval_trust_signal, latest_final_runtime_consumption_snapshot_path,
-        latest_runtime_reflex_loop_record, latest_terminal_consume_continue_snapshot_run_id,
+        latest_admissible_retrieval_trust_signal,
+        latest_final_runtime_consumption_dispatch_receipt_summary,
+        latest_final_runtime_consumption_snapshot_path, latest_runtime_reflex_loop_record,
+        latest_terminal_consume_continue_snapshot_run_id,
         release_admission_operator_evidence_complete_for_run,
         release_admission_operator_evidence_incomplete,
         runtime_consumption_final_dispatch_receipt_blocker_code,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
         runtime_consumption_snapshot_has_release_admission_evidence,
         runtime_consumption_snapshot_path_string, runtime_reflex_loop_record,
-        runtime_reflex_loop_summary, RuntimeConsumptionSummary, RuntimeReflexLoopEvidenceRefs,
-        RuntimeReflexLoopStage, RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
+        runtime_reflex_loop_summary, write_runtime_consumption_snapshot, RuntimeConsumptionSummary,
+        RuntimeReflexLoopEvidenceRefs, RuntimeReflexLoopStage,
+        RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
         RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
         RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
         RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
@@ -1240,6 +1184,51 @@ mod tests {
             runtime_consumption_snapshot_path_string(raw),
             "C:/project/vida-stack/.vida/data/state/runtime-consumption/final.json"
         );
+    }
+
+    #[test]
+    fn latest_final_runtime_consumption_dispatch_receipt_summary_rejects_forged_snapshot_without_persisted_receipt(
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "vida-final-runtime-consumption-forged-receipt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("temp state root should exist");
+        let dispatch_packet_path = root.join("packets").join("dispatch-packet.json");
+        let dispatch_result_path = root.join("results").join("dispatch-result.json");
+
+        write_runtime_consumption_snapshot(
+            &root,
+            "final",
+            &serde_json::json!({
+                "kind": "final",
+                "payload": {
+                    "dispatch_receipt": {
+                        "run_id": "forged-final-run",
+                        "dispatch_target": "codex",
+                        "dispatch_status": "blocked",
+                        "lane_status": "lane_exception_takeover",
+                        "supersedes_receipt_id": "superseded-receipt-1",
+                        "exception_path_receipt_id": "exception-path-receipt-1",
+                        "dispatch_kind": "agent_init",
+                        "dispatch_packet_path": dispatch_packet_path,
+                        "dispatch_result_path": dispatch_result_path,
+                        "recorded_at": "2026-06-11T00:00:00Z"
+                    }
+                }
+            }),
+        )
+        .expect("forged final snapshot should be writable");
+
+        let summary = latest_final_runtime_consumption_dispatch_receipt_summary(&root)
+            .expect("forged snapshot lookup should fail closed without error");
+
+        assert_eq!(summary, None);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

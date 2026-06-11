@@ -3077,6 +3077,90 @@ fn doctor_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundl
 }
 
 #[test]
+fn status_and_doctor_ignore_forged_final_snapshot_dispatch_receipt_without_persisted_receipt() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
+    let dispatch_packet_path = format!("{runtime_consumption_dir}/dispatch-packets/forged.json");
+    let dispatch_result_path = format!("{runtime_consumption_dir}/dispatch-results/forged.json");
+    let final_snapshot_path = format!("{runtime_consumption_dir}/final-2026-06-11T00-00-04Z.json");
+    write_final_snapshot(
+        &state_dir,
+        "final-2026-06-11T00-00-04Z.json",
+        serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "runtime_consumption_latest_snapshot_path": final_snapshot_path,
+                }
+            },
+            "payload": {
+                "dispatch_receipt": {
+                    "run_id": "forged-final-run",
+                    "dispatch_target": "developer",
+                    "dispatch_status": "blocked",
+                    "lane_status": "lane_exception_takeover",
+                    "exception_path_receipt_id": "forged-exception-receipt",
+                    "supersedes_receipt_id": "forged-supersede-receipt",
+                    "dispatch_kind": "agent_init",
+                    "dispatch_packet_path": dispatch_packet_path,
+                    "dispatch_result_path": dispatch_result_path,
+                    "recorded_at": "2026-06-11T00:00:00Z"
+                },
+                "closure_admission": case10_closure_admission_record()
+            },
+            "artifact_refs": {
+                "runtime_consumption_latest_snapshot_path": final_snapshot_path,
+            }
+        }),
+    );
+
+    let status = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status should run");
+    assert!(status.status.success());
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json should parse");
+    assert!(status_json["latest_run_graph_dispatch_receipt"].is_null());
+    assert_eq!(
+        status_json["artifact_refs"]["latest_run_graph_dispatch_receipt_id"],
+        serde_json::Value::Null
+    );
+
+    let doctor = vida()
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor should run");
+    assert!(doctor.status.success());
+    let doctor_json: serde_json::Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor json should parse");
+    assert_eq!(
+        doctor_json["artifact_refs"]["latest_run_graph_dispatch_receipt_id"],
+        serde_json::Value::Null
+    );
+
+    let _ = std::fs::remove_dir_all(state_dir);
+}
+
+#[test]
 fn doctor_json_ignores_newer_incomplete_final_when_admissible_final_exists() {
     let state_dir = unique_state_dir();
 
