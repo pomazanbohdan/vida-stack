@@ -2944,7 +2944,8 @@ impl StateStore {
         &self,
         packet_path: &str,
     ) -> Result<Option<std::path::PathBuf>, StateStoreError> {
-        let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
+        let packet_path =
+            crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
         if packet_path.as_os_str().is_empty() {
             return Ok(None);
         }
@@ -4499,9 +4500,7 @@ mod tests {
         }
     }
 
-    fn reconciled_pack_dispatch_receipt_for_path(
-        packet_path: String,
-    ) -> RunGraphDispatchReceipt {
+    fn reconciled_pack_dispatch_receipt_for_path(packet_path: String) -> RunGraphDispatchReceipt {
         let mut receipt = sample_dispatch_receipt("run-reconciled-pack-context");
         receipt.dispatch_packet_path = Some(packet_path);
         receipt
@@ -4624,9 +4623,8 @@ mod tests {
         let external_packet = external_root.join("outside-packet.json");
         write_reconciled_pack_packet(&external_packet, "outside-state-root", None);
 
-        let receipt = reconciled_pack_dispatch_receipt_for_path(
-            external_packet.display().to_string(),
-        );
+        let receipt =
+            reconciled_pack_dispatch_receipt_for_path(external_packet.display().to_string());
         let error = store
             .reconciled_pack_dispatch_context(&receipt)
             .expect_err("out-of-root packet should be rejected");

@@ -185,10 +185,9 @@ pub(crate) fn dispatch_packet_repair_refs_from_path(path: &str) -> DispatchPacke
     let Ok(project_root) = std::env::current_dir() else {
         return DispatchPacketRepairRefs::default();
     };
-    let Some(packet) = crate::status_surface::dispatch_packet_json_from_project_path(
-        &project_root,
-        path,
-    ) else {
+    let Some(packet) =
+        crate::status_surface::dispatch_packet_json_from_project_path(&project_root, path)
+    else {
         return DispatchPacketRepairRefs::default();
     };
     DispatchPacketRepairRefs {
@@ -426,10 +425,10 @@ mod tests {
     #[test]
     fn consume_resume_error_payload_does_not_read_outside_packet_refs() {
         let project_root = std::env::current_dir().expect("current dir");
-        let outside_root = project_root
-            .parent()
-            .expect("project parent")
-            .join(format!("vida-taskflow-diagnostics-outside-{}", std::process::id()));
+        let outside_root = project_root.parent().expect("project parent").join(format!(
+            "vida-taskflow-diagnostics-outside-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&outside_root).expect("outside root should create");
         let packet_path = outside_root.join("packet.json");
         std::fs::write(
@@ -455,7 +454,10 @@ mod tests {
             payload["blocker_codes"],
             serde_json::json!(["dispatch_packet_contract_invalid"])
         );
-        assert_eq!(payload["artifact_refs"]["dispatch_packet_path"], packet_path.display().to_string());
+        assert_eq!(
+            payload["artifact_refs"]["dispatch_packet_path"],
+            packet_path.display().to_string()
+        );
         assert!(payload["artifact_refs"]["run_id"].is_null());
         assert!(payload["artifact_refs"]["task_id"].is_null());
         assert!(payload["next_actions"][0]

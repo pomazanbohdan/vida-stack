@@ -1147,10 +1147,8 @@ pub(crate) fn downstream_activation_fields(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
 ) -> (String, Option<String>, Option<String>, Option<String>) {
-    let policy_dispatch_target = policy_dispatch_target_for_admissibility(
-        &role_selection.execution_plan,
-        dispatch_target,
-    );
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(&role_selection.execution_plan, dispatch_target);
     match policy_dispatch_target.as_str() {
         "spec-pack" | "work-pool-pack" | "dev-pack" => (
             "taskflow_pack".to_string(),
@@ -1165,8 +1163,11 @@ pub(crate) fn downstream_activation_fields(
         ),
         "closure" => ("closure".to_string(), None, None, None),
         _ => {
-            let lane = dispatch_contract_lane(&role_selection.execution_plan, &policy_dispatch_target)
-                .or_else(|| dispatch_contract_lane(&role_selection.execution_plan, dispatch_target));
+            let lane =
+                dispatch_contract_lane(&role_selection.execution_plan, &policy_dispatch_target)
+                    .or_else(|| {
+                        dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)
+                    });
             (
                 "agent_lane".to_string(),
                 Some("vida agent-init".to_string()),
@@ -1374,7 +1375,8 @@ fn backend_admissibility_key_for_dispatch_target(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> String {
-    let policy_dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
     let canonical_target = canonical_dispatch_target_name(&policy_dispatch_target);
     match canonical_target.as_str() {
         "implementer" | "writer" => "implementation".to_string(),
@@ -2006,12 +2008,10 @@ pub(crate) fn sync_receipt_configured_activation_assignment(
         return;
     }
     let execution_plan = &role_selection.execution_plan;
-    let policy_target = policy_dispatch_target_for_admissibility(
-        execution_plan,
-        &receipt.dispatch_target,
-    );
-    let canonical_target = dispatch_target_for_runtime_role(execution_plan, &policy_target)
-        .unwrap_or(policy_target);
+    let policy_target =
+        policy_dispatch_target_for_admissibility(execution_plan, &receipt.dispatch_target);
+    let canonical_target =
+        dispatch_target_for_runtime_role(execution_plan, &policy_target).unwrap_or(policy_target);
     let lane_activation = dispatch_contract_lane(execution_plan, &canonical_target)
         .map(dispatch_contract_lane_activation);
     let (assignment, _) =
@@ -2207,10 +2207,8 @@ pub(crate) fn preferred_selected_model_profile_for_dispatch_target(
     dispatch_target: &str,
     selected_backend: Option<&str>,
 ) -> Option<String> {
-    let dispatch_target = policy_dispatch_target_for_admissibility(
-        &role_selection.execution_plan,
-        dispatch_target,
-    );
+    let dispatch_target =
+        policy_dispatch_target_for_admissibility(&role_selection.execution_plan, dispatch_target);
     selected_backend
         .and_then(|backend_id| {
             route_selected_model_profile_for_backend(
@@ -10786,9 +10784,7 @@ host_environment:
 
         let error = validate_runtime_dispatch_packet_contract(&packet, "test packet")
             .expect_err("malformed top-level read_only_paths should fail closed");
-        assert!(error.contains(
-            "top-level read_only_paths must be an array of non-empty strings"
-        ));
+        assert!(error.contains("top-level read_only_paths must be an array of non-empty strings"));
     }
 
     #[test]
@@ -10815,23 +10811,21 @@ host_environment:
         let mut malformed_owned_paths = packet.clone();
         malformed_owned_paths["delivery_task_packet"]["owned_paths"] =
             serde_json::json!(["allowed", 0]);
-        let error = validate_runtime_dispatch_packet_contract(&malformed_owned_paths, "test packet")
-            .expect_err("malformed active packet body owned_paths should fail closed");
-        assert!(error.contains(
-            "active packet body owned_paths must be an array of non-empty strings"
-        ));
+        let error =
+            validate_runtime_dispatch_packet_contract(&malformed_owned_paths, "test packet")
+                .expect_err("malformed active packet body owned_paths should fail closed");
+        assert!(
+            error.contains("active packet body owned_paths must be an array of non-empty strings")
+        );
 
         let mut malformed_read_only_paths = packet;
         malformed_read_only_paths["delivery_task_packet"]["read_only_paths"] =
             serde_json::json!(["docs/process", 0]);
-        let error = validate_runtime_dispatch_packet_contract(
-            &malformed_read_only_paths,
-            "test packet",
-        )
-        .expect_err("malformed active packet body read_only_paths should fail closed");
-        assert!(error.contains(
-            "active packet body read_only_paths must be an array of non-empty strings"
-        ));
+        let error =
+            validate_runtime_dispatch_packet_contract(&malformed_read_only_paths, "test packet")
+                .expect_err("malformed active packet body read_only_paths should fail closed");
+        assert!(error
+            .contains("active packet body read_only_paths must be an array of non-empty strings"));
     }
 
     #[test]
@@ -22914,17 +22908,16 @@ agent_system:
     #[test]
     fn preserves_lane_policy_for_dispatch_target_alias_build_downstream_receipt() {
         let mut role_selection = mixed_backend_role_selection();
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] =
-            json!({
-                "implementer": {
-                    "dispatch_target": "dev",
-                    "task_class": "implementation",
-                    "activation": {
-                        "activation_agent_type": "junior",
-                        "activation_runtime_role": "worker"
-                    }
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = json!({
+            "implementer": {
+                "dispatch_target": "dev",
+                "task_class": "implementation",
+                "activation": {
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
                 }
-            });
+            }
+        });
 
         let receipt = executed_agent_lane_receipt(
             "implementer",
@@ -22934,19 +22927,15 @@ agent_system:
             Some("dev"),
         );
 
-        let downstream =
-            build_downstream_dispatch_receipt(&role_selection, &receipt)
-                .expect("alias downstream receipt should build");
+        let downstream = build_downstream_dispatch_receipt(&role_selection, &receipt)
+            .expect("alias downstream receipt should build");
 
         assert_eq!(downstream.dispatch_target, "dev");
         assert_eq!(
             downstream.selected_backend.as_deref(),
             Some("internal_subagents")
         );
-        assert_eq!(
-            downstream.activation_agent_type.as_deref(),
-            Some("junior")
-        );
+        assert_eq!(downstream.activation_agent_type.as_deref(), Some("junior"));
         assert_eq!(
             downstream.activation_runtime_role.as_deref(),
             Some("worker")

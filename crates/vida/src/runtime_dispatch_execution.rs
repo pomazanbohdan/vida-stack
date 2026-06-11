@@ -606,10 +606,11 @@ fn ready_external_readiness_fallback_backend(
         &role_selection.execution_plan,
         dispatch_target,
     )?;
-    let policy_dispatch_target = crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
-        &role_selection.execution_plan,
-        dispatch_target,
-    );
+    let policy_dispatch_target =
+        crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
+            &role_selection.execution_plan,
+            dispatch_target,
+        );
     let mut candidates = Vec::new();
     push_unique_backend_candidate(
         &mut candidates,

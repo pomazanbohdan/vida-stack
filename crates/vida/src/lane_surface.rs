@@ -1102,7 +1102,8 @@ fn pending_host_bridge_next_action(
     let result_path =
         crate::runtime_dispatch_state::normalize_persisted_runtime_path(dispatch_result_path);
     let result_path =
-        canonicalize_existing_regular_state_path(&state_root, &result_path, "dispatch result").ok()?;
+        canonicalize_existing_regular_state_path(&state_root, &result_path, "dispatch result")
+            .ok()?;
     let result = read_host_bridge_request_at_path(&result_path).ok()?;
     let request = host_bridge_request_object(&result)?;
     let request_path = host_bridge_path_string(request, "request_path")
@@ -2334,8 +2335,7 @@ pub(crate) fn missing_task_stale_blocked_run_can_retire(
         && lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready");
 
-    (receipt.dispatch_status == "blocked" && blocked_or_running)
-        || prelaunch_packet_ready
+    (receipt.dispatch_status == "blocked" && blocked_or_running) || prelaunch_packet_ready
 }
 
 const MAX_LANE_PACKET_READ_BYTES: u64 = 1024 * 1024;
@@ -2624,8 +2624,7 @@ fn trusted_host_bridge_completion_request_context(
     let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
         host_bridge_path_string(&request, "packet_path")?,
     );
-    let packet_path =
-        canonicalize_existing_regular_state_path(state_root, &packet_path, "packet")?;
+    let packet_path = canonicalize_existing_regular_state_path(state_root, &packet_path, "packet")?;
     if let Some(selected_backend) = receipt.selected_backend.as_deref() {
         let backend_id = host_bridge_path_string(&request, "backend_id")?;
         if backend_id != selected_backend {
@@ -2846,8 +2845,11 @@ fn validated_host_bridge_paths_from_receipt(
     };
     let dispatch_result_path =
         crate::runtime_dispatch_state::normalize_persisted_runtime_path(dispatch_result_path);
-    let dispatch_result_path =
-        canonicalize_existing_regular_state_path(state_root, &dispatch_result_path, "dispatch result")?;
+    let dispatch_result_path = canonicalize_existing_regular_state_path(
+        state_root,
+        &dispatch_result_path,
+        "dispatch result",
+    )?;
     let result = read_host_bridge_request_at_path(&dispatch_result_path)?;
     let paths = match host_bridge_request_paths_from_dispatch_result(&result) {
         Ok(paths) => paths,
@@ -7212,8 +7214,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lane_retire_rejects_exception_takeover_missing_task_stale_blocked_run_without_closed_unit()
-    {
+    async fn lane_retire_rejects_exception_takeover_missing_task_stale_blocked_run_without_closed_unit(
+    ) {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -7366,7 +7368,8 @@ mod tests {
         assert_eq!(receipt.lane_status, seeded_receipt.lane_status);
         assert_eq!(receipt.dispatch_target, seeded_receipt.dispatch_target);
         assert_eq!(
-            receipt.dispatch_packet_path, seeded_receipt.dispatch_packet_path
+            receipt.dispatch_packet_path,
+            seeded_receipt.dispatch_packet_path
         );
         let binding = store
             .run_graph_continuation_binding(run_id)
@@ -7507,7 +7510,8 @@ mod tests {
         assert_eq!(receipt.lane_status, seeded_receipt.lane_status);
         assert_eq!(receipt.dispatch_target, seeded_receipt.dispatch_target);
         assert_eq!(
-            receipt.dispatch_packet_path, seeded_receipt.dispatch_packet_path
+            receipt.dispatch_packet_path,
+            seeded_receipt.dispatch_packet_path
         );
         let binding = store
             .run_graph_continuation_binding(run_id)
@@ -7681,7 +7685,8 @@ mod tests {
         assert_eq!(receipt.lane_status, seeded_receipt.lane_status);
         assert_eq!(receipt.dispatch_target, seeded_receipt.dispatch_target);
         assert_eq!(
-            receipt.dispatch_packet_path, seeded_receipt.dispatch_packet_path
+            receipt.dispatch_packet_path,
+            seeded_receipt.dispatch_packet_path
         );
         let binding = store
             .run_graph_continuation_binding(run_id)
@@ -9419,8 +9424,9 @@ mod tests {
             let symlink_request_path = root.join("host-tool-bridge/requests/symlink.json");
             std::os::unix::fs::symlink(&outside_request_path, &symlink_request_path)
                 .expect("create symlink request");
-            let symlink_error = read_host_bridge_request_quickly(root.clone(), symlink_request_path)
-                .expect_err("symlink request should fail");
+            let symlink_error =
+                read_host_bridge_request_quickly(root.clone(), symlink_request_path)
+                    .expect_err("symlink request should fail");
             assert!(symlink_error.contains("regular file"), "{symlink_error}");
         }
 
@@ -9429,17 +9435,15 @@ mod tests {
     }
 
     #[test]
-    fn read_lane_packet_reads_contained_packet_and_rejects_traversal_symlink_and_oversized_file()
-    {
+    fn read_lane_packet_reads_contained_packet_and_rejects_traversal_symlink_and_oversized_file() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let pid = std::process::id();
-        let root = std::env::temp_dir().join(format!(
-            "vida-lane-surface-lane-packet-read-{pid}-{nanos}"
-        ));
+        let root =
+            std::env::temp_dir().join(format!("vida-lane-surface-lane-packet-read-{pid}-{nanos}"));
         std::fs::create_dir_all(&root).expect("create packet root");
 
         let packet_path = root.join("runtime-consumption/packets/packet.json");
@@ -9457,10 +9461,7 @@ mod tests {
         let packet = read_lane_packet(&root, packet_path.to_str().expect("utf-8"))
             .expect("contained packet should read");
         assert_eq!(packet["run_id"], "run-contained");
-        assert_eq!(
-            packet["delivery_task_packet"]["task_id"],
-            "task-contained"
-        );
+        assert_eq!(packet["delivery_task_packet"]["task_id"], "task-contained");
 
         let outside_root = std::env::temp_dir().join(format!(
             "vida-lane-surface-lane-packet-outside-{pid}-{nanos}"
@@ -9477,9 +9478,8 @@ mod tests {
             .to_string(),
         )
         .expect("write outside packet");
-        let outside_error =
-            read_lane_packet(&root, outside_packet_path.to_str().expect("utf-8"))
-                .expect_err("outside-root packet should fail");
+        let outside_error = read_lane_packet(&root, outside_packet_path.to_str().expect("utf-8"))
+            .expect_err("outside-root packet should fail");
         assert!(
             outside_error.contains("outside VIDA state root"),
             "{outside_error}"
@@ -9490,9 +9490,8 @@ mod tests {
             .join("packets")
             .join(".")
             .join("dot-segment.json");
-        let dot_segment_error =
-            read_lane_packet(&root, dot_segment_path.to_str().expect("utf-8"))
-                .expect_err("dot-segment packet should fail");
+        let dot_segment_error = read_lane_packet(&root, dot_segment_path.to_str().expect("utf-8"))
+            .expect_err("dot-segment packet should fail");
         assert!(
             dot_segment_error.contains("dot-segment"),
             "{dot_segment_error}"

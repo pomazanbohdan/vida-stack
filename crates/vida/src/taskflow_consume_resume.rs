@@ -17013,13 +17013,10 @@ agent_system:
     #[test]
     fn consume_continue_resume_error_payload_does_not_read_outside_packet_refs() {
         let project_root = std::env::current_dir().expect("current dir");
-        let outside_root = project_root
-            .parent()
-            .expect("project parent")
-            .join(format!(
-                "vida-consume-resume-outside-packet-{}",
-                std::process::id()
-            ));
+        let outside_root = project_root.parent().expect("project parent").join(format!(
+            "vida-consume-resume-outside-packet-{}",
+            std::process::id()
+        ));
         let packet_path = outside_root.join("runtime-consumption/dispatch-packets/run-1.json");
         fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
             .expect("create packet dir");
@@ -17281,9 +17278,8 @@ agent_system:
     #[tokio::test]
     async fn resolve_runtime_consumption_resume_inputs_for_run_id_fails_closed_when_explicit_task_graph_binding_mismatches_dispatch_packet_lineage(
     ) {
-        let root = unique_dispatch_packet_test_root(
-            "vida-consume-resume-explicit-binding-mismatch",
-        );
+        let root =
+            unique_dispatch_packet_test_root("vida-consume-resume-explicit-binding-mismatch");
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let run_id = "run-explicit-binding-mismatch";
@@ -17994,8 +17990,7 @@ agent_system:
     #[tokio::test]
     async fn resolve_runtime_consumption_resume_inputs_for_run_id_allows_matching_explicit_task_graph_binding_lineage(
     ) {
-        let root =
-            unique_dispatch_packet_test_root("vida-consume-resume-explicit-binding-match");
+        let root = unique_dispatch_packet_test_root("vida-consume-resume-explicit-binding-match");
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let run_id = "run-explicit-binding-match";
@@ -19208,8 +19203,7 @@ agent_system:
 
     #[test]
     fn read_dispatch_packet_repairs_mismatched_specification_owned_scope_before_validation() {
-        let packet_root =
-            unique_dispatch_packet_test_root("vida-specification-owned-scope-packet");
+        let packet_root = unique_dispatch_packet_test_root("vida-specification-owned-scope-packet");
         let packet_path = packet_root.join("packet.json");
         fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
             .expect("create packet dir");
@@ -19265,8 +19259,7 @@ agent_system:
 
     #[test]
     fn read_dispatch_packet_rejects_widened_single_task_move_scope() {
-        let packet_root =
-            unique_dispatch_packet_test_root("vida-widened-single-task-move-packet");
+        let packet_root = unique_dispatch_packet_test_root("vida-widened-single-task-move-packet");
         let packet_path = packet_root.join("packet.json");
         fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
             .expect("create packet dir");

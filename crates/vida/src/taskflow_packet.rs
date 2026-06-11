@@ -947,8 +947,8 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_taskflow_packet_render_payload, build_taskflow_packet_repair_payload,
-        hydrate_dispatch_packet_owned_paths_from_task, parse_packet_repair_args,
-        packet_repair_projection_name, repair_delivery_task_packet_identity,
+        hydrate_dispatch_packet_owned_paths_from_task, packet_repair_projection_name,
+        parse_packet_repair_args, repair_delivery_task_packet_identity,
         repair_persisted_dispatch_packet_from_task, resolve_latest_packet_run_id,
         resolve_packet_render_run_id, run_taskflow_packet,
     };
@@ -1187,14 +1187,15 @@ mod tests {
     }
 
     fn packet_repair_dispatch_packet(run_id: &str) -> serde_json::Value {
-        let mut delivery_task_packet = crate::runtime_dispatch_packets::runtime_delivery_task_packet(
-            run_id,
-            "implementer",
-            "worker",
-            "implementation",
-            "delivery",
-            "bounded repair test",
-        );
+        let mut delivery_task_packet =
+            crate::runtime_dispatch_packets::runtime_delivery_task_packet(
+                run_id,
+                "implementer",
+                "worker",
+                "implementation",
+                "delivery",
+                "bounded repair test",
+            );
         delivery_task_packet["owned_paths"] = serde_json::json!([]);
         serde_json::json!({
             "packet_kind": "runtime_dispatch_packet",
@@ -1221,7 +1222,9 @@ mod tests {
             fs::create_dir_all(&root).expect("create state root");
             let mut task = packet_repair_task_with_metadata();
             task.id = task_id.to_string();
-            let packet_path = root.join("runtime-consumption").join(format!("{lookup_run_id}.json"));
+            let packet_path = root
+                .join("runtime-consumption")
+                .join(format!("{lookup_run_id}.json"));
             fs::create_dir_all(packet_path.parent().expect("packet parent"))
                 .expect("create packet parent");
             let original_packet = packet.clone();
@@ -1253,9 +1256,10 @@ mod tests {
                     })
                     .await
                     .expect("persist status row");
-                let mut receipt_row = RunGraphDispatchReceiptStored::from(
-                    packet_repair_receipt(receipt_row_run_id, &packet_path),
-                );
+                let mut receipt_row = RunGraphDispatchReceiptStored::from(packet_repair_receipt(
+                    receipt_row_run_id,
+                    &packet_path,
+                ));
                 receipt_row.run_id = receipt_row_run_id.to_string();
                 let _: Option<RunGraphDispatchReceiptStored> = raw_db
                     .upsert(("run_graph_dispatch_receipt", lookup_run_id))
@@ -1298,12 +1302,14 @@ mod tests {
                 packet["packet_template_kind"] = serde_json::json!(value)
             }
             PacketMutation::MissingTemplateKind => {
-                packet.as_object_mut()
+                packet
+                    .as_object_mut()
                     .expect("packet object")
                     .remove("packet_template_kind");
             }
             PacketMutation::MissingActiveBody => {
-                packet.as_object_mut()
+                packet
+                    .as_object_mut()
                     .expect("packet object")
                     .remove("delivery_task_packet");
             }
@@ -1593,13 +1599,11 @@ mod tests {
                 serde_json::from_str(&projection).expect("decode projection");
             assert_eq!(payload["status"], "blocked");
             assert_eq!(payload["from_task"], task.id);
-            assert!(
-                payload["blocker_codes"]
-                    .as_array()
-                    .expect("blocker codes")
-                    .iter()
-                    .any(|code| code == "dispatch_packet_repair_failed")
-            );
+            assert!(payload["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "dispatch_packet_repair_failed"));
             let repair_error = payload["repair_error"].as_str().expect("repair error");
             assert!(
                 repair_error.contains("Persisted dispatch packet run_id does not match"),
