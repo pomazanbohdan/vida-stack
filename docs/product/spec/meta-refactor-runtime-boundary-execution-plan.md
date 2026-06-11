@@ -592,11 +592,20 @@ These are the source-plan anchors this tracker is tied to:
     graph-summary public cache binding/smoke is added or explicitly scoped as a
     follow-up; validator score 9/10, 33 tool invocations across 9 batches, token
     usage not exposed.
-  - Root follow-up `rt003-graph-summary-cache-public-smoke` records that current
-    evidence did not find a production graph-summary read/write binding for
-    `taskflow-graph-summary-latest`; RT-003 remains scoped to the shared cache
-    invariant plus the existing status route use of `read_state_stale_recent_json_projection`.
-  - Proof passed: `cargo test -p vida operator_projection_cache -- --nocapture`
+  - Root follow-up `rt003-graph-summary-cache-public-smoke` verified the public
+    `vida taskflow graph-summary --json` route binding through
+    `run_taskflow_graph_summary`: it writes a stale
+    `taskflow-graph-summary-latest` pass cache, touches the state mutation
+    marker, recomputes from the authoritative store, and returns blocked instead
+    of accepting the stale cache.
+  - `gpt-5.4-mini/xhigh` executor `Halley` was dispatched for the follow-up but
+    did not return within the bounded wait; score pending until shutdown/final
+    evidence is available. Root verified the existing public-route smoke under
+    exception takeover.
+  - Proof passed: `cargo test -p vida
+    graph_summary_rejects_state_marker_stale_cached_projection -- --nocapture`,
+    `cargo test -p vida graph_summary_cache_requires_current_projection_contract_version
+    -- --nocapture`, `cargo test -p vida operator_projection_cache -- --nocapture`
     with 18 tests, `cargo fmt --all -- --check`, `cargo build`, and
     `git diff --check`.
 - RT-004 delegation scorecard:
