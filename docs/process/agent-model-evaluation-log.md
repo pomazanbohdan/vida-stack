@@ -246,6 +246,99 @@ Next-task selection rule:
   the formatter blocker is removed. Keep waiting for the mini preflight long
   enough to classify its result before parent proof closure.
 
+## 2026-06-12 - wave-0-runtime-proof-host-bridge-stale-path-fix
+
+Scope:
+- Task: `wave-0-runtime-proof-host-bridge-stale-path-fix`
+- Parent: `wave-0-runtime-tests`
+- Commit: `292ca411e`
+- Files: `crates/vida/src/agent_dispatch_surface.rs`,
+  `crates/vida/src/init_surfaces.rs`,
+  `crates/vida/src/taskflow_consume_resume.rs`
+- Proof:
+  - `cargo +1.95.0 fmt --all -- --check`
+  - `git diff --cached --check`
+  - `cargo +1.95.0 test -p vida --test doctor_surface_contract_smoke -- --nocapture`
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The fix was small but touched shared
+  runtime authority paths, so root kept implementation local and used exact
+  failing smoke tests as the primary feedback loop.
+- Validator: local focused smoke proof, 9/10. `doctor_surface_contract_smoke`
+  passed with 37 tests and 2 ignored tests after the fix.
+- Scout: `gpt-5.4-mini` read-only explorer, 8/10. It correctly identified that
+  RT coverage already existed and that `wave-0-runtime-tests` needed proof,
+  not new test files. Host did not expose token counts.
+
+Post-Task Self-Analysis:
+- Worked: clean-HEAD reproduction separated real proof failures from dirty
+  worktree suspicion before patching.
+- Waste: broad `boot_smoke` was launched too early after focused doctor fixes
+  and produced a large unrelated failure set; future Wave 0 proof should run
+  focused failing package first, then broaden in smaller batches.
+- Risk: `agent_dispatch_surface.rs` already had an unstaged host-bridge
+  attach-artifact hunk; the final commit included host-bridge surface changes
+  together, while unrelated dirty files remain unstaged.
+- Next change: classify the remaining `boot_smoke` baseline blocker as a
+  separate proof blocker for `wave-0-runtime-tests`; do not close the parent
+  until declared proof is green.
+- Docs update: this scorecard records the new dynamic proof-isolation criteria;
+  no fixed instruction change is needed unless the pattern repeats.
+- workflow_score_10: 8/10. The focused defect closed with proof, but broad proof
+  ordering created avoidable noise.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-proof-host-bridge-stale-path-fix`.
+2. Wave/parent closure distance: pass, direct blocker under
+   `wave-0-runtime-tests`.
+3. Scope and non-goals stable: pass, host-bridge/path/stale-run proof only.
+4. Dirty worktree handled: partial, unrelated dirty files preserved; one
+   pre-existing host-bridge hunk shared the same staged surface.
+5. Executor cheapest capable: pass, local root fix after exact reproduction.
+6. Validator matched risk: pass, full `doctor_surface_contract_smoke`.
+7. Prompt packet shape: not applicable, no write-producing subagent.
+8. Agent handles: pass, scout was closed after result capture.
+9. Token/tool/step telemetry: partial, scout tool calls visible; tokens hidden.
+10. Avoidable commands: partial, broad `boot_smoke` ran before proof isolation.
+11. Proof strength: pass for closed child; parent proof still blocked.
+12. Public/release proof: not applicable.
+13. Debug build: implicit through cargo test compile; broad build still pending.
+14. TaskFlow state: pass, child task created and closed with explicit evidence.
+15. Staging by invariant: partial, staged host-bridge surface included an
+    already-present same-surface hunk.
+16. Publication authorization: pass, active epic repeatable push instruction.
+17. Evaluation docs: pass, this scorecard.
+18. Parent/wave metrics: pass, epic progress after close is 88/217 tasks
+    closed, 40.55%; waves closed remain 0/13.
+19. New defects/follow-ups: remaining `boot_smoke` baseline blocker under
+    `wave-0-runtime-tests`.
+20. Next routing rule: pass, continue with the remaining declared proof blocker
+    before `wave-0-baseline-proof`.
+
+Dynamic criteria created from this session segment:
+1. Clean-HEAD criterion: when dirty files plausibly explain proof failures, run
+   the same focused proof against clean `HEAD` before attributing blame.
+2. Same-surface staging criterion: if an existing unstaged hunk shares the same
+   runtime surface as the fix, explicitly record whether it was staged or left
+   unstaged and why.
+3. Broad-proof escalation criterion: after focused proof is green, broaden one
+   package at a time; if the first broad package explodes, stop and classify the
+   new blocker instead of mixing it into the just-closed child task.
+
+Meta-analysis remediation:
+- Waste remediation: next work starts from the `boot_smoke` failure set, not from
+  the already-green doctor smoke tests.
+- Risk remediation: keep unrelated dirty files unstaged and re-check `git
+  status --short` before every commit.
+- Documentation remediation: dynamic criteria are enough for now; promote to
+  fixed checklist only if another broad-proof noise event repeats.
+
+Next-task selection rule:
+- Continue `wave-0-runtime-tests` by isolating the remaining `boot_smoke`
+  blocker. Do not close `wave-0-runtime-tests` or `wave-0-baseline-proof` until
+  the declared proof bundle passes.
+
 ## 2026-06-12 - pr355-host-bridge-artifact-state-root
 
 Scope:
