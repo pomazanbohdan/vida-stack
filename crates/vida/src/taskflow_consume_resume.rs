@@ -2368,16 +2368,6 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
             return Ok(());
         }
     }
-    if active_receipt.as_ref().is_some_and(|receipt| {
-        receipt.run_id == run_id
-            && receipt.downstream_dispatch_ready
-            && receipt
-                .downstream_dispatch_packet_path
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty())
-    }) {
-        return Ok(());
-    }
     if task_missing {
         return Err(stale_missing_task_run_graph_resume_error(
             &status,
@@ -12762,6 +12752,25 @@ agent_system:
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let run_id = "run-downstream-packet-ready";
+        let labels: Vec<String> = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: run_id,
+                title: "Downstream packet ready",
+                display_id: None,
+                description: "receipt-backed downstream packet ready",
+                issue_type: "epic",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create TaskFlow authority");
         let mut status =
             crate::taskflow_run_graph::default_run_graph_status(run_id, "dev-pack", "delivery");
         status.task_id = run_id.to_string();
@@ -12803,7 +12812,7 @@ agent_system:
             downstream_dispatch_ready: true,
             downstream_dispatch_blockers: Vec::new(),
             downstream_dispatch_packet_path: Some(packet_path.display().to_string()),
-            downstream_dispatch_status: None,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
             downstream_dispatch_result_path: None,
             downstream_dispatch_trace_path: None,
             downstream_dispatch_executed_count: 1,
@@ -12824,6 +12833,73 @@ agent_system:
             .expect(
                 "receipt-backed downstream packet_ready should allow downstream resume validation",
             );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn validate_run_graph_resume_state_for_downstream_packet_rejects_missing_task_with_weak_downstream_receipt(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-downstream-missing-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-downstream-missing-task";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "dev-pack", "delivery");
+        status.task_id = "task-missing-downstream-authority".to_string();
+        status.active_node = "dev-pack".to_string();
+        status.next_node = None;
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "dev_pack_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_implementer".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "conversation_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale run graph status");
+
+        let packet_dir = root.join("runtime-consumption/downstream-dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create downstream packet dir");
+        let packet_path = packet_dir.join("run-downstream-missing-task.json");
+        fs::write(&packet_path, "{}").expect("write downstream packet placeholder");
+        let mut receipt = taskflow_consume_resume_test_receipt("taskflow_pack", "executed");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "work-pool-pack".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_blockers = vec!["attacker_controlled_blocker".to_string()];
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist weak downstream dispatch receipt");
+
+        let error = validate_run_graph_resume_state_for_downstream_packet(&store, run_id)
+            .await
+            .expect_err(
+                "missing TaskFlow task must fail closed before weak downstream receipt evidence",
+            );
+        assert!(
+            error.contains("Stale missing-task run graph `run-downstream-missing-task`"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("vida lane retire run-downstream-missing-task"),
+            "unexpected error: {error}"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
