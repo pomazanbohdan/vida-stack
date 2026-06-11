@@ -1,6 +1,6 @@
 # META Runtime Boundary Refactor Baseline Tracking Document
 
-Status: `IO-001 and DOC-001 hardened; targeted proofs green; broader Wave 0 batch still pending`
+Status: `IO-001, DOC-001, and HB-005 hardened; targeted proofs green; broader Wave 0 batch still pending`
 
 ## Purpose
 
@@ -28,6 +28,9 @@ This file is intentionally a tracker, not a rewrite of the plan. The wave defini
 - DOC-001 now hardens `docflow closeout --changed` / `docflow-cli closeout --changed`
   against repo-local `core.fsmonitor` helpers by disabling fsmonitor and
   untracked-cache in the git status invocation.
+- HB-005 now hardens `vida lane complete` so implementation scope validation
+  derives allowed `owned_paths` from the immutable dispatch packet / TaskFlow
+  authority instead of mutable host bridge request JSON.
 - HB-001 now proves the public `vida agent host-bridge --request ... --state-dir ...`
   path fail-closes on an attacker request path outside the explicit trusted
   state root; the public run exit and shared payload helper keep
@@ -42,6 +45,8 @@ This file is intentionally a tracker, not a rewrite of the plan. The wave defini
   - `cargo test -p vida host_bridge_taskflow_implementation_artifacts_blocks_invalid_artifact_evidence -- --nocapture`
   - `cargo test -p vida host_bridge_missing_receipt`
   - `cargo test -p vida host_bridge_missing_receipt -- --nocapture`
+  - `cargo test -p vida host_bridge_implementation_scope_uses_immutable_packet`
+  - `cargo test -p vida host_bridge_implementation_scope_uses_immutable_packet -- --nocapture`
   - `cargo build`
 - Host-bridge authority proof was re-run after the HB-002 production authority
   fix and now blocks earlier on `host_bridge_dispatch_receipt_missing` before
@@ -178,6 +183,13 @@ Expected:
   status = blocked
   blocker_codes contains implementation_attempt_scope_guard_violation
   scope_validation.owned_paths = ["allowed"]
+
+Implementation status:
+  covered by `crates/vida/src/lane_surface.rs::host_bridge_implementation_scope_uses_immutable_packet`
+  `vida lane complete` now derives implementation scope from the immutable
+  dispatch packet / TaskFlow-owned paths, not mutable host bridge request JSON.
+  mutable request `owned_paths` no longer widen `scope_validation.owned_paths`;
+  broader request-owned scope still blocks against the immutable packet scope.
 ```
 
 #### RT-001: terminal missing-task closure needs clean receipt
