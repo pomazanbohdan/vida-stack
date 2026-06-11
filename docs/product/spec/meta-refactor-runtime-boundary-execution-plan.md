@@ -77,6 +77,21 @@ This file is intentionally a tracker, not a rewrite of the plan. The wave defini
   artifact attachment.
 - This rework still sits inside the broader Wave 0 batch; the full batch proof
   remains pending.
+- `wave-0-routing-tests` recovery note: the canonical dev-team dispatch preview
+  is currently blocked by `packet_materialization_failed:task=wave-0-routing-tests`
+  with repeated `materialized packet dispatch_target mismatch: expected coach,
+  got coach_test_gate` evidence. The lane exception takeover is active only for
+  the Wave 0 smoke-test/tracker scope:
+  `crates/docflow-cli/tests/cli_smoke.rs`, `crates/vida/tests/boot_smoke.rs`,
+  `crates/vida/tests/doctor_surface_contract_smoke.rs`,
+  `crates/vida/tests/task_smoke.rs`, and this tracker. Production source edits
+  in `crates/vida/src/**` must be rebound to the matching runtime-source task
+  before modification.
+- No new weak red fixture was added for the `coach_test_gate` mismatch in this
+  slice because the public CLI reproduction attempt did not reach the
+  `coach_test_gate` materialization branch without production-source recovery.
+  Keep the blocker as runtime evidence until a source-scoped task can fix the
+  canonicalization path or supply a faithful public CLI fixture.
 
 ## Wave 0 Goal
 
