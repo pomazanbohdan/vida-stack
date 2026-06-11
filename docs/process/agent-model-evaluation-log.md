@@ -150,6 +150,102 @@ Next-task selection rule:
 - After this task, every closed task must run the post-task checklist and record
   scorecard evidence before unrelated work starts.
 
+## 2026-06-12 - wave-0-baseline-rustfmt-normalization
+
+Scope:
+- Task: `wave-0-baseline-rustfmt-normalization`
+- Parent: `wave-0-baseline-proof`
+- Commit: `473064139`
+- Files: `crates/vida/src/lane_surface.rs`,
+  `crates/vida/src/runtime_dispatch_execution.rs`,
+  `crates/vida/src/runtime_dispatch_state.rs`,
+  `crates/vida/src/state_store_run_graph_summary.rs`,
+  `crates/vida/src/taskflow_consume_resume.rs`,
+  `crates/vida/src/taskflow_operator_diagnostics.rs`,
+  `crates/vida/src/taskflow_packet.rs`
+- Proof:
+  - `cargo +1.95.0 fmt --all -- --check --files-with-diff`
+  - `cargo +1.95.0 fmt --all`
+  - `cargo +1.95.0 fmt --all -- --check`
+  - `git diff --cached --check`
+  - `vida task closure-ready wave-0-baseline-rustfmt-normalization --json`
+
+Observed model results:
+- Executor: local orchestrator mechanical formatting, 9/10. No model executor
+  was launched because the proof blocker was an exact rustfmt drift list and the
+  safe action was deterministic. Tokens/tool-call counts are not exposed by the
+  host.
+- Validator: local rustfmt check plus cached diff hygiene, 9/10. It verified
+  the formatting invariant and staged only the seven files reported by the
+  pre-format `--files-with-diff` command.
+- Agent state: the mini read-only Wave 0 proof preflight was still running and
+  not used for this mechanical formatting closure.
+
+Post-Task Self-Analysis:
+- Worked: `--files-with-diff` isolated the real rustfmt blocker and avoided
+  broad guessing.
+- Waste: the first full proof run failed on fmt before other commands; future
+  proof bundles should preflight `cargo fmt --all -- --check --files-with-diff`
+  when the worktree is dirty.
+- Risk: `cargo fmt --all` also formatted pre-existing dirty files. They were
+  deliberately left unstaged, but the working tree now contains formatted dirty
+  hunks that still need ownership classification before later commits.
+- Next change: before broad proof bundles in a dirty worktree, run the cheap
+  hunk/format preflight and stage only pre-identified invariant files.
+- Docs update: no fixed-doc change needed; this is covered by the dynamic
+  dirty-worktree and proof-bundle criteria.
+- workflow_score_10: 8/10. The blocker was resolved quickly, but the broad fmt
+  command touched dirty files and required extra staging discipline.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, `wave-0-baseline-rustfmt-normalization`.
+2. Wave/parent closure distance: pass, unblocked `wave-0-baseline-proof` fmt.
+3. Scope and non-goals stable: pass, rustfmt-only normalization.
+4. Dirty worktree handled: partial, dirty files were preserved unstaged but were
+   formatted by the tool.
+5. Executor cheapest capable: pass, deterministic local command.
+6. Validator matched risk: pass, rustfmt and diff hygiene.
+7. Prompt packet shape: not applicable, no executor prompt.
+8. Agent handles: partial, unrelated preflight mini still running.
+9. Token/tool/step telemetry: partial, host does not expose exact root tokens.
+10. Avoidable commands: pass, identified fmt preflight ordering improvement.
+11. Proof strength: pass for formatting invariant.
+12. Public/release proof: not applicable.
+13. Debug build: covered by the just-prior docs task build; this normalization
+    only changed formatting and will be covered by returning to Wave 0 proof.
+14. TaskFlow state: pass, closure-ready and task close succeeded.
+15. Staging by invariant: pass, only seven rustfmt-reported files staged.
+16. Publication authorization: pass, active epic repeatable push instruction.
+17. Evaluation docs: pass, this scorecard.
+18. Parent/wave metrics: pass, epic progress after close is 87/216 tasks
+    closed, 40.28%; waves closed remain 0/13.
+19. New defects/follow-ups: none yet; dirty formatted hunks remain to classify.
+20. Next routing rule: pass, run fmt preflight before broad proof bundles in a
+    dirty worktree.
+
+Dynamic criteria created from this session segment:
+1. Dirty-format criterion: when a workspace-wide formatter is needed in a dirty
+   worktree, capture `--files-with-diff` before formatting and stage only that
+   pre-identified set unless the active task owns the other dirty files.
+2. Proof-order criterion: proof bundles in dirty worktrees should start with the
+   cheapest fail-fast formatter/linter before launching long test batches.
+3. Running-agent criterion: a read-only agent that is unrelated to the just
+   closed mechanical subtask may remain open, but it must be classified before
+   its parent proof task closes.
+
+Meta-analysis remediation:
+- Waste remediation: next Wave 0 proof rerun starts after fmt pass, avoiding
+  another immediate formatter failure.
+- Risk remediation: dirty formatted files remain unstaged and must be classified
+  before any commit that could include them.
+- Documentation remediation: no fixed checklist change; dynamic criteria above
+  are enough unless this pattern repeats.
+
+Next-task selection rule:
+- Return to `wave-0-baseline-proof` and rerun its declared proof bundle now that
+  the formatter blocker is removed. Keep waiting for the mini preflight long
+  enough to classify its result before parent proof closure.
+
 ## 2026-06-12 - pr355-host-bridge-artifact-state-root
 
 Scope:
