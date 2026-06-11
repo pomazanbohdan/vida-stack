@@ -130,6 +130,29 @@ Allowed statuses:
 9. `failed`
 10. `consumed`
 
+## Attempt Final Report Contract
+
+Every agent attempt, whether accepted or rejected, must return a final report
+that includes:
+
+1. changed files or read-only scope reviewed,
+2. production change summary or explicit `production_changed: false`,
+3. tests/proofs run with pass/fail/not-run status,
+4. residual risks,
+5. `tokens_used`,
+6. `steps_taken`,
+7. `tool_calls_used`.
+
+If exact token usage is not exposed by the host runtime, the attempt must write
+`tokens_used: not_exposed_by_host`. It must not estimate tokens unless the
+runtime provides an explicit estimate field. Step and tool-call counts must be
+reported from the attempt's own action log.
+
+For cheap executor lanes selected as `gpt-5.4-mini`, use the highest available
+reasoning effort by default. The consolidator still treats the attempt as
+untrusted until a stronger validator or root orchestrator verifies source
+fidelity, public-surface proof, and false-green risk.
+
 ## Attempt Artifact Contract
 
 Every attempt must return structured output:

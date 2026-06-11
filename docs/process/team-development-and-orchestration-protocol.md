@@ -14,7 +14,8 @@ This protocol defines:
 4. how orchestrator, implementer, coach, verifier, and escalation cooperate,
 5. closure rules for packet-level work,
 6. how packet shapes, prompt-stack precedence, and boot-readiness rules stay explicit,
-7. how orchestrators phrase delegated packets so low-cost agents preserve source facts, scope, and proof evidence on the first attempt.
+7. how orchestrators phrase delegated packets so low-cost agents preserve source facts, scope, and proof evidence on the first attempt,
+8. how delegated lanes report usage, proof, commit, push, and wave-close follow-up obligations.
 
 This protocol does not define:
 
@@ -173,7 +174,22 @@ Small-agent packet requirements:
 7. include forbidden shorthand when compression would damage the artifact, such as `cur`, `src`, `req`, `impl`, `cmd`, `cfg`, or unexplained single-letter markers,
 8. require honest status language for unexecuted work, such as `pending`, `not run`, or `not created`,
 9. include a self-check block that the lane must run before its final response,
-10. require a final response with changed files, exact summary, verification, and remaining gaps.
+10. require a final response with changed files, exact summary, verification, remaining gaps, token usage, step count, and tool-call count.
+
+Small-agent reasoning rule:
+
+1. when the operator explicitly selects `gpt-5.4-mini` as the cheap executor for development or test-authoring packets, dispatch it with the highest available reasoning effort for that carrier,
+2. do not lower the mini executor's reasoning effort for runtime authority, TaskFlow, DocFlow, host-bridge, path-policy, receipt, or release-gate work unless the operator explicitly overrides this rule for that bounded packet,
+3. the higher reasoning budget does not authorize self-approval; root orchestration and an independent stronger validator remain required for authority-sensitive work.
+
+Delegated final-report telemetry rule:
+
+1. every delegated lane final report must include `tokens_used`, `steps_taken`, and `tool_calls_used`,
+2. if the host runtime exposes exact token usage, report the exact value,
+3. if exact token usage is not exposed, write `tokens_used: not_exposed_by_host` and do not invent a number,
+4. `steps_taken` must count meaningful reasoning/action stages completed by the lane,
+5. `tool_calls_used` must count shell, read/search, edit, test, build, VCS, browser, MCP, or host-tool calls made by that lane,
+6. missing telemetry makes the lane report incomplete and requires rework or orchestrator notation before the result can be accepted.
 
 Source-derived documentation packets must add an acceptance gate that names mandatory copied lines. For example, if the source contains proof commands or fixture invariants, the packet must list the exact commands, paths, blocker codes, and negative assertions that must appear in the target artifact. A delegated lane that omits any mandatory copied line is not closure-ready; route it back as rework instead of accepting a polished summary.
 
@@ -204,6 +220,9 @@ Final response:
 - exact changes made
 - verification commands and results
 - remaining gaps or risks
+- tokens_used
+- steps_taken
+- tool_calls_used
 ```
 
 ## Decomposition Rule
@@ -474,7 +493,15 @@ After each closure-ready task:
 1. update the TaskFlow task state with the completion, rework, or blocker result,
 2. run the declared debug build for the touched workspace or the broader workspace when no narrower debug build is declared,
 3. commit only the bounded closed scope after the task state update and debug build pass,
-4. leave unfinished red-test or rework files unstaged unless they are the explicit closed scope.
+4. push the task commit to the configured upstream immediately after the commit succeeds,
+5. leave unfinished red-test or rework files unstaged unless they are the explicit closed scope.
+
+After each closure-ready wave:
+
+1. close or update every child TaskFlow item before closing the wave parent,
+2. run the declared wave proof and debug build,
+3. commit and push the wave closure state,
+4. run `docs/process/github-pr-processing-protocol.md` immediately after the pushed wave closure unless the operator explicitly says to skip PR processing for that wave.
 
 If any of those fail:
 
@@ -531,5 +558,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/team-development-and-orchestration-protocol.md
 created_at: '2026-03-13T17:00:00+02:00'
-updated_at: 2026-06-03T15:45:00+03:00
+updated_at: 2026-06-11T03:15:00+03:00
 changelog_ref: team-development-and-orchestration-protocol.changelog.jsonl

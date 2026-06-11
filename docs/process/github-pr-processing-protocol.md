@@ -6,6 +6,12 @@ Purpose: define the project-owned operating protocol for processing open GitHub 
 
 This protocol applies to project-local PR triage and batch processing for the active `vida-stack` repository.
 
+Wave-closure trigger:
+
+1. after a TaskFlow wave is closed, committed, and pushed, the orchestrator must run this PR-processing protocol unless the operator explicitly says to skip it for that wave,
+2. PR processing after a wave close is not optional cleanup; it verifies whether open PRs are now obsolete, duplicate, directly mergeable, or need manual integration against the newly pushed `main`,
+3. if the wave close leaves the worktree dirty or the push fails, record the blocker on the wave task and do not start PR processing until the pushed state is authoritative.
+
 It covers:
 
 1. open PR inventory,
@@ -113,5 +119,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/github-pr-processing-protocol.md
 created_at: '2026-05-16T00:00:00+03:00'
-updated_at: 2026-05-16T14:06:57.5397037Z
+updated_at: 2026-06-11T03:15:00+03:00
 changelog_ref: github-pr-processing-protocol.changelog.jsonl
