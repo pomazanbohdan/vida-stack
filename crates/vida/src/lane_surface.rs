@@ -2331,15 +2331,15 @@ pub(crate) fn missing_task_stale_blocked_run_can_retire(
         && lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready");
     let exception_takeover_stale_blocked = receipt.dispatch_status == "blocked"
+        && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
         && receipt
             .exception_path_receipt_id
             .as_deref()
             .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
-        && matches!(
-            lane_status,
-            value if value == crate::LaneStatus::LaneExceptionRecorded.as_str()
-                || value == crate::LaneStatus::LaneExceptionTakeover.as_str()
-        );
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|receipt_id| !receipt_id.trim().is_empty());
     let active_exception_takeover_stale_blocked = receipt.dispatch_status == "executed"
         && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
         && receipt
@@ -4556,6 +4556,17 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
+            if receipt.lane_status == crate::LaneStatus::LaneExceptionRecorded.as_str()
+                && !receipt
+                    .supersedes_receipt_id
+                    .as_deref()
+                    .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
+            {
+                eprintln!(
+                    "Lane `{run_id}` has recorded exception evidence but no active exception takeover supersession; refusing retire."
+                );
+                return ExitCode::from(2);
+            }
             let recovery = store.run_graph_recovery_summary(run_id).await.ok();
             if let Err(error) =
                 lane_mutation_status_guard(run_id, Some(&status), recovery.as_ref(), &receipt)

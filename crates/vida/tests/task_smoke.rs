@@ -10060,6 +10060,203 @@ fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
 }
 
 #[test]
+fn lane_retire_rejects_recorded_exception_without_supersession_and_preserves_binding() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let run_id = "rt002-recorded-exception-no-supersession";
+    let task_id = run_id;
+    let parent_id = "rt002-recorded-exception-parent";
+    create_epic_parent(&state_dir, parent_id, "RT-002 parent", "open");
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "RT-002 backing task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            task_id,
+            "implementation",
+            "implementation",
+            "blocked",
+            "implementation",
+            "{\"policy_gate\":\"validation_report_required\",\"context_state\":\"sealed\",\"resume_target\":\"dispatch.implementation\",\"recovery_ready\":false}",
+        ],
+        &state_dir,
+    );
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = format!("{packet_dir}/{run_id}.json");
+    fs::write(&packet_path, format!("{{\"run_id\":\"{run_id}\"}}")).expect("write packet");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "implementation",
+            "dispatch_status": "blocked",
+            "lane_status": "lane_exception_recorded",
+            "dispatch_kind": "test_dispatch",
+            "dispatch_surface": "vida taskflow run-graph dispatch-init",
+            "dispatch_command": "vida taskflow run-graph dispatch-init rt002 --json",
+            "dispatch_packet_path": packet_path,
+            "blocker_code": "tool_execution_failed",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_executed_count": 0,
+            "exception_path_receipt_id": "rt002-exception-receipt",
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-06-11T00:00:00Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", run_id))
+            .bind(("receipt", receipt))
+            .await
+            .expect("seed recorded exception dispatch receipt");
+        let binding = serde_json::json!({
+            "run_id": run_id,
+            "task_id": task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "task_graph_task",
+                "task_id": task_id,
+                "run_id": run_id,
+                "active_node": "implementation"
+            },
+            "binding_source": "rt002_regression_seed",
+            "why_this_unit": "recorded exception is not active takeover",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only_open_cycle",
+            "recorded_at": "2026-06-11T00:00:00Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", run_id))
+            .bind(("binding", binding))
+            .await
+            .expect("seed continuation binding");
+        drop(db);
+    });
+
+    let retire = run_command_capture(
+        &[
+            "lane",
+            "retire",
+            run_id,
+            "--receipt-id",
+            "rt002-retire",
+            "--reason",
+            "recorded exception is not active takeover",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(
+        retire.status.code(),
+        Some(2),
+        "retire stdout={} stderr={}",
+        String::from_utf8_lossy(&retire.stdout),
+        String::from_utf8_lossy(&retire.stderr)
+    );
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let mut status_response = db
+            .query("SELECT * FROM type::record('execution_plan_state', $run)")
+            .bind(("run", run_id))
+            .await
+            .expect("read run graph status");
+        let status: Option<Value> = status_response.take(0).expect("take status");
+        let status = status.expect("status should remain persisted");
+        assert_eq!(status["run_id"], run_id);
+        assert_eq!(status["status"], "blocked");
+
+        let mut receipt_response = db
+            .query("SELECT * FROM type::record('run_graph_dispatch_receipt', $run)")
+            .bind(("run", run_id))
+            .await
+            .expect("read receipt");
+        let receipt: Option<Value> = receipt_response.take(0).expect("take receipt");
+        let receipt = receipt.expect("receipt should remain persisted");
+        assert_eq!(receipt["lane_status"], "lane_exception_recorded");
+        assert_eq!(
+            receipt["exception_path_receipt_id"],
+            "rt002-exception-receipt"
+        );
+        assert!(receipt["supersedes_receipt_id"].is_null());
+
+        let mut binding_response = db
+            .query("SELECT * FROM type::record('run_graph_continuation_binding', $run)")
+            .bind(("run", run_id))
+            .await
+            .expect("read binding");
+        let binding: Option<Value> = binding_response.take(0).expect("take binding");
+        let binding = binding.expect("continuation binding should remain present");
+        assert_eq!(binding["status"], "bound");
+        assert_eq!(binding["run_id"], run_id);
+        assert_eq!(binding["task_id"], task_id);
+        assert_eq!(binding["active_bounded_unit"]["kind"], "task_graph_task");
+        assert_eq!(binding["active_bounded_unit"]["task_id"], task_id);
+        assert_eq!(binding["active_bounded_unit"]["run_id"], run_id);
+        assert_eq!(
+            binding["active_bounded_unit"]["active_node"],
+            "implementation"
+        );
+        assert_eq!(binding["binding_source"], "rt002_regression_seed");
+        assert_eq!(
+            binding["why_this_unit"],
+            "recorded exception is not active takeover"
+        );
+        assert_eq!(binding["primary_path"], "normal_delivery_path");
+        assert_eq!(
+            binding["sequential_vs_parallel_posture"],
+            "sequential_only_open_cycle"
+        );
+        drop(db);
+    });
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_action() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

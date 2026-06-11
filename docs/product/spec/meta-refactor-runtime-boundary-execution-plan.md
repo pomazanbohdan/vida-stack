@@ -556,6 +556,29 @@ These are the source-plan anchors this tracker is tied to:
     test-only patches; escalate source/runtime implementation or any validator
     rejection to `gpt-5.5-low`; keep `gpt-5.5-medium` as the default closure
     validator for authority-sensitive runtime work.
+- RT-002 delegation scorecard:
+  - `gpt-5.4-mini/xhigh` explorer `Meitner` produced the best initial
+    decomposition: correct acceptance source, public-surface test target, and
+    production seam; score 8.5/10, 22 tool calls, token usage not exposed. The
+    first wait timed out, so this model is useful as cheap read-only prefetch
+    but should not block the critical path.
+  - `gpt-5.5-low` executor `Kuhn` left a useful production guard and first
+    regression draft but failed to return a final report and then shut down;
+    technical contribution useful, process quality 5.5/10, tool/token usage not
+    exposed.
+  - `gpt-5.4-mini/xhigh` executor `Lorentz` fixed the failing fixture and
+    returned a concise report with exact proof, score 8.5/10, 13 tool calls,
+    token usage not exposed; it did not own or validate the production guard.
+  - `gpt-5.5-medium` validator `Faraday` correctly rejected closure until the
+    continuation-binding assertion checked concrete fields instead of only
+    presence, validator score 9/10, 10 tool calls, token usage not exposed.
+  - Final root proof passed after validator rework: exact RT-002 smoke,
+    adjacent active exception-takeover smoke, `cargo test -p vida lane_retire`,
+    `cargo fmt --all -- --check`, `cargo build`, and `git diff --check`.
+  - Updated routing rule: keep mini/xhigh for read-only decomposition and
+    small fixture/test repair; do not rely on either mini or low executor for
+    closure when the final patch combines partial agent edits across production
+    authority code. Require medium validation plus root proof for these slices.
 
 -----
 artifact_path: product/spec/meta-refactor-runtime-boundary-execution-plan
