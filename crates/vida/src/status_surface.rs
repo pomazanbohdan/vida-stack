@@ -36,6 +36,63 @@ impl StatusRunGraphArtifactSource {
     }
 }
 
+const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
+
+pub(crate) fn dispatch_packet_json_from_project_path(
+    project_root: &std::path::Path,
+    packet_path: &str,
+) -> Option<serde_json::Value> {
+    let packet_path = packet_path.trim();
+    if packet_path.is_empty() {
+        return None;
+    }
+
+    let path = std::path::Path::new(packet_path);
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        project_root.join(path)
+    };
+    let Ok(project_root) = project_root.canonicalize() else {
+        return None;
+    };
+    let Ok(link_metadata) = std::fs::symlink_metadata(&candidate) else {
+        return None;
+    };
+    if link_metadata.file_type().is_symlink() || !link_metadata.file_type().is_file() {
+        return None;
+    }
+    if link_metadata.len() > DISPATCH_PACKET_REF_READ_LIMIT_BYTES {
+        return None;
+    }
+    let Ok(candidate) = candidate.canonicalize() else {
+        return None;
+    };
+    if !candidate.starts_with(&project_root) {
+        return None;
+    }
+
+    let Ok(file) = std::fs::File::open(candidate) else {
+        return None;
+    };
+    let mut raw = String::new();
+    let mut limited = std::io::Read::take(file, DISPATCH_PACKET_REF_READ_LIMIT_BYTES + 1);
+    if std::io::Read::read_to_string(&mut limited, &mut raw).is_err() {
+        return None;
+    }
+    if raw.len() as u64 > DISPATCH_PACKET_REF_READ_LIMIT_BYTES {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(&raw).ok()
+}
+
 pub(crate) fn status_dispatch_packet_refs(
     project_root: &std::path::Path,
     packet_path: Option<&str>,
@@ -43,16 +100,7 @@ pub(crate) fn status_dispatch_packet_refs(
     let Some(packet_path) = packet_path.map(str::trim).filter(|path| !path.is_empty()) else {
         return StatusDispatchPacketRefs::default();
     };
-    let path = std::path::Path::new(packet_path);
-    let path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        project_root.join(path)
-    };
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return StatusDispatchPacketRefs::default();
-    };
-    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&raw) else {
+    let Some(packet) = dispatch_packet_json_from_project_path(project_root, packet_path) else {
         return StatusDispatchPacketRefs::default();
     };
     StatusDispatchPacketRefs {
@@ -1925,6 +1973,104 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn unique_status_packet_test_root(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn status_dispatch_packet_refs_reads_only_project_contained_regular_json() {
+        let root = unique_status_packet_test_root("vida-status-packet-contained");
+        let packet_path =
+            root.join(".vida/data/state/runtime-consumption/dispatch-packets/run-1.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet dir");
+        fs::write(
+            &packet_path,
+            serde_json::to_vec(&serde_json::json!({
+                "run_id": "run-contained",
+                "delivery_task_packet": { "task_id": "task-contained" }
+            }))
+            .expect("encode packet"),
+        )
+        .expect("write packet");
+
+        let refs = super::status_dispatch_packet_refs(
+            &root,
+            Some(".vida/data/state/runtime-consumption/dispatch-packets/run-1.json"),
+        );
+
+        assert_eq!(refs.run_id.as_deref(), Some("run-contained"));
+        assert_eq!(refs.task_id.as_deref(), Some("task-contained"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn status_dispatch_packet_refs_rejects_outside_parent_and_oversized_paths() {
+        let root = unique_status_packet_test_root("vida-status-packet-rejects");
+        fs::create_dir_all(&root).expect("create root");
+        let outside = root
+            .parent()
+            .expect("root parent")
+            .join(format!("outside-packet-{}.json", std::process::id()));
+        fs::write(
+            &outside,
+            serde_json::to_vec(&serde_json::json!({
+                "run_id": "run-outside",
+                "delivery_task_packet": { "task_id": "task-outside" }
+            }))
+            .expect("encode outside"),
+        )
+        .expect("write outside");
+        let oversized = root.join("oversized.json");
+        fs::write(&oversized, "x".repeat(1024 * 1024 + 1)).expect("write oversized");
+
+        let absolute_refs =
+            super::status_dispatch_packet_refs(&root, Some(&outside.display().to_string()));
+        let parent_refs = super::status_dispatch_packet_refs(&root, Some("../outside-packet.json"));
+        let oversized_refs = super::status_dispatch_packet_refs(&root, Some("oversized.json"));
+
+        assert!(absolute_refs.run_id.is_none());
+        assert!(absolute_refs.task_id.is_none());
+        assert!(parent_refs.run_id.is_none());
+        assert!(parent_refs.task_id.is_none());
+        assert!(oversized_refs.run_id.is_none());
+        assert!(oversized_refs.task_id.is_none());
+        let _ = fs::remove_file(outside);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_dispatch_packet_refs_rejects_symlinked_packets() {
+        let root = unique_status_packet_test_root("vida-status-packet-symlink");
+        fs::create_dir_all(&root).expect("create root");
+        let target = root.join("target.json");
+        let link = root.join("packet-link.json");
+        fs::write(
+            &target,
+            serde_json::to_vec(&serde_json::json!({
+                "run_id": "run-symlink",
+                "delivery_task_packet": { "task_id": "task-symlink" }
+            }))
+            .expect("encode target"),
+        )
+        .expect("write target");
+        std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+        let refs = super::status_dispatch_packet_refs(&root, Some("packet-link.json"));
+
+        assert!(refs.run_id.is_none());
+        assert!(refs.task_id.is_none());
+        let _ = fs::remove_dir_all(root);
     }
 
     fn restore_vida_session_id(saved: Option<String>) {

@@ -385,11 +385,13 @@ struct DispatchPacketRepairRefs {
     task_id: Option<String>,
 }
 
-fn dispatch_packet_repair_refs_from_path(path: &str) -> DispatchPacketRepairRefs {
-    let Ok(body) = std::fs::read_to_string(path) else {
-        return DispatchPacketRepairRefs::default();
-    };
-    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&body) else {
+fn dispatch_packet_repair_refs_from_path(
+    project_root: &std::path::Path,
+    path: &str,
+) -> DispatchPacketRepairRefs {
+    let Some(packet) =
+        crate::status_surface::dispatch_packet_json_from_project_path(project_root, path)
+    else {
         return DispatchPacketRepairRefs::default();
     };
     DispatchPacketRepairRefs {
@@ -495,7 +497,13 @@ fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> ser
     let packet_path = consume_continue_resume_error_packet_path(error);
     let packet_refs = packet_path
         .as_deref()
-        .map(dispatch_packet_repair_refs_from_path)
+        .map(|path| {
+            let project_root = std::env::current_dir().ok();
+            project_root
+                .as_deref()
+                .map(|project_root| dispatch_packet_repair_refs_from_path(project_root, path))
+                .unwrap_or_default()
+        })
         .unwrap_or_default();
     let run_id = consume_continue_resume_error_run_id(error).or(packet_refs.run_id);
     let task_id = packet_refs.task_id;
@@ -16191,10 +16199,13 @@ agent_system:
 
     #[test]
     fn consume_continue_resume_error_payload_classifies_dispatch_packet_contract_invalid() {
-        let root = std::env::temp_dir().join(format!(
-            "vida-consume-resume-invalid-packet-action-{}",
-            std::process::id()
-        ));
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join(format!(
+                "vida-consume-resume-invalid-packet-action-{}",
+                std::process::id()
+            ));
         let packet_path = root.join("runtime-consumption/dispatch-packets/run-1.json");
         fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
             .expect("create packet dir");
@@ -16238,6 +16249,37 @@ agent_system:
         );
         assert_eq!(payload["artifact_refs"]["run_id"], "run-1");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn consume_continue_resume_error_payload_does_not_read_outside_packet_refs() {
+        let outside = std::env::temp_dir().join(format!(
+            "vida-consume-resume-outside-secret-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &outside,
+            serde_json::to_vec(&serde_json::json!({
+                "run_id": "run-outside",
+                "delivery_task_packet": { "task_id": "task-outside" }
+            }))
+            .expect("encode outside"),
+        )
+        .expect("write outside");
+        let error = format!(
+            "execution_preparation_gate_blocked: dispatch_packet_contract_invalid; dispatch packet `{}`",
+            outside.display()
+        );
+        let payload =
+            consume_continue_resume_error_payload(&error, "vida taskflow consume continue");
+
+        assert_eq!(
+            payload["artifact_refs"]["dispatch_packet_path"],
+            outside.display().to_string()
+        );
+        assert!(payload["artifact_refs"]["run_id"].is_null());
+        assert!(payload["artifact_refs"]["task_id"].is_null());
+        let _ = fs::remove_file(outside);
     }
 
     #[test]
