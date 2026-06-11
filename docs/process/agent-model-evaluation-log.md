@@ -3,6 +3,47 @@
 Purpose: record per-task executor/validator efficiency evidence so the next VIDA
 task can choose a cheaper or stronger model deliberately.
 
+## 2026-06-11 - pr352-358-dispatch-packet-read-path-safety
+
+Scope:
+- Task: `pr352-358-dispatch-packet-read-path-safety`
+- PRs: `#352`, `#358`
+- Files: `crates/vida/src/lane_surface.rs`, `crates/vida/src/status_surface.rs`,
+  `crates/vida/src/taskflow_consume_resume.rs`,
+  `crates/vida/src/taskflow_operator_diagnostics.rs`
+- Proof:
+  - `cargo test -p vida host_bridge_request_rejects_out_of_root_or_oversized_file -- --nocapture`
+  - `cargo test -p vida read_lane_packet_reads_contained_packet_and_rejects_traversal_symlink_and_oversized_file -- --nocapture`
+  - `cargo test -p vida status_dispatch_packet_refs -- --nocapture`
+  - `cargo test -p vida consume_resume_error_payload_does_not_read_outside_packet_refs -- --nocapture`
+  - `cargo test -p vida consume_continue_resume_error_payload_does_not_read_outside_packet_refs -- --nocapture`
+  - `cargo build`
+  - `git diff --check`
+
+Observed model results:
+- Executor `gpt-5.4-mini` with `xhigh` reasoning: 4/10 for broad shared
+  implementation. It eventually returned a useful partial patch, but only after
+  several long waits and an interrupt checkpoint; it also ran false-green
+  `--lib` test filters, left a red focused test, and required rework.
+- Rework executor `gpt-5.4-mini` with `high` reasoning: 8/10 for narrow red-test
+  repair. With one failing test and one warning family, it fixed the issue,
+  removed warning noise, and returned focused proof quickly.
+- Validator `gpt-5.5` with `medium` reasoning: 8/10 for scope and risk review.
+  It caught false-green filters and adjacent agent-dispatch path-safety gaps.
+  One rejection point treated pre-existing dirty files as if they were part of
+  the patch; the orchestrator split those findings into a separate TaskFlow item
+  instead of mixing hunks.
+
+Next-task selection rule:
+- Do not give broad cross-file shared-invariant implementation to mini xhigh as
+  one large packet when the same objective can be split by public surface.
+- Prefer mini high for precise rework after the orchestrator has a red test,
+  target files, and exact acceptance.
+- Keep 5.5-medium as the validator for host-bridge/path-safety work; require it
+  to distinguish scoped patch files from pre-existing dirty files.
+- When a validator finds a real adjacent issue in a dirty file, create a new
+  bounded TaskFlow item rather than silently expanding the current commit.
+
 ## 2026-06-11 - lane-surface-host-bridge-receipt-authority
 
 Scope:
