@@ -9,6 +9,30 @@ use crate::taskflow_run_graph::{
 };
 use crate::RuntimeConsumptionLaneSelection;
 
+const MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES: u64 = 1024 * 1024;
+
+fn packet_path_has_dot_segment(path: &std::path::Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    })
+}
+
+fn invalid_reconciled_pack_dispatch_packet_error(
+    packet_path: &std::path::Path,
+    reason: impl Into<String>,
+) -> StateStoreError {
+    StateStoreError::InvalidTaskRecord {
+        reason: format!(
+            "Failed to load materialized pack dispatch packet `{}`: {}",
+            packet_path.display(),
+            reason.into()
+        ),
+    }
+}
+
 fn reconcile_run_graph_status_with_dispatch_receipt(
     mut status: RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceiptStored>,
@@ -2879,24 +2903,16 @@ impl StateStore {
         else {
             return Ok(None);
         };
-        let packet_path = std::path::PathBuf::from(packet_path);
-        let packet_path = if packet_path.is_absolute() {
-            packet_path
-        } else {
-            self.root().join(packet_path)
+        let Some(packet_path) = self.canonical_reconciled_pack_dispatch_packet_path(packet_path)?
+        else {
+            return Ok(None);
         };
-        let body = match std::fs::read_to_string(&packet_path) {
-            Ok(body) => body,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(StateStoreError::InvalidTaskRecord {
-                    reason: format!(
-                        "Failed to read materialized pack dispatch packet `{}`: {error}",
-                        packet_path.display()
-                    ),
-                });
-            }
-        };
+        let body = std::fs::read_to_string(&packet_path).map_err(|error| {
+            invalid_reconciled_pack_dispatch_packet_error(
+                &packet_path,
+                format!("failed to read packet body: {error}"),
+            )
+        })?;
         let packet = serde_json::from_str::<serde_json::Value>(&body).map_err(|error| {
             StateStoreError::InvalidTaskRecord {
                 reason: format!(
@@ -2922,6 +2938,77 @@ impl StateStore {
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         Ok(Some((role_selection, run_graph_bootstrap)))
+    }
+
+    fn canonical_reconciled_pack_dispatch_packet_path(
+        &self,
+        packet_path: &str,
+    ) -> Result<Option<std::path::PathBuf>, StateStoreError> {
+        let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
+        if packet_path.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        if packet_path_has_dot_segment(&packet_path) {
+            return Err(invalid_reconciled_pack_dispatch_packet_error(
+                &packet_path,
+                "dot-segment traversal is not admissible",
+            ));
+        }
+        let candidate_path = if packet_path.is_absolute() {
+            packet_path
+        } else {
+            self.root().join(packet_path)
+        };
+        let metadata = match std::fs::symlink_metadata(&candidate_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(invalid_reconciled_pack_dispatch_packet_error(
+                    &candidate_path,
+                    format!("failed to inspect packet path: {error}"),
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(invalid_reconciled_pack_dispatch_packet_error(
+                &candidate_path,
+                "symlink packet paths are not admissible; refusing to follow them",
+            ));
+        }
+        let root = std::fs::canonicalize(self.root()).map_err(|error| {
+            invalid_reconciled_pack_dispatch_packet_error(
+                self.root(),
+                format!("failed to canonicalize VIDA state root: {error}"),
+            )
+        })?;
+        let candidate_path = std::fs::canonicalize(&candidate_path).map_err(|error| {
+            invalid_reconciled_pack_dispatch_packet_error(
+                &candidate_path,
+                format!("failed to canonicalize packet path: {error}"),
+            )
+        })?;
+        if !candidate_path.starts_with(&root) {
+            return Err(invalid_reconciled_pack_dispatch_packet_error(
+                &candidate_path,
+                format!("escapes VIDA state root `{}`", root.display()),
+            ));
+        }
+        if !metadata.is_file() {
+            return Err(invalid_reconciled_pack_dispatch_packet_error(
+                &candidate_path,
+                "materialized pack dispatch packet is not a regular file",
+            ));
+        }
+        if metadata.len() > MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES {
+            return Err(invalid_reconciled_pack_dispatch_packet_error(
+                &candidate_path,
+                format!(
+                    "materialized pack dispatch packet is {} bytes, exceeding the 1 MiB intake cap",
+                    metadata.len()
+                ),
+            ));
+        }
+        Ok(Some(candidate_path))
     }
 
     fn spec_first_dispatch_task_identity_from_tasks(
@@ -4412,6 +4499,65 @@ mod tests {
         }
     }
 
+    fn reconciled_pack_dispatch_receipt_for_path(
+        packet_path: String,
+    ) -> RunGraphDispatchReceipt {
+        let mut receipt = sample_dispatch_receipt("run-reconciled-pack-context");
+        receipt.dispatch_packet_path = Some(packet_path);
+        receipt
+    }
+
+    fn write_reconciled_pack_packet(
+        path: &std::path::Path,
+        marker: &str,
+        padding_bytes: Option<usize>,
+    ) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create packet parent");
+        }
+        let mut packet = serde_json::json!({
+            "role_selection_full": {
+                "ok": true,
+                "activation_source": "test",
+                "selection_mode": "runtime",
+                "fallback_role": "orchestrator",
+                "request": marker,
+                "selected_role": "pm",
+                "conversational_mode": null,
+                "single_task_only": true,
+                "tracked_flow_entry": "work-pool-pack",
+                "allow_freeform_chat": false,
+                "confidence": "high",
+                "matched_terms": ["work-pool-pack"],
+                "compiled_bundle": null,
+                "execution_plan": {
+                    "development_flow": {
+                        "dispatch_contract": {}
+                    },
+                    "orchestration_contract": {}
+                },
+                "reason": "test"
+            },
+            "run_graph_bootstrap": {
+                "marker": marker
+            }
+        });
+        if let Some(padding_bytes) = padding_bytes {
+            packet
+                .as_object_mut()
+                .expect("packet should be an object")
+                .insert(
+                    "padding".to_string(),
+                    serde_json::Value::String("x".repeat(padding_bytes)),
+                );
+        }
+        fs::write(
+            path,
+            serde_json::to_string_pretty(&packet).expect("packet json should encode"),
+        )
+        .expect("write reconciled pack packet");
+    }
+
     #[test]
     fn terminal_closure_supersedes_stale_pending_developer_handoff_receipt() {
         let mut status = sample_run_graph_status();
@@ -4468,6 +4614,247 @@ mod tests {
             receipt.downstream_dispatch_status.as_deref(),
             Some("executed")
         );
+    }
+
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_rejects_absolute_packet_outside_state_root() {
+        let root = temp_run_graph_root("vida-reconciled-pack-external-packet");
+        let external_root = temp_run_graph_root("vida-reconciled-pack-attacker-packet");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let external_packet = external_root.join("outside-packet.json");
+        write_reconciled_pack_packet(&external_packet, "outside-state-root", None);
+
+        let receipt = reconciled_pack_dispatch_receipt_for_path(
+            external_packet.display().to_string(),
+        );
+        let error = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect_err("out-of-root packet should be rejected");
+
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("escapes VIDA state root"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(external_root);
+    }
+
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_rejects_relative_packet_traversal() {
+        let root = temp_run_graph_root("vida-reconciled-pack-traversal");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let outside_packet = root.parent().unwrap().join(format!(
+            "vida-reconciled-pack-outside-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        write_reconciled_pack_packet(&outside_packet, "traversal-outside-root", None);
+
+        let receipt = reconciled_pack_dispatch_receipt_for_path(format!(
+            "../{}",
+            outside_packet.file_name().unwrap().to_string_lossy()
+        ));
+        let error = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect_err("dot-segment traversal should be rejected");
+
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("dot-segment traversal"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other:?}"),
+        }
+
+        let _ = fs::remove_file(outside_packet);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_rejects_existing_directory_packet_path() {
+        let root = temp_run_graph_root("vida-reconciled-pack-directory-packet");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let packet_dir = root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("packet-dir");
+        fs::create_dir_all(&packet_dir).expect("create packet directory");
+
+        let receipt = reconciled_pack_dispatch_receipt_for_path(packet_dir.display().to_string());
+        let error = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect_err("directory packet path should be rejected");
+
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("not a regular file"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_rejects_symlink_packet_path() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_run_graph_root("vida-reconciled-pack-symlink");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let packet = root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("packet.json");
+        write_reconciled_pack_packet(&packet, "symlink-target", None);
+        let packet_link = root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("packet-link.json");
+        if let Some(parent) = packet_link.parent() {
+            fs::create_dir_all(parent).expect("create symlink parent");
+        }
+        symlink(&packet, &packet_link).expect("create packet symlink");
+
+        let receipt = reconciled_pack_dispatch_receipt_for_path(packet_link.display().to_string());
+        let error = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect_err("symlink packet path should be rejected");
+
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("symlink"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_rejects_windows_symlink_packet_path() {
+        use std::os::windows::fs::symlink_file;
+
+        let root = temp_run_graph_root("vida-reconciled-pack-windows-symlink");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let packet = root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("packet.json");
+        write_reconciled_pack_packet(&packet, "windows-symlink-target", None);
+        let packet_link = root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("packet-link.json");
+        if let Some(parent) = packet_link.parent() {
+            fs::create_dir_all(parent).expect("create symlink parent");
+        }
+        match symlink_file(&packet, &packet_link) {
+            Ok(()) => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
+                eprintln!("skipping Windows symlink packet path test: {error}");
+                let _ = fs::remove_dir_all(root);
+                return;
+            }
+            Err(error) => panic!("create packet symlink: {error}"),
+        }
+
+        let receipt = reconciled_pack_dispatch_receipt_for_path(packet_link.display().to_string());
+        let error = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect_err("symlink packet path should be rejected");
+
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("symlink"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_allows_absolute_packet_inside_state_root() {
+        let root = temp_run_graph_root("vida-reconciled-pack-state-packet");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let packet = root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("inside-packet.json");
+        write_reconciled_pack_packet(&packet, "inside-state-root", None);
+
+        let receipt = reconciled_pack_dispatch_receipt_for_path(packet.display().to_string());
+        let (_role_selection, run_graph_bootstrap) = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect("in-root packet should decode")
+            .expect("in-root packet should be accepted");
+
+        assert_eq!(run_graph_bootstrap["marker"], "inside-state-root");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_allows_relative_packet_inside_state_root() {
+        let root = temp_run_graph_root("vida-reconciled-pack-relative-packet");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let packet = root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("relative-packet.json");
+        write_reconciled_pack_packet(&packet, "relative-state-root", None);
+
+        let relative_packet_path = packet
+            .strip_prefix(&root)
+            .expect("packet should live under state root")
+            .display()
+            .to_string();
+        let receipt = reconciled_pack_dispatch_receipt_for_path(relative_packet_path);
+        let (_role_selection, run_graph_bootstrap) = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect("relative in-root packet should decode")
+            .expect("relative in-root packet should be accepted");
+
+        assert_eq!(run_graph_bootstrap["marker"], "relative-state-root");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn reconciled_pack_dispatch_context_rejects_oversized_packet() {
+        let root = temp_run_graph_root("vida-reconciled-pack-oversized");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let packet = root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("oversized-packet.json");
+        write_reconciled_pack_packet(
+            &packet,
+            "oversized-packet",
+            Some(MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES as usize + 1),
+        );
+
+        let receipt = reconciled_pack_dispatch_receipt_for_path(packet.display().to_string());
+        let error = store
+            .reconciled_pack_dispatch_context(&receipt)
+            .expect_err("oversized packet should be rejected");
+
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("1 MiB intake cap"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(root);
     }
 
     fn sample_replay_lineage_receipt(
