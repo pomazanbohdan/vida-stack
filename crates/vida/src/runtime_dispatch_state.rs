@@ -7,10 +7,10 @@ use super::*;
 use crate::release1_contracts::canonical_lane_status_str;
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 use crate::runtime_contract_vocab::{
-    canonical_dispatch_target_name, RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH,
-    RUNTIME_ROLE_PM, RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER,
-    TASK_CLASS_ARCHITECTURE, TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION,
-    TASK_CLASS_VERIFICATION,
+    backend_admissibility_key_for_task_class, canonical_dispatch_target_name,
+    RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM,
+    RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, TASK_CLASS_ARCHITECTURE,
+    TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION, TASK_CLASS_VERIFICATION,
 };
 #[cfg(test)]
 use crate::runtime_dispatch_downstream_packets::downstream_dispatch_packet_body;
@@ -1344,17 +1344,30 @@ pub(crate) fn dispatch_target_runtime_assignment(
     (serde_json::Value::Null, "missing")
 }
 
-fn canonical_dispatch_target_for_backend_resolution(dispatch_target: &str) -> String {
-    match canonical_dispatch_target_name(dispatch_target).as_str() {
+fn backend_admissibility_key_for_dispatch_target(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> String {
+    let canonical_target = canonical_dispatch_target_name(dispatch_target);
+    match canonical_target.as_str() {
         "implementer" | "writer" => "implementation".to_string(),
         "execution_preparation" => "architecture".to_string(),
-        other => other.to_string(),
+        "implementation" | "verification" | "architecture" | "specification" | "coach"
+        | "analysis" | "review" => canonical_target,
+        other => dispatch_contract_lane(execution_plan, dispatch_target)
+            .and_then(|lane| lane["task_class"].as_str())
+            .and_then(backend_admissibility_key_for_task_class)
+            .unwrap_or(other)
+            .to_string(),
     }
 }
 
-fn dispatch_target_requires_strict_backend_admissibility(dispatch_target: &str) -> bool {
+fn dispatch_target_requires_strict_backend_admissibility(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> bool {
     matches!(
-        canonical_dispatch_target_for_backend_resolution(dispatch_target).as_str(),
+        backend_admissibility_key_for_dispatch_target(execution_plan, dispatch_target).as_str(),
         "implementation" | "verification"
     )
 }
@@ -1364,8 +1377,10 @@ pub(crate) fn backend_is_admissible_for_dispatch_target(
     backend_id: &str,
     dispatch_target: &str,
 ) -> bool {
-    let canonical_target = canonical_dispatch_target_for_backend_resolution(dispatch_target);
-    let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
+    let canonical_target =
+        backend_admissibility_key_for_dispatch_target(execution_plan, dispatch_target);
+    let strict_required =
+        dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target);
     let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
         return !strict_required;
     };
@@ -1528,7 +1543,8 @@ fn admissible_backend_candidates_for_dispatch_target(
     activation_agent_type: Option<&str>,
 ) -> Vec<String> {
     let route_is_backend_agnostic = !route_has_backend_hints(execution_plan, route);
-    let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
+    let strict_required =
+        dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target);
     let mut candidates = Vec::new();
     let inherited = inherited_selected_backend.map(str::to_string);
     let activation = activation_agent_type.map(str::to_string);
@@ -1645,7 +1661,8 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
     activation_agent_type: Option<&str>,
     inherited_selected_backend: Option<&str>,
 ) -> Option<String> {
-    let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
+    let strict_required =
+        dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target);
     let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
     let (candidates, route_is_backend_agnostic) = if let Some(route) = route {
         (
@@ -22446,6 +22463,90 @@ agent_system:
         );
 
         assert_eq!(selected.as_deref(), Some("junior"));
+    }
+
+    #[test]
+    fn admissible_selected_backend_uses_configured_lane_task_class_for_role_label() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "read_only",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "verification": true,
+                        "implementation": false
+                    }
+                },
+                {
+                    "backend_id": "writer",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "developer": {
+                            "dispatch_target": "developer",
+                            "runtime_role": "worker",
+                            "task_class": "implementation"
+                        }
+                    }
+                }
+            }
+        });
+
+        assert!(
+            !backend_is_admissible_for_dispatch_target(&execution_plan, "read_only", "developer"),
+            "configured developer role label should enforce implementation admissibility"
+        );
+
+        let selected = admissible_selected_backend_for_dispatch_target(
+            &execution_plan,
+            "developer",
+            Some("read_only"),
+            Some("read_only"),
+        );
+
+        assert_eq!(selected.as_deref(), Some("writer"));
+    }
+
+    #[test]
+    fn admissible_selected_backend_uses_configured_test_authoring_task_class_for_role_label() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "writer",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "implementation": true,
+                        "verification": false
+                    }
+                }
+            ],
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "tester": {
+                            "dispatch_target": "tester",
+                            "runtime_role": "verifier",
+                            "task_class": "test_authoring"
+                        }
+                    }
+                }
+            }
+        });
+
+        let selected = admissible_selected_backend_for_dispatch_target(
+            &execution_plan,
+            "tester",
+            Some("writer"),
+            Some("writer"),
+        );
+
+        assert_eq!(selected, None);
     }
 
     #[test]

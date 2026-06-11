@@ -1,6 +1,6 @@
 # META Runtime Boundary Refactor Baseline Tracking Document
 
-Status: `IO-001, DOC-001, and HB-001 through HB-005 hardened; targeted proofs green; broader Wave 0 batch still pending`
+Status: `IO-001, DOC-001, HB-001 through HB-005, ROUTE-001, and ROUTE-002 hardened; targeted proofs green; broader Wave 0 batch still pending`
 
 ## Purpose
 
@@ -41,6 +41,15 @@ This file is intentionally a tracker, not a rewrite of the plan. The wave defini
   path fail-closes on an attacker request path outside the explicit trusted
   state root; the public run exit and shared payload helper keep
   `host_tool_calls = []`.
+- ROUTE-001 now enforces dev-team human labels through configured
+  `task_class` backend admissibility instead of treating role labels as
+  bypassable backend keys; PR #350 is integrated into the Wave 0 routing slice.
+- ROUTE-002 now rejects `vida agent-init --role ...` aliases that resolve to the
+  root `orchestrator` runtime role; PR #340 is integrated into the Wave 0
+  routing slice.
+- Explicit `agent-init --role developer` selection now preserves
+  `dispatch_target = developer` while allowing `selected_role` to normalize to
+  `worker`, so backend admissibility evaluates the human lane label.
 - Validation rework tightened the DOC-001 proof: a plain `git status`
   precondition now proves the repo-local helper executes before the
   `docflow closeout --changed` assertion checks that the helper stays idle.
@@ -53,7 +62,16 @@ This file is intentionally a tracker, not a rewrite of the plan. The wave defini
   - `cargo test -p vida host_bridge_missing_receipt -- --nocapture`
   - `cargo test -p vida host_bridge_implementation_scope_uses_immutable_packet`
   - `cargo test -p vida host_bridge_implementation_scope_uses_immutable_packet -- --nocapture`
+  - `cargo test -p vida agent_init_explicit_role_preserves_requested_role_as_dispatch_target -- --nocapture`
+  - `cargo test -p vida agent_init_explicit_role_rejects_dev_team_orchestrator_runtime_role_aliases -- --nocapture`
+  - `cargo test -p vida backend_is_admissible_for_dispatch_target_uses_configured_lane_task_class_for_role_label -- --nocapture`
+  - `cargo test -p vida admissible_selected_backend_uses_configured_lane_task_class_for_role_label -- --nocapture`
+  - `cargo test -p vida admissible_selected_backend_uses_configured_test_authoring_task_class_for_role_label -- --nocapture`
   - `cargo build`
+- Broad `cargo test -p vida uses_configured -- --nocapture` is not a closure
+  proof for this slice because it also selects an unrelated existing
+  `agent_dispatch_next_command_uses_configured_runtime_selection_truth` stack
+  overflow path.
 - Host-bridge authority proof was re-run after the HB-002 production authority
   fix and now blocks earlier on `host_bridge_dispatch_receipt_missing` before
   artifact attachment.
@@ -274,6 +292,14 @@ Setup:
 
 Expected:
   blocked by backend admissibility
+
+Implementation status:
+  covered by `backend_admissibility_key_for_task_class`,
+  `backend_is_admissible_for_dispatch_target_uses_configured_lane_task_class_for_role_label`,
+  `admissible_selected_backend_uses_configured_lane_task_class_for_role_label`,
+  and `admissible_selected_backend_uses_configured_test_authoring_task_class_for_role_label`
+  across runtime dispatch and scheduler selection.
+  PR #350 integrated.
 ```
 
 #### ROUTE-002: agent-init aliases cannot resolve to orchestrator
@@ -287,6 +313,12 @@ Setup:
 
 Expected:
   blocked/rejected before selected_role accepted
+
+Implementation status:
+  covered by `agent_init_selected_role_allowed`,
+  `agent_init_explicit_role_rejects_dev_team_orchestrator_runtime_role_aliases`,
+  and `agent_init_explicit_role_preserves_requested_role_as_dispatch_target`.
+  PR #340 integrated.
 ```
 
 #### IO-001: task attempt artifact reads require regular file and max size
@@ -345,11 +377,12 @@ cargo build
 
 ## Wave Tracking Table
 
-Fill this after each wave. Current baseline row remains pending because no proof was run in this task.
+Fill this after each wave. Current baseline row remains pending until the full
+Wave 0 batch proof is run.
 
 | Wave | Name | Goal | Required artifact / tests | Proof commands | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | Baseline freeze and defect fixtures | Freeze current behavior and create failing fixtures for all known bug classes before large movement. | `crates/vida/tests/host_bridge_authority_smoke.rs`, `crates/vida/tests/runtime_authority_smoke.rs`, `crates/vida/tests/taskflow_routing_smoke.rs`, `crates/vida/tests/artifact_io_smoke.rs`, `crates/docflow-cli/tests/git_hardening_smoke.rs` or the approved existing smoke files. | `cargo fmt --all -- --check`; `git diff --check`; Wave 0 baseline proof batch from above | partial | IO-001, DOC-001, and HB-001 through HB-005 targeted proofs are green; the host-bridge test group task is closed; broader Wave 0 baseline proof and remaining RT/ROUTE fixtures still need execution. |
+| 0 | Baseline freeze and defect fixtures | Freeze current behavior and create failing fixtures for all known bug classes before large movement. | `crates/vida/tests/host_bridge_authority_smoke.rs`, `crates/vida/tests/runtime_authority_smoke.rs`, `crates/vida/tests/taskflow_routing_smoke.rs`, `crates/vida/tests/artifact_io_smoke.rs`, `crates/docflow-cli/tests/git_hardening_smoke.rs` or the approved existing smoke files. | `cargo fmt --all -- --check`; `git diff --check`; targeted ROUTE/HB/IO/DOC proof commands; Wave 0 baseline proof batch from above | partial | IO-001, DOC-001, HB-001 through HB-005, ROUTE-001, and ROUTE-002 targeted proofs are green; PR #340 and #350 are integrated; broader Wave 0 baseline proof and remaining RT fixtures still need execution. |
 | 1 | `runtime-path-policy` | Create a single safe IO/path boundary and remove direct unsafe reads/writes from authority-sensitive runtime paths. | `crates/runtime-path-policy/*` plus targeted call-site migration. | Wave 1 proof batch from the source plan. | pending |  |
 | 2 | `operator-output` | Extract shared operator rendering and envelope logic. | `crates/operator-output/*` and moved human output code. | Wave 2 proof batch from the source plan. | pending |  |
 | 3 | `taskflow-host-bridge` | Move host bridge request / provenance / completion logic behind a bounded boundary. | Host bridge request, provenance, completion, artifact scope modules. | Wave 3 proof batch from the source plan. | pending |  |
@@ -433,6 +466,19 @@ These are the source-plan anchors this tracker is tied to:
 - HB-005 immutable-scope guard is now covered in
   `crates/vida/src/lane_surface.rs::host_bridge_implementation_scope_uses_immutable_packet`;
   mutable request `owned_paths` cannot widen TaskFlow packet scope.
+- ROUTE-001 is now covered in
+  `crates/vida/src/runtime_contract_vocab.rs`,
+  `crates/vida/src/runtime_dispatch_execution.rs`, and
+  `crates/vida/src/runtime_dispatch_state.rs`; developer and test-authoring
+  labels resolve through configured `task_class` admissibility.
+- ROUTE-002 is now covered in `crates/vida/src/init_surfaces.rs`; explicit
+  agent-init role aliases cannot resolve to `orchestrator`, and requested
+  human labels remain the selection `dispatch_target`.
+- Open PR intake mapping:
+  - PR #340: integrated as ROUTE-002.
+  - PR #350: integrated as ROUTE-001.
+  - PR #356: follow-up required for dispatch-target alias normalization; not
+    integrated in this Wave 0 routing slice.
 - Delegation scorecard for IO-001 / DOC-001:
   - executor `gpt-5.4-mini`: useful for bounded edits and repetitive proof
     runs, but required an additional pass to harden the docflow git-status
@@ -453,6 +499,16 @@ These are the source-plan anchors this tracker is tied to:
   - Root orchestrator remains responsible for accepting evidence, updating
     TaskFlow, running debug build, committing, pushing, self-diagnostic, and
     PR protocol.
+- Delegation scorecard for ROUTE-001 / ROUTE-002:
+  - `gpt-5.4-mini` was useful for PR triage/exploration with concrete mapping
+    quality around 8-9/10, but write-agent runs for this slice timed out or
+    failed to return final evidence, so they are not closure-quality execution
+    evidence in this environment.
+  - `gpt-5.5-medium` validator `Ramanujan` returned PASS after rework, quality
+    score 8.5/10, validator self-score 8/10, 42 tool calls/steps, and token
+    usage not exposed by host.
+  - Root orchestrator performed the accepted code integration, focused proof,
+    docs update, TaskFlow update, commit, push, and PR closure protocol.
 - Next task routing recommendation: keep `gpt-5.4-mini` for narrow
   implementation packets only when the prompt names exact caller roots,
   fail-closed behavior, TaskFlow metadata updates, proof commands, and commit
