@@ -3,6 +3,60 @@
 Purpose: record per-task executor/validator efficiency evidence so the next VIDA
 task can choose a cheaper or stronger model deliberately.
 
+## 2026-06-12 - pr355-host-bridge-artifact-state-root
+
+Scope:
+- Task: `pr355-host-bridge-artifact-state-root`
+- PR: `#355`
+- File: `crates/vida/src/agent_dispatch_surface.rs`
+- Commit: `5885bbf11`
+- Proof:
+  - `cargo +1.95.0 test -p vida host_bridge_attach_artifact_records_attempt_authority_and_updates_request -- --nocapture`
+  - `wsl.exe bash -lc 'cd /mnt/c/project/vida-stack && cargo +1.95.0 test -p vida --bin vida host_bridge_attach_artifact_blocks_symlinked_normalized_artifact_directory -- --nocapture'`
+  - `cargo +1.95.0 build`
+  - `rustfmt +1.95.0 --edition 2021 --check crates/vida/src/agent_dispatch_surface.rs`
+  - `git diff --cached --check`
+  - `vida task validate-graph --json`
+  - `vida task closure-ready pr355-host-bridge-artifact-state-root --json`
+
+Observed model results:
+- Read-only hunk-isolation executor `gpt-5.4-mini` with `xhigh` reasoning:
+  9/10. It correctly identified that PR #355 hunks were disjoint from existing
+  dirty provenance hunks and recommended hunk-safe staging. Tokens were not
+  exposed by the host.
+- Initial write executor `gpt-5.4-mini` with `xhigh` reasoning: 8/10 after
+  validation. It produced the correct production helper and call-site shape, but
+  its Unix regression was false-green because Windows ran zero `#[cfg(unix)]`
+  tests and the test path relied on an unrelated dirty provenance hunk.
+- First validator `gpt-5.5` with `medium` reasoning: 8/10 with 8/10 confidence.
+  It rejected closure for the exact false-green risk: the symlink regression did
+  not independently prove the normalized artifact writer without dirty
+  provenance behavior.
+- Rework executor `gpt-5.4-mini` with `xhigh` reasoning: 8.5/10. It added a
+  receipt-valid test fixture so the Unix regression reached the writer without
+  relying on unrelated hunks, but still reported only Windows zero-test proof.
+- Orchestrator correction: ran the exact Linux target with
+  `cargo +1.95.0 test -p vida --bin vida ...`, fixed the missing bin-test import,
+  reran Linux proof with one real test, reran Windows compatibility, build,
+  file-scoped rustfmt, and cached diff-check.
+- Final validator `gpt-5.5` with `medium` reasoning: 9/10 with 9/10 confidence.
+  It accepted closure and confirmed unrelated dirty hunks were no longer required
+  for the PR #355 proof path.
+
+Session optimization rule:
+- Before launching an executor for platform-gated tests, identify the exact cargo
+  target that owns the test. Tests inside `crates/vida/src/main.rs` require
+  `cargo test -p vida --bin vida <test-name>`, not broad `cargo test -p vida
+  <test-name>`, which may compile integration tests and waste minutes.
+- For same-file dirty targets, keep the read-only mini hunk-isolation preflight;
+  it prevented broad writes and enabled hunk-safe staging.
+- A cheap executor may own the patch, but it must either run the platform-gated
+  proof on the platform where the test is compiled or explicitly report the proof
+  gap. Treat `0 tests` as a blocker until a real platform proof exists.
+- Use the stronger validator after local proof, not before the platform target is
+  known. This avoids paying the validator to find a proof-target error the
+  orchestrator can detect with one exact command.
+
 ## 2026-06-11 - pr343-lane-retire-closure-proof-bypass
 
 Scope:
