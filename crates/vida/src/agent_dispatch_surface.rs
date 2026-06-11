@@ -568,9 +568,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     {
         Ok(store) => store,
         Err(_) => {
-            if !modern_pending_host_bridge_request(request)
-                && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
-            {
+            if !retryable_host_bridge_completion_request_for_state_root(state_root, request) {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
             return blockers;
@@ -600,21 +598,13 @@ async fn append_host_bridge_dispatch_receipt_blockers(
     let receipt = match store.run_graph_dispatch_receipt(run_id).await {
         Ok(Some(receipt)) => receipt,
         Err(_) => {
-            if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
-                .await
-                && !modern_pending_host_bridge_request(request)
-                && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
-            {
+            if !retryable_host_bridge_completion_request_for_state_root(state_root, request) {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
             return;
         }
         Ok(None) => {
-            if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
-                .await
-                && !modern_pending_host_bridge_request(request)
-                && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
-            {
+            if !retryable_host_bridge_completion_request_for_state_root(state_root, request) {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
             return;
@@ -669,19 +659,6 @@ async fn host_bridge_request_matches_reconciled_blocked_status(
     status.status == "blocked"
         && status.active_node.trim() == request_target
         && status.policy_gate == "host_tool_bridge_adapter_required"
-}
-
-fn modern_pending_host_bridge_request(request: &serde_json::Value) -> bool {
-    if host_bridge_request_string(request, "status") != Some("pending")
-        || host_bridge_request_string(request, "dispatch_transport") != Some("host_tool_bridge")
-    {
-        return false;
-    }
-    let Some(request_path) = host_bridge_request_string(request, "request_path") else {
-        return false;
-    };
-    let normalized = request_path.replace('\\', "/");
-    normalized.contains("/.vida/data/state/host-tool-bridge/requests/")
 }
 
 fn host_bridge_artifact_has_retryable_completion_blocker(artifact: &serde_json::Value) -> bool {
@@ -4903,6 +4880,124 @@ mod tests {
             .expect("blocker codes")
             .iter()
             .any(|code| code == "host_bridge_request_untrusted_path"));
+        assert!(payload["host_bridge"]["host_tool_calls"]
+            .as_array()
+            .expect("host tool calls")
+            .is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_missing_receipt_blocks_pending_request() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-missing-receipt-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("state root");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let run_id = "run-hb-002";
+        runtime.block_on(async {
+            let store = state_store::StateStore::open(state_root.clone())
+                .await
+                .expect("open store");
+            store
+                .create_task_with_fixture_parent(CreateTaskRequest {
+                    task_id: run_id,
+                    title: "Host bridge missing receipt",
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status: "open",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: ".",
+                })
+                .await
+                .expect("create task");
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("refresh snapshot");
+        });
+
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        for path in [&request_path, &packet_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(&packet_path, b"{}").expect("packet");
+        std::fs::write(&result_path, b"{}").expect("result");
+        std::fs::write(&receipt_path, b"{}").expect("receipt");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-hb-002",
+            "run_id": run_id,
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("write request");
+
+        let _cwd = guard_current_dir(&root);
+        let _env = EnvVarGuard::unset("VIDA_ROOT");
+        let exit = runtime.block_on(run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: Vec::new(),
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: None,
+            consolidation_receipt_id: None,
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(state_root.clone()),
+        }));
+
+        assert_eq!(exit, ExitCode::from(1));
+        let blockers = runtime.block_on(host_bridge_request_provenance_blockers(
+            &request_path,
+            &request,
+            Some(&state_root),
+        ));
+        assert!(blockers
+            .iter()
+            .any(|code| code == "host_bridge_dispatch_receipt_missing"));
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, blockers, Some(&state_root));
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes")
+            .iter()
+            .any(|code| code == "host_bridge_dispatch_receipt_missing"));
         assert!(payload["host_bridge"]["host_tool_calls"]
             .as_array()
             .expect("host tool calls")

@@ -40,9 +40,12 @@ This file is intentionally a tracker, not a rewrite of the plan. The wave defini
   - `cargo test -p vida --test task_smoke task_attempt_collect_rejects -- --nocapture`
   - `cargo test -p vida --test task_smoke task_attempt_implementation_artifact_validation -- --nocapture`
   - `cargo test -p vida host_bridge_taskflow_implementation_artifacts_blocks_invalid_artifact_evidence -- --nocapture`
+  - `cargo test -p vida host_bridge_missing_receipt`
+  - `cargo test -p vida host_bridge_missing_receipt -- --nocapture`
   - `cargo build`
-- Host-bridge authority proof was re-run and currently blocks earlier on
-  `host_bridge_dispatch_receipt_missing` before artifact attachment.
+- Host-bridge authority proof was re-run after the HB-002 production authority
+  fix and now blocks earlier on `host_bridge_dispatch_receipt_missing` before
+  artifact attachment.
 - This rework still sits inside the broader Wave 0 batch; the full batch proof
   remains pending.
 
@@ -355,6 +358,11 @@ These are the source-plan anchors this tracker is tied to:
   with explicit trusted-state-dir authority over an attacker request path;
   the blocked exit is asserted directly and `host_tool_calls = []` remains
   asserted through the shared payload helper.
+- HB-002 production authority fix is now covered in
+  `crates/vida/src/agent_dispatch_surface.rs` on the public host-bridge path
+  with a real `.vida/data/state` root, bounded packet/result/receipt paths,
+  and no persisted dispatch receipt; the blocked exit is asserted directly and
+  `host_tool_calls = []` remains asserted through the shared payload helper.
 - Delegation scorecard for IO-001 / DOC-001:
   - executor `gpt-5.4-mini`: useful for bounded edits and repetitive proof
     runs, but required an additional pass to harden the docflow git-status
