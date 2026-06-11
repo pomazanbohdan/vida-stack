@@ -2333,44 +2333,9 @@ pub(crate) fn missing_task_stale_blocked_run_can_retire(
     let prelaunch_packet_ready = receipt.dispatch_status == "executed"
         && lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready");
-    let exception_takeover_stale_blocked = receipt.dispatch_status == "blocked"
-        && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|receipt_id| !receipt_id.trim().is_empty());
-    let active_exception_takeover_stale_blocked = receipt.dispatch_status == "executed"
-        && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|receipt_id| !receipt_id.trim().is_empty());
-    let bridge_request_stale_blocked = receipt.dispatch_status == "bridge_request_pending"
-        && lane_status == crate::LaneStatus::LaneOpen.as_str()
-        && receipt.blocker_code.as_deref() == Some("host_tool_bridge_adapter_required");
-    let exception_takeover_bridge_request_stale_blocked = receipt.dispatch_status
-        == "bridge_request_pending"
-        && lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
-        && receipt.blocker_code.as_deref() == Some("host_tool_bridge_adapter_required");
 
     (receipt.dispatch_status == "blocked" && blocked_or_running)
         || prelaunch_packet_ready
-        || exception_takeover_stale_blocked
-        || active_exception_takeover_stale_blocked
-        || bridge_request_stale_blocked
-        || exception_takeover_bridge_request_stale_blocked
 }
 
 const MAX_LANE_PACKET_READ_BYTES: u64 = 1024 * 1024;
@@ -7247,7 +7212,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lane_retire_allows_exception_takeover_missing_task_stale_blocked_run() {
+    async fn lane_retire_rejects_exception_takeover_missing_task_stale_blocked_run_without_closed_unit()
+    {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -7350,6 +7316,20 @@ mod tests {
             )
             .await
             .expect("persist continuation binding");
+        let seeded_status = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read seeded status");
+        let seeded_receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read seeded receipt")
+            .expect("receipt should exist");
+        let seeded_binding = store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read seeded continuation binding")
+            .expect("binding should remain present");
         drop(store);
         wait_for_state_unlock(&root);
 
@@ -7364,43 +7344,47 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
-            .expect("reopen store after exception retire");
-        let retired = store
+            .expect("reopen store after exception retire rejection");
+        let retained = store
             .run_graph_status(run_id)
             .await
-            .expect("read retired status");
-        assert_eq!(retired.status, "completed");
-        assert_eq!(retired.lifecycle_stage, "closure_complete");
-        assert_eq!(retired.resume_target, "none");
-        assert!(!retired.recovery_ready);
+            .expect("read retained status");
+        assert_eq!(retained.status, seeded_status.status);
+        assert_eq!(retained.lifecycle_stage, seeded_status.lifecycle_stage);
+        assert_eq!(retained.resume_target, seeded_status.resume_target);
+        assert_eq!(retained.recovery_ready, seeded_status.recovery_ready);
         let receipt = store
             .run_graph_dispatch_receipt(run_id)
             .await
-            .expect("read retired receipt")
+            .expect("read retained receipt")
             .expect("receipt should exist");
+        assert_eq!(receipt.dispatch_status, seeded_receipt.dispatch_status);
+        assert_eq!(receipt.lane_status, seeded_receipt.lane_status);
+        assert_eq!(receipt.dispatch_target, seeded_receipt.dispatch_target);
         assert_eq!(
-            receipt.lane_status,
-            crate::LaneStatus::LaneCompleted.as_str()
+            receipt.dispatch_packet_path, seeded_receipt.dispatch_packet_path
         );
-        assert_eq!(
-            receipt.downstream_dispatch_status.as_deref(),
-            Some("retired_closed_task_run")
-        );
-        assert!(store
+        let binding = store
             .run_graph_continuation_binding(run_id)
             .await
             .expect("read continuation binding")
-            .is_none());
+            .expect("binding should remain present");
+        assert_eq!(binding.status, seeded_binding.status);
+        assert_eq!(binding.task_id, seeded_binding.task_id);
+        assert_eq!(
+            binding.active_bounded_unit,
+            seeded_binding.active_bounded_unit
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn lane_retire_allows_bridge_pending_missing_task_stale_blocked_run() {
+    async fn lane_retire_rejects_bridge_pending_missing_task_stale_blocked_run() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -7473,6 +7457,20 @@ mod tests {
             )
             .await
             .expect("persist continuation binding");
+        let seeded_status = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read seeded status");
+        let seeded_receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read seeded receipt")
+            .expect("receipt should exist");
+        let seeded_binding = store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read seeded continuation binding")
+            .expect("binding should remain present");
         drop(store);
         wait_for_state_unlock(&root);
 
@@ -7487,43 +7485,47 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(1));
 
         let store = StateStore::open_existing(root.clone())
             .await
-            .expect("reopen store after bridge-pending retire");
-        let retired = store
+            .expect("reopen store after bridge-pending retire rejection");
+        let retained = store
             .run_graph_status(run_id)
             .await
-            .expect("read retired status");
-        assert_eq!(retired.status, "completed");
-        assert_eq!(retired.lifecycle_stage, "closure_complete");
-        assert_eq!(retired.resume_target, "none");
-        assert!(!retired.recovery_ready);
+            .expect("read retained status");
+        assert_eq!(retained.status, seeded_status.status);
+        assert_eq!(retained.lifecycle_stage, seeded_status.lifecycle_stage);
+        assert_eq!(retained.resume_target, seeded_status.resume_target);
+        assert_eq!(retained.recovery_ready, seeded_status.recovery_ready);
         let receipt = store
             .run_graph_dispatch_receipt(run_id)
             .await
-            .expect("read retired receipt")
+            .expect("read retained receipt")
             .expect("receipt should exist");
+        assert_eq!(receipt.dispatch_status, seeded_receipt.dispatch_status);
+        assert_eq!(receipt.lane_status, seeded_receipt.lane_status);
+        assert_eq!(receipt.dispatch_target, seeded_receipt.dispatch_target);
         assert_eq!(
-            receipt.lane_status,
-            crate::LaneStatus::LaneCompleted.as_str()
+            receipt.dispatch_packet_path, seeded_receipt.dispatch_packet_path
         );
-        assert_eq!(
-            receipt.downstream_dispatch_status.as_deref(),
-            Some("retired_closed_task_run")
-        );
-        assert!(store
+        let binding = store
             .run_graph_continuation_binding(run_id)
             .await
             .expect("read continuation binding")
-            .is_none());
+            .expect("binding should remain present");
+        assert_eq!(binding.status, seeded_binding.status);
+        assert_eq!(binding.task_id, seeded_binding.task_id);
+        assert_eq!(
+            binding.active_bounded_unit,
+            seeded_binding.active_bounded_unit
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn lane_retire_allows_active_exception_takeover_missing_unit_stale_blocked_run() {
+    async fn lane_retire_rejects_active_exception_takeover_missing_unit_stale_blocked_run() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -7629,6 +7631,20 @@ mod tests {
             )
             .await
             .expect("persist active exception continuation binding");
+        let seeded_status = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read seeded status");
+        let seeded_receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read seeded receipt")
+            .expect("receipt should exist");
+        let seeded_binding = store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read seeded continuation binding")
+            .expect("binding should remain present");
         drop(store);
         wait_for_state_unlock(&root);
 
@@ -7643,37 +7659,41 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
-            .expect("reopen store after active exception retire");
-        let retired = store
+            .expect("reopen store after active exception retire rejection");
+        let retained = store
             .run_graph_status(run_id)
             .await
-            .expect("read retired status");
-        assert_eq!(retired.status, "completed");
-        assert_eq!(retired.lifecycle_stage, "closure_complete");
-        assert_eq!(retired.resume_target, "none");
-        assert!(!retired.recovery_ready);
+            .expect("read retained status");
+        assert_eq!(retained.status, seeded_status.status);
+        assert_eq!(retained.lifecycle_stage, seeded_status.lifecycle_stage);
+        assert_eq!(retained.resume_target, seeded_status.resume_target);
+        assert_eq!(retained.recovery_ready, seeded_status.recovery_ready);
         let receipt = store
             .run_graph_dispatch_receipt(run_id)
             .await
-            .expect("read retired receipt")
+            .expect("read retained receipt")
             .expect("receipt should exist");
+        assert_eq!(receipt.dispatch_status, seeded_receipt.dispatch_status);
+        assert_eq!(receipt.lane_status, seeded_receipt.lane_status);
+        assert_eq!(receipt.dispatch_target, seeded_receipt.dispatch_target);
         assert_eq!(
-            receipt.lane_status,
-            crate::LaneStatus::LaneCompleted.as_str()
+            receipt.dispatch_packet_path, seeded_receipt.dispatch_packet_path
         );
-        assert_eq!(
-            receipt.downstream_dispatch_status.as_deref(),
-            Some("retired_closed_task_run")
-        );
-        assert!(store
+        let binding = store
             .run_graph_continuation_binding(run_id)
             .await
             .expect("read continuation binding")
-            .is_none());
+            .expect("binding should remain present");
+        assert_eq!(binding.status, seeded_binding.status);
+        assert_eq!(binding.task_id, seeded_binding.task_id);
+        assert_eq!(
+            binding.active_bounded_unit,
+            seeded_binding.active_bounded_unit
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
