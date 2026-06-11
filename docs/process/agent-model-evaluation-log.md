@@ -3,6 +3,150 @@
 Purpose: record per-task executor/validator efficiency evidence so the next VIDA
 task can choose a cheaper or stronger model deliberately.
 
+## Required Scorecard Shape
+
+Every completed task that used delegated execution, validation, or model-routing
+evidence must add a compact scorecard before the next unrelated task starts.
+
+Required fields:
+
+1. task id, parent/wave, PR/source when applicable, owned files, commit hashes,
+2. proof commands and pass/fail/not-run status,
+3. executor model/carrier, reasoning effort, role, score out of 10, tokens used
+   or `not_exposed_by_host`, tool-call count, step count, changed files, proof
+   quality, and rework required,
+4. validator model/carrier, reasoning effort, score out of 10, tokens used or
+   `not_exposed_by_host`, tool-call count, step count, accepted/rejected verdict,
+   false-green findings, missing proof, unrelated hunk findings, and residual
+   risk,
+5. orchestrator action, including local proof, staged-scope correction, TaskFlow
+   close, commit, push, docs update, parent/wave closure check, and handle
+   cleanup,
+6. Post-Task Self-Analysis: cite the canonical STOP gate in
+   `docs/process/project-orchestrator-operating-protocol.md`, record the base
+   fields, all 20 fixed criteria outcomes, dynamic criteria created from the
+   latest session segment, meta-analysis remediation outcomes, and
+   `workflow_score_10`,
+7. next-task selection rule that changes future routing, prompt shape, proof
+   bundle, or model choice.
+
+Do not invent token counts. If the host does not expose tokens or tool calls,
+write `not_exposed_by_host` and record any observed approximate count only when
+it is clearly labeled as approximate.
+
+## 2026-06-12 - todo-agent-optimization-top-level-docs
+
+Scope:
+- Task: `todo-agent-optimization-top-level-docs`
+- Parent: `pr-open-runtime-hardening-342-343-349-352-355-356-358-360-361`
+- Files: `AGENTS.sidecar.md`,
+  `docs/process/project-orchestrator-operating-protocol.md`,
+  `docs/process/team-development-and-orchestration-protocol.md`,
+  `docs/process/project-orchestrator-startup-bundle.md`,
+  `docs/process/agent-model-evaluation-log.md`
+- Proof:
+  - `git diff --check -- AGENTS.sidecar.md docs/process/project-orchestrator-operating-protocol.md docs/process/team-development-and-orchestration-protocol.md docs/process/project-orchestrator-startup-bundle.md docs/process/agent-model-evaluation-log.md`
+  - `vida docflow check AGENTS.sidecar.md docs/process/project-orchestrator-operating-protocol.md docs/process/team-development-and-orchestration-protocol.md docs/process/project-orchestrator-startup-bundle.md docs/process/agent-model-evaluation-log.md --json`
+  - `vida task validate-graph --json`
+  - `cargo +1.95.0 build`
+
+Observed model results:
+- Orchestrator-only documentation implementation: 8/10. The task was prompted
+  directly by the operator while pause was active, so no executor agent was
+  launched. The change promoted wave-first execution, the post-task checklist,
+  active publication authorization, and required scorecard shape to top-level
+  project instructions. Tokens and tool-call usage are not exposed by the host.
+- Validator: local DocFlow, diff hygiene, graph validation, and debug build.
+  No separate model validator was launched because the bounded scope was
+  documentation/process alignment and the operator explicitly asked to update
+  instructions rather than run another model experiment.
+- Orchestrator correction: fixed a sidecar numbering inconsistency by moving
+  runtime-DX rules into a separate overlay instead of continuing the old list
+  after the new epic optimization overlay.
+
+Post-Task Self-Analysis:
+- Worked: direct owner-doc edits were faster than delegating because the user
+  asked for explicit instruction changes and the target docs were known.
+- Waste: the first checklist wording hid self-analysis under generic
+  optimization, which forced a second documentation pass.
+- Risk: missing explicit self-analysis would let future tasks close with metrics
+  but no process learning.
+- Next change: require self-analysis as a named closure gate before unrelated
+  work, and update docs immediately when the analysis changes a rule.
+- Docs update: yes; top-level sidecar, orchestrator protocol, team protocol, and
+  scorecard template were updated.
+- workflow_score_10: 8/10. Proof and scope were solid, but the first pass missed
+  one operator-required criterion.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `pr-open-runtime-hardening-342-343-349-352-355-356-358-360-361`.
+2. Wave/parent closure distance: partial, this process task improves epic
+   execution discipline but does not close a wave child.
+3. Scope and non-goals stable: pass, docs-only instruction update.
+4. Dirty worktree handled: pass, unrelated Rust/untracked files left unstaged.
+5. Executor cheapest capable: pass, local orchestrator was cheaper than launching
+   a model because the operator requested direct instruction changes.
+6. Validator matched risk: pass, local DocFlow/diff/graph/build proof was enough
+   for process docs; no authority code changed.
+7. Prompt packet shape: pass for local TODO; no delegated prompt used.
+8. Agent handles: pass, no new agents launched.
+9. Token/tool/step telemetry: partial, host token/tool exact counts not exposed.
+10. Avoidable commands: pass, identified missing self-analysis as avoidable
+    second-pass cause.
+11. Proof strength: pass, DocFlow, diff hygiene, graph, and build proof.
+12. Public/release proof: not applicable, no public CLI behavior changed.
+13. Debug build: pass, `cargo +1.95.0 build`.
+14. TaskFlow state: pass, graph valid and closure-ready checked before close.
+15. Staging by invariant: pending until commit, docs-only files must be staged.
+16. Publication authorization: pass, active epic has repeatable task push
+    instruction.
+17. Evaluation docs: pass, this scorecard records the rule change.
+18. Parent/wave metrics: pending after task close.
+19. New defects/follow-ups: none required after this docs pass.
+20. Next routing rule: pass, self-analysis STOP gate blocks future task starts
+    until complete.
+
+Dynamic criteria created from this session segment:
+1. User-correction criterion: if the operator asks "where is X?" after a
+   checklist answer, treat that as a missing explicit gate, not as a request for
+   explanation only. Evidence: the next docs update must name the gate and show
+   where it blocks continuation.
+2. Dynamic-extension criterion: every Post-Task Self-Analysis must create
+   session-specific criteria from events since the previous task closure, or
+   explicitly prove that the fixed list already covered all new events.
+3. Closure-delay criterion: when acceptance expands during a docs task, do not
+   close or commit until the expanded acceptance is reflected in the owner doc,
+   top-level overlay, and scorecard template.
+4. Deduplication criterion: keep detailed criteria in one owner doc and make
+   sidecar/team docs reference it, rather than copying full lists into multiple
+   surfaces.
+5. Pause/resume criterion: after pause is lifted by a write request, the
+   orchestrator must state why the request is explicit resume for that bounded
+   write and must not silently resume unrelated epic work until the requested
+   docs/task slice closes.
+
+Meta-analysis remediation:
+- Waste remediation: converted hidden self-analysis into a named STOP gate.
+- Risk remediation: expanded owner protocol to 20 criteria and required
+  docs/scripts/code/tests/TaskFlow remediation decisions.
+- Dynamic remediation: added a mandatory dynamic-criteria requirement so future
+  self-analysis learns from the latest session segment instead of relying only
+  on the fixed checklist.
+- Documentation remediation: updated sidecar, orchestrator protocol, team
+  protocol, startup bundle, and scorecard template.
+- Script/code remediation: not needed for this docs-only task; future repeated
+  misses should become a script/runtime guard or TaskFlow optimization defect.
+
+Next-task selection rule:
+- For future process-rule updates, use local orchestrator implementation when
+  the operator asks for immediate instruction changes and the affected files are
+  owner docs with clear wording. Use a mini read-only validator only when the
+  requested rule conflicts with existing process law or spans more than one
+  owner layer.
+- After this task, every closed task must run the post-task checklist and record
+  scorecard evidence before unrelated work starts.
+
 ## 2026-06-12 - pr355-host-bridge-artifact-state-root
 
 Scope:

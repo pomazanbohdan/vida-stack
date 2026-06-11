@@ -71,6 +71,17 @@ The normal top-level loop is:
 8. dispatch the next configured lane,
 9. synthesize the result into TaskFlow and the next bounded step or closure.
 
+For long-running refactor epics, the loop is specialized as a wave-first
+optimization loop:
+
+1. select the wave with the smallest verified closure distance,
+2. bind only the next child task or bounded child batch inside that wave,
+3. run the three-step task loop (`Bind -> Delegate -> Close`),
+4. after each task, update the model-routing scorecard and parent/wave closure
+   state before selecting the next child,
+5. close the wave parent before moving to an unrelated wave when its children,
+   proof, release/install, and diagnostic gates are complete.
+
 Generic owner references:
 
 1. active-unit binding, anti-stop, final-report, and continuation law are owned by `instruction-contracts/core.orchestration-runtime-capsule`, `instruction-contracts/core.orchestration-protocol`, and `runtime-instructions/work.taskflow-protocol`,
@@ -87,6 +98,18 @@ Project residue:
 5. treat CI after push as diagnostic unless the active bounded unit is release/mainline/installer/CI architecture admission,
 6. keep historical release labels and concrete blocker names as evidence only, not permanent routing law,
 7. when `vida.config.yaml -> autonomous_execution.agent_only_development` is true, the project default is VIDA agent orchestration; a current VIDA `agent-init` packet, host-tool bridge request, sticky continuation intent, or visible agent-only runtime policy is not by itself explicit authorization to use a spawn-capable host subagent bridge when the host tool requires separate explicit subagent/delegation permission.
+
+Active-epic publication residue:
+
+1. when the current operator explicitly instructs "commit and push after each
+   task" or equivalent wording for the active epic, that instruction is the
+   current repeatable publication authorization for scoped task commits and
+   matching documentation scorecard commits,
+2. the authorization remains bounded to the active epic/session pattern and does
+   not authorize unrelated publication, broad batch publication, or GitHub
+   mutations outside the active TaskFlow item,
+3. if the operator pauses, revokes, or narrows publication, return to the generic
+   "push only when currently authorized" rule.
 
 The orchestrator must not:
 
@@ -241,6 +264,198 @@ Before starting a new bounded task, the orchestrator should decide:
 7. whether similar report items can be batched into one TaskFlow mutation window.
 
 Do not use `vibe_cli` or `jcode_nim_cli` for root-session write authority, task closure, receipt fabrication, or final proof acceptance. Their output is advisory evidence until the orchestrator validates it against source, TaskFlow, runtime receipts, or focused proof. `jcode_nim_cli` remains experimental until `jcode run --json` reports a provider label consistent with `jcode provider current` for the selected NIM model.
+
+## Wave-First Epic Optimization Rule
+
+The active refactor epic is optimized for wave closure, not leaf-task count.
+
+Before selecting the next work item, compute or inspect closure distance for the
+candidate waves:
+
+1. open child count,
+2. blocked child count,
+3. missing proof or closure-ready blockers,
+4. dirty-file overlap and staging risk,
+5. same-file or same-contract conflict domains,
+6. expected debug/build/test cost,
+7. release/install cost if the wave can close,
+8. open PR or GitHub mutation coupling,
+9. runtime ambiguity or ownership blockers,
+10. validator residual risk from the last similar task.
+
+Select the wave with the smallest closure distance unless current user wording,
+runtime binding, open PR priority, or a critical blocker explicitly requires a
+different bounded unit.
+
+Do not optimize for closed-task percentage alone. The progress report must
+include closed waves over total waves whenever the question is about epic
+completion.
+
+## Three-Step Task Optimization Loop
+
+Every task in a long-running refactor epic uses:
+
+1. `Bind`
+2. `Delegate`
+3. `Close`
+
+`Bind` must record:
+
+1. active task id and parent/wave,
+2. why this task is selected now,
+3. exact invariant or documentation contract,
+4. owned paths and out-of-scope paths,
+5. dirty-worktree hunks that must remain unstaged,
+6. proof bundle,
+7. sequential versus parallel posture,
+8. model-routing expectation for executor and validator,
+9. stop condition and blocked fallback.
+
+`Delegate` must:
+
+1. use the cheapest capable executor for the bounded packet,
+2. use mini/highest-reasoning for hunk classification, preflight, docs/source
+   fidelity, test-only patches, and one-file implementation when the proof
+   bundle is explicit,
+3. use `gpt-5.5-low` or the configured low-cost stronger executor for focused
+   rework after mini timeout, under-coverage, or validator rejection,
+4. use `gpt-5.5-medium` or the configured medium validator for TaskFlow,
+   host-bridge, receipt authority, path policy, public CLI, release, or
+   wave-closure gates,
+5. keep validator prompts short: invariant gap, false-green tests, missing
+   proof, unrelated hunks, residual risk,
+6. classify every agent return before launching a replacement for the same
+   stage.
+
+`Close` must:
+
+1. run the focused proof bundle and the declared debug build,
+2. run `vida task validate-graph --json`,
+3. run `vida task closure-ready <task-id> --json`,
+4. close the TaskFlow item only when closure-ready passes,
+5. commit only scoped task files and push when the active publication pattern
+   authorizes it,
+6. update `docs/process/agent-model-evaluation-log.md`,
+7. run DocFlow/diff checks for documentation changes,
+8. commit and push the evaluation-doc update under the same publication pattern,
+9. run Post-Task Self-Analysis and update instructions again when the analysis
+   changes the operating rule,
+10. check parent/wave closure readiness,
+11. run runtime self-diagnostic when the task is architectural/process-shaped or
+    closes a wave,
+12. release-install and smoke the system `vida` binary before treating a wave as
+    operationally closed,
+13. select the next task using the updated scorecard, self-analysis, and
+    closure-distance data.
+
+## Post-Task Self-Analysis Gate
+
+Post-Task Self-Analysis is a STOP gate after every closed task and before
+selecting unrelated work. The next unrelated task is blocked until the
+orchestrator records the base fields, checks all 20 fixed criteria below,
+creates the dynamic criteria from the just-finished session segment, and applies
+or records the meta-analysis remediation.
+
+Base fields:
+
+1. `worked`: which executor, validator, proof, prompt, or local step produced
+   useful progress,
+2. `waste`: which commands, waits, scans, repeated checks, or agent prompts
+   were avoidable,
+3. `risk`: which false-green, dirty-hunk, runtime ambiguity, missing proof,
+   stale TaskFlow, timeout, or publication risk appeared,
+4. `next_change`: what changes in model choice, reasoning effort, prompt shape,
+   proof bundle, staging, or parallel/sequential posture for the next task,
+5. `docs_update`: whether the finding requires updating project instructions,
+   scorecard templates, prompt templates, scripts, code, tests, or TaskFlow
+   optimization defects,
+6. `workflow_score_10`: orchestrator process score considering cost, tool calls,
+   proof strength, rework, elapsed time, and closure quality.
+
+Twenty fixed required criteria:
+
+1. Active bounded unit was explicit before write-producing work.
+2. Wave/parent closure distance improved or the task had a documented reason to
+   run before the current wave.
+3. Task scope, non-goals, and owned paths stayed stable.
+4. Dirty worktree hunks were classified and preserved or converted to follow-up
+   tasks.
+5. Executor model choice was the cheapest capable option for the bounded risk.
+6. Validator model choice matched authority/risk level.
+7. Agent prompts had one task id, one goal, one proof bundle, one stop condition,
+   and telemetry requirements.
+8. Agent handles were closed/deleted or cleanup blockers were recorded.
+9. Token, tool-call, step, and wait costs were recorded or explicitly marked
+   `not_exposed_by_host`.
+10. Avoidable shell/read/status/doctor/build commands were identified.
+11. Proof bundle covered the claimed behavior rather than a narrow false-green.
+12. Public-surface proof, JSON/default output proof, help proof, or release proof
+    was included when the task type required it.
+13. Debug build or declared build substitute was run and recorded.
+14. TaskFlow graph, closure-ready, and close state were current.
+15. Commit staging was by invariant, not by whole dirty file.
+16. Push/publication matched the active authorization pattern.
+17. Documentation/evaluation scorecard was updated before unrelated work.
+18. Parent/wave closure-ready state and epic task/wave metrics were refreshed.
+19. New runtime/tooling/process defects discovered during the task were created,
+    updated, or explicitly deferred with reason.
+20. The next task routing rule changed when the evidence justified changing it,
+    or explicitly remained unchanged with reason.
+
+Dynamic criteria requirement:
+
+1. After checking the 20 fixed criteria, analyze the session segment from the
+   previous task closure to the current task closure.
+2. Create additional dynamic criteria that capture new failure modes, waste
+   patterns, proof gaps, agent behavior, runtime/tooling friction, user feedback,
+   or documentation drift that the fixed list did not cover.
+3. Each dynamic criterion must be actionable and testable in the next task, with
+   an expected evidence source or stop condition.
+4. Record which dynamic criteria become one-time checks for the next task and
+   which should be promoted into the fixed checklist, prompt template, script,
+   code, test, or project documentation.
+5. If no new dynamic criteria are created, explicitly state why the fixed
+   checklist fully covered the session segment.
+
+Meta-analysis remediation:
+
+1. For every `waste` item, choose one remediation: remove the redundant step,
+   batch it, replace it with a compact command, script it, document it, or create
+   a runtime/operator-efficiency defect.
+2. For every `risk` item, choose one remediation: add/adjust proof, update a
+   prompt/checklist, create a follow-up TaskFlow task, update code/tests/scripts,
+   update documentation/instructions, or record why no action is required.
+3. If remediation changes project behavior, update the relevant instruction,
+   process doc, script, code, test, or TaskFlow defect before unrelated work.
+4. If remediation cannot be completed inside the just-closed task, create or
+   update a follow-up with acceptance criteria and cite it in the scorecard.
+
+## Post-Task Optimization Checklist
+
+After every task, the orchestrator must track:
+
+1. TaskFlow state updated and closed/blocker recorded.
+2. Declared proof bundle result.
+3. Debug build result.
+4. Scoped commit hash and push result.
+5. Documentation/evaluation scorecard commit hash and push result.
+6. Completed agent handles closed or cleanup blocker recorded.
+7. Executor model, reasoning effort, score, tokens, tool calls, and rework count.
+8. Validator model, reasoning effort, score, tokens, tool calls, and residual
+   risk.
+9. Post-Task Self-Analysis recorded with base fields, all 20 fixed criteria,
+   dynamic criteria created from the latest session segment, and meta-analysis
+   remediation outcomes.
+10. False-green risks found and whether they became tests or follow-up tasks.
+11. Dirty hunks preserved or follow-up task created for adjacent useful hunks.
+12. Parent/wave closure readiness and remaining child count.
+13. Epic task percentage and wave percentage.
+14. Runtime friction or slow-command defects created/updated when observed.
+15. PR/open-source intake state when the task came from a PR.
+16. Next routing rule written in the agent evaluation log.
+
+If any checklist item cannot be proven, keep the current task or a follow-up
+TaskFlow item open instead of silently moving to unrelated work.
 
 Research-stage delegation modes:
 

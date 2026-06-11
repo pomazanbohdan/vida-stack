@@ -16,6 +16,7 @@ This protocol defines:
 6. how packet shapes, prompt-stack precedence, and boot-readiness rules stay explicit,
 7. how orchestrators phrase delegated packets so low-cost agents preserve source facts, scope, and proof evidence on the first attempt,
 8. how delegated lanes report usage, proof, commit, and operator-gated publication or wave-close follow-up obligations.
+9. how long-running epics optimize executor/validator routing after every task.
 
 This protocol does not define:
 
@@ -213,6 +214,18 @@ Dynamic model-routing rule:
    synthesis, record the reason, and use the score only as local routing evidence
    for future packets, not as proof that the current task is closed.
 
+Wave-first routing rule:
+
+1. in long-running refactor epics, model routing is evaluated inside the current
+   wave first; do not select unrelated ready leaves only because they are cheap,
+2. before launching a task, inspect whether finishing it moves a wave closer to
+   closure, removes a parent blocker, or only increases leaf percentage,
+3. prefer the task that reduces wave closure distance when proof risk and write
+   scope are comparable,
+4. record the updated task percent and wave percent after closure,
+5. when a wave reaches closure-ready, stop selecting leaf work and close the
+   wave parent with release/install and self-diagnostic evidence.
+
 Three-step task execution rule:
 
 1. Delegate and self-proof:
@@ -237,6 +250,39 @@ invariant is rejected twice, dirty-file overlap blocks scoped commits, the
 executor skipped required public proof, or the task needs a shared architectural
 decision. The three-step loop preserves quality gates while reducing
 root-session micro-operations.
+
+Post-task optimization rule:
+
+After every task packet, before selecting the next task, the orchestrator must
+complete or explicitly block this checklist:
+
+1. TaskFlow item updated, closed, or left open with an exact blocker.
+2. Focused proof bundle and debug build result recorded.
+3. Scoped code/test/doc commit created and pushed when the active publication
+   pattern authorizes it.
+4. Agent evaluation documentation updated, checked, committed, and pushed under
+   the same publication pattern.
+5. Completed host-agent handles closed or deleted; cleanup failures recorded by
+   handle id and blocker.
+6. Executor and validator scored on a 10-point scale with token/tool-call
+   telemetry or `not_exposed_by_host`.
+7. The canonical Post-Task Self-Analysis STOP gate from
+   `docs/process/project-orchestrator-operating-protocol.md` passed, including
+   base fields, 20 fixed criteria, dynamic criteria created from the latest
+   session segment, and meta-analysis remediation outcomes.
+8. Rework count, false-green risk, residual risk, and next model-routing rule
+   recorded.
+9. Dirty-worktree hunks outside the bounded invariant preserved unstaged or moved
+   to a follow-up TaskFlow item.
+10. Parent and wave `closure-ready` checked when the task changed closure
+    distance.
+11. Epic progress reported as both task percent and wave count.
+12. Any slow command, missing CLI option, runtime ambiguity, or documentation
+    inconsistency classified as a TaskFlow optimization/runtime defect.
+
+The checklist is a closure gate, not a final-report template. Missing checklist
+items require rework, follow-up, or an explicit blocker before unrelated work is
+selected.
 
 Optimized packet launch rule:
 
@@ -615,8 +661,15 @@ After each closure-ready task:
 1. update the TaskFlow task state with the completion, rework, or blocker result,
 2. run the declared debug build for the touched workspace or the broader workspace when no narrower debug build is declared,
 3. commit only the bounded closed scope after the task state update and debug build pass,
-4. push the task commit only when a current explicit operator instruction authorizes that specific task, publication batch, or repeatable publication pattern; task closure and a clean commit are not authorization by themselves,
-5. leave unfinished red-test or rework files unstaged unless they are the explicit closed scope.
+4. push the task commit when a current explicit operator instruction authorizes
+   that specific task, publication batch, or repeatable publication pattern; the
+   active epic instruction to push after every task is such a repeatable pattern
+   until the operator pauses, revokes, or narrows it,
+5. update the agent evaluation documentation with the executor/validator
+   scorecard and next routing rule,
+6. commit and push the evaluation documentation under the same active
+   publication pattern,
+7. leave unfinished red-test or rework files unstaged unless they are the explicit closed scope.
 
 After each closure-ready wave:
 

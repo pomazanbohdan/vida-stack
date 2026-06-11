@@ -34,6 +34,8 @@ Treat this bundle as the compact project `always_on_core` startup set for routin
 5. command timing, slow-gate classification, and script/gate optimization defaults from `command-timing-and-gate-optimization-protocol.md`,
 6. runtime-defect Error Search routing defaults from `project-error-search-runtime-diagnostics-protocol.md`.
 7. runtime development environment skill and issue-processing routing from `vida-runtime-development-environment.md`.
+8. wave-first epic optimization, three-step task execution, and post-task
+   scorecard/checklist routing from `project-orchestrator-operating-protocol.md`.
 
 ## Runtime Summary
 
@@ -48,6 +50,12 @@ After reading this bundle, the orchestrator should be able to answer:
 7. whether a full owner protocol read is required for an edge case,
 8. whether a runtime defect must use `META(Error Search)` because authority, ownership, receipt, proof, or routing law is involved.
 9. whether `vida-runtime-development` or `vida-github-issues` should be activated for the current bounded step.
+10. which wave has the smallest closure distance when the active goal is a
+    long-running epic,
+11. which executor/validator routing rule was learned from the last comparable
+    task,
+12. which post-task checklist items must be proven before selecting unrelated
+    work.
 
 ## Expansion Rule
 
@@ -62,6 +70,8 @@ Expand beyond it only when:
 5. command timing, slow-gate, or script optimization decisions are not settled by the timing protocol summary,
 6. the user explicitly asks for the deeper owner protocol,
 7. a runtime defect or multi-defect pool requires the full project Error Search overlay.
+8. wave-first closure distance, model-routing optimization, post-task scorecard,
+   or publication authorization is unclear.
 
 ## Routing
 
