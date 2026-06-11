@@ -15,7 +15,7 @@ This protocol defines:
 5. closure rules for packet-level work,
 6. how packet shapes, prompt-stack precedence, and boot-readiness rules stay explicit,
 7. how orchestrators phrase delegated packets so low-cost agents preserve source facts, scope, and proof evidence on the first attempt,
-8. how delegated lanes report usage, proof, commit, push, and wave-close follow-up obligations.
+8. how delegated lanes report usage, proof, commit, and operator-gated publication or wave-close follow-up obligations.
 
 This protocol does not define:
 
@@ -493,15 +493,15 @@ After each closure-ready task:
 1. update the TaskFlow task state with the completion, rework, or blocker result,
 2. run the declared debug build for the touched workspace or the broader workspace when no narrower debug build is declared,
 3. commit only the bounded closed scope after the task state update and debug build pass,
-4. push the task commit to the configured upstream immediately after the commit succeeds,
+4. do not push the task commit unless the operator gives a fresh affirmative request for that specific publication batch after the commit is ready,
 5. leave unfinished red-test or rework files unstaged unless they are the explicit closed scope.
 
 After each closure-ready wave:
 
 1. close or update every child TaskFlow item before closing the wave parent,
 2. run the declared wave proof and debug build,
-3. commit and push the wave closure state,
-4. run `docs/process/github-pr-processing-protocol.md` immediately after the pushed wave closure unless the operator explicitly says to skip PR processing for that wave.
+3. commit the wave closure state without pushing it unless the operator gives a fresh affirmative request for that specific wave-publication batch,
+4. do not run `docs/process/github-pr-processing-protocol.md` from wave closure unless the operator gives a fresh affirmative request for that specific PR-processing batch.
 
 If any of those fail:
 

@@ -245,7 +245,7 @@ Do not use `vibe_cli` or `jcode_nim_cli` for root-session write authority, task 
 Research-stage delegation modes:
 
 1. `external_readonly_complete` lets an external carrier fully complete analysis, specification, review, or proof-diagnosis work and return a structured report with evidence refs, risks, and a recommended next step. The root orchestrator validates that report before mutating TaskFlow or accepting closure.
-2. `external_patch_proposal` lets an external carrier prepare a patch proposal, proposed diff or file plan, verification commands, and rollback notes. The root orchestrator applies or rejects the diff, runs proof, commits, pushes, and closes TaskFlow.
+2. `external_patch_proposal` lets an external carrier prepare a patch proposal, proposed diff or file plan, verification commands, and rollback notes. The root orchestrator applies or rejects the diff, runs proof, commits, performs only explicitly authorized publication, and closes TaskFlow.
 3. Every task research intake must record both mode decisions: `external_readonly_complete` as the read-only evidence path and `external_patch_proposal` as the patch/diff proposal path. A mode may be marked `not_run` only with a reason such as no useful independent question, no lawful owned paths, unavailable carrier, duplicate output, or task risk too low for the extra attempt.
 
 Premature micro-splitting rule:

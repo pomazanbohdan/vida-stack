@@ -1,16 +1,16 @@
 # GitHub PR Processing Protocol
 
-Purpose: define the project-owned operating protocol for processing open GitHub pull requests in `vida-stack` when the operator is asked to merge, close, manually integrate, clean branches, and return to `main`.
+Purpose: define the project-owned operating protocol for processing open GitHub pull requests in `vida-stack` only after the operator gives a fresh affirmative request for the specific PR-processing batch that may merge, close, manually integrate, clean branches, and return to `main`.
 
 ## Scope
 
 This protocol applies to project-local PR triage and batch processing for the active `vida-stack` repository.
 
-Wave-closure trigger:
+Remote-mutation authorization gate:
 
-1. after a TaskFlow wave is closed, committed, and pushed, the orchestrator must run this PR-processing protocol unless the operator explicitly says to skip it for that wave,
-2. PR processing after a wave close is not optional cleanup; it verifies whether open PRs are now obsolete, duplicate, directly mergeable, or need manual integration against the newly pushed `main`,
-3. if the wave close leaves the worktree dirty or the push fails, record the blocker on the wave task and do not start PR processing until the pushed state is authoritative.
+1. wave closure, task closure, or a clean local commit is not authorization to run this PR-processing protocol, push `main`, close PRs, comment on PRs, merge PRs, or delete remote branches,
+2. before inventory expands into any remote-mutating PR-processing batch, the operator must give a fresh affirmative request naming that specific PR batch or publication scope,
+3. if that authorization is absent, record PR-processing as an available follow-up and stop before any GitHub mutation.
 
 It covers:
 
@@ -30,6 +30,7 @@ It does not replace GitHub issue triage, release publication, framework bootstra
    - Read the project bootstrap/sidecar context when the session has drifted.
    - Inspect `git status --short --branch`.
    - Resolve the current remote and ensure the target base is `main` unless the user explicitly names another base.
+   - Confirm the operator gave a fresh affirmative request for the specific remote-mutating PR-processing batch before any push, merge, PR comment, PR close, or remote branch deletion.
 
 2. Inventory open PRs.
    - Use `gh pr list --state open --json number,title,headRefName,baseRefName,mergeable,statusCheckRollup,url`.
