@@ -157,10 +157,6 @@ fn emit_dispatch_diagnosis_lines(
 }
 
 pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> ExitCode {
-    if matches!(inputs.render, crate::RenderMode::Plain) {
-        emit_status_toon_report(&inputs);
-        return ExitCode::SUCCESS;
-    }
     crate::surface_render::print_surface_header(inputs.render, "vida status");
     crate::surface_render::print_surface_line(inputs.render, "backend", inputs.backend_summary);
     crate::surface_render::print_surface_line(

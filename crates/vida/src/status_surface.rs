@@ -1179,7 +1179,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                     };
                     normalize_status_projection_json_shape(&mut summary_json);
-                    if !summary_only {
+                    if !summary_only && !as_json {
                         compact_status_projection_for_fast_operator_render(&mut summary_json);
                     }
                     let rendered_json = crate::operator_toon_report::select_fields(
