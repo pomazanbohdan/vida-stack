@@ -11096,18 +11096,28 @@ fn taskflow_factual_sandbox_h6_h8_runtime_packet_runner() {
         true,
     );
     assert!(
-        recovery_status.status.success(),
-        "{}{}",
+        !recovery_status.status.success(),
+        "recovery status should block while the delegated cycle is open: {}{}",
         String::from_utf8_lossy(&recovery_status.stdout),
         String::from_utf8_lossy(&recovery_status.stderr)
     );
     let recovery_json: serde_json::Value =
         serde_json::from_slice(&recovery_status.stdout).expect("recovery status json should parse");
     assert_eq!(recovery_json["surface"], "vida taskflow recovery status");
+    assert_eq!(recovery_json["status"], "blocked");
+    assert!(recovery_json["blocker_codes"]
+        .as_array()
+        .expect("recovery blocker codes should render")
+        .iter()
+        .any(|code| code == "open_delegated_cycle"));
     assert_eq!(
         recovery_json["recovery"]["run_id"],
         packet_latest_json["run_id"]
     );
+    assert!(recovery_json["recommended_command"]
+        .as_str()
+        .expect("recovery recommended command should render")
+        .contains("taskflow consume continue --run-id sandbox-h8-packet"));
 
     fs::remove_dir_all(project_root).expect("temp project root should be removed");
 }

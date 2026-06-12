@@ -6728,6 +6728,8 @@ impl RunGraphDispatchInitArtifacts {
             .dispatch_receipt
             .downstream_dispatch_packet_path
             .clone();
+        let taskflow_handoff_plan =
+            compact_taskflow_handoff_plan_for_dispatch_init(&self.taskflow_handoff_plan);
         serde_json::json!({
             "surface": "vida taskflow run-graph dispatch-init",
             "requested_run_id": self.requested_run_id,
@@ -6735,10 +6737,27 @@ impl RunGraphDispatchInitArtifacts {
             "dispatch_receipt": self.dispatch_receipt,
             "dispatch_packet_path": self.dispatch_packet_path,
             "downstream_dispatch_packet_path": downstream_dispatch_packet_path,
-            "taskflow_handoff_plan": self.taskflow_handoff_plan,
+            "taskflow_handoff_plan": taskflow_handoff_plan,
             "run_graph_bootstrap": self.run_graph_bootstrap,
+            "full_handoff_plan_location": "dispatch_packet",
         })
     }
+}
+
+fn compact_taskflow_handoff_plan_for_dispatch_init(plan: &serde_json::Value) -> serde_json::Value {
+    let mut summary = serde_json::Map::new();
+    for key in [
+        "status",
+        "handoff_ready",
+        "design_packet_activation_source",
+        "required_artifacts",
+        "execution_preparation_artifacts",
+    ] {
+        if let Some(value) = plan.get(key) {
+            summary.insert(key.to_string(), value.clone());
+        }
+    }
+    serde_json::Value::Object(summary)
 }
 
 fn dispatch_init_cache_record_id(value: &str) -> String {
@@ -7890,6 +7909,7 @@ async fn commit_previewed_run_graph_dispatch_init_artifacts(
                     "run_graph_dispatch_init",
                 )
                 .await?;
+                store.close().await;
                 Ok::<(), String>(())
             };
             match authoritative_commit.await {
