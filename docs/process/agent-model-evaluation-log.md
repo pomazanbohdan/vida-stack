@@ -2671,6 +2671,107 @@ Dynamic criteria created from this session segment:
    seeded test helpers must create the backing TaskFlow authority unless the
    specific test is explicitly about missing backing state.
 
+## 2026-06-12 - wave-0-runtime-tests-boot-smoke-closure
+
+Scope:
+- Task: `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Parent: `wave-0-runtime-tests`
+- Commits: `ccf769640`, `bf144b53b`
+- STOP doc commit before closure: `8b96a91ec`
+- Files: `crates/vida/tests/boot_smoke.rs`,
+  `docs/process/agent-model-evaluation-log.md`
+- TaskFlow closure:
+  - `vida task close wave-0-runtime-tests-boot-smoke-failure-classification --reason "boot_smoke broad proof green: cargo +1.95.0 test -p vida --test boot_smoke -- --nocapture passed 273/273; commits ccf769640,bf144b53b; STOP log 8b96a91ec" --json`
+  - `vida task show wave-0-runtime-tests-boot-smoke-failure-classification --json`
+    reported `status=closed`.
+- Proof:
+  - `cargo +1.95.0 fmt --all -- --check`
+  - `git diff --check -- crates/vida/tests/boot_smoke.rs`
+  - `cargo +1.95.0 test -p vida --test boot_smoke status_surface_supports_json_summary -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test boot_smoke status_surface_supports_compact_json_summary_view -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test boot_smoke status_surface_supports_color_emoji_render_mode_via_env -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test boot_smoke -- --nocapture`
+    passed 273/273 in 108.30s.
+  - `vida task closure-ready wave-0-runtime-tests-boot-smoke-failure-classification --json`
+    before close correctly reported leaf proof had to be closed with explicit
+    evidence.
+  - `vida task list --json`
+  - `vida taskflow graph explain --json`
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The remaining red proof was a parallel
+  state-access contention gap in positive status tests, and the cheapest safe
+  fix was a narrow test retry helper.
+- Validator: exact status tests plus full parallel `boot_smoke`, 9/10. The
+  declared planner proof target is now green in the same parallel mode that was
+  previously red.
+- Tokens/tool calls: `not_exposed_by_host`; long full-suite proof used native
+  shell timeout because `ctx_shell` has a shorter call limit.
+
+Post-Task Self-Analysis:
+- Worked: refusing to close after serial-only proof kept the declared parallel
+  target honest.
+- Waste: the first status retry patch did not include all positive status JSON
+  surfaces, causing one extra full-suite iteration.
+- Risk: expanding global lock retry would mask negative lock-remediation tests;
+  the fix kept state-access retry opt-in for positive read assertions.
+- Next change: identify all sibling positive surfaces before rerunning full
+  broad proof after a concurrency helper patch.
+- Docs update: yes, this STOP entry records the closure and dynamic criteria.
+- workflow_score_10: 8/10. Final proof is complete; one extra broad run was
+  avoidable.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: pass, the leaf defect task is closed.
+3. Scope and non-goals stable: pass, test retry semantics only.
+4. Dirty worktree handled: pass, unrelated dirty production files and untracked
+   notes remained unstaged.
+5. Executor cheapest capable: pass, local test helper edit.
+6. Validator matched risk: pass, exact positive status surfaces plus full
+   parallel boot_smoke.
+7. Prompt packet shape: not applicable, no delegated executor prompt.
+8. Agent handles: pass, no new agents launched.
+9. Token/tool/step telemetry: partial, host token/tool counts not exposed.
+10. Avoidable commands: partial, one extra full-suite run from incomplete sibling
+    surface coverage.
+11. Proof strength: pass, declared proof target `boot_smoke --nocapture` green
+    273/273.
+12. Public/release proof: pass for CLI status/doctor/taskflow smoke behavior.
+13. Debug build: pass through cargo test rebuilds.
+14. TaskFlow graph: pass, task closed and graph explain inspected.
+15. Staging by invariant: pass, only test and STOP doc files staged in their
+    respective commits.
+16. Publication authorization: pass, active epic continuation was already sticky.
+17. Evaluation docs: pass, STOP closure entry written before moving to next task.
+18. Parent/wave metrics: partial, leaf closed; parent/wave aggregate not yet
+    closed.
+19. New defects/follow-ups: none for boot_smoke; no residual red tests in the
+    declared target.
+20. Next routing rule: pass, select next ready TaskFlow item only after this STOP
+    commit and graph/ready inspection.
+
+Meta-analysis remediation:
+- Added opt-in state-access retry for positive status/doctor read assertions that
+  can legally see `degraded_lock_contention` during parallel integration tests.
+- Kept deterministic degraded lock surfaces available for negative
+  lock-remediation tests by not broadening the global retry predicate.
+- Required declared-target proof before TaskFlow closure, rather than accepting
+  serial-only proof as enough for a parallel proof target.
+
+Dynamic criteria created from this session segment:
+1. Declared-target closure criterion: a leaf task cannot close on a stronger or
+   adjacent proof mode if its planner metadata names a different command. Run and
+   record the declared command itself, or update the task metadata before
+   closure.
+2. Positive-sibling coverage criterion: after adding a retry/helper for one
+   positive surface test, search and patch sibling positive surfaces using the
+   same command family before rerunning a full broad suite.
+3. Negative-contract isolation criterion: when fixing test flakiness around lock
+   contention, keep negative tests on non-retrying helpers so fail-fast and
+   degraded fallback contracts remain observable.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -2680,5 +2781,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T08:32:00+03:00
+updated_at: 2026-06-12T08:36:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
