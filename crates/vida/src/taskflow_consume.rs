@@ -447,11 +447,18 @@ async fn consume_final_requested_owned_paths(
 fn apply_consume_final_downstream_dispatch_contract(
     dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     direct_consumption_ready: bool,
+    docflow_ready: bool,
+    conversational_mode: bool,
+    blocker_code: Option<&str>,
 ) {
     if direct_consumption_ready {
         return;
     }
-    if dispatch_receipt.downstream_dispatch_target.as_deref() != Some("closure") {
+    let docflow_verdict_block = super::blocker_code_str(super::BlockerCode::DocflowVerdictBlock);
+    let should_clear_downstream = (!docflow_ready && !conversational_mode)
+        || dispatch_receipt.downstream_dispatch_target.as_deref() == Some("closure")
+        || blocker_code == Some(docflow_verdict_block);
+    if !should_clear_downstream {
         return;
     }
     dispatch_receipt.downstream_dispatch_target = None;
@@ -965,6 +972,9 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         apply_consume_final_downstream_dispatch_contract(
                             &mut dispatch_receipt,
                             direct_consumption_ready,
+                            docflow_verdict.ready,
+                            role_selection.conversational_mode.is_some(),
+                            consume_final_blocker_code.as_deref(),
                         );
                         if !consume_final_mode.is_read_only() {
                             let owned_paths_override = consume_final_owned_paths_override(
