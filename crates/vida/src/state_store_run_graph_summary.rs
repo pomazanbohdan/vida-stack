@@ -3480,7 +3480,7 @@ impl StateStore {
                 self, &status,
             )
             .await?
-            .task_closed_stale_run(),
+            .stale_for_active_projection(),
         )
     }
 
@@ -3496,7 +3496,7 @@ impl StateStore {
                 self, status,
             )
             .await?
-            .task_closed_stale_run(),
+            .stale_for_active_projection(),
         )
     }
 
@@ -5697,6 +5697,27 @@ mod tests {
         }
         let root = temp_run_graph_root("vida-run-graph-current-session-latest");
         let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        for task_id in ["task-foreign", "task-current"] {
+            store
+                .create_task_with_fixture_parent(CreateTaskRequest {
+                    task_id,
+                    title: "Current session latest task",
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status: "in_progress",
+                    priority: 0,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "test",
+                })
+                .await
+                .expect("create current session latest task");
+        }
 
         let mut foreign_status = sample_run_graph_status();
         foreign_status.run_id = "run-foreign".to_string();
@@ -6006,6 +6027,25 @@ mod tests {
         }
         let root = temp_run_graph_root("vida-run-graph-owner-evidence-status");
         let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "task-owner-evidence-status",
+                title: "Owner evidence task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create owner evidence task");
 
         let mut status = sample_run_graph_status();
         status.run_id = "run-owner-evidence-status".to_string();
@@ -6800,6 +6840,25 @@ mod tests {
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "run-active",
+                title: "Active task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create active task");
 
         let active = crate::taskflow_run_graph::default_run_graph_status(
             "run-active",
@@ -6879,6 +6938,28 @@ mod tests {
         let labels = Vec::new();
         store
             .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "run-active-open-task",
+                title: "Active open task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create active open task");
+        store
+            .show_task("run-active-open-task")
+            .await
+            .expect("active open task should be readable");
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-closed-active-run",
                 title: "Closed task with stale active run",
                 display_id: None,
@@ -6925,6 +7006,92 @@ mod tests {
             .expect("latest status should load")
             .expect("open-task run should remain latest after stale closed-task run is skipped");
         assert_eq!(latest.run_id, "run-active-open-task");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_skips_active_run_for_missing_task() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-run-graph-skips-active-missing-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "run-active-present-task",
+                title: "Active present task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create active present task");
+        store
+            .show_task("run-active-present-task")
+            .await
+            .expect("active present task should be readable");
+
+        let active = crate::taskflow_run_graph::default_run_graph_status(
+            "run-active-present-task",
+            "task-active-present",
+            "implementation",
+        );
+        store
+            .record_run_graph_status(&active)
+            .await
+            .expect("persist active present-task status");
+        let active_status = store
+            .run_graph_status("run-active-present-task")
+            .await
+            .expect("active present run should load");
+        let active_verdict =
+            crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                &store,
+                &active_status,
+            )
+            .await
+            .expect("active present run should have task authority verdict");
+        assert_eq!(
+            active_verdict.kind,
+            crate::taskflow_run_graph_task_authority::RunGraphTaskAuthorityKind::AuthoritativeTaskPresent
+        );
+
+        let mut stale = crate::taskflow_run_graph::default_run_graph_status(
+            "run-missing-active-task",
+            "task-missing-active-run",
+            "implementation",
+        );
+        stale.task_id = "task-missing-active-run".to_string();
+        stale.status = "ready".to_string();
+        stale.lifecycle_stage = "implementation_dispatch_ready".to_string();
+        store
+            .record_run_graph_status(&stale)
+            .await
+            .expect("persist stale missing-task status");
+
+        let latest = store
+            .latest_run_graph_status()
+            .await
+            .expect("latest status should load")
+            .expect(
+                "present-task run should remain latest after stale missing-task run is skipped",
+            );
+        assert_eq!(latest.run_id, "run-active-present-task");
 
         let _ = fs::remove_dir_all(&root);
     }
