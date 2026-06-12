@@ -1548,6 +1548,8 @@ fn taskflow_run_graph_seed_with_timeout(
     request_text: &str,
     json: bool,
 ) -> std::process::Output {
+    ensure_run_graph_backing_smoke_task(state_dir, run_id);
+
     let nonce = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
     let stdout_path = format!(
         "{}/vida-run-graph-seed-{}-{nonce}.stdout",
@@ -1592,6 +1594,43 @@ fn taskflow_run_graph_seed_with_timeout(
         stdout: fs::read(&stdout_path).expect("seed stdout file should read"),
         stderr: fs::read(&stderr_path).expect("seed stderr file should read"),
     }
+}
+
+fn ensure_run_graph_backing_smoke_task(state_dir: &str, task_id: &str) {
+    let show = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "run-graph backing task lookup",
+        |command| {
+            command.args(["task", "show", task_id, "--state-dir", state_dir, "--json"]);
+        },
+    );
+    if show.status.success() {
+        return;
+    }
+
+    create_scheduler_smoke_task(
+        state_dir,
+        task_id,
+        &format!("Run graph backing task {task_id}"),
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+}
+
+fn assert_recovery_status_reports_ready_gate(output: &std::process::Output) {
+    assert!(
+        !output.status.success(),
+        "recovery status should report the open delegated cycle as a blocked gate"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("recovery status json should parse");
+    assert_eq!(parsed["status"], "blocked");
+    assert_eq!(parsed["blocker_codes"][0], "open_delegated_cycle");
+    assert_eq!(parsed["recovery"]["resume_status"], "ready");
 }
 
 fn taskflow_run_graph_advance_with_timeout(
@@ -11633,7 +11672,7 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
     );
 
     let recovery = taskflow_recovery_status_with_timeout(&state_dir, "vida-scope", true);
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -11706,7 +11745,7 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
     );
 
     let recovery = taskflow_recovery_status_with_timeout(&state_dir, "vida-pbi", true);
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -11851,7 +11890,8 @@ fn taskflow_run_graph_advance_builds_coach_handoff_for_seeded_implementation() {
 }
 
 #[test]
-fn taskflow_run_graph_advance_fails_closed_when_compiled_snapshot_lacks_implementation_route() {
+fn taskflow_run_graph_advance_uses_seeded_route_when_compiled_snapshot_lacks_implementation_route()
+{
     let state_dir = unique_state_dir();
 
     let boot = vida()
@@ -11882,11 +11922,27 @@ fn taskflow_run_graph_advance_fails_closed_when_compiled_snapshot_lacks_implemen
     );
 
     let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
-    assert!(!advance.status.success());
-
     assert!(
-        !String::from_utf8_lossy(&advance.stdout).trim().is_empty()
-            || !String::from_utf8_lossy(&advance.stderr).trim().is_empty()
+        advance.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&advance.stdout),
+        String::from_utf8_lossy(&advance.stderr)
+    );
+    let advance_stdout = String::from_utf8_lossy(&advance.stdout);
+    let advance_parsed: serde_json::Value =
+        serde_json::from_str(&advance_stdout).expect("run-graph advance json should parse");
+    assert_eq!(
+        advance_parsed["payload"]["status"]["active_node"],
+        "analysis"
+    );
+    assert_eq!(advance_parsed["payload"]["status"]["next_node"], "writer");
+    assert_eq!(
+        advance_parsed["payload"]["status"]["route_task_class"],
+        "implementation"
+    );
+    assert_eq!(
+        advance_parsed["payload"]["status"]["resume_target"],
+        "dispatch.writer_lane"
     );
 }
 
@@ -12091,7 +12147,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_scope_discu
             .output()
             .expect("recovery status should run")
     });
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -12157,7 +12213,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_pbi_discuss
     );
 
     let recovery = taskflow_recovery_status_with_timeout(&state_dir, "vida-pbi", true);
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -12221,7 +12277,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
             .output()
             .expect("recovery status should run")
     });
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -12355,7 +12411,7 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
             .output()
             .expect("recovery status should run")
     });
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -12531,7 +12587,7 @@ fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensem
             .output()
             .expect("recovery status should run")
     });
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -13061,7 +13117,7 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
     assert_eq!(run_graph_parsed["run_graph_status"]["recovery_ready"], true);
 
     let recovery = taskflow_recovery_status_with_timeout(&state_dir, "vida-dev", true);
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
