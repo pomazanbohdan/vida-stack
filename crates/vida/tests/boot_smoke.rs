@@ -4795,11 +4795,15 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
     );
     let resumed_stderr = String::from_utf8_lossy(&resumed.stderr);
     assert!(
-        resumed_stderr.contains("Run-graph resume gate denied"),
+        resumed_stderr.contains("Stale missing-task run graph"),
         "{resumed_stderr}"
     );
     assert!(
-        resumed_stderr.contains("recovery_ready is false"),
+        resumed_stderr.contains("references missing TaskFlow task"),
+        "{resumed_stderr}"
+    );
+    assert!(
+        resumed_stderr.contains("vida lane retire"),
         "{resumed_stderr}"
     );
 
