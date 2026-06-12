@@ -634,7 +634,6 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     let Some(run_id) = host_bridge_request_string(request, "run_id") else {
         return blockers;
     };
-    let request_target = host_bridge_request_string(request, "dispatch_target");
     if host_bridge_packet_is_empty_object(canonical_packet_path.as_deref()) {
         blockers.push("host_bridge_dispatch_receipt_missing".to_string());
         return blockers;
@@ -647,11 +646,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     {
         Ok(store) => store,
         Err(_) => {
-            if !host_bridge_packet_matches_reconciled_active_request(
-                canonical_packet_path.as_deref(),
-                request_target,
-            ) && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
-            {
+            if !retryable_host_bridge_completion_request_for_state_root(state_root, request) {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
             return blockers;
@@ -683,10 +678,6 @@ async fn append_host_bridge_dispatch_receipt_blockers(
         Err(_) => {
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
-                && !host_bridge_packet_matches_reconciled_active_request(
-                    canonical_packet_path,
-                    request_target,
-                )
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
@@ -696,10 +687,6 @@ async fn append_host_bridge_dispatch_receipt_blockers(
         Ok(None) => {
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
-                && !host_bridge_packet_matches_reconciled_active_request(
-                    canonical_packet_path,
-                    request_target,
-                )
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
@@ -757,41 +744,6 @@ async fn host_bridge_request_matches_reconciled_blocked_status(
         || status.resume_target == format!("dispatch.{request_target}"))
         && (status.policy_gate == "host_tool_bridge_adapter_required"
             || status.lifecycle_stage == format!("{request_target}_blocked"))
-}
-
-fn host_bridge_packet_matches_reconciled_active_request(
-    canonical_packet_path: Option<&Path>,
-    request_target: Option<&str>,
-) -> bool {
-    let Some(request_target) = request_target else {
-        return false;
-    };
-    let Some(packet_path) = canonical_packet_path else {
-        return false;
-    };
-    let Ok(packet) = read_canonical_host_bridge_json_artifact(packet_path, "host bridge packet")
-    else {
-        return false;
-    };
-    let downstream_active_target = packet
-        .get("downstream_dispatch_active_target")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    let downstream_status = packet
-        .get("downstream_dispatch_status")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    let source_target = packet
-        .get("source_dispatch_target")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    let source_status = packet
-        .get("source_dispatch_status")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    (downstream_active_target == Some(request_target) && downstream_status == Some("blocked"))
-        || (source_target == Some(request_target)
-            && source_status == Some("bridge_request_pending"))
 }
 
 fn host_bridge_packet_is_empty_object(canonical_packet_path: Option<&Path>) -> bool {
@@ -4676,7 +4628,6 @@ mod tests {
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
         host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
         host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
-        host_bridge_packet_matches_reconciled_active_request,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, read_canonical_host_bridge_json_artifact,
@@ -5139,10 +5090,6 @@ mod tests {
             read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet")
                 .expect_err("oversized packet should be rejected");
         assert!(packet_error.contains("exceeding"));
-        assert!(!host_bridge_packet_matches_reconciled_active_request(
-            Some(&packet_path),
-            Some("implementer"),
-        ));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -5307,7 +5254,17 @@ mod tests {
             std::fs::create_dir_all(path.parent().expect("artifact parent"))
                 .expect("create artifact parent");
         }
-        std::fs::write(&packet_path, b"{}").expect("packet");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "source_dispatch_target": "implementer",
+                "source_dispatch_status": "bridge_request_pending",
+                "downstream_dispatch_active_target": "implementer",
+                "downstream_dispatch_status": "blocked"
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet");
         std::fs::write(&result_path, b"{}").expect("result");
         std::fs::write(&receipt_path, b"{}").expect("receipt");
         let request = serde_json::json!({
