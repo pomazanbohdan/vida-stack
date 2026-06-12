@@ -1,14 +1,14 @@
-# Closure Admission Evidence Table Design
+# Closure Admission Evidence Table Contract
 
-Status: `proposed`
+Status: active product contract
 
-Use this template for one bounded feature/change design before implementation.
+Use this contract as the canonical closure-admission evidence crosswalk for runtime-consumption, status, doctor, and closure gating surfaces.
 
 ## Summary
-- Feature / change: define one explicit closure-admission evidence table so runtime-consumption, status, doctor, and closure gating surfaces consume the same minimum evidence set instead of relying on scattered prose.
+- Contract: define one explicit closure-admission evidence table so runtime-consumption, status, doctor, and closure gating surfaces consume the same minimum evidence set instead of relying on scattered prose.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | status | doctor | runtime-consumption`
-- Status: `proposed`
+- Status: active product contract
 
 ## Current Context
 - Existing system overview
@@ -21,37 +21,37 @@ Use this template for one bounded feature/change design before implementation.
   - `runtime_consumption_state.rs`, `status_surface.rs`, `doctor_surface.rs`, and `release1_contracts.rs` are the current runtime owner surfaces that interpret closure-admission evidence.
 - Current pain point or gap
   - The canon names the required evidence families, but it does not yet provide one compact table that binds evidence class, canonical source artifact, minimum acceptable signal, and fail-closed blocker semantics in one place.
-  - Packet `github-123-closure-admission-evidence-table` has no existing canonical spec landing zone in the repo, so delegated specification work cannot point to a bounded owner doc yet.
+  - Closure-admission evidence previously had no single canonical crosswalk that runtime and operator surfaces could cite.
   - Without one explicit table, nearby specs can remain individually correct while runtime and operator surfaces drift on which artifacts are mandatory versus merely helpful.
 
 ## Goal
 - What this change should achieve
-  - Create one bounded design doc that states the closure-admission evidence table explicitly.
+  - State the closure-admission evidence table explicitly.
   - Bind closure-admission evidence classes to canonical artifact families, consuming surfaces, and blocker semantics.
-  - Give future implementation or proof packets one canonical specification target instead of relying on cross-document inference.
+  - Give future implementation or proof packets one canonical contract target instead of relying on cross-document inference.
 - What success looks like
   - Closure-admission evidence can be reviewed from one table without reconstructing it from multiple specs.
   - Runtime work can cite a canonical minimum evidence table when deciding whether closure admission is lawful.
-  - The active spec map and provenance map register this document as the packet landing artifact.
+  - The active spec map and catalog register this document as the closure-admission evidence contract.
 - What is explicitly out of scope
   - Reworking release-admission snapshot selection logic.
   - Redesigning the `closure_admission_record` schema beyond clarifying how it participates in the evidence table.
-  - Implementing runtime changes in this delegated specification packet.
+  - Implementing runtime changes in this documentation-only contract conversion.
 
 ## Requirements
 
 ### Functional Requirements
-- Must define one explicit closure-admission evidence table for the current Release-1 closure path.
+- Must define one explicit closure-admission evidence table for the current closure path.
 - Must distinguish required evidence from supporting evidence.
 - Must identify the canonical artifact or receipt family for each required evidence class.
 - Must state the minimum acceptable signal for each evidence class.
 - Must state the fail-closed blocker when an evidence class is absent, stale, or contradictory.
-- Must keep current runtime contract profile, current runtime contract profile, and runtime-consumption/operator evidence semantics aligned.
+- Must keep current runtime contract profile and runtime-consumption/operator evidence semantics aligned.
 - Must provide a bounded specification target that future runtime packets can cite directly.
 
 ### Non-Functional Requirements
 - Performance
-  - Documentation-only in this packet; future runtime consumers should be able to evaluate the table without widening artifact scans beyond current families.
+  - Documentation-only in this contract; future runtime consumers should be able to evaluate the table without widening artifact scans beyond current families.
 - Scalability
   - The table must remain additive so later evidence families can be appended without redefining the closure contract.
 - Observability
@@ -61,7 +61,7 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/closure-admission-evidence-table-design.md`
+  - `docs/product/spec/closure-admission-evidence-table-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
 - Runtime families affected:
@@ -124,7 +124,7 @@ Will implement / choose:
   - closure-admission record production/consumption
   - operator blocker rendering for missing evidence families
 - Bounded responsibilities
-  - This design doc owns the crosswalk table.
+  - This contract owns the crosswalk table.
   - Existing closure/schema docs remain the source of truth for detailed law and field definitions.
 
 ### Data / State Model
@@ -136,7 +136,7 @@ Will implement / choose:
   - replay/checkpoint lineage artifact
   - bounded risk-acceptance artifact
 - Migration or compatibility notes
-  - No schema migration is required for this specification packet.
+  - No schema migration is required for this contract.
   - Future runtime implementation should consume the table additively and preserve current fail-closed behavior.
 
 ### Integration Points
@@ -150,7 +150,7 @@ Will implement / choose:
   - `fix-release-admission-evidence-detection-artifac-design.md`
 
 ### Bounded File Set
-- `docs/product/spec/closure-admission-evidence-table-design.md`
+- `docs/product/spec/closure-admission-evidence-table-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - current runtime contract profile
@@ -173,21 +173,16 @@ Will implement / choose:
   - Operator surfaces may summarize, but they must not silently widen what counts as closure evidence.
   - Missing rows in the evidence table remain blockers, not warnings.
 
-## Implementation Plan
+## Runtime Adoption
 
-### Phase 1
-- Land this design doc and register it in the active spec/provenance maps.
-- First proof target
-  - `vida docflow fastcheck --root . docs/product/spec/closure-admission-evidence-table-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
-
-### Phase 2
+### Runtime Consumer Adoption
 - Update closure-facing runtime logic to consume or cite the table explicitly where blocker classification or evidence summaries currently rely on scattered checks.
-- Second proof target
+- Proof target
   - targeted `cargo test -p vida` around release-admission, closure gating, and operator blocker classification
 
-### Phase 3
+### Operator Proof Adoption
 - Re-run runtime/operator proof for a closure path and a blocked path to confirm table-row parity between artifacts and operator output.
-- Third proof target
+- Proof target
   - `vida status --json`
   - `vida doctor --json`
   - bounded `vida taskflow consume final ... --json` closure proof replay
@@ -198,21 +193,21 @@ Will implement / choose:
 - Integration tests
   - future `cargo test -p vida` coverage for status/doctor closure-admission blocker rendering
 - Runtime checks
-  - `vida docflow check --root . docs/product/spec/closure-admission-evidence-table-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
+  - `vida docflow check --root . docs/product/spec/closure-admission-evidence-table-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
   - `vida status --json`
   - `vida doctor --json`
 
 ## Observability
 - Logging points
-  - none in this specification packet
+  - none in this documentation-only contract
 - Metrics / counters
-  - none in this specification packet
+  - none in this documentation-only contract
 - Receipts / runtime state written
-  - none in this specification packet beyond normal documentation metadata/changelog tracking
+  - none in this documentation-only contract beyond normal documentation metadata/changelog tracking
 
 ## Rollout Strategy
 - Development rollout
-  - spec-only landing artifact for packet `github-123-closure-admission-evidence-table`
+  - documentation-only contract promotion
 - Migration / compatibility notes
   - additive documentation change only
 - Operator or user restart / restart-notice requirements
@@ -223,7 +218,7 @@ Will implement / choose:
   - expose table-row names or codes directly in closure blockers so operator output cites the same vocabulary as the spec
   - add a machine-readable closure-evidence bundle schema if future runtime work needs stricter bundle validation
 - Known limitations
-  - this packet does not yet enforce the table in runtime code
+  - this contract does not yet enforce the table in runtime code
 - Technical debt left intentionally
   - existing closure evidence logic remains distributed across current runtime owner files until a later implementation packet consumes this table directly
 
@@ -241,13 +236,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/closure-admission-evidence-table-design
+artifact_path: product/spec/closure-admission-evidence-table-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-05-13
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/closure-admission-evidence-table-design.md
+source_path: docs/product/spec/closure-admission-evidence-table-contract.md
 created_at: 2026-05-13T00:00:00Z
 updated_at: 2026-05-13T00:00:00Z
-changelog_ref: closure-admission-evidence-table-design.changelog.jsonl
+changelog_ref: closure-admission-evidence-table-contract.changelog.jsonl

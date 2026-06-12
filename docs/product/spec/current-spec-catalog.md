@@ -280,9 +280,9 @@ Companion rule:
 51. [model-provider-price-catalog-lifecycle-design.md](model-provider-price-catalog-lifecycle-design.md)
    Config families: bounded model/provider price-catalog source-of-truth, provider/model availability inventory, freshness/source metadata, dry-run/apply receipt lifecycle, init/status readiness projection, and price-aware selected/rejected candidate diagnostics
    Registered path: `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
-52. [closure-admission-evidence-table-design.md](closure-admission-evidence-table-design.md)
+52. [closure-admission-evidence-table-contract.md](closure-admission-evidence-table-contract.md)
    Config families: bounded closure-admission evidence crosswalk, canonical evidence-family minimums, operator blocker parity, and closure-bundle fail-closed semantics
-   Registered path: `docs/product/spec/closure-admission-evidence-table-design.md`
+   Registered path: `docs/product/spec/closure-admission-evidence-table-contract.md`
 53. [taskflow-happy-path-test-catalog-design.md](taskflow-happy-path-test-catalog-design.md)
    Config families: bounded ordered TaskFlow happy-path test catalog, proof-target mapping, parent/child closure consistency gate, and immediate defect-epic repair through agent mode
    Registered path: `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
