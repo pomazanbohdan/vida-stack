@@ -184,9 +184,6 @@ Companion rule:
 26. [fix-release-admission-evidence-detection-artifac-design.md](fix-release-admission-evidence-detection-artifac-design.md)
    Config families: bounded release-admission evidence detection, admissible final-snapshot precedence, operator artifact-ref parity, and effective-bundle receipt citation stability
    Registered path: `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
-27. [clarify-enforce-immediate-continuation-shell-saf-design.md](clarify-enforce-immediate-continuation-shell-saf-design.md)
-   Config families: bounded continuation recovery law, shell-safe backlog note recording, and help/prompt alignment for active continued-development sessions
-   Registered path: `docs/product/spec/clarify-enforce-immediate-continuation-shell-saf-design.md`
 28. [ops-state-and-runtime-evidence-hygiene-design.md](ops-state-and-runtime-evidence-hygiene-design.md)
    Config families: bounded post-release ops policy for authoritative state roots, runtime-consumption evidence hygiene, temp-state proof workflows, and generated-state working-tree posture
    Registered path: `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
@@ -199,9 +196,6 @@ Companion rule:
 31. [existing-design-implementation-routing-blocked-design.md](existing-design-implementation-routing-blocked-design.md)
    Config families: bounded design-gate suppression for implementation-ready tasks, tracked-flow routing repair away from stale spec-pack re-entry, and implementation-oriented dispatch truth for already finalized design-backed work
    Registered path: `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
-32. [launcher-decomposition-and-code-hygiene-design.md](launcher-decomposition-and-code-hygiene-design.md)
-   Config families: bounded launcher decomposition seams, large-file concentration reduction, dead-code and duplication validation, and proof-safe extraction planning for `crates/vida/**`
-   Registered path: `docs/product/spec/launcher-decomposition-and-code-hygiene-design.md`
 33. [split-oversized-runtime-modules-ownership-execut-design.md](split-oversized-runtime-modules-ownership-execut-design.md)
    Config families: bounded ownership-based split plan for oversized TaskFlow runtime modules, compatibility-preserving facade seams, execution-preparation requirements, module-map proof targets, and guarded rollout across `crates/vida/src/runtime_dispatch_state.rs`, `taskflow_consume_resume.rs`, `taskflow_run_graph.rs`, `taskflow_proxy.rs`, `task_surface.rs`, and `init_surfaces.rs`
    Registered path: `docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`

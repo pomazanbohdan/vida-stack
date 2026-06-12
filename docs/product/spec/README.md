@@ -26,7 +26,6 @@ Active design docs:
 
 - `docs/product/spec/spec-proof-auto-flow-design.md`
 - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
-- `docs/product/spec/clarify-enforce-immediate-continuation-shell-saf-design.md`
 - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
 - `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
 - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
