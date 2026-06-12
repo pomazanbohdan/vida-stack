@@ -1631,6 +1631,92 @@ Final dynamic criteria STOP point:
    record must name the final dynamic criteria STOP point separately from the 20
    fixed baseline criteria.
 
+## 2026-06-12 - Status smoke state-lock retry stabilization
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `717279777 stabilize status smoke lock retries`
+- Goal: make status/doctor/status-surface smoke tests retry deterministic
+  state-lock degraded payloads without reintroducing the Windows bounded-output
+  pipe wait problem.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke diagnostics_status_and_doctor_share_closed_run_projection_blocker -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_and_doctor -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke doctor_surface_ -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_surface_ -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke` after the slice: `251 passed`,
+  `22 failed`.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The slice was narrow after broad evidence
+  showed `state_store_read_lock_contention` in stdout rather than stderr.
+- Validator: focused status/doctor/status-surface filters plus broad snapshot,
+  9/10. Broad failure identity improved by one and the status lock class left
+  the failure list.
+
+Post-Task Self-Analysis:
+- Worked: reading broad failure stdout revealed that deterministic degraded lock
+  payloads can carry the lock error only in stdout.
+- Worked: separating `command_output_with_state_lock_retry` from the generic
+  retry helper preserved tests that intentionally assert deterministic lock
+  fail-closed output.
+- Waste: the first helper change retried only stderr-detected locks and required
+  a second broad run to expose the stdout-only lock payload.
+- Risk: broad failure identity can migrate between adjacent status tests until
+  the shared detection predicate covers stdout and stderr.
+- Meta-analysis remediation: update shared harness detection rather than adding
+  per-test sleeps or widening command timeouts.
+- Docs update: yes; this STOP record adds the stdout+stderr lock detection
+  criterion below.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, broad improved from `250/23` to
+   `251/22` but the classification child remains open.
+3. Scope and non-goals stable: pass, harness retry only.
+4. Dirty worktree handled: pass, unrelated Rust and untracked files stayed
+   unstaged.
+5. Executor cheapest capable: pass, local fix from exact broad evidence.
+6. Validator matched risk: pass, focused families plus broad snapshot.
+7. Agent prompts: not applicable; no new subagents launched for this local
+   critical-path harness fix.
+8. Agent handles: pass, no active handles used.
+9. Telemetry: partial, exact token/cost unavailable; proof duration and broad
+   counts recorded.
+10. Avoidable commands: partial, one broad rerun was needed because the first
+    predicate only inspected stderr.
+11. Proof strength: pass for the claimed status lock-retry class.
+12. Public-surface proof: pass, status and doctor CLI smoke tests covered default,
+    JSON, and render paths in the affected family.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: partial, classification task remains active.
+15. Staging by invariant: pass, only `boot_smoke.rs` was staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP gate is recorded before selecting the next
+    runtime slice.
+18. Parent/wave metrics: broad status is now `251 passed`, `22 failed`; wave
+    closure still blocked.
+19. New defects/follow-ups: remaining failures now cluster around stale
+    missing-task run graph, consume-final routing, run-graph recovery, stack
+    overflow, and child-dependency projection.
+20. Next routing rule: pass, continue with the first non-lock residual cluster;
+    do not keep spending slices on status/doctor lock retries unless a new
+    failure identity reintroduces that class.
+
+Final dynamic criteria STOP point:
+1. Stdout+stderr lock-detection criterion: when a broad-only smoke failure shows
+   a degraded lock payload, inspect both stdout and stderr before changing retry
+   semantics. Evidence: the next harness retry change must cite the exact stream
+   where `state_store_read_lock_contention` or equivalent lock text appeared.
+2. Broad-migration criterion: when a broad run improves count by one but another
+   adjacent status test briefly fails, require a second broad snapshot or focused
+   family proof before deciding the same class remains open.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1640,5 +1726,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T06:02:00+03:00
+updated_at: 2026-06-12T06:19:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
