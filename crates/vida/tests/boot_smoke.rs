@@ -11175,6 +11175,16 @@ fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    create_scheduler_smoke_task(
+        &state_dir,
+        "vida-a",
+        "Bridged flow state task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
 
     let init = vida()
         .args([
@@ -11234,10 +11244,17 @@ fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
     );
 
     let recovery_latest = taskflow_recovery_latest_with_timeout(&state_dir, "latest", true);
-    assert!(recovery_latest.status.success());
+    assert!(!recovery_latest.status.success());
     let recovery_latest_stdout = String::from_utf8_lossy(&recovery_latest.stdout);
     let recovery_latest_parsed: serde_json::Value =
         serde_json::from_str(&recovery_latest_stdout).expect("recovery latest should parse");
+    assert!(
+        json_string_array_contains(
+            &recovery_latest_parsed["blocker_codes"],
+            "open_delegated_cycle"
+        ),
+        "{recovery_latest_parsed}"
+    );
     assert_eq!(recovery_latest_parsed["recovery"]["run_id"], "vida-a");
     assert_eq!(recovery_latest_parsed["recovery"]["resume_node"], "writer");
     assert_eq!(recovery_latest_parsed["recovery"]["resume_status"], "ready");
@@ -11304,9 +11321,10 @@ fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
     let status_stdout = String::from_utf8_lossy(&status_output.stdout);
     let status_parsed: serde_json::Value =
         serde_json::from_str(&status_stdout).expect("status json should parse");
+    assert_eq!(status_parsed["latest_run_graph_status"]["run_id"], "vida-a");
     assert_eq!(
-        status_parsed["latest_run_graph_checkpoint"]["run_id"],
-        "vida-a"
+        status_parsed["latest_run_graph_status"]["checkpoint_kind"],
+        "execution_cursor"
     );
     assert_eq!(status_parsed["latest_run_graph_gate"]["run_id"], "vida-a");
 
@@ -11345,6 +11363,16 @@ fn status_and_doctor_text_surfaces_report_non_empty_latest_flow_state() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    create_scheduler_smoke_task(
+        &state_dir,
+        "vida-a",
+        "Status doctor flow state task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
 
     let init = vida()
         .args([
@@ -11418,6 +11446,16 @@ fn taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    create_scheduler_smoke_task(
+        &state_dir,
+        "vida-a",
+        "Bridged direct run flow state task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
 
     let init = vida()
         .args([
@@ -11470,10 +11508,17 @@ fn taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state() {
     );
 
     let recovery_status = taskflow_recovery_status_with_timeout(&state_dir, "vida-a", true);
-    assert!(recovery_status.status.success());
+    assert!(!recovery_status.status.success());
     let recovery_status_stdout = String::from_utf8_lossy(&recovery_status.stdout);
     let recovery_status_parsed: serde_json::Value =
         serde_json::from_str(&recovery_status_stdout).expect("recovery status should parse");
+    assert!(
+        json_string_array_contains(
+            &recovery_status_parsed["blocker_codes"],
+            "open_delegated_cycle"
+        ),
+        "{recovery_status_parsed}"
+    );
     assert_eq!(recovery_status_parsed["run_id"], "vida-a");
     assert_eq!(recovery_status_parsed["recovery"]["resume_node"], "writer");
     assert_eq!(recovery_status_parsed["recovery"]["resume_status"], "ready");
