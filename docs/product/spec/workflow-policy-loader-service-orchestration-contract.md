@@ -1,27 +1,15 @@
-# WORKFLOW Policy Loader For Service-Orchestrated Runs
+# WORKFLOW Policy Loader Service Orchestration Contract
 
-Status: proposed
+Status: active product contract
 
-Use this document as the bounded design contract for adding a repo-owned `WORKFLOW.md` policy loader to service-orchestrated VIDA runs. The loader enriches the existing `vida.config.yaml` and agent-extension flow registry path; it must not become a second runtime authority.
+Use this contract as the bounded policy-loader contract for adding a repo-owned `WORKFLOW.md` policy overlay to service-orchestrated VIDA runs. The loader enriches the existing `vida.config.yaml` and agent-extension flow registry path; it must not become a second runtime authority.
 
 ## Summary
 
-- Feature / change: load optional service-orchestration policy from `WORKFLOW.md`.
+- Contract: load optional service-orchestration policy from `WORKFLOW.md`.
 - Owner layer: mixed.
 - Runtime surface: `vida.config.yaml | docs/process/agent-extensions/flows.yaml | WORKFLOW.md | taskflow consume | status/TUI projections`.
-- Status: proposed.
-
-## Runtime Request Evidence
-
-The active TaskFlow run `vida-symphony-workflow-md-policy-loader` selected an internal subagent specification lane:
-
-- dispatch target: `specification`
-- runtime role: `business_analyst`
-- backend: `internal_subagents`
-- owned path: `docs/product/spec/add-workflow-policy-loader-service-orchestrated-design.md`
-- read-only evidence paths: `.vida/data/state/runtime-consumption`, `docs/product/spec`, and `docs/process`
-
-The host-bridge result was specification evidence only. It did not authorize implementation, runtime state closure without handoff evidence, or mutation outside this document.
+- Status: active product contract.
 
 ## Problem Statement
 
@@ -33,7 +21,7 @@ Service-orchestrated development flows must not depend on hardcoded Rust fallbac
 
 `WORKFLOW.md` should provide a project-local policy overlay for service orchestration only when explicitly enabled by configuration. It must not silently redefine TaskFlow law, proof law, carrier selection, or prompt-template authority.
 
-## Design
+## Contract
 
 Add a typed loader that reads `WORKFLOW.md` as Markdown with strict YAML front matter.
 
@@ -138,7 +126,7 @@ cargo test -p vida workflow_policy_loader -- --nocapture --test-threads=1
 cargo test -p vida development_flow_catalog -- --nocapture --test-threads=1
 cargo test -p vida dev_team_sequence_uses_configured_flow_ordered_step_overrides -- --nocapture --test-threads=1
 vida taskflow consume agent-system --json
-vida docflow check --root . docs/product/spec/add-workflow-policy-loader-service-orchestrated-design.md
+vida docflow check --root . docs/product/spec/workflow-policy-loader-service-orchestration-contract.md
 ```
 
 ## Risks And Controls
@@ -152,18 +140,14 @@ vida docflow check --root . docs/product/spec/add-workflow-policy-loader-service
 - Risk: TUI becomes authority.
   Control: TUI consumes projections only.
 
-## Next Handoff
-
-After this design is finalized, continue with execution preparation and test-authoring slices before implementation. The first implementation packet should own only the typed loader/schema module and its unit tests.
-
 -----
-artifact_path: product/spec/add-workflow-policy-loader-service-orchestrated-design
+artifact_path: product/spec/workflow-policy-loader-service-orchestration-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-06-02'
 schema_version: '1'
-status: proposed
-source_path: docs/product/spec/add-workflow-policy-loader-service-orchestrated-design.md
+status: canonical
+source_path: docs/product/spec/workflow-policy-loader-service-orchestration-contract.md
 created_at: '2026-06-02T00:00:00+03:00'
 updated_at: '2026-06-02T00:00:00+03:00'
-changelog_ref: add-workflow-policy-loader-service-orchestrated-design.changelog.jsonl
+changelog_ref: workflow-policy-loader-service-orchestration-contract.changelog.jsonl

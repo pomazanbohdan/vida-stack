@@ -71,12 +71,12 @@ Companion rule:
    Config families: layered runtime capability progression across `vida/config/**`, TaskFlow runtime-family implementation surfaces, runtime ledgers, readiness gates, and future direct runtime consumption
 2. [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md)
    Config families: framework role law, project role/skill/profile/flow activation through `vida.config.yaml`, project-owned agent-extension registries, and runtime validation for the TaskFlow runtime family
-3. [development-flow-catalog-schema-design.md](development-flow-catalog-schema-design.md)
+3. [development-flow-catalog-schema-contract.md](development-flow-catalog-schema-contract.md)
    Config families: `vida.config.yaml -> dev_team.default_flow_id`, `dev_team.work_item_flow_bindings`, `dev_team.flows.*.ordered_steps`, `docs/process/agent-extensions/flows.yaml`, `docs/product/spec/hook-templates.yaml`, host-agent adapter projection fields, and future approval-gate fields
-   Registered path: `docs/product/spec/development-flow-catalog-schema-design.md`
-4. [add-workflow-policy-loader-service-orchestrated-design.md](add-workflow-policy-loader-service-orchestrated-design.md)
+   Registered path: `docs/product/spec/development-flow-catalog-schema-contract.md`
+4. [workflow-policy-loader-service-orchestration-contract.md](workflow-policy-loader-service-orchestration-contract.md)
    Config families: optional `WORKFLOW.md` service-orchestration policy overlay, `vida.config.yaml`, `docs/process/agent-extensions/flows.yaml`, prompt-template references, snapshot/reload projection, and TUI-visible validation errors
-   Registered path: `docs/product/spec/add-workflow-policy-loader-service-orchestrated-design.md`
+   Registered path: `docs/product/spec/workflow-policy-loader-service-orchestration-contract.md`
 3. [agent-lane-selection-and-conversation-mode-model.md](agent-lane-selection-and-conversation-mode-model.md)
    Config families: overlay-driven auto-lane selection, bounded conversational modes, one-task scope/PBI discussion, and lawful handoff into pack/taskflow routing
 4. [party-chat-v2-problem-party-model.md](party-chat-v2-problem-party-model.md)

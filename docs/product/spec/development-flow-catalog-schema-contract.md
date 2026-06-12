@@ -1,15 +1,15 @@
-# Development Flow Catalog Schema Design
+# Development Flow Catalog Schema Contract
 
-Status: proposed
+Status: active product contract
 
-Use this document as the bounded schema contract for configurable development flows. The flow catalog must make role order, command templates, lifecycle hooks, proof gates, rework/resume transitions, approval pauses, and host-agent adapter projection data-driven rather than hardcoded in CLI/runtime code.
+Use this contract as the bounded schema contract for configurable development flows. The flow catalog must make role order, command templates, lifecycle hooks, proof gates, rework/resume transitions, approval pauses, and host-agent adapter projection data-driven rather than hardcoded in CLI/runtime code.
 
 ## Summary
 
-- Feature / change: add a configurable development-flow catalog schema.
+- Contract: add a configurable development-flow catalog schema.
 - Owner layer: mixed.
 - Runtime surface: `vida.config.yaml | agent_extensions.flows | taskflow consume | agent dispatch-next | agent-init`.
-- Status: proposed.
+- Status: active product contract.
 
 ## Core Rule
 
@@ -187,7 +187,7 @@ cargo test -p vida lifecycle_hook_contract -- --nocapture --test-threads=1
 cargo test -p vida dev_team_sequence_uses_configured_flow_ordered_step_overrides -- --nocapture --test-threads=1
 cargo test -p vida project_routing_shape_defines_configurable_pr_and_specialized_flow_presets -- --nocapture --test-threads=1
 vida taskflow consume agent-system --json
-vida docflow check --root . docs/product/spec/development-flow-catalog-schema-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history
+vida docflow check --root . docs/product/spec/development-flow-catalog-schema-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history
 ```
 
 ## External Reference Notes
@@ -201,13 +201,13 @@ These sources are reference patterns only, not VIDA runtime law:
 - OpenCode agents docs: configured primary/subagent behavior and permission boundaries.
 
 -----
-artifact_path: product/spec/development-flow-catalog-schema-design
+artifact_path: product/spec/development-flow-catalog-schema-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-06-01'
 schema_version: '1'
-status: proposed
-source_path: docs/product/spec/development-flow-catalog-schema-design.md
+status: canonical
+source_path: docs/product/spec/development-flow-catalog-schema-contract.md
 created_at: '2026-06-01T00:00:00+03:00'
 updated_at: '2026-06-01T00:00:00+03:00'
-changelog_ref: development-flow-catalog-schema-design.changelog.jsonl
+changelog_ref: development-flow-catalog-schema-contract.changelog.jsonl
