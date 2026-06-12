@@ -127,7 +127,7 @@ fn consume_resume_error_kind(error: &str) -> TaskflowDiagnosticKind {
     } else if error.contains("Run-graph resume gate denied") && error.contains("recovery_ready") {
         TaskflowDiagnosticKind::RunGraphRecoveryNotReady
     } else if error.contains("Persisted dispatch receipt expects dispatch_packet_path") {
-        TaskflowDiagnosticKind::RunGraphRecoveryNotReady
+        TaskflowDiagnosticKind::ConsumeContinueResumeBlocked
     } else if error.contains("No persisted run-graph dispatch receipt exists")
         || error.contains("missing receipt recovery could not load dispatch context")
     {
@@ -383,6 +383,27 @@ mod tests {
             .as_str()
             .expect("next action should be text")
             .contains("vida lane retire run-stale --receipt-id run-stale"));
+    }
+
+    #[test]
+    fn persisted_dispatch_packet_path_mismatch_is_consume_continue_resume_blocked() {
+        let payload = consume_resume_error_payload(
+            "Persisted dispatch receipt expects dispatch_packet_path `/state/runtime-consumption/dispatch-packets/run-1.json` but resolved `/state/runtime-consumption/downstream-dispatch-packets/run-1-explicit-ready-downstream.json`",
+            "vida taskflow consume continue",
+        );
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["consume_continue_resume_blocked"])
+        );
+        assert_eq!(
+            payload["diagnostic_kind"],
+            "consume_continue_resume_blocked"
+        );
+        assert!(payload["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("expects dispatch_packet_path")));
     }
 
     #[test]

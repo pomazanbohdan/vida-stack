@@ -7961,7 +7961,7 @@ fn consume_continue_repeated_run_id_after_success_fails_closed_without_closure_p
     );
     assert_eq!(
         repeated_resumed_json["blocker_codes"],
-        serde_json::json!(["run_graph_recovery_not_ready"]),
+        serde_json::json!(["consume_continue_resume_blocked"]),
         "{repeated_resumed_json}"
     );
     assert!(
