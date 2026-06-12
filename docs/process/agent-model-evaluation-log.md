@@ -2777,7 +2777,7 @@ Dynamic criteria created from this session segment:
 Scope:
 - Task: `architecture-refactor-final-runtime-state-matrix-sweep`
 - Parent/epic: `architecture-refactor-quality-epic`
-- Commits: pending
+- Commits: `74890d927`, `dc90bd250`, `64de0061b`
 - Files: `AGENTS.sidecar.md`,
   `docs/process/project-orchestrator-operating-protocol.md`,
   `crates/vida/src/runtime_dispatch_state.rs`,
@@ -2853,17 +2853,19 @@ Twenty criteria outcome:
     JSON, recovery, run-graph, status, doctor, and task surfaces.
 13. Debug build: pass via compiling full smoke suites.
 14. TaskFlow state: pass, TODOs closed, final sweep closed, epic auto-closed.
-15. Staging by invariant: pending, must stage only scoped final-sweep files and
-    preserve unrelated dirty files before commit.
-16. Publication authorization: pending commit/push under active epic pattern.
+15. Staging by invariant: pass, staged only scoped final-sweep/code/docs files
+    and preserved unrelated dirty files.
+16. Publication authorization: pass, commits were pushed under the active epic
+    publication pattern.
 17. Evaluation docs: pass, this scorecard records the STOP gate.
 18. Parent/wave metrics: pass, epic is 100% closed after final sweep closure.
 19. New defects/follow-ups: pass, lock/reopen fixes were handled inside the
     active final sweep. Runtime self-diagnostic residual latest-snapshot
     mismatch was recorded on upstream issue #114 instead of opening a duplicate;
     release install asset materialization was opened as issue #364.
-20. Next routing rule: pass, next work is blocked until commit/push, runtime
-    self-diagnostic, and epic closeout checks finish.
+20. Next routing rule: pass, next work should route to explicitly selected
+    follow-up tasks only; this epic is closed and residual runtime diagnostics
+    are tracked on issues #114 and #364.
 
 Final dynamic criteria STOP point:
 1. Final-item enforcement criterion: after every task, the dynamic criteria
