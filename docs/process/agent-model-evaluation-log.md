@@ -1483,6 +1483,77 @@ Dynamic criteria final step:
    serialize only the minimal shared-state test cluster when parallel harness
    contention is the failure source.
 
+## 2026-06-12 - Diagnostics status/doctor pipe-drain smoke fix
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `471032fd4 drain diagnostics status doctor smoke output`
+- Goal: remove the EOF/empty-output parse failure in
+  `diagnostics_status_and_doctor_share_closed_run_projection_blocker` by running
+  status/doctor JSON commands through a pipe-draining retry helper.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke diagnostics_status_and_doctor_share_closed_run_projection_blocker -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke` after the slice: `246 passed`,
+  `27 failed`; the exact diagnostics pipe path is green, while other
+  status/doctor and run-graph clusters remain.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The slice reused the status harness
+  finding that custom bounded waits can produce EOF/timeout on JSON output.
+- Validator: exact diagnostics/status/doctor smoke, 8/10. Broad boot_smoke still
+  shows separate doctor/status harness failures and runtime graph failures.
+
+Post-Task Self-Analysis:
+- Worked: applied the previous pipe-drain lesson immediately to the next failing
+  status/doctor JSON path.
+- Worked: kept the slice narrow to one exact diagnostics test rather than
+  bundling all remaining doctor/status failures.
+- Waste: broad rerun after the slice was noisy and did not improve total count in
+  that sample, but it confirmed the next residual cluster.
+- Risk: exact pass does not prove all status/doctor full-suite flakes are gone;
+  next slice should audit every remaining doctor/status JSON command runner.
+- Meta-analysis remediation: promote pipe-drain audit from one test to the full
+  status/doctor smoke family before deeper runtime fixes.
+- Docs update: yes; this STOP record adds the family-wide pipe-drain audit rule.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, diagnostics status/doctor JSON path under
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, exact diagnostics test fixed; broad
+   sample remains `246 passed`, `27 failed`.
+3. Scope and non-goals stable: pass, one smoke test command runner path.
+4. Dirty worktree handled: pass, unrelated dirty files stayed unstaged.
+5. Executor cheapest capable: pass, local harness edit.
+6. Validator matched risk: pass, exact diagnostics smoke plus broad sample.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no active agents launched.
+9. Telemetry: partial, durations observed; tokens/cost unavailable.
+10. Avoidable commands: pass, reused prior finding instead of re-diagnosing from
+    scratch.
+11. Proof strength: pass for exact diagnostics pipe path.
+12. Public-surface proof: pass, public `status --json` and `doctor --json` were
+    exercised through the diagnostics smoke.
+13. Debug build: pass, cargo tests rebuilt the binary.
+14. TaskFlow state: partial, classification child remains active.
+15. Staging by invariant: pass, only `boot_smoke.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP gate is recorded before next fix.
+18. Parent/wave metrics: unchanged until broad classification closes.
+19. New defects/follow-ups: remaining doctor/status smoke tests should be audited
+    for the same bounded-runner pipe issue.
+20. Dynamic criteria generation: pass, session segment produced the family-wide
+    pipe-drain audit criterion below.
+
+Dynamic criteria final step:
+1. Status/doctor family pipe-drain criterion: after fixing one large JSON command
+   in a smoke test, search adjacent status/doctor diagnostics for the same custom
+   bounded runner and migrate them as a family before treating remaining failures
+   as product-runtime defects.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1492,5 +1563,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T05:32:00+03:00
+updated_at: 2026-06-12T05:39:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
