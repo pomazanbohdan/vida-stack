@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -136,6 +136,7 @@ fn installed_vida() -> (String, Command) {
 
 static UNIQUE_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 static BOOT_PROTOCOL_BINDING_LOCK_SIMULATION_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static STATUS_SURFACE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn unique_state_dir() -> String {
     let nanos = SystemTime::now()
@@ -16400,6 +16401,9 @@ fn memory_surface_fails_closed_when_governance_linkage_missing() {
 
 #[test]
 fn status_surface_reports_backend_and_bundle_receipt() {
+    let _status_surface_guard = STATUS_SURFACE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let state_dir = unique_state_dir();
 
     let boot = vida()
@@ -16409,11 +16413,9 @@ fn status_surface_reports_backend_and_bundle_receipt() {
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let output = vida()
-        .arg("status")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("status should run");
+    let mut command = vida();
+    command.arg("status").env("VIDA_STATE_DIR", &state_dir);
+    let output = command_output_with_retry(&mut command);
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -16437,18 +16439,26 @@ fn status_surface_reports_backend_and_bundle_receipt() {
 
 #[test]
 fn status_surface_supports_color_emoji_render_mode_via_env() {
+    let _status_surface_guard = STATUS_SURFACE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let state_dir = unique_state_dir();
 
     let boot = boot_with_retry(&state_dir);
     assert!(boot.status.success());
 
-    let output = vida()
+    let mut command = vida();
+    command
         .arg("status")
         .env("VIDA_STATE_DIR", &state_dir)
-        .env("VIDA_RENDER", "color_emoji")
-        .output()
-        .expect("status should run with color emoji render mode");
-    assert!(output.status.success());
+        .env("VIDA_RENDER", "color_emoji");
+    let output = command_output_with_retry(&mut command);
+    assert!(
+        output.status.success(),
+        "status color emoji stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("📘 vida status"));
@@ -16457,6 +16467,9 @@ fn status_surface_supports_color_emoji_render_mode_via_env() {
 
 #[test]
 fn status_surface_fails_closed_on_uninitialized_state_dir() {
+    let _status_surface_guard = STATUS_SURFACE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let state_dir = unique_state_dir();
 
     let output = vida()
@@ -17027,17 +17040,25 @@ fn orchestrator_init_and_next_lawful_reject_closed_task_ready_dev_pack_dispatch_
 
 #[test]
 fn status_surface_supports_json_summary() {
+    let _status_surface_guard = STATUS_SURFACE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let state_dir = unique_state_dir();
 
     let boot = boot_with_retry(&state_dir);
     assert!(boot.status.success());
 
-    let output = vida()
+    let mut command = vida();
+    command
         .args(["status", "--json", "--view", "full"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("status json should run");
-    assert!(output.status.success());
+        .env("VIDA_STATE_DIR", &state_dir);
+    let output = command_output_with_retry(&mut command);
+    assert!(
+        output.status.success(),
+        "status json stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
@@ -17163,18 +17184,26 @@ fn status_surface_supports_json_summary() {
 
 #[test]
 fn status_surface_supports_compact_json_summary_view() {
+    let _status_surface_guard = STATUS_SURFACE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let state_dir = unique_state_dir();
 
     let boot = boot_with_retry(&state_dir);
     assert!(boot.status.success());
     let snapshot_path = seed_runtime_consumption_final_snapshot(&state_dir);
 
-    let output = vida()
+    let mut command = vida();
+    command
         .args(["status", "--summary", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("status summary json should run");
-    assert!(output.status.success());
+        .env("VIDA_STATE_DIR", &state_dir);
+    let output = command_output_with_retry(&mut command);
+    assert!(
+        output.status.success(),
+        "status summary json stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
