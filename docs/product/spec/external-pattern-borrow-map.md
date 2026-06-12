@@ -1,10 +1,10 @@
 # VIDA External Pattern Borrow Map
 
-Status: draft `v1` design input
+Status: canonical semantic borrow map
 
-Revision: `2026-03-09`
+Revision: `2026-06-13`
 
-Purpose: record which external state-machine and agent-runtime patterns are intentionally borrowed into the `vida` kernel, which are deferred, and which are explicitly rejected.
+Purpose: record which external state-machine and agent-runtime patterns are approved semantic references for the `vida` kernel, which are deferred, and which are explicitly rejected.
 
 ## 1. Source Families
 
@@ -40,7 +40,7 @@ Why:
 
 VIDA mapping:
 
-1. `transition_engine.nim`
+1. current transition-runtime implementation surfaces
 2. root machine transition specs
 
 ### 2.2 Adopted As Kernel Direction
@@ -91,7 +91,7 @@ Reason:
 | Middleware/listener layer above core transitions | adopt now | Gives a lawful place for projection and subscription derivation without mutating canonical state in callbacks | derived projection/listener kernel |
 | Structured output contracts with validation | adopt now | Aligns with explicit role output contracts already present in instruction catalog | instruction catalog, role output contracts, proof requirements |
 | Human interrupt/resume semantics | adopt now | LangGraph confirms pause/resume is a runtime primitive, not just UI wording; VIDA should keep it receipt-backed and fail-closed | manual intervention, approval waits, resumability checkpoints, governance interrupts |
-| Dynamic runtime capability exposure | adopt now | Already consistent with overlay-derived runtime inventory and bounded capability matching | `agent_inventory.nim`, `assignment_engine.nim` |
+| Dynamic runtime capability exposure | adopt now | Already consistent with overlay-derived runtime inventory and bounded capability matching | runtime inventory and assignment policy surfaces |
 | Stream/update subscriptions for runtime observers | adopt now | Useful as rebuildable operator projection channels, not as canonical state | projection topics, listener topics, status/readiness surfaces |
 | Time-travel and fork-from-checkpoint debugging | adopt as future direction | Valuable for proof repro and doctor/debug replay, but must not redefine canonical truth | replay from checkpoint, proof reproduction, debug forks |
 | Pending checkpoint writes after partial failure | adopt as future direction | Useful for resumable retry without re-running already successful work | future checkpoint write ledger and retry law |
@@ -155,9 +155,9 @@ Reason:
 
 These borrow decisions already affect the current implementation:
 
-1. `assignment_engine.nim` uses dynamic overlay-derived runtime inventory instead of product-law hardcoding
-2. `instruction_engine.nim` provides an explicit instruction composition surface
-3. `transition_engine.nim` supports event semantics beyond raw `command`
+1. runtime assignment surfaces use dynamic overlay-derived runtime inventory instead of product-law hardcoding
+2. instruction composition surfaces provide explicit instruction assembly boundaries
+3. transition-runtime surfaces support event semantics beyond raw `command`
 4. route and assignment law stay config-owned, while concrete runtime inventory stays overlay/runtime-owned
 5. projection/listener/checkpoint behavior is justified only as a derived runtime surface, never as a replacement for state/receipt/proof ownership
 6. checkpoint semantics are now explicitly split between `checkpoint hint`, future `checkpoint commit`, and future `checkpoint replay/fork` concerns
@@ -198,10 +198,10 @@ Borrowed patterns must not violate these invariants:
 artifact_path: product/spec/external-pattern-borrow-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/external-pattern-borrow-map.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-12T20:45:00+02:00'
+updated_at: '2026-06-13T00:00:00+03:00'
 changelog_ref: external-pattern-borrow-map.changelog.jsonl

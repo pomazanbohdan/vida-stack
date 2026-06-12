@@ -22,23 +22,21 @@ Companion rule:
 3. [receipt-and-proof-law.md](receipt-and-proof-law.md)
    Config families: `vida/config/receipts/**`, `vida/config/policies/**`
 4. [external-pattern-borrow-map.md](external-pattern-borrow-map.md)
-   Config families: cross-cutting product law only
+   Config families: cross-cutting semantic borrow law only
 5. [projection-listener-checkpoint-model.md](projection-listener-checkpoint-model.md)
    Config families: `vida/config/machines/**`, runtime consumption by the TaskFlow runtime family
 6. [gateway-resume-handle-and-trigger-index.md](gateway-resume-handle-and-trigger-index.md)
-   Config families: future route/gateway law
-7. [machine-definition-lint-law.md](machine-definition-lint-law.md)
-   Config families: future machine lint
-8. [checkpoint-commit-and-replay-model.md](checkpoint-commit-and-replay-model.md)
+   Config families: future-direction route/gateway law
+7. [checkpoint-commit-and-replay-model.md](checkpoint-commit-and-replay-model.md)
    Config families: runtime-derived checkpoint law
-9. [verification-merge-law.md](verification-merge-law.md)
-   Config families: future verification routing law
-10. [instruction-artifact-model.md](instruction-artifact-model.md)
-    Config families: `vida/config/instructions/**`
-11. [skill-management-and-activation-law.md](skill-management-and-activation-law.md)
-    Config families: `skills/**`, `activation/**`
-12. [instruction-migration-map.md](instruction-migration-map.md)
-    Config families: `vida/config/instructions/**`
+8. [verification-merge-law.md](verification-merge-law.md)
+   Config families: active verification routing law
+9. [instruction-artifact-model.md](instruction-artifact-model.md)
+   Config families: `vida/config/instructions/**`
+10. [skill-management-and-activation-law.md](skill-management-and-activation-law.md)
+   Config families: `skills/**`, `activation/**`
+11. [instruction-migration-map.md](instruction-migration-map.md)
+   Config families: `vida/config/instructions/**`
 
 ### Documentation And Inventory
 
