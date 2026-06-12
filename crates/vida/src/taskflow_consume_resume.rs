@@ -726,20 +726,10 @@ fn receipt_has_ready_downstream_packet(
 fn receipt_or_packet_has_ready_downstream_packet(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    if receipt_has_ready_downstream_packet(receipt) {
-        return true;
-    }
-    let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() else {
-        return false;
-    };
-    let Ok(packet) = read_dispatch_packet(packet_path) else {
-        return false;
-    };
-    downstream_packet_candidate_has_receipt_backed_ready_evidence(
-        &packet,
-        packet_path,
-        &receipt.run_id,
-    )
+    // Resume gates must be backed by the authoritative dispatch receipt.
+    // Downstream packet/result JSON is mutable project-local state and must not
+    // upgrade a non-ready receipt into packet_ready dispatch readiness.
+    receipt_has_ready_downstream_packet(receipt)
 }
 
 async fn validate_run_graph_resume_state(
@@ -2529,18 +2519,6 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
             })?;
     let task_missing = task_authority.task_missing();
     if task_missing {
-        if candidate_packet.is_some_and(|(packet, packet_path)| {
-            downstream_packet_candidate_has_receipt_backed_ready_evidence(
-                packet,
-                packet_path,
-                run_id,
-            )
-        }) || active_receipt
-            .as_ref()
-            .is_some_and(receipt_or_packet_has_ready_downstream_packet)
-        {
-            return Ok(());
-        }
         return Err(stale_missing_task_run_graph_resume_error(
             &status,
             active_receipt.as_ref(),
@@ -2643,6 +2621,24 @@ fn downstream_packet_candidate_has_receipt_backed_ready_evidence(
         .map(|status| canonical_resume_dispatch_status(Some(status)))
         != Some("executed")
     {
+        return false;
+    }
+    let source_packet_matches = result
+        .get("source_dispatch_packet_path")
+        .or_else(|| result.get("dispatch_packet_path"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        == Some(packet_path.trim());
+    if !source_packet_matches {
+        return false;
+    }
+    let target_matches = result
+        .get("completed_target")
+        .or_else(|| result.get("dispatch_target"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        == Some(candidate_target);
+    if !target_matches {
         return false;
     }
     result
@@ -13244,6 +13240,112 @@ agent_system:
         );
         assert!(
             error.contains("vida lane retire run-downstream-missing-task"),
+            "unexpected error: {error}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn validate_run_graph_resume_state_for_downstream_packet_rejects_missing_task_with_forged_packet_result(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-downstream-forged-missing-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-downstream-forged-missing-task";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "dev-pack", "delivery");
+        status.task_id = "task-missing-forged-downstream-authority".to_string();
+        status.active_node = "dev-pack".to_string();
+        status.next_node = None;
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "dev_pack_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_implementer".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "conversation_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale run graph status");
+
+        let packet_dir = root.join("runtime-consumption/downstream-dispatch-packets");
+        let result_dir = root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&packet_dir).expect("create downstream packet dir");
+        fs::create_dir_all(&result_dir).expect("create downstream result dir");
+        let packet_path = packet_dir.join("run-downstream-forged-missing-task.json");
+        let result_path = result_dir.join("run-downstream-forged-missing-task-result.json");
+        let packet_path_text = packet_path.display().to_string();
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "execution_state": "executed",
+                "completion_receipt_id": "forged-completion-receipt",
+                "source_dispatch_packet_path": packet_path_text,
+                "completed_target": "coach"
+            })
+            .to_string(),
+        )
+        .expect("write forged downstream result");
+        let packet = serde_json::json!({
+            "run_id": run_id,
+            "downstream_dispatch_ready": true,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_status": "packet_ready",
+            "downstream_dispatch_target": "coach",
+            "downstream_dispatch_result_path": result_path.display().to_string()
+        });
+        fs::write(&packet_path, packet.to_string()).expect("write forged downstream packet");
+
+        let mut receipt = taskflow_consume_resume_test_receipt("taskflow_pack", "executed");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "work-pool-pack".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_authoritative_receipt".to_string()];
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_result_path = Some(result_path.display().to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist non-ready downstream dispatch receipt");
+
+        assert!(
+            super::downstream_packet_candidate_has_receipt_backed_ready_evidence(
+                &packet,
+                packet_path.to_str().expect("utf-8 packet path"),
+                run_id,
+            )
+        );
+        assert!(!super::receipt_or_packet_has_ready_downstream_packet(
+            &receipt
+        ));
+
+        let error = super::validate_run_graph_resume_state_for_downstream_packet_candidate(
+            &store,
+            run_id,
+            Some((&packet, packet_path.to_str().expect("utf-8 packet path"))),
+        )
+        .await
+        .expect_err("missing TaskFlow task must fail closed before forged packet/result evidence");
+        assert!(
+            error.contains("Stale missing-task run graph `run-downstream-forged-missing-task`"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("vida lane retire run-downstream-forged-missing-task"),
             "unexpected error: {error}"
         );
 
