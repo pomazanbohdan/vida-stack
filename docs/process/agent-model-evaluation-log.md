@@ -1033,6 +1033,91 @@ Dynamic criteria final step:
    piped stdout, verify default JSON output stays compact enough not to block on
    the pipe buffer before process exit.
 
+## 2026-06-12 - downstream resume stale recovery projection
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `c0c1865c3 fix downstream resume stale recovery projection`
+- Goal: let default `consume continue --json` resume from receipt-backed ready
+  downstream packets even when the original TaskFlow task identity is missing,
+  and keep recovery/status projection aligned with the resumed downstream node.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/src/taskflow_consume_resume.rs crates/vida/src/taskflow_run_graph.rs crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_and_doctor -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_and_doctor -- --nocapture --test-threads=1`
+- `cargo +1.95.0 test -p vida --test boot_smoke diagnostics_status_and_doctor_share_closed_run_projection_blocker -- --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_continue_prefers_latest_final_snapshot_after_bundle_check -- --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_continue_resumes_from_persisted_final_snapshot -- --exact`
+- `cargo +1.95.0 test -p vida --bin vida taskflow_consume_resume::tests::resolve_runtime_consumption_resume_inputs_without_run_id_switches_to_fresh_bound_task_run -- --nocapture --exact`
+
+Residual blockers observed:
+- Default-parallel `cargo +1.95.0 test -p vida --test boot_smoke status_and_doctor -- --nocapture`
+  still timed out in `diagnostics_status_and_doctor_share_closed_run_projection_blocker`
+  while running concurrently with the golden-route test; the same filter passes
+  with `--test-threads=1`, and both exact tests pass.
+- `cargo +1.95.0 test -p vida taskflow_run_graph -- --nocapture` remains blocked
+  by pre-existing broad-filter failures: command-vocabulary assertions expecting
+  `--json` suffixes and a stack overflow in
+  `dispatch_init_reuses_existing_routed_receipt_packet`.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The fix required repeated exact
+  reproduction and temporary payload prints; a separate classifier agent would
+  likely have been slower than direct iteration.
+- Validator: exact golden-route plus sequential scoped filter, 8/10. The default
+  parallel filter remains a known Windows watchdog residual.
+
+Post-Task Self-Analysis:
+- Worked: temporary debug prints clarified that the first failure was generic
+  stale-missing output, then recovery status `open_delegated_cycle`.
+- Worked: splitting receipt-backed downstream evidence from full resume
+  validation kept stale guards from rejecting lawful downstream packets too early.
+- Waste: the first ready-downstream detector still called full validation, so it
+  reproduced the same stale guard instead of bypassing it.
+- Risk: recovery projection now treats ready routed receipts as resolving stale
+  missing task identity; future tests should ensure this exemption does not hide
+  genuinely missing packet/receipt evidence.
+- Next change: continue classifying remaining broad boot_smoke failures under
+  `wave-0-runtime-tests-boot-smoke-failure-classification`.
+- Docs update: dynamic staged-gate criterion added below.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, golden-route downstream resume/recovery
+   projection inside boot_smoke failure classification.
+2. Wave/parent closure distance: pass, removed one status/doctor cluster failure;
+   parent remains blocked by unrelated boot_smoke failures.
+3. Scope and non-goals stable: pass, did not repair broad command-vocabulary or
+   stack-overflow unit failures.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged.
+5. Executor cheapest capable: pass, local orchestrator was sufficient.
+6. Validator matched risk: pass, exact golden-route and adjacent resume tests ran.
+7. Agent prompts: not applicable, no new agent launched.
+8. Agent handles: pass, no active agent remained from this slice.
+9. Telemetry: partial, command durations observed; cost unavailable.
+10. Avoidable commands: pass, temporary prints were removed before commit.
+11. Proof strength: pass for exact and sequential scoped surfaces.
+12. Public-surface proof: pass, `consume continue`, recovery status, and
+    status/doctor route were covered.
+13. Debug build: pass, cargo rebuilt `vida`.
+14. TaskFlow state: partial, classification child remains active.
+15. Staging by invariant: pass, only two runtime files staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this scorecard.
+18. Parent/wave metrics: unchanged until parent closure proof passes.
+19. New defects/follow-ups: parallel status/doctor watchdog and broad
+    taskflow_run_graph unit failures remain separate residuals.
+20. Dynamic criteria generation: pass, session segment produced the staged-gate
+    criterion below.
+
+Dynamic criteria final step:
+1. Staged-gate criterion: when a failing test advances through multiple
+   assertions after each fix, record each newly exposed assertion as a separate
+   gate in the self-analysis; do not treat the first green sub-assertion as task
+   closure until the full original test passes.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1042,5 +1127,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T04:05:00+03:00
+updated_at: 2026-06-12T04:32:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
