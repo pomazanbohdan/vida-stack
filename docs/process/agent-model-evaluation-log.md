@@ -1335,6 +1335,80 @@ Dynamic criteria final step:
    same invariant. If the lower-level contract is explicit and green, update the
    stale smoke expectation and prove both levels together.
 
+## 2026-06-12 - Protocol-binding refresh smoke alignment
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `deeae399e align protocol binding refresh smoke tests`
+- Goal: update protocol-binding smoke tests from stale fail-closed expectations
+  to the current self-healing command behavior, while preserving lower-level
+  fail-closed coverage for untrusted evidence.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_protocol_binding_check_refreshes -- --nocapture`
+- `cargo +1.95.0 test -p vida taskflow_protocol_binding::tests::protocol_binding_check_ok_blocks -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke` after the slice: `246 passed`,
+  `27 failed`; protocol-binding failures were removed, while status/recovery
+  concurrency and run-graph clusters remain.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The first hypothesis was too narrow
+  because the pure checker still fail-closes, but command routing refreshes
+  launcher activation evidence before the check sees it.
+- Validator: exact refresh smoke plus pure checker fail-closed units, 9/10.
+- Residual: broad status tests are nondeterministic under full parallel
+  boot_smoke and can change the total failure count run to run.
+
+Post-Task Self-Analysis:
+- Worked: temporary assertion output exposed the self-healing JSON payload and
+  showed fresh `captured_at` evidence.
+- Worked: helper read-back assertion now proves test fixture overwrites really
+  hit the intended state-store row before command-level refresh replaces them.
+- Waste: initial reasoning spent time on helper path/digest mismatch before the
+  command-level refresh behavior was visible.
+- Risk: renaming fail-closed tests to refresh tests could lose blocker coverage;
+  mitigated by running the pure `protocol_binding_check_ok_blocks_*` units.
+- Meta-analysis remediation: classify command-level self-healing separately from
+  pure decision-gate fail-closed behavior.
+- Docs update: yes; this STOP record adds the self-healing command criterion.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, protocol-binding smoke cluster under
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, two protocol-binding broad failures
+   removed, but full-suite nondeterminism reported `246 passed`, `27 failed`.
+3. Scope and non-goals stable: pass, smoke tests and helper verification only.
+4. Dirty worktree handled: pass, unrelated dirty files stayed unstaged.
+5. Executor cheapest capable: pass, local test-contract update.
+6. Validator matched risk: pass, command-level refresh tests plus pure unit
+   fail-closed tests.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no active agents were launched.
+9. Telemetry: partial, durations observed; tokens/cost unavailable.
+10. Avoidable commands: partial, diagnostic rerun was needed to expose JSON.
+11. Proof strength: pass for protocol-binding refresh behavior.
+12. Public-surface proof: pass, public `taskflow protocol-binding check --json`
+    covered.
+13. Debug build: pass, cargo tests rebuilt the binary.
+14. TaskFlow state: partial, classification child remains active.
+15. Staging by invariant: pass, only `boot_smoke.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP gate is recorded before next fix.
+18. Parent/wave metrics: unchanged until broad classification closes.
+19. New defects/follow-ups: status-surface full-suite nondeterminism remains a
+    likely next target.
+20. Dynamic criteria generation: pass, session segment produced the
+    self-healing command criterion below.
+
+Dynamic criteria final step:
+1. Self-healing command criterion: when a public command now repairs stale state
+   before evaluating a lower-level gate, update smoke tests to prove repair at
+   the command level and keep separate unit coverage for the pure fail-closed
+   decision gate.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1344,5 +1418,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T05:03:00+03:00
+updated_at: 2026-06-12T05:13:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
