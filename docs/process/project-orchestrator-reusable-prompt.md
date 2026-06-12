@@ -52,7 +52,7 @@ Continue/stop decision table:
 | User/operator says VIDA runtime is defective | Use bounded static analysis, file proof, and scoped commits; record missing runtime evidence as later repair. |
 | Delegated lane or handoff is open | Do not substitute local root implementation. |
 | Agent-first or parallel-agent routing was explicitly ordered | Keep that routing sticky through recovery or explicit reroute. |
-| Host subagent APIs are merely configured | Do not launch carriers without explicit user request. |
+| Host subagent APIs are merely configured | Require an explicit user request before launching configured carriers. |
 | Thread-limit, stale-lane, timeout, or `not_found` occurs | Inspect lanes, synthesize completed returns, reclaim closeable lanes, then retry lawful dispatch before exception handling. |
 | Bounded result names an evidenced next item | Bind and continue in the same cycle unless blocked or explicitly stopped. |
 | Commentary, status output, green proof, or intermediate report occurs | Treat as visibility only, not a pause boundary. |

@@ -128,12 +128,9 @@ fn read_host_bridge_request(
         .map(Path::to_path_buf)
         .or_else(|| infer_host_bridge_state_root_from_request_path(path));
     if let Some(state_root) = inferred_state_root {
-        return match canonical_state_artifact_path(&state_root, &path.display().to_string(), true) {
-            Ok(canonical_path) => {
-                read_canonical_host_bridge_json_artifact(&canonical_path, "host bridge request")
-            }
-            Err(_) => read_canonical_host_bridge_json_artifact(path, "host bridge request"),
-        };
+        let canonical_path =
+            canonical_state_artifact_path(&state_root, &path.display().to_string(), true)?;
+        return read_canonical_host_bridge_json_artifact(&canonical_path, "host bridge request");
     }
     read_canonical_host_bridge_json_artifact(path, "host bridge request")
 }
