@@ -2798,7 +2798,7 @@ Scope:
   - Runtime self-diagnostic: epic progress 709/709 closed and graph valid; status
     and doctor still report `run_graph_latest_snapshot_inconsistent` after
     reconcile. Added reproduction comment to GitHub issue #114:
-    https://github.com/pomazanbohdan/vida-stack/issues/114#issuecomment-4688073637
+    https://github.com/pomazanbohdan/vida-stack/issues/114#issuecomment-4688112734
   - Release/install diagnostic: `cargo build -p vida -p vida-pi-agent --release`
     passed and installed `vida.exe` hash matched `target/release/vida.exe`;
     `vida --version` and installed epic progress smoke passed. `vida release
