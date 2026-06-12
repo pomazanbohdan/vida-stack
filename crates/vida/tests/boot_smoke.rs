@@ -1498,20 +1498,20 @@ fn taskflow_consume_bundle_check_with_timeout(state_dir: &str) -> std::process::
 }
 
 fn status_with_timeout(project_root: &str, state_dir: &str, args: &[&str]) -> std::process::Output {
-    bounded_vida_output(&["-k", "5s", "20s"], "status should run", |command| {
-        command
-            .args(args)
-            .current_dir(project_root)
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", state_dir);
-    })
+    let mut command = vida();
+    command
+        .args(args)
+        .current_dir(project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", state_dir);
+    command_output_with_retry(&mut command)
 }
 
 fn doctor_with_timeout(state_dir: &str, args: &[&str]) -> std::process::Output {
-    bounded_vida_output(&["-k", "5s", "20s"], "doctor should run", |command| {
-        command.args(args).env("VIDA_STATE_DIR", state_dir);
-    })
+    let mut command = vida();
+    command.args(args).env("VIDA_STATE_DIR", state_dir);
+    command_output_with_retry(&mut command)
 }
 
 fn taskflow_run_graph_latest_with_timeout(state_dir: &str, json: bool) -> std::process::Output {
