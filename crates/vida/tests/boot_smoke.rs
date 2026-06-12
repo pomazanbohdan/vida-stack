@@ -16636,30 +16636,22 @@ fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
     );
     let diagnostics_json = parse_json_output(&diagnostics, "diagnostics post-commit");
 
-    let status = bounded_vida_output_with_state_lock_retry(
-        &["-k", "5s", "20s"],
-        "status json should run",
-        |command| {
-            command
-                .args(["status", "--json"])
-                .env("VIDA_STATE_DIR", &state_dir);
-        },
-    );
+    let mut status_command = vida();
+    status_command
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir);
+    let status = command_output_with_retry(&mut status_command);
     let status_json = parse_json_output(&status, "status");
     assert_eq!(
         status_json["view"], "summary",
         "default status --json should use compact operator summary output"
     );
 
-    let doctor = bounded_vida_output_with_state_lock_retry(
-        &["-k", "5s", "20s"],
-        "doctor json should run",
-        |command| {
-            command
-                .args(["doctor", "--json"])
-                .env("VIDA_STATE_DIR", &state_dir);
-        },
-    );
+    let mut doctor_command = vida();
+    doctor_command
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir);
+    let doctor = command_output_with_retry(&mut doctor_command);
     let doctor_json = parse_json_output(&doctor, "doctor");
 
     let blocker = "closed_task_active_run_projection_mismatch";
