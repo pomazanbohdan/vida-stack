@@ -31,7 +31,19 @@ Required fields:
    additional criterion for the next task every time; it is separate from, and
    cannot be replaced by, the fixed 20 criteria or prior dynamic criteria.
    Record `workflow_score_10`,
-7. next-task selection rule that changes future routing, prompt shape, proof
+7. implementation follow-up tasks: cite every TaskFlow task id created or
+   updated for actionable self-analysis, runtime self-diagnostic,
+   release/install diagnostic, DocFlow, TaskFlow, agent-return, or user-correction
+   finding. If no TaskFlow task is created for a finding, record a specific
+   `no_task_reason` such as already fixed in this task, duplicate of an existing
+   TaskFlow task, non-actionable observation, or upstream-only issue already
+   linked. A log-only actionable finding is an incomplete STOP gate,
+8. PR / issue processing: record `open_prs` as processed, `no_open_prs`,
+   `not_applicable`, `no_task_reason`, or `left_open_reason`; record
+   `processed_issues` as closed, `no_processed_issues`, `not_applicable`,
+   `no_task_reason`, or `kept_open_reason`. Processed issues may not disappear
+   into prose-only notes,
+9. next-task selection rule that changes future routing, prompt shape, proof
    bundle, or model choice.
 
 Do not invent token counts. If the host does not expose tokens or tool calls,
@@ -2901,6 +2913,261 @@ Next-task selection rule:
   new task. If another broad suite fails from a transient read helper, sweep
   sibling helpers first and only then spend another full-suite run.
 
+## 2026-06-12 - Self-analysis task emission hardening
+
+Scope:
+- Task: `todo-self-analysis-task-emission-instructions`
+- Follow-up emission TODO: `todo-self-analysis-followup-task-emission`
+- Scorecard TODO: `todo-self-analysis-task-emission-scorecard`
+- Parent: `post-epic-self-analysis-optimization-followups`
+- Files:
+  - `AGENTS.sidecar.md`
+  - `docs/process/project-orchestrator-operating-protocol.md`
+  - `docs/process/agent-model-evaluation-log.md`
+
+Proof:
+- `vida task validate-graph --json`: pass before and after follow-up task
+  creation.
+- `vida task closure-ready todo-self-analysis-task-emission-instructions
+  --json`: pass.
+- `vida task close todo-self-analysis-task-emission-instructions --json`: pass.
+- `vida task close todo-self-analysis-followup-task-emission --json`: pass after
+  creating implementation follow-up tasks.
+- `git diff -- AGENTS.sidecar.md
+  docs/process/project-orchestrator-operating-protocol.md
+  docs/process/agent-model-evaluation-log.md`: reviewed.
+
+Executor / validator:
+- Executor: root orchestrator, local docs and TaskFlow mutation, 8/10. The
+  change was bounded and used explicit TODO slices, with one recoverable
+  auto-close/reopen detour on the parent epic.
+- Validator: local graph/closure-ready/diff checks, 8/10. No Rust proof was run
+  because this slice only changes process instructions and TaskFlow metadata.
+- Tokens/tool calls: `not_exposed_by_host`; observable cost was multiple
+  TaskFlow mutations plus focused file reads/diff checks.
+
+Post-Task Self-Analysis:
+- Worked: the user correction exposed the missing enforcement link between
+  prose diagnostics and implementation work. The protocol now requires
+  TaskFlow implementation task ids or explicit `no_task_reason` for actionable
+  self-analysis/self-diagnostic findings.
+- Waste: the first instruction TODO briefly auto-closed the parent because it
+  had no other open child yet; future process epics should create the tracking
+  TODO before closing the first child or create follow-up tasks before closing
+  the only child.
+- Risk: a self-diagnostic residual can still be tracked only in GitHub without
+  a project-local TaskFlow task unless the scorecard/linter task is completed.
+- Next change: run `self-analysis-scorecard-task-ref-linter` before broad
+  process work that updates the evaluation log, once that linter exists.
+- Docs update: yes, top-level overlay, owner protocol, and evaluation log
+  template now require implementation follow-up tasks.
+- workflow_score_10: 8/10. The rule is now explicit and backed by tasks; the
+  remaining weakness is lack of automated enforcement.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `todo-self-analysis-task-emission-instructions`.
+2. Wave/parent closure distance: pass, created a new follow-up parent with
+   open implementation work instead of selecting unrelated work.
+3. Scope and non-goals stable: pass, process instructions, scorecard template,
+   and TaskFlow metadata only.
+4. Dirty worktree handled: pass, unrelated dirty files remained untouched.
+5. Executor cheapest capable: pass, local docs/TaskFlow work was sufficient.
+6. Validator matched risk: pass, graph/closure-ready/diff proof covered the
+   process slice.
+7. Prompt packet shape: not applicable, no delegated packet was launched.
+8. Agent handles: pass, no agent handles were launched.
+9. Token/tool/step telemetry: partial, host did not expose token counts.
+10. Avoidable commands: partial, parent reopen would have been avoided by
+    creating the follow-up tracking child before closing the first TODO.
+11. Proof strength: pass for process metadata; no product-code proof required.
+12. Public/release proof: not applicable.
+13. Debug build: not run, docs/TaskFlow-only change.
+14. TaskFlow state: pass, graph validates and parent remains `in_progress`.
+15. Staging by invariant: not applicable, no commit was requested for this new
+    follow-up epic; diff scope was reviewed and no staging was performed.
+16. Publication authorization: not applicable, no push requested for this new
+    follow-up epic.
+17. Evaluation docs: pass, this scorecard records the STOP gate.
+18. Parent/wave metrics: pass, new follow-up parent has open implementation
+    descendants.
+19. New defects/follow-ups: pass, eight implementation tasks created from the
+    self-analysis and runtime diagnostic findings.
+20. Next routing rule: pass, next work must choose an explicit follow-up task
+    from `post-epic-self-analysis-optimization-followups` or another
+    user-specified bounded unit.
+
+Implementation follow-up tasks:
+- `self-analysis-scorecard-task-ref-linter`
+- `self-analysis-proof-command-guard`
+- `self-analysis-positive-read-helper-sweep`
+- `self-analysis-dynamic-criteria-registry`
+- `self-analysis-model-telemetry-template`
+- `self-analysis-runtime-snapshot-parity-task`
+- `self-analysis-release-install-asset-task`
+- `self-analysis-log-backfill-task-refs`
+
+PR / issue processing:
+- open_prs: no_open_prs for this local process slice.
+- processed_issues: no_processed_issues; upstream issues #114 and #364 were
+  referenced but not processed or closed by this slice.
+
+Final dynamic criteria STOP point:
+1. Task-emission completeness criterion: after every self-analysis or runtime
+   self-diagnostic, actionable findings are incomplete until each has a
+   TaskFlow implementation task id, an updated existing task id, or an explicit
+   `no_task_reason`. Evidence source: the scorecard's `Implementation
+   follow-up tasks` field and `vida task progress <parent> --json`.
+2. Parent auto-close ordering criterion: when creating a new process parent,
+   keep at least one open tracking child before closing the first leaf, or be
+   prepared to immediately reopen/repair the parent. Evidence source:
+   `vida task validate-graph --json` and parent progress.
+
+Meta-analysis remediation:
+- Instruction remediation: updated the operating protocol, sidecar overlay, and
+  evaluation log template so log-only actionable findings no longer satisfy the
+  STOP gate.
+- TaskFlow remediation: created project-local TaskFlow tasks for the previous
+  runtime self-diagnostic residuals already mirrored in issues #114 and #364.
+- Automation remediation: created `self-analysis-scorecard-task-ref-linter` and
+  `self-analysis-proof-command-guard` to turn the new rule into executable
+  checks.
+
+Next-task selection rule:
+- The follow-up parent is now the explicit backlog for self-analysis
+  optimization work. Start with `self-analysis-scorecard-task-ref-linter` when
+  enforcing the new rule mechanically, or with one of the priority-1 residual
+  defect tasks when runtime behavior is the active goal.
+
+## 2026-06-12 - Self-analysis scorecard task-reference linter
+
+Scope:
+- Task: `self-analysis-scorecard-task-ref-linter`
+- Implementation TODO: `todo-self-analysis-scorecard-linter-implementation`
+- Scorecard TODO: `todo-self-analysis-scorecard-linter-scorecard`
+- Parent: `post-epic-self-analysis-optimization-followups`
+- Files:
+  - `scripts/check-agent-evaluation-log.ps1`
+  - `scripts/vida-dev-gate.ps1`
+  - `tests/fixtures/agent-evaluation-log/*.md`
+  - `docs/process/agent-model-evaluation-log.md`
+  - `docs/process/project-orchestrator-operating-protocol.md`
+
+Proof:
+- `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts/check-agent-evaluation-log.ps1 -Path
+  docs/process/agent-model-evaluation-log.md -Json`: pass.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts/check-agent-evaluation-log.ps1 -Path
+  tests/fixtures/agent-evaluation-log/pass.md -Json`: pass.
+- Negative fixtures blocked as expected:
+  `missing-task-ref`, `missing-pr-processing`, `stale-pending`,
+  `unclosed-processed-issue`.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts/vida-dev-gate.ps1 -Mode script-check`: pass, including the new
+  evaluation-log linter.
+- `vida docflow check docs/process/agent-model-evaluation-log.md
+  docs/process/project-orchestrator-operating-protocol.md --json`: pass.
+- `vida task validate-graph --json`: pass.
+- `git diff --check -- scripts/check-agent-evaluation-log.ps1
+  scripts/vida-dev-gate.ps1 tests/fixtures/agent-evaluation-log
+  docs/process/agent-model-evaluation-log.md
+  docs/process/project-orchestrator-operating-protocol.md`: pass.
+
+Executor / validator:
+- Executor: root orchestrator, local script/docs/fixture implementation, 8/10.
+  The implementation stayed bounded and integrated into `script-check`.
+- Validator: linter real-log pass, pass fixture, four negative fixtures, DocFlow,
+  TaskFlow graph, and diff whitespace checks, 9/10.
+- Tokens/tool calls: `not_exposed_by_host`; observable cost was focused file
+  reads, one script implementation, fixture proof, and TaskFlow updates.
+
+Post-Task Self-Analysis:
+- Worked: implementing the rule as a script and wiring it into
+  `scripts/vida-dev-gate.ps1 -Mode script-check` turned the new scorecard
+  contract into an executable gate instead of another prose checklist.
+- Waste: two short reruns were caused by PowerShell 5 parser/hashtable
+  compatibility issues; future PowerShell helper scripts should avoid inline
+  conditional expressions inside object literals.
+- Risk: the linter validates the latest scorecard by default to avoid breaking
+  grandfathered older entries, so historical coverage still depends on
+  `self-analysis-log-backfill-task-refs`.
+- Next change: run the linter through `script-check` before closing any process
+  or self-analysis task that touches the evaluation log.
+- Docs update: yes, the required scorecard shape and operating protocol now
+  include PR / issue processing and processed-issue closure state.
+- workflow_score_10: 8/10. The executable gate is in place, with explicit
+  negative fixtures; remaining improvement is the historical backfill task.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `self-analysis-scorecard-task-ref-linter`.
+2. Wave/parent closure distance: pass, one priority-1 follow-up implementation
+   moved from open to implemented under the self-analysis follow-up parent.
+3. Scope and non-goals stable: pass, limited to linter, fixtures, dev-gate
+   integration, and scorecard/protocol text.
+4. Dirty worktree handled: pass, unrelated Rust and root scratch files remained
+   untouched.
+5. Executor cheapest capable: pass, local script/docs implementation was enough.
+6. Validator matched risk: pass, executable negative fixtures covered the new
+   policy checks.
+7. Prompt packet shape: not applicable, no delegated prompt was launched.
+8. Agent handles: pass, no agent handles were launched.
+9. Token/tool/step telemetry: partial, host token counts were not exposed.
+10. Avoidable commands: partial, PowerShell parser compatibility caused two
+    avoidable reruns and produced a new dynamic criterion.
+11. Proof strength: pass, real log, pass fixture, and four negative fixtures
+    covered the claimed behavior.
+12. Public/release proof: not applicable, this is a local process script gate.
+13. Debug build: not run, no Rust code changed.
+14. TaskFlow state: pass, implementation TODO closed and graph validated.
+15. Staging by invariant: not applicable, no commit was requested.
+16. Publication authorization: not applicable, no push requested for this
+    follow-up task.
+17. Evaluation docs: pass, this scorecard records the STOP gate and passes the
+    new linter.
+18. Parent/wave metrics: pass, parent progress improved by one implemented
+    child while remaining follow-up tasks stay open.
+19. New defects/follow-ups: pass, no new actionable defect beyond existing
+    `self-analysis-log-backfill-task-refs`; `no_task_reason`: historical
+    scorecard backfill is already tracked there.
+20. Next routing rule: pass, future evaluation-log changes should run
+    `scripts/vida-dev-gate.ps1 -Mode script-check` before TaskFlow closure.
+
+Implementation follow-up tasks:
+- `self-analysis-log-backfill-task-refs`
+- no_task_reason: no separate new task for PowerShell object-literal
+  compatibility; the script was fixed inside this task and covered by
+  `script-check`.
+
+PR / issue processing:
+- open_prs: no_open_prs for this local process-script slice.
+- processed_issues: no_processed_issues; this task did not process or close
+  GitHub issues.
+
+Final dynamic criteria STOP point:
+1. PowerShell compatibility criterion: for repository PowerShell helper scripts,
+   avoid inline conditionals inside object literals and run a parser check under
+   the same Windows PowerShell command family used by the proof gate. Evidence
+   source: the failed initial linter runs and the subsequent
+   `scripts/vida-dev-gate.ps1 -Mode script-check` pass.
+
+Meta-analysis remediation:
+- Script remediation: added `scripts/check-agent-evaluation-log.ps1` with latest
+  scorecard validation and `-All` support.
+- Gate remediation: wired the linter into `scripts/vida-dev-gate.ps1 -Mode
+  script-check`.
+- Fixture remediation: added one pass fixture and four negative fixtures for
+  missing task refs, missing PR processing, stale placeholders, and unclosed
+  processed issues.
+- Documentation remediation: updated required scorecard shape and operating
+  protocol checklist for PR/open issue processing and processed issue closure.
+
+Next-task selection rule:
+- If continuing self-analysis optimization, the next mechanical hardening item
+  is `self-analysis-proof-command-guard`; if cleaning older records first,
+  choose `self-analysis-log-backfill-task-refs`.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -2910,5 +3177,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T09:24:00+03:00
+updated_at: 2026-06-12T10:04:13+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl

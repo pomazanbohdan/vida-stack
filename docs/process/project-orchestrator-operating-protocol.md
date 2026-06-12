@@ -353,10 +353,13 @@ Every task in a long-running refactor epic uses:
 Post-Task Self-Analysis is a STOP gate after every closed task and before
 selecting unrelated work. The next unrelated task is blocked until the
 orchestrator records the base fields, checks all 20 fixed criteria below,
-applies or records the meta-analysis remediation, and then completes the final
-checklist item: the dynamic-criteria STOP point for the just-finished session
-segment. The fixed list is the baseline only; it is not a substitute for
-generating at least one new additional session-derived criterion every time.
+applies or records the meta-analysis remediation, creates or updates TaskFlow
+implementation tasks for every actionable self-analysis or self-diagnostic
+finding, cites those task ids or an explicit `no_task_reason`, and then
+completes the final checklist item: the dynamic-criteria STOP point for the
+just-finished session segment. The fixed list is the baseline only; it is not a
+substitute for generating at least one new additional session-derived criterion
+every time.
 
 Base fields:
 
@@ -370,7 +373,8 @@ Base fields:
    proof bundle, staging, or parallel/sequential posture for the next task,
 5. `docs_update`: whether the finding requires updating project instructions,
    scorecard templates, prompt templates, scripts, code, tests, or TaskFlow
-   optimization defects,
+   optimization defects, and which TaskFlow implementation task id owns each
+   actionable follow-up,
 6. `workflow_score_10`: orchestrator process score considering cost, tool calls,
    proof strength, rework, elapsed time, and closure quality.
 
@@ -436,9 +440,25 @@ Meta-analysis remediation:
 2. For every `risk` item, choose one remediation: add/adjust proof, update a
    prompt/checklist, create a follow-up TaskFlow task, update code/tests/scripts,
    update documentation/instructions, or record why no action is required.
-3. If remediation changes project behavior, update the relevant instruction,
+3. For every actionable finding from Post-Task Self-Analysis, runtime
+   self-diagnostic, release/install diagnostic, DocFlow check, TaskFlow check,
+   agent return, or user correction, create or update a concrete TaskFlow
+   implementation task unless the finding is already fully fixed inside the
+   just-closed task, is a duplicate of an existing TaskFlow task, or is tracked
+   only in an upstream issue with a recorded project-local no-task reason.
+4. Every created or updated follow-up must include acceptance criteria, proof
+   target, owner surface or owned path, and the source finding. Cite its task id
+   in the scorecard and final dynamic criteria section. A prose log entry alone
+   does not satisfy this gate.
+5. If the task touched, reviewed, cited, or depended on GitHub/open-source
+   intake, record open PR handling and processed issue closure state in the
+   scorecard. Open PRs must be processed, explicitly marked `no_open_prs` or
+   `not_applicable`, or kept open with `left_open_reason`. Processed issues must
+   be closed, explicitly marked `no_processed_issues` or `not_applicable`, or
+   kept open with `kept_open_reason`/`no_task_reason`.
+6. If remediation changes project behavior, update the relevant instruction,
    process doc, script, code, test, or TaskFlow defect before unrelated work.
-4. If remediation cannot be completed inside the just-closed task, create or
+7. If remediation cannot be completed inside the just-closed task, create or
    update a follow-up with acceptance criteria and cite it in the scorecard.
 
 ## Post-Task Optimization Checklist
@@ -457,13 +477,18 @@ After every task, the orchestrator must track:
 9. Post-Task Self-Analysis recorded with base fields, all 20 fixed criteria,
    dynamic criteria created from the latest session segment, and meta-analysis
    remediation outcomes.
-10. False-green risks found and whether they became tests or follow-up tasks.
-11. Dirty hunks preserved or follow-up task created for adjacent useful hunks.
-12. Parent/wave closure readiness and remaining child count.
-13. Epic task percentage and wave percentage.
-14. Runtime friction or slow-command defects created/updated when observed.
-15. PR/open-source intake state when the task came from a PR.
-16. Next routing rule written in the agent evaluation log.
+10. Implementation follow-up task ids recorded for every actionable
+    self-analysis or self-diagnostic finding, or a specific `no_task_reason`
+    recorded for non-actionable, duplicate, or upstream-only findings.
+11. False-green risks found and whether they became tests or follow-up tasks.
+12. Dirty hunks preserved or follow-up task created for adjacent useful hunks.
+13. Parent/wave closure readiness and remaining child count.
+14. Epic task percentage and wave percentage.
+15. Runtime friction or slow-command defects created/updated when observed.
+16. PR/open-source intake state recorded: open PRs processed or explicitly kept
+    open with reason, and processed issues closed or explicitly kept open with
+    reason.
+17. Next routing rule written in the agent evaluation log.
 
 If any checklist item cannot be proven, keep the current task or a follow-up
 TaskFlow item open instead of silently moving to unrelated work.

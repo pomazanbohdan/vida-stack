@@ -275,6 +275,24 @@ try {
             "-Command",
             '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/vida-dev-gate.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
         )
+        Invoke-Timed "powershell-evaluation-log-linter-parse" @(
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/check-agent-evaluation-log.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
+        )
+        Invoke-Timed "agent-evaluation-log-lint" @(
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/check-agent-evaluation-log.ps1",
+            "-Path",
+            "docs/process/agent-model-evaluation-log.md"
+        )
         [string[]]$changedBashScripts = @(Get-ChangedBashScripts)
         if ($changedBashScripts.Count -eq 0) {
             Add-SkippedRecord "bash-script-parse" "no changed Bash scripts"
