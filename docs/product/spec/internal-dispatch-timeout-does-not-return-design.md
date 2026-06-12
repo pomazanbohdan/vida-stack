@@ -19,7 +19,7 @@ Status: `approved`
   - `crates/vida/src/runtime_dispatch_execution.rs` owns the internal command wrapper and timeout behavior.
   - `crates/vida/src/runtime_dispatch_state.rs` owns handoff timeout policy, in-flight receipt recording, timeout normalization, and run-graph dispatch receipt reconciliation.
   - `crates/vida/src/taskflow_consume_resume.rs` and recovery surfaces project the run as `awaiting_implementer` / `implementation_dispatch_ready`.
-  - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md` already governs truthful fail-closed semantics for internal Codex execution.
+  - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md` already governs truthful fail-closed semantics for internal Codex execution.
 - Current pain point or gap
   - Live proof for `feature-repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen` now shows routing is repaired: `cargo run -p vida -- taskflow run-graph dispatch-init feature-reconcile-autonomous-execution-flag-runtime-drift --json` records a lawful implementer packet with `dispatch_target = implementer`, `handoff_runtime_role = worker`, `activation_agent_type = junior`, and `selected_backend = internal_subagents`.
   - Executing that packet via `cargo run -p vida -- agent-init --dispatch-packet ... --execute-dispatch --json` still records an in-flight artifact with `status = "pass"` and `execution_state = "executing"` plus `activation_view_only`, then only later returns `Timed out executing runtime dispatch handoff after 242s`.
@@ -63,7 +63,7 @@ Status: `approved`
 - Project docs / specs affected:
   - `docs/product/spec/internal-dispatch-timeout-does-not-return-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+  - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -139,7 +139,7 @@ Will implement / choose:
   - `taskflow run-graph dispatch-init` -> `agent-init --execute-dispatch` -> internal delegated dispatch -> dispatch receipt/result reconciliation
   - `taskflow consume continue` -> internal delegated dispatch -> dispatch receipt/result reconciliation
 - Cross-document / cross-protocol dependencies
-  - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+  - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
   - `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
   - `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
 
@@ -224,7 +224,7 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+  - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
   - `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
   - `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
 - Related protocols

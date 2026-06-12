@@ -185,7 +185,7 @@ Will implement / choose:
 ## References
 
 - `docs/process/codex-agent-configuration-guide.md`
-- `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+- `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
 
 -----

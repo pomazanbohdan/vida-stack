@@ -400,7 +400,7 @@ Will implement / choose:
 
 ## References
 - Related specs:
-  - `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+  - `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
   - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
   - `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
 - Related protocols:

@@ -161,8 +161,6 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-- `docs/product/spec/coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md`
-- `docs/product/spec/external-coach-timeout-truth-does-not-return-cleanly-design.md`
 - `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
 
 -----

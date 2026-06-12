@@ -158,7 +158,7 @@ Will implement / choose:
 - Cross-document / cross-protocol dependencies
   - `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
   - `docs/process/project-operations.md`
-  - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+  - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 
 ### Bounded File Set
 - `docs/product/spec/authoritative-state-lock-recovery-design.md`
@@ -243,7 +243,7 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
-- `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+- `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - `docs/process/project-operations.md`
 - `docs/process/environments.md`
 

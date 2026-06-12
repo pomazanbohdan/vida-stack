@@ -497,7 +497,7 @@ Will implement / choose:
   - `docs/product/spec/status-families-and-query-surface-model.md`
   - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
-  - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
+  - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 - Related protocols
   - `docs/process/documentation-tooling-map.md`
 - Related ADRs

@@ -140,7 +140,7 @@ Will implement / choose:
 - Cross-document / cross-protocol dependencies
   - `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
   - `docs/product/spec/specification-lane-scope-hardening-design.md`
-  - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
+  - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 
 ### Bounded File Set
 - `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
@@ -218,7 +218,7 @@ Will implement / choose:
 ## References
 - `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
 - `docs/product/spec/specification-lane-scope-hardening-design.md`
-- `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
+- `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 
 -----
 artifact_path: product/spec/existing-design-implementation-routing-blocked-design

@@ -1,11 +1,11 @@
-# Spec Protocol Foundation Session Scoped Orchestr Design
+# Session Scoped Orchestrator Protocol Foundation Contract
 
 Purpose:
 Define the bounded product/runtime protocol foundation for multiple orchestrator
 sessions that may operate in the same VIDA project root without stealing each
 other's active continuation, lane ownership, or write authority.
 
-Status: `approved`
+Status: canonical
 
 Problem:
 The current TaskFlow and lane surfaces can expose an active run, delegated lane,
@@ -85,13 +85,13 @@ Follow-on Slices:
   takeover states.
 
 -----
-artifact_path: product/spec/spec-protocol-foundation-session-scoped-orchestr-design
+artifact_path: product/spec/session-scoped-orchestrator-protocol-foundation-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-05-16
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/spec-protocol-foundation-session-scoped-orchestr-design.md
+source_path: docs/product/spec/session-scoped-orchestrator-protocol-foundation-contract.md
 created_at: 2026-05-16T19:46:09.3307329Z
 updated_at: 2026-05-16T19:46:09.3307329Z
-changelog_ref: spec-protocol-foundation-session-scoped-orchestr-design.changelog.jsonl
+changelog_ref: session-scoped-orchestrator-protocol-foundation-contract.changelog.jsonl

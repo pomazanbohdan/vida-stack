@@ -140,7 +140,7 @@ Host bridge request shape:
 - `docs/process/agent-system.md`
 - `docs/process/codex-agent-configuration-guide.md`
 - `docs/product/spec/host-agent-bridge-adapter-contract.md`
-- `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+- `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
 - `docs/product/spec/compiled-runtime-bundle-contract.md`
 - OpenAI Codex CLI non-interactive mode: `https://developers.openai.com/codex/noninteractive`

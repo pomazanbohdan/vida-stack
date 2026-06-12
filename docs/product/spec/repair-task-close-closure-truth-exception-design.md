@@ -65,7 +65,7 @@ Status: `approved`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
-  - `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
+  - `docs/product/spec/lane-supersede-shared-truth-envelope-contract.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -246,7 +246,7 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
-- `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
+- `docs/product/spec/lane-supersede-shared-truth-envelope-contract.md`
 - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
 - `crates/vida/src/runtime_dispatch_state.rs`
 - `crates/vida/src/taskflow_consume_resume.rs`

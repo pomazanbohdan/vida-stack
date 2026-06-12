@@ -249,7 +249,7 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+  - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 - Related protocols
   - `docs/process/project-orchestrator-operating-protocol.md`

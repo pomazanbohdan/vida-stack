@@ -1,4 +1,4 @@
-# Spec Compliant Exception Path Takeover Surface Design
+# Spec Compliant Exception Path Takeover Surface Contract
 
 Purpose: restore a spec-compliant, receipt-governed operator path for local exception takeover so the runtime no longer deadlocks when specs require exception-path evidence but the product exposes no canonical surface that can record it.
 
@@ -245,13 +245,13 @@ Sequence:
 Release 1 keeps delegation-first law intact, but removes the current deadlock by adding the missing operator mutation surface required by the existing specs.
 
 -----
-artifact_path: product/spec/spec-compliant-exception-path-takeover-surface-design
+artifact_path: product/spec/spec-compliant-exception-path-takeover-surface-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-08
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md
+source_path: docs/product/spec/spec-compliant-exception-path-takeover-surface-contract.md
 created_at: 2026-04-08T21:24:52.231234213Z
 updated_at: 2026-04-09T05:41:17.916939008Z
-changelog_ref: spec-compliant-exception-path-takeover-surface-design.changelog.jsonl
+changelog_ref: spec-compliant-exception-path-takeover-surface-contract.changelog.jsonl

@@ -1,14 +1,14 @@
-# Pi Primary Environment And Agent Carrier Design
+# Pi Primary Environment Agent Carrier Specification
 
-Status: `proposed`
+Status: canonical
 
-Use this document as the bounded design/TZ for the TaskFlow epic `feature-vida-pi-agent-primary-environment` before any Pi config, template, adapter, readiness, dispatch, or release code changes.
+This specification defines Pi primary-environment and external-carrier behavior for VIDA runtime configuration, projection, dispatch, readiness, and release proof.
 
 ## Summary
 - Feature / change: add Pi as a first-class VIDA primary host environment, add `pi_cli` as a write-capable external CLI carrier through a `vida-pi-agent` adapter, and project VIDA-owned runtime roles/profiles into Pi internal-agent files under `.pi/**`.
 - Owner layer: `mixed`
 - Runtime surface: `project activation | taskflow | agent-init | status | release/install | external cli carrier`
-- Status: proposed
+- Status: canonical
 
 ## Current Context
 - VIDA already has a carrier/runtime-profile model in `vida.config.yaml` and runtime assignment paths that select carriers by runtime role, task class, readiness, score, cost, and quality constraints rather than by a fixed hardcoded agent identity.
@@ -87,7 +87,7 @@ Use this document as the bounded design/TZ for the TaskFlow epic `feature-vida-p
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+  - `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - operator runbook/process docs added in the docs task
@@ -215,7 +215,7 @@ Will implement / choose:
 
 ### Bounded File Set
 - Phase 1: specification/design
-  - `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+  - `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
 - Phase 2: config/template profiles
@@ -263,7 +263,7 @@ Will implement / choose:
 - Task: `feature-vida-pi-agent-primary-environment-spec`
 - Create and register this design/TZ.
 - First proof target:
-  - `vida docflow check --root . docs/product/spec/pi-primary-environment-and-agent-carrier-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/pi-primary-environment-agent-carrier-spec.md docs/product/spec/current-spec-map.md`
 
 ### Phase 2
 - Task: `feature-vida-pi-agent-config-and-template-profiles`
@@ -351,7 +351,7 @@ Concise proof commands recorded across the implementation slices:
 - `cargo build -p vida-pi-agent --bins --locked`
 - `vida docflow check-file --path docs/process/external-cli-carrier-operator-procedure.md`
 - `vida docflow check-file --path docs/process/agent-system.md`
-- `vida docflow check-file --path docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+- `vida docflow check-file --path docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
 
 ## Validation / Proof
 - Unit tests:
@@ -375,7 +375,7 @@ Concise proof commands recorded across the implementation slices:
   - `vida agent-init --execute-dispatch --json` with a bounded Pi smoke packet when credentials/readiness allow
   - `vida-pi-agent --version` or equivalent adapter smoke
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/pi-primary-environment-and-agent-carrier-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/pi-primary-environment-agent-carrier-spec.md docs/product/spec/current-spec-map.md`
   - `vida docflow check --root . <operator-docs>` after runbook work
   - `vida docflow readiness-check --profile active-canon` when template/readiness law changes
   - runtime self-diagnostic after release/install
@@ -426,7 +426,7 @@ Concise proof commands recorded across the implementation slices:
   - `docs/product/spec/external-cli-carrier-hardening-design.md`
   - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
-  - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
+  - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
   - `docs/product/spec/host-agent-layer-status-matrix.md`
   - `docs/product/spec/hybrid-host-executor-semantics-model.md`
   - `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
@@ -445,13 +445,13 @@ Concise proof commands recorded across the implementation slices:
   - Pi extensions docs
 
 -----
-artifact_path: product/spec/pi-primary-environment-and-agent-carrier-design
+artifact_path: product/spec/pi-primary-environment-agent-carrier-spec
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-06-02
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/pi-primary-environment-and-agent-carrier-design.md
+source_path: docs/product/spec/pi-primary-environment-agent-carrier-spec.md
 created_at: 2026-05-19T15:27:13.8001375Z
 updated_at: 2026-06-02T03:05:00+03:00
-changelog_ref: pi-primary-environment-and-agent-carrier-design.changelog.jsonl
+changelog_ref: pi-primary-environment-agent-carrier-spec.changelog.jsonl

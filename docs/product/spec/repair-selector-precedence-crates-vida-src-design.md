@@ -196,7 +196,7 @@ Will implement / choose:
 ## References
 - `crates/vida/src/runtime_lane_summary.rs`
 - `crates/vida/src/taskflow_run_graph.rs`
-- `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
+- `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 
 -----
 artifact_path: product/spec/repair-selector-precedence-crates-vida-src-design

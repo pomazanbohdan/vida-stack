@@ -1558,7 +1558,7 @@ agent_system:
       pi:
         price_basis: provider_configured_external_cli
         source_paths:
-          - docs/product/spec/pi-primary-environment-and-agent-carrier-design.md
+          - docs/product/spec/pi-primary-environment-agent-carrier-spec.md
         freshness:
           required: false
           max_age_days: 30
@@ -2332,7 +2332,7 @@ agent_system:
           pricing:
             price_source_kind: provider_catalog
             source_paths:
-              - docs/product/spec/pi-primary-environment-and-agent-carrier-design.md
+              - docs/product/spec/pi-primary-environment-agent-carrier-spec.md
             freshness:
               required: false
               max_age_days: 30
@@ -2370,7 +2370,7 @@ agent_system:
           pricing:
             price_source_kind: provider_catalog
             source_paths:
-              - docs/product/spec/pi-primary-environment-and-agent-carrier-design.md
+              - docs/product/spec/pi-primary-environment-agent-carrier-spec.md
             freshness:
               required: false
               max_age_days: 30

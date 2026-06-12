@@ -149,9 +149,7 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
-- `docs/product/spec/coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md`
-- `docs/product/spec/external-coach-timeout-truth-does-not-return-cleanly-design.md`
-- `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
+- `docs/product/spec/lane-supersede-shared-truth-envelope-contract.md`
 
 -----
 artifact_path: product/spec/blocked-external-coach-artifact-truth-not-reconciled-design

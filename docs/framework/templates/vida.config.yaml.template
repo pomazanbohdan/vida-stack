@@ -1111,7 +1111,7 @@ agent_system:
       pi:
         price_basis: provider_configured_external_cli
         source_paths:
-          - docs/product/spec/pi-primary-environment-and-agent-carrier-design.md
+          - docs/product/spec/pi-primary-environment-agent-carrier-spec.md
         freshness:
           required: false
           max_age_days: 30

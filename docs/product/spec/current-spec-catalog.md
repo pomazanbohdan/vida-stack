@@ -143,21 +143,19 @@ Companion rule:
 21. [multi-orchestrator-session-ownership-and-claims-design.md](multi-orchestrator-session-ownership-and-claims-design.md)
     Config families: orchestrator session identity, worktree-scoped claims, lease/heartbeat ownership, scoped status/continuation admission, foreign blocker visibility, and multi-session TaskFlow scheduling
     Registered path: `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
-22. [spec-protocol-foundation-session-scoped-orchestr-design.md](spec-protocol-foundation-session-scoped-orchestr-design.md)
+22. [session-scoped-orchestrator-protocol-foundation-contract.md](session-scoped-orchestrator-protocol-foundation-contract.md)
     Config families: session-scoped orchestrator protocol foundation, active claim admission, delegated lane ownership, exception takeover state naming, and continuation posture across TaskFlow, lane, status, and self-diagnostic surfaces
-    Registered path: `docs/product/spec/spec-protocol-foundation-session-scoped-orchestr-design.md`
+    Registered path: `docs/product/spec/session-scoped-orchestrator-protocol-foundation-contract.md`
 23. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
     Config families: host-agent activation layers, overlay-owned tier ladders, tier selection economics, local score/state surfaces, task-close feedback ingestion, and status/budget observability over `.vida/state/**`
 24. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
     Config families: runtime dispatch packet scope policy, tracked design-doc write ownership for specification lanes, downstream packet parity, and legacy packet normalization for task-class-aware scope hardening
 25. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
     Config families: fail-closed resume-time packet reconciliation, persisted specification packet repair toward tracked design-doc scope, and active A1 recovery-truth closure for stale dispatch lineage
-26. [lane-supersede-and-shared-truth-envelope-design.md](lane-supersede-and-shared-truth-envelope-design.md)
+26. [lane-supersede-shared-truth-envelope-contract.md](lane-supersede-shared-truth-envelope-contract.md)
    Config families: explicit lane supersession mutation, shared lane-envelope truth derivation across `show`/`exception-takeover`/`supersede`, admissible-versus-active takeover posture, and recovery-adjacent lane-command discoverability
-27. [implementation-backend-admissibility-and-selection-truth-design.md](implementation-backend-admissibility-and-selection-truth-design.md)
+27. [implementation-backend-admissibility-selection-truth-contract.md](implementation-backend-admissibility-selection-truth-contract.md)
    Config families: implementation-lane backend admissibility truth, canonical selected-backend resolution, route-primary versus effective-backend diagnostic split, and packet/summary/status projection alignment
-28. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
-   Config families: coach-lane downstream backend canonicalization, explicit review-route preference over inherited internal fallback, mixed-lane backend lineage, and runtime dispatch receipt/status alignment
 29. [blocked-external-coach-artifact-truth-not-reconciled-design.md](blocked-external-coach-artifact-truth-not-reconciled-design.md)
    Config families: blocked dispatch semantic-mismatch detection, run-graph projection stale truth beyond executing-only timeout cases, consume-resume continuation repair for obsolete blocked artifacts, and lane/status operator parity for mismatched blocked evidence
    Registered path: `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
@@ -217,30 +215,24 @@ Companion rule:
 33. [split-oversized-runtime-modules-ownership-execut-design.md](split-oversized-runtime-modules-ownership-execut-design.md)
    Config families: bounded ownership-based split plan for oversized TaskFlow runtime modules, compatibility-preserving facade seams, execution-preparation requirements, module-map proof targets, and guarded rollout across `crates/vida/src/runtime_dispatch_state.rs`, `taskflow_consume_resume.rs`, `taskflow_run_graph.rs`, `taskflow_proxy.rs`, `task_surface.rs`, and `init_surfaces.rs`
    Registered path: `docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`
-33. [internal-codex-agent-execution-fail-closed-design.md](internal-codex-agent-execution-fail-closed-design.md)
+33. [internal-codex-agent-execution-fail-closed-contract.md](internal-codex-agent-execution-fail-closed-contract.md)
    Config families: bounded internal-host activation-view fail-closed semantics, truthful agent-lane execution state, root-session anti-bypass guidance, and runtime dispatch bridge hardening for Codex/internal execution
-   Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+   Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 34. [internal-dispatch-timeout-does-not-return-design.md](internal-dispatch-timeout-does-not-return-design.md)
    Config families: bounded internal-host delegated handoff timeout return semantics, prompt blocked receipt/result truth for stranded implementer handoffs, and runtime dispatch wrapper hardening beyond in-flight `executing` artifacts
    Registered path: `docs/product/spec/internal-dispatch-timeout-does-not-return-design.md`
 35. [internal-codex-activation-view-timeout-holder-release-design.md](internal-codex-activation-view-timeout-holder-release-design.md)
    Config families: bounded stale in-flight reconciliation, canonical dispatch timeout reuse for internal-host handoff truth, legacy fallback compatibility, and truthful continue/recovery status for still-executing delegated work
    Registered path: `docs/product/spec/internal-codex-activation-view-timeout-holder-release-design.md`
-36. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
-   Config families: bounded coach-lane backend canonicalization, explicit review-route preference over inherited internal fallback, mixed-lane backend lineage, and runtime dispatch receipt/status alignment
-   Registered path: `docs/product/spec/coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md`
-37. [external-coach-timeout-truth-does-not-return-cleanly-design.md](external-coach-timeout-truth-does-not-return-cleanly-design.md)
-   Config families: bounded external coach timeout truth, timeout classification by actual backend class, bounded parent return after kill-after grace, and external dispatch artifact/status alignment
-   Registered path: `docs/product/spec/external-coach-timeout-truth-does-not-return-cleanly-design.md`
 37. [taskflow-execution-semantics-and-scheduler-design.md](taskflow-execution-semantics-and-scheduler-design.md)
    Config families: bounded TaskFlow task execution semantics schema, graph-plus-semantics scheduler projection, operator-visible parallel-admission truth, and fail-closed compatibility defaults for legacy tasks
    Registered path: `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
 38. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
    Config families: bounded external CLI carrier dispatch pinning, carrier readiness/status classification, normalized opencode/kilo/vibe project profiles, and operator-visible smoke-proof routing for sandbox/auth/model activation
    Registered path: `docs/product/spec/external-cli-carrier-hardening-design.md`
-39. [orchestrator-runtime-contract-hardening-design.md](orchestrator-runtime-contract-hardening-design.md)
+39. [orchestrator-runtime-contract-hardening-contract.md](orchestrator-runtime-contract-hardening-contract.md)
    Config families: bounded orchestrator/agent/lane/status runtime contract hardening, path-scoped exception takeover truth, preview planner output, carrier selection API, lock-resilient init reads, and Codex App agent cleanup release rollout
-   Registered path: `docs/product/spec/orchestrator-runtime-contract-hardening-design.md`
+   Registered path: `docs/product/spec/orchestrator-runtime-contract-hardening-contract.md`
 36. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
    Config families: bounded continuation-binding fail-closed enforcement, explicit active-bounded-unit init/status surfaces, ambiguity blocker vocabulary, and generated host guidance against self-selecting adjacent work
    Registered path: `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
@@ -298,9 +290,9 @@ Companion rule:
 53. [taskflow-happy-path-test-catalog-design.md](taskflow-happy-path-test-catalog-design.md)
    Config families: bounded ordered TaskFlow happy-path test catalog, proof-target mapping, parent/child closure consistency gate, and immediate defect-epic repair through agent mode
    Registered path: `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
-54. [pi-primary-environment-and-agent-carrier-design.md](pi-primary-environment-and-agent-carrier-design.md)
+54. [pi-primary-environment-agent-carrier-spec.md](pi-primary-environment-agent-carrier-spec.md)
     Config families: Pi primary host environment selection/materialization, `pi_cli` external carrier profiles, `vida-pi-agent` adapter dispatch, Pi internal-agent projections, bounded write-scope guard, template propagation, and release/package proof
-    Registered path: `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+    Registered path: `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
 55. [add-runtime-web-restart-current-repo-design.md](add-runtime-web-restart-current-repo-design.md)
     Config families: current-repo scoped web proof restart command, explicit edge-proxy restart opt-in, stale listener ownership checks, compact JSON restart receipts, and TaskFlow proof consumption for `vida runtime web restart`
     Registered path: `docs/product/spec/add-runtime-web-restart-current-repo-design.md`

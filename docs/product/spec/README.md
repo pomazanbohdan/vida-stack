@@ -24,7 +24,6 @@ Suggested homes:
 
 Active design docs:
 
-- `docs/product/spec/spec-proof-auto-flow-design.md`
 - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
 - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
 - `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
@@ -36,12 +35,12 @@ Active design docs:
 - `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
 - `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
 - `docs/product/spec/bounded-release-retrieval-identity-memory-govern-design.md`
-- `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
-- `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
+- `docs/product/spec/lane-supersede-shared-truth-envelope-contract.md`
+- `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
 - `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
 - `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
-- `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
+- `docs/product/spec/spec-compliant-exception-path-takeover-surface-contract.md`
 - `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
 
 Current promoted runtime-control specs:

@@ -1,14 +1,12 @@
-# Internal Codex Agent Execution Fail Closed Design
+# Internal Codex Agent Execution Fail Closed Contract
 
-Status: approved
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: Fail closed when the internal Codex backend materializes only an activation view, never returns a terminal `agent_message`, or otherwise withholds execution evidence, and persist a blocked dispatch result/receipt so operator/runtime surfaces do not deadlock on missing receipt state.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher | project activation`
-- Status: proposed
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -71,7 +69,7 @@ Use this template for one bounded feature/change design before implementation.
   - `docs/process/project-packet-and-lane-runtime-capsule.md`
   - `docs/process/codex-agent-configuration-guide.md`
   - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
-  - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+  - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - Framework protocols affected:
   - none beyond bootstrap-carried wording
 - Runtime families affected:
@@ -163,7 +161,7 @@ Will implement / choose:
 - `docs/process/project-packet-and-lane-runtime-capsule.md`
 - `docs/process/codex-agent-configuration-guide.md`
 - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
-- `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+- `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - `crates/vida/src/runtime_dispatch_execution.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
 - `crates/vida/src/runtime_dispatch_packet_text.rs`
@@ -188,7 +186,7 @@ Will implement / choose:
 - Update this design with the exact blocker semantics and proof targets.
 - Tighten orchestrator/runtime instruction surfaces to name activation-view-only dispatch explicitly.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+  - `vida docflow check --root . docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 
 ### Phase 2
 - Change runtime dispatch code so internal activation-view-only handoffs stop reporting `packet_ready/lane_running` as if execution happened.
@@ -257,13 +255,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/internal-codex-agent-execution-fail-closed-design
+artifact_path: product/spec/internal-codex-agent-execution-fail-closed-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-04-08'
 schema_version: '1'
-status: draft
-source_path: docs/product/spec/internal-codex-agent-execution-fail-closed-design.md
+status: canonical
+source_path: docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md
 created_at: '2026-04-08T19:45:00+03:00'
 updated_at: '2026-04-08T19:45:00+03:00'
-changelog_ref: internal-codex-agent-execution-fail-closed-design.changelog.jsonl
+changelog_ref: internal-codex-agent-execution-fail-closed-contract.changelog.jsonl

@@ -1,4 +1,4 @@
-# Orchestrator Runtime Contract Hardening Design
+# Orchestrator Runtime Contract Hardening Contract
 
 Status: `implemented`
 
@@ -39,7 +39,7 @@ Status: `implemented`
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/orchestrator-runtime-contract-hardening-design.md`
+  - `docs/product/spec/orchestrator-runtime-contract-hardening-contract.md`
   - `docs/process/codex-agent-configuration-guide.md`
 - Runtime families affected:
   - bootstrap init surfaces
@@ -86,7 +86,7 @@ Will implement:
 - `crates/vida/src/status_surface_write_guard.rs`
 - `crates/vida/src/status_surface_json_report.rs`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/orchestrator-runtime-contract-hardening-design.md`
+- `docs/product/spec/orchestrator-runtime-contract-hardening-contract.md`
 - `docs/process/codex-agent-configuration-guide.md`
 
 ## Fail-Closed Constraints
@@ -120,7 +120,7 @@ Will implement:
   - `target\debug\vida.exe lane reclaim --completed --host-agents --json`
   - installed `vida --version`
 - Canonical checks:
-  - `target\debug\vida.exe docflow check --root . docs/product/spec/orchestrator-runtime-contract-hardening-design.md docs/process/codex-agent-configuration-guide.md`
+  - `target\debug\vida.exe docflow check --root . docs/product/spec/orchestrator-runtime-contract-hardening-contract.md docs/process/codex-agent-configuration-guide.md`
 
 ## Observability
 - JSON fields:
@@ -145,16 +145,16 @@ Will implement:
 - `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
 - `docs/process/codex-agent-configuration-guide.md`
 - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
-- `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+- `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 
 -----
-artifact_path: product/spec/orchestrator-runtime-contract-hardening-design
+artifact_path: product/spec/orchestrator-runtime-contract-hardening-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-05-04'
 schema_version: '1'
 status: implemented
-source_path: docs/product/spec/orchestrator-runtime-contract-hardening-design.md
+source_path: docs/product/spec/orchestrator-runtime-contract-hardening-contract.md
 created_at: '2026-05-04T00:00:00+03:00'
 updated_at: '2026-05-04T00:00:00+03:00'
-changelog_ref: orchestrator-runtime-contract-hardening-design.changelog.jsonl
+changelog_ref: orchestrator-runtime-contract-hardening-contract.changelog.jsonl

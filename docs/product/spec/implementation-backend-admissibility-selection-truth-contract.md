@@ -1,12 +1,12 @@
-# Implementation Backend Admissibility And Selection Truth Design
+# Implementation Backend Admissibility Selection Truth Contract
 
-Status: approved
+Status: canonical
 
 ## Summary
 - Feature / change: unify backend admissibility-aware selection truth for implementation lanes across dispatch execution, packet rendering, receipt summaries, and operator/status surfaces
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher`
-- Status: `approved`
+- Status: canonical
 
 ## Current Context
 - `runtime_lane_summary.rs` already builds a `backend_admissibility_matrix`.
@@ -54,7 +54,7 @@ Will implement / choose:
   - The receipt may preserve historical raw selection drift; user-facing runtime truth should not.
 
 ## Bounded File Set
-- `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
+- `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
@@ -74,13 +74,13 @@ Will implement / choose:
 - current runtime contract profile
 
 -----
-artifact_path: product/spec/implementation-backend-admissibility-and-selection-truth-design
+artifact_path: product/spec/implementation-backend-admissibility-selection-truth-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: 2026-04-17
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md
+source_path: docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md
 created_at: '2026-04-17T18:35:00+03:00'
 updated_at: 2026-04-17T18:35:00+03:00
-changelog_ref: implementation-backend-admissibility-and-selection-truth-design.changelog.jsonl
+changelog_ref: implementation-backend-admissibility-selection-truth-contract.changelog.jsonl

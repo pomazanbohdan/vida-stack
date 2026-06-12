@@ -1,12 +1,12 @@
-# Lane Supersede And Shared Truth Envelope Design
+# Lane Supersede Shared Truth Envelope Contract
 
-Status: approved
+Status: canonical
 
 ## Summary
 - Feature / change: make `vida lane supersede` the explicit supersession mutation and unify one shared lane-envelope truth derivation across `show`, `exception-takeover`, and `supersede`
 - Owner layer: `mixed`
 - Runtime surface: `launcher | taskflow recovery adjacency`
-- Status: `approved`
+- Status: canonical
 
 ## Current Context
 - `vida lane` already exists as a root family-owned operator surface.
@@ -91,7 +91,7 @@ Will implement / choose:
 6. Ordinary blocked/failed dispatch truth continues to surface canonical receipt/downstream blocker codes.
 
 ### Bounded File Set
-- `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
+- `docs/product/spec/lane-supersede-shared-truth-envelope-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
@@ -112,19 +112,19 @@ Will implement / choose:
   - `vida taskflow help recovery`
 
 ## References
-- `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
+- `docs/product/spec/spec-compliant-exception-path-takeover-surface-contract.md`
 - current runtime contract profile
 - current runtime contract profile
 - current runtime contract profile
 
 -----
-artifact_path: product/spec/lane-supersede-and-shared-truth-envelope-design
+artifact_path: product/spec/lane-supersede-shared-truth-envelope-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: 2026-04-17
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md
+source_path: docs/product/spec/lane-supersede-shared-truth-envelope-contract.md
 created_at: '2026-04-17T18:20:00+03:00'
 updated_at: 2026-04-17T18:20:00+03:00
-changelog_ref: lane-supersede-and-shared-truth-envelope-design.changelog.jsonl
+changelog_ref: lane-supersede-shared-truth-envelope-contract.changelog.jsonl
