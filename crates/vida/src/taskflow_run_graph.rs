@@ -1933,9 +1933,23 @@ fn recovery_surface_contract_with_owned_scope(
             owned_write_scope_hint,
         );
     let ready_handoff_resolves_open_cycle = recovery_ready_handoff_resolves_open_cycle(summary);
+    let projection_ready_handoff_resolves_open_cycle = summary.delegation_gate.delegated_cycle_open
+        && summary.delegation_gate.blocker_code.as_deref() == Some("open_delegated_cycle")
+        && summary.recovery_ready
+        && summary.resume_status == "ready"
+        && summary.resume_target.starts_with("dispatch.")
+        && projection_truth
+            .dispatch_receipt
+            .as_ref()
+            .is_some_and(|receipt| {
+                summary.active_node == receipt.dispatch_target
+                    && matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
+                    && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
+            });
     let mut blocker_codes = if projection_resolves_open_cycle
         || active_exception_takeover_resolves_open_cycle
         || ready_handoff_resolves_open_cycle
+        || projection_ready_handoff_resolves_open_cycle
     {
         Vec::new()
     } else {
@@ -2638,6 +2652,20 @@ fn projection_truth_blocker_codes_for_ready_handoff(
         })
     {
         return normalize_run_graph_blocker_codes(&[], projection_truth.stale_state_suspected);
+    }
+    if projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            status == "ready"
+                && recovery_ready
+                && resume_target.starts_with("dispatch.")
+                && active_node == receipt.dispatch_target
+                && matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
+                && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
+        })
+    {
+        return Vec::new();
     }
     projection_truth_blocker_codes(projection_truth)
 }

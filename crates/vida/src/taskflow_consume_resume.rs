@@ -682,6 +682,12 @@ async fn latest_stale_run_graph_task_authority_error(
                 status.run_id
             )
         })?;
+    if dispatch_receipt
+        .as_ref()
+        .is_some_and(receipt_or_packet_has_ready_downstream_packet)
+    {
+        return Ok(None);
+    }
     Ok(Some(stale_missing_task_run_graph_resume_error(
         &status,
         dispatch_receipt.as_ref(),
@@ -717,6 +723,25 @@ fn receipt_has_ready_downstream_packet(
             .is_some_and(|path| !path.trim().is_empty())
 }
 
+fn receipt_or_packet_has_ready_downstream_packet(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    if receipt_has_ready_downstream_packet(receipt) {
+        return true;
+    }
+    let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() else {
+        return false;
+    };
+    let Ok(packet) = read_dispatch_packet(packet_path) else {
+        return false;
+    };
+    downstream_packet_candidate_has_receipt_backed_ready_evidence(
+        &packet,
+        packet_path,
+        &receipt.run_id,
+    )
+}
+
 async fn validate_run_graph_resume_state(
     store: &super::StateStore,
     run_id: &str,
@@ -732,7 +757,7 @@ async fn validate_run_graph_resume_state(
             let receipt_exists = receipt.is_some();
             if receipt
                 .as_ref()
-                .is_some_and(receipt_has_ready_downstream_packet)
+                .is_some_and(receipt_or_packet_has_ready_downstream_packet)
             {
                 return Ok(());
             }
@@ -2464,7 +2489,7 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
             let receipt_exists = receipt.is_some();
             if receipt
                 .as_ref()
-                .is_some_and(receipt_has_ready_downstream_packet)
+                .is_some_and(receipt_or_packet_has_ready_downstream_packet)
             {
                 return Ok(());
             }
@@ -2504,6 +2529,18 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
             })?;
     let task_missing = task_authority.task_missing();
     if task_missing {
+        if candidate_packet.is_some_and(|(packet, packet_path)| {
+            downstream_packet_candidate_has_receipt_backed_ready_evidence(
+                packet,
+                packet_path,
+                run_id,
+            )
+        }) || active_receipt
+            .as_ref()
+            .is_some_and(receipt_or_packet_has_ready_downstream_packet)
+        {
+            return Ok(());
+        }
         return Err(stale_missing_task_run_graph_resume_error(
             &status,
             active_receipt.as_ref(),
@@ -4292,9 +4329,7 @@ async fn default_resume_has_authoritative_ready_downstream_packet(
     else {
         return Ok(false);
     };
-    maybe_resume_inputs_from_ready_downstream_packet(store, Some(&run_id), &receipt)
-        .await
-        .map(|resume| resume.is_some())
+    Ok(receipt_has_ready_downstream_packet(&receipt))
 }
 
 fn downstream_result_packet_path(result: &serde_json::Value) -> Option<String> {
@@ -5553,6 +5588,24 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                     return Ok(resume);
                 }
             }
+            if receipt_or_packet_has_ready_downstream_packet(&receipt) {
+                if let Some(resume) = maybe_resume_inputs_from_ready_downstream_packet(
+                    store,
+                    Some(&resolved_run_id),
+                    &receipt,
+                )
+                .await?
+                {
+                    record_run_graph_replay_lineage_receipt_for_resume(
+                        store,
+                        &receipt,
+                        &resume,
+                        "downstream_packet_after_missing_task_status",
+                    )
+                    .await?;
+                    return Ok(resume);
+                }
+            }
             return Err(stale_missing_task_run_graph_resume_error(
                 status,
                 Some(&receipt),
@@ -6348,6 +6401,23 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             let role_selection;
             let run_graph_bootstrap;
             let state_root = store.root().to_path_buf();
+            let no_explicit_resume_target = requested_run_id.is_none()
+                && requested_dispatch_packet_path.is_none()
+                && requested_downstream_packet_path.is_none();
+            let default_has_authoritative_ready_downstream_packet = if no_explicit_resume_target {
+                match default_resume_has_authoritative_ready_downstream_packet(&store).await {
+                    Ok(has_ready_downstream_packet) => has_ready_downstream_packet,
+                    Err(error) => {
+                        if emit_output {
+                            eprintln!("{error}");
+                            emit_consume_continue_resume_error(&error, surface_name, as_json);
+                        }
+                        return ExitCode::from(1);
+                    }
+                }
+            } else {
+                false
+            };
             if let Some(run_id) = requested_run_id.as_deref() {
                 if let Ok(status) = store.run_graph_status(run_id).await {
                     match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
@@ -6363,13 +6433,20 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                                     .unwrap_or(false) =>
                         {
                             let receipt = store.run_graph_dispatch_receipt(run_id).await.ok().flatten();
-                            let error =
-                                stale_missing_task_run_graph_resume_error(&status, receipt.as_ref());
-                            if emit_output {
-                                eprintln!("{error}");
-                                emit_consume_continue_resume_error(&error, surface_name, as_json);
+                            if !receipt
+                                .as_ref()
+                                .is_some_and(receipt_or_packet_has_ready_downstream_packet)
+                            {
+                                let error = stale_missing_task_run_graph_resume_error(
+                                    &status,
+                                    receipt.as_ref(),
+                                );
+                                if emit_output {
+                                    eprintln!("{error}");
+                                    emit_consume_continue_resume_error(&error, surface_name, as_json);
+                                }
+                                return ExitCode::from(1);
                             }
-                            return ExitCode::from(1);
                         }
                         Ok(_) => {}
                         Err(error) => {
@@ -6385,10 +6462,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     }
                 }
             }
-            if requested_run_id.is_none()
-                && requested_dispatch_packet_path.is_none()
-                && requested_downstream_packet_path.is_none()
-            {
+            if no_explicit_resume_target && !default_has_authoritative_ready_downstream_packet {
                 match latest_stale_run_graph_task_authority_error(&store).await {
                     Ok(Some(error)) => {
                         if emit_output {
@@ -6443,19 +6517,8 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 }
             };
             if fast_deferred_resume_inputs.is_none()
-                && requested_run_id.is_none()
-                && requested_dispatch_packet_path.is_none()
-                && requested_downstream_packet_path.is_none()
-                && match default_resume_has_authoritative_ready_downstream_packet(&store).await {
-                    Ok(has_ready_downstream_packet) => !has_ready_downstream_packet,
-                    Err(error) => {
-                        if emit_output {
-                            eprintln!("{error}");
-                            emit_consume_continue_resume_error(&error, surface_name, as_json);
-                        }
-                        return ExitCode::from(1);
-                    }
-                }
+                && no_explicit_resume_target
+                && !default_has_authoritative_ready_downstream_packet
             {
                 match latest_dispatch_packet_contract_error_for_resume_gate(&store).await {
                     Ok(Some(error)) => {
@@ -6766,6 +6829,16 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             let persist_deferred_handoff = dispatch_receipt.dispatch_status == "packet_ready"
                 || dispatch_receipt.downstream_dispatch_ready;
             if dispatch_receipt.dispatch_status == "packet_ready" {
+                if let Err(error) = sync_run_graph_after_retry_artifact(
+                    &store,
+                    &run_graph_bootstrap,
+                    &dispatch_receipt,
+                )
+                .await
+                {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
                 dispatch_receipt.dispatch_status = "routed".to_string();
                 dispatch_receipt.lane_status = super::derive_lane_status(
                     &dispatch_receipt.dispatch_status,
