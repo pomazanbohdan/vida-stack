@@ -3525,6 +3525,163 @@ Next-task selection rule:
   `runtime-dispatch-flow-stuck-after-analyst` unless parent closure-readiness
   proves the parent can close without another implementation fix.
 
+## 2026-06-12 - Runtime dispatch flow active exception takeover reconciliation
+
+Scope:
+- Task: `runtime-dispatch-flow-stuck-after-analyst`
+- Implementation TODO: `todo-runtime-dispatch-exception-takeover-reconciliation`
+- Scorecard TODO: `todo-runtime-dispatch-flow-scorecard-log`
+- Parent: `self-analysis-runtime-snapshot-parity-task`
+- Files:
+  - `crates/vida/src/runtime_dispatch_receipt_helpers.rs`
+  - `crates/vida/src/taskflow_run_graph.rs`
+  - `crates/vida/src/continuation_binding_summary.rs`
+  - `docs/process/agent-model-evaluation-log.md`
+
+Proof:
+- `cargo +1.95.0 fmt --check`: pass.
+- `cargo +1.95.0 test -p vida
+  active_exception_takeover_requires_matching_run_and_complete_receipt_pair
+  -- --nocapture`: pass, 1 real test.
+- `cargo +1.95.0 test -p vida
+  run_graph_blocker_evidence_accepts_active_exception_takeover
+  -- --nocapture`: pass, 1 real test.
+- `cargo +1.95.0 test -p vida
+  run_graph_status_surface_suppresses_open_cycle_after_active_exception_takeover
+  -- --nocapture`: pass, 1 real test.
+- `cargo +1.95.0 test -p vida
+  run_graph_advance_reports_active_exception_takeover_before_route_support_error
+  -- --nocapture`: pass, 1 real test.
+- `cargo +1.95.0 test -p vida
+  blocked_latest_run_graph_status_accepts_active_exception_takeover_binding
+  -- --nocapture`: pass, 1 real test.
+- `cargo +1.95.0 test -p vida
+  task_next_lawful_exception_takeover_bypasses_open_cycle_blocker
+  -- --nocapture`: pass, 1 real test.
+- `vida release install --json`: pass after a long release build; installed
+  fingerprint verified by `vida doctor --json` as
+  `71529a7bf3eb5d6209de0af6ffa82729e6d6bfcc873456c106db584be68cf859`.
+- `vida taskflow run-graph status self-analysis-runtime-snapshot-parity-task
+  --json`: pass; blocker codes empty, active node `analyst`, no
+  `tool_execution_failed`.
+- `vida taskflow run-graph advance self-analysis-runtime-snapshot-parity-task
+  --json`: fail-closed by design with target run/node and
+  `evidence_kind=active_exception_takeover`, not the old unsupported
+  `specification/analyst` route error.
+- `vida lane takeover-ready self-analysis-runtime-snapshot-parity-task --json`:
+  pass, `takeover_state=active`, `root_local_write_allowed=true`.
+- `vida doctor --json`: pass after closing the implementation TODO; no
+  claim conflicts; current-session run and dispatch receipt both point to
+  `self-analysis-runtime-snapshot-parity-task`.
+- `vida task validate-graph --json`: pass.
+- rationale: command `vida taskflow consume continue --run-id ... --max-rounds 3`
+  from old task proof was not run because current CLI rejects `--max-rounds`;
+  live status/advance/takeover-ready surfaces covered the accepted public
+  behavior for this slice.
+
+Executor / validator:
+- Executor: root orchestrator under active exception takeover, 8/10.
+- Validator: focused unit/contract tests, installed live surfaces, doctor,
+  TaskFlow graph validation, and one read-only explorer plus one pattern-sweep
+  explorer, 9/10.
+- Tokens/tool calls: `not_exposed_by_host`; observable overhead came from one
+  release-install timeout window and one incorrect multi-filter cargo command.
+
+Post-Task Self-Analysis:
+- Worked: run-graph status no longer reports stale `tool_execution_failed` for
+  a matching active exception-takeover receipt, and advance now emits a
+  deterministic active-takeover blocker before generic route support errors.
+- Waste: the first release install timed out while the child cargo/rustc
+  process still ran; one cargo command attempted two filters in a single
+  invocation and had to be split.
+- Risk: pattern sweep found adjacent duplicate or looser takeover predicates
+  outside the closed run-graph status/advance slice; final sequential status
+  proof also exposed a status/doctor activation-posture contradiction.
+- Next change: publish this slice, then choose between parent closure-readiness
+  and `runtime-active-exception-takeover-predicate-consolidation` based on the
+  next lawful TaskFlow binding.
+- Docs update: yes, this scorecard records the STOP gate.
+- workflow_score_10: 8/10. The runtime defect is covered and live proof is
+  strong, but duplicate-predicate consolidation remains as a tracked residual.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `runtime-dispatch-flow-stuck-after-analyst`.
+2. Wave/parent closure distance: pass, priority-1 child closed under
+   `self-analysis-runtime-snapshot-parity-task`.
+3. Scope and non-goals stable: pass, fixed run-graph status/advance and the
+   continuation verdict bridge only.
+4. Dirty worktree handled: pass, scoped to three Rust files plus scorecard.
+5. Executor cheapest capable: pass, root exception takeover was already active
+   for `crates/vida/src` and the evaluation log.
+6. Validator matched risk: pass, public live surfaces plus focused regressions.
+7. Prompt packet shape: pass, no new write-producing delegated packet used.
+8. Agent handles: pass, read-only explorer and pattern-sweep explorer were
+   classified and closed.
+9. Token/tool/step telemetry: partial, host token counts unavailable.
+10. Avoidable commands: partial, release-install timeout needed process
+    monitoring; one cargo filter command was malformed.
+11. Proof strength: pass, old route error removed and active-takeover guidance
+    verified in installed CLI.
+12. Public/release proof: pass, installed binary verified by doctor fingerprint.
+13. Debug build: pass, focused tests compiled changed paths.
+14. TaskFlow state: pass, implementation TODO and defect closed.
+15. Staging by invariant: pass, patch stages one active-takeover verdict
+    invariant.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass, this entry records the STOP gate.
+18. Parent/wave metrics: pass, parent epic increased to 31/41 closed.
+19. New defects/follow-ups: pass,
+    `runtime-active-exception-takeover-predicate-consolidation` created for
+    the pattern-sweep residual.
+20. Next routing rule: pass, publish this slice, then rebind the next lawful
+    continuation item before implementation.
+
+Implementation follow-up tasks:
+- `runtime-active-exception-takeover-predicate-consolidation`
+- `runtime-latest-run-graph-missing-task-parity-repair`
+- `runtime-status-activation-pending-doctor-parity`
+- no_task_reason: no new task for `--max-rounds`; it is stale task proof text,
+  while current accepted surfaces do not require that option.
+
+PR / issue processing:
+- open_prs: left_open_reason=`self-analysis-epic-pr-issue-closure-pass`
+  owns the epic-level PR pass; this slice did not process PRs directly.
+- processed_issues: no_processed_issues in this slice; upstream issue handling
+  remains part of the epic closure pass.
+
+Final dynamic criteria STOP point:
+1. Long release install monitoring criterion: when `vida release install`
+   exceeds the host timeout but child cargo/rustc processes still have active
+   CPU, wait for the existing install to finish and verify the installed
+   fingerprint before retrying. Evidence source: this slice's first install
+   timed out at five minutes, but the build finished afterward and the second
+   install completed successfully.
+
+Meta-analysis remediation:
+- Code remediation: introduced shared active exception-takeover receipt helpers
+  for full and summary dispatch receipts.
+- Code remediation: run-graph status suppresses stale blockers only for
+  matching active exception-takeover receipts with both receipt ids.
+- Code remediation: run-graph advance reports active exception takeover before
+  unsupported route errors and JSON evidence marks the blocker with
+  `evidence_kind=active_exception_takeover`.
+- Code remediation: continuation binding summary now consumes the shared
+  summary receipt verdict.
+- TaskFlow remediation: created
+  `runtime-active-exception-takeover-predicate-consolidation` for remaining
+  duplicate or looser predicates found by the pattern sweep.
+- TaskFlow remediation: created
+  `runtime-status-activation-pending-doctor-parity` after sequential proof
+  showed `vida status --json` reporting `activation_pending` while
+  `vida doctor --json` reported `normal_boot_allowed`.
+
+Next-task selection rule:
+- Commit and push this dispatch-flow slice. Then run TaskFlow next-lawful or
+  closure-readiness before selecting between parent closure,
+  `runtime-active-exception-takeover-predicate-consolidation`, and the remaining
+  parity residual.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -3534,5 +3691,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T10:18:14+03:00
+updated_at: 2026-06-12T12:37:32+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl

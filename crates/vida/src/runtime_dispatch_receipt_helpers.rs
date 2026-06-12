@@ -124,6 +124,22 @@ pub(crate) fn dispatch_summary_has_clean_completed_lane(
     })
 }
 
+pub(crate) fn dispatch_summary_has_active_exception_takeover(
+    receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
+    expected_run_id: Option<&str>,
+) -> bool {
+    expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+        && receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
 pub(crate) fn dispatch_receipt_has_clean_completed_lane(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     expected_run_id: Option<&str>,
@@ -133,6 +149,22 @@ pub(crate) fn dispatch_receipt_has_clean_completed_lane(
         && receipt.lane_status == "lane_completed"
         && receipt.blocker_code.is_none()
         && receipt.downstream_dispatch_blockers.is_empty()
+}
+
+pub(crate) fn dispatch_receipt_has_active_exception_takeover(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    expected_run_id: Option<&str>,
+) -> bool {
+    expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+        && receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 pub(crate) fn dispatch_receipt_downstream_blockers_superseded_by_ready_handoff(
@@ -423,6 +455,29 @@ mod tests {
             .push("handoff_pending".to_string());
         assert!(!dispatch_summary_has_clean_completed_lane(
             Some(&summary),
+            Some("run-1")
+        ));
+    }
+
+    #[test]
+    fn active_exception_takeover_requires_matching_run_and_complete_receipt_pair() {
+        let mut receipt = receipt_for("run-1");
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+
+        assert!(dispatch_receipt_has_active_exception_takeover(
+            &receipt,
+            Some("run-1")
+        ));
+        assert!(!dispatch_receipt_has_active_exception_takeover(
+            &receipt,
+            Some("other-run")
+        ));
+
+        receipt.supersedes_receipt_id = None;
+        assert!(!dispatch_receipt_has_active_exception_takeover(
+            &receipt,
             Some("run-1")
         ));
     }

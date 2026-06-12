@@ -2103,15 +2103,9 @@ fn recovery_projection_has_active_exception_takeover(
         .dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
-            receipt.lane_status == "lane_exception_takeover"
-                && receipt
-                    .exception_path_receipt_id
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-                && receipt
-                    .supersedes_receipt_id
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
+            crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_active_exception_takeover(
+                receipt, None,
+            )
         })
 }
 
@@ -2231,16 +2225,10 @@ fn active_exception_takeover_receipt_matches_status(
     let Some(receipt) = receipt else {
         return false;
     };
-    receipt.run_id == status.run_id
-        && receipt.lane_status == "lane_exception_takeover"
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+    crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_active_exception_takeover(
+        receipt,
+        Some(&status.run_id),
+    )
 }
 
 fn status_derived_exception_takeover_binding(
@@ -2725,6 +2713,12 @@ fn run_graph_status_surface_blocker_codes(
             crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
         })
     {
+        return Vec::new();
+    }
+    if active_exception_takeover_receipt_matches_status(
+        status,
+        projection_truth.dispatch_receipt.as_ref(),
+    ) {
         return Vec::new();
     }
 
@@ -5184,12 +5178,19 @@ fn run_graph_blocker_evidence(
     if !is_blocked_advance {
         return Ok(None);
     }
-    let blocker_code = run_graph_blocker_code(args.status).ok_or_else(|| {
-        format!(
-            "run-graph advance blocked without explicit blocker evidence for `{}` status `{}`; refusing to continue (fail-closed)",
-            args.run_id, args.status
+    let is_active_exception_takeover = args.error.contains("active exception takeover");
+    let blocker_code = if is_active_exception_takeover {
+        crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::OpenDelegatedCycle,
         )
-    })?;
+    } else {
+        run_graph_blocker_code(args.status).ok_or_else(|| {
+            format!(
+                "run-graph advance blocked without explicit blocker evidence for `{}` status `{}`; refusing to continue (fail-closed)",
+                args.run_id, args.status
+            )
+        })?
+    };
     let canonical_blocker_codes =
         canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code])).ok_or_else(
             || {
@@ -5216,6 +5217,11 @@ fn run_graph_blocker_evidence(
             "resume_target": args.resume_target,
             "next_node": args.next_node,
             "source": "run_graph_state",
+            "evidence_kind": if is_active_exception_takeover {
+                "active_exception_takeover"
+            } else {
+                "run_graph_status_blocker"
+            },
         }]
     })))
 }
@@ -8136,6 +8142,21 @@ pub(crate) async fn derive_advanced_run_graph_status(
 ) -> Result<TaskflowRunGraphAdvancePayload, String> {
     let compiled_control = compiled_run_graph_control(store).await?;
     let implementation = compiled_control.implementation;
+    let dispatch_receipt = store
+        .run_graph_dispatch_receipt(&existing.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read run-graph dispatch receipt for `{}` before advance: {error}",
+                existing.run_id
+            )
+        })?;
+    if active_exception_takeover_receipt_matches_status(&existing, dispatch_receipt.as_ref()) {
+        return Err(format!(
+            "run-graph advance blocked: run `{}` is in active exception takeover for `{}`; finish the scoped local work allowed by `vida lane takeover-ready {} --json`, then close the bounded task before advancing another runtime lane.",
+            existing.run_id, existing.active_node, existing.run_id
+        ));
+    }
 
     if existing.task_class == "implementation"
         && existing.route_task_class == "implementation"
@@ -9369,6 +9390,35 @@ mod tests {
         assert_eq!(
             shared_operator_output_contract_parity_error(&evidence),
             None
+        );
+    }
+
+    #[test]
+    fn run_graph_blocker_evidence_accepts_active_exception_takeover() {
+        let evidence = run_graph_blocker_evidence(RunGraphBlockerEvidenceArgs {
+            run_id: "run-active-exception",
+            active_node: "analyst",
+            status: "blocked",
+            route_task_class: "specification",
+            policy_gate: "not_required",
+            resume_target: "dispatch.analyst",
+            next_node: None,
+            error: "run-graph advance blocked: run `run-active-exception` is in active exception takeover for `analyst`; finish the scoped local work allowed by `vida lane takeover-ready run-active-exception --json`, then close the bounded task before advancing another runtime lane.",
+        })
+        .expect("active exception takeover should be explicit blocker evidence")
+        .expect("active exception takeover should render blocker evidence");
+
+        assert_eq!(
+            evidence["blockers"][0]["code"],
+            serde_json::json!("open_delegated_cycle")
+        );
+        assert_eq!(
+            evidence["blockers"][0]["evidence_kind"],
+            serde_json::json!("active_exception_takeover")
+        );
+        assert_eq!(
+            evidence["incident"]["active_node"],
+            serde_json::json!("analyst")
         );
     }
 
@@ -14581,6 +14631,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_graph_advance_reports_active_exception_takeover_before_route_support_error() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let mut existing = default_run_graph_status(
+            "run-active-exception-advance",
+            "specification",
+            "specification",
+        );
+        existing.active_node = "analyst".to_string();
+        existing.status = "blocked".to_string();
+        existing.lifecycle_stage = "analyst_blocked".to_string();
+        existing.lane_id = "analyst_lane".to_string();
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-active-exception-advance");
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_command = None;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_packet_path = None;
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("record active exception takeover receipt");
+
+        let error = derive_advanced_run_graph_status(&store, existing)
+            .await
+            .expect_err("active exception takeover should block route advance");
+
+        assert!(error.contains("active exception takeover"));
+        assert!(error.contains("vida lane takeover-ready run-active-exception-advance --json"));
+        assert!(
+            !error.contains("currently supports only seeded implementation"),
+            "advance should not mask active exception takeover behind route support errors"
+        );
+    }
+
+    #[tokio::test]
     async fn seeded_worker_test_author_lane_can_advance_to_coach() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
@@ -15683,6 +15778,53 @@ mod tests {
         assert_eq!(
             payload["diagnosis_detail"]["blocker_codes"],
             serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn run_graph_status_surface_suppresses_open_cycle_after_active_exception_takeover() {
+        let mut status = default_run_graph_status(
+            "run-active-exception-status",
+            "specification",
+            "specification",
+        );
+        status.active_node = "analyst".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analyst_blocked".to_string();
+        status.lane_id = "analyst_lane".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "dispatch.analyst".to_string();
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-active-exception-status");
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_command = None;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_packet_path = None;
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida lane show run-active-exception-status --json".to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let blocker_codes = run_graph_status_surface_blocker_codes(&status, &projection_truth);
+
+        assert!(
+            blocker_codes.is_empty(),
+            "active exception takeover receipt should supersede stale open delegated cycle blockers"
         );
     }
 

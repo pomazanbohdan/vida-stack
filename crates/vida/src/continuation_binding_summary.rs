@@ -96,22 +96,10 @@ fn active_exception_takeover_evidence_matches_status(
     if terminal_continue_run_id == Some(status.run_id.as_str()) && !supersedes_distinct_exception {
         return false;
     }
-    let exception_takeover_state = crate::release1_contracts::exception_takeover_state(
-        dispatch.exception_path_receipt_id.as_deref(),
-        dispatch.supersedes_receipt_id.as_deref(),
-        None,
-    );
-    dispatch.run_id == status.run_id
-        && (dispatch.lane_status == "lane_exception_takeover"
-            || exception_takeover_state.is_active())
-        && dispatch
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && dispatch
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+    crate::runtime_dispatch_receipt_helpers::dispatch_summary_has_active_exception_takeover(
+        dispatch,
+        Some(&status.run_id),
+    )
 }
 
 fn active_exception_takeover_binding_matches_status(
