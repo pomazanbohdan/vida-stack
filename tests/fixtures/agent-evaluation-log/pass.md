@@ -11,6 +11,8 @@ Scope:
 
 Proof:
 - `fixture proof`: pass.
+- declared_proof: `fixture proof`
+- executed_proof: `fixture proof`
 
 Executor / validator:
 - Executor: fixture, 8/10.

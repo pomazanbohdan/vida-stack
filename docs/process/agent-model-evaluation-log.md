@@ -11,7 +11,11 @@ evidence must add a compact scorecard before the next unrelated task starts.
 Required fields:
 
 1. task id, parent/wave, PR/source when applicable, owned files, commit hashes,
-2. proof commands and pass/fail/not-run status,
+2. proof commands and pass/fail/not-run status. If proof closure depends on a
+   declared command, record matching `declared_proof` and `executed_proof` or a
+   `rationale` for any substitution. `0 tests`, `0 passed`, under-run,
+   `proof_count_shrinkage`, omitted declared proof, or command substitution
+   must be marked with `zero_tests_expected`, `no_task_reason`, or `rationale`,
 3. executor model/carrier, reasoning effort, role, score out of 10, tokens used
    or `not_exposed_by_host`, tool-call count, step count, changed files, proof
    quality, and rework required,
@@ -3168,6 +3172,125 @@ Next-task selection rule:
   is `self-analysis-proof-command-guard`; if cleaning older records first,
   choose `self-analysis-log-backfill-task-refs`.
 
+## 2026-06-12 - Self-analysis proof command guard
+
+Scope:
+- Task: `self-analysis-proof-command-guard`
+- Implementation TODO: `todo-self-analysis-proof-command-guard-implementation`
+- Scorecard TODO: `todo-self-analysis-proof-command-guard-scorecard`
+- Parent: `post-epic-self-analysis-optimization-followups`
+- Files:
+  - `scripts/check-agent-evaluation-log.ps1`
+  - `tests/fixtures/agent-evaluation-log/*.md`
+  - `docs/process/agent-model-evaluation-log.md`
+
+Proof:
+- declared_proof: `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts/vida-dev-gate.ps1 -Mode script-check`
+- executed_proof: `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts/vida-dev-gate.ps1 -Mode script-check`
+- Real log lint:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts/check-agent-evaluation-log.ps1 -Path
+  docs/process/agent-model-evaluation-log.md -Json`: pass.
+- Pass fixture:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts/check-agent-evaluation-log.ps1 -Path
+  tests/fixtures/agent-evaluation-log/pass.md -Json`: pass.
+- Negative fixtures blocked as expected: `missing-task-ref`,
+  `missing-pr-processing`, `stale-pending`, `unclosed-processed-issue`,
+  `zero-test-proof`, `proof-count-shrinkage`, and `proof-command-mismatch`.
+- `vida docflow check docs/process/agent-model-evaluation-log.md --json`: pass.
+- `vida task validate-graph --json`: pass.
+- `git diff --check -- scripts/check-agent-evaluation-log.ps1
+  tests/fixtures/agent-evaluation-log docs/process/agent-model-evaluation-log.md`:
+  pass.
+
+Executor / validator:
+- Executor: root orchestrator, local linter/fixture/docs implementation, 8/10.
+- Validator: real log lint, pass fixture, seven negative fixtures, script-check,
+  DocFlow, TaskFlow graph, and diff whitespace checks, 9/10.
+- Tokens/tool calls: `not_exposed_by_host`; observable cost was focused
+  PowerShell script edits, fixture proof, and TaskFlow updates.
+
+Post-Task Self-Analysis:
+- Worked: the existing evaluation-log linter was the right owner for proof
+  false-green checks, so the new guard reused the current script and dev-gate
+  path instead of adding another standalone checker.
+- Waste: no broad Rust/test proof was needed; the task was docs/script-shaped
+  and closed with script fixtures.
+- Risk: proof-count shrinkage and command substitution are marker-based in the
+  scorecard; historical entries still need `self-analysis-log-backfill-task-refs`
+  before `-All` can become mandatory.
+- Next change: when a proof result uses a changed filter or smaller command,
+  record `declared_proof`, `executed_proof`, and `rationale` in the Proof block.
+- Docs update: yes, required scorecard field 2 now defines proof guard markers.
+- workflow_score_10: 9/10. The guard is executable, fixture-backed, and wired
+  into the existing script-check path.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, `self-analysis-proof-command-guard`.
+2. Wave/parent closure distance: pass, one priority-1 follow-up moved to
+   implemented/scorecarded state.
+3. Scope and non-goals stable: pass, limited to linter, fixtures, and scorecard
+   template text.
+4. Dirty worktree handled: pass, unrelated Rust and scratch files remained
+   untouched.
+5. Executor cheapest capable: pass, local script edit was sufficient.
+6. Validator matched risk: pass, seven negative fixtures now cover the guard
+   family.
+7. Prompt packet shape: not applicable, no delegated prompt was launched.
+8. Agent handles: pass, no agent handles were launched.
+9. Token/tool/step telemetry: partial, host token counts were not exposed.
+10. Avoidable commands: pass, focused script/fixture proof avoided broad builds.
+11. Proof strength: pass, real log, pass fixture, and negative fixtures covered
+    zero tests, shrinkage, and proof mismatch risks.
+12. Public/release proof: not applicable, process-script gate only.
+13. Debug build: not run, no Rust code changed.
+14. TaskFlow state: pass, implementation TODO closed and graph validated.
+15. Staging by invariant: not applicable yet; commit/push will be a separate
+    bounded publication TODO if requested/continued.
+16. Publication authorization: not run in this implementation slice; commit/push
+    is a separate bounded publication step.
+17. Evaluation docs: pass, this scorecard records the STOP gate.
+18. Parent/wave metrics: pass, parent closure count improved.
+19. New defects/follow-ups: pass, no new actionable follow-up; `no_task_reason`:
+    historical full-log enforcement remains covered by
+    `self-analysis-log-backfill-task-refs`.
+20. Next routing rule: pass, continue with explicit priority-1 residuals or
+    commit/push this completed slice before selecting another implementation.
+
+Implementation follow-up tasks:
+- `self-analysis-log-backfill-task-refs`
+- no_task_reason: no new task for guard automation; implemented in this slice.
+
+PR / issue processing:
+- open_prs: no_open_prs for this local process-script slice.
+- processed_issues: no_processed_issues; this task did not process or close
+  GitHub issues.
+
+Final dynamic criteria STOP point:
+1. Proof-declaration parity criterion: when proof closure depends on a declared
+   command, the scorecard must record `declared_proof` and `executed_proof`; if
+   they differ, a `rationale` is mandatory before closure. Evidence source:
+   `scripts/check-agent-evaluation-log.ps1` and
+   `tests/fixtures/agent-evaluation-log/proof-command-mismatch.md`.
+
+Meta-analysis remediation:
+- Script remediation: extended `scripts/check-agent-evaluation-log.ps1` with
+  proof-block checks for zero tests, proof count shrinkage, omitted/substituted
+  declared proof, and declared/executed mismatch.
+- Fixture remediation: added negative fixtures for `zero-test-proof`,
+  `proof-count-shrinkage`, and `proof-command-mismatch`.
+- Documentation remediation: updated required scorecard field 2 with proof
+  guard recording requirements.
+
+Next-task selection rule:
+- Commit/push this proof guard slice before starting another implementation.
+  After publication, the next priority-1 choices are runtime residual defects
+  `self-analysis-runtime-snapshot-parity-task` and
+  `self-analysis-release-install-asset-task`.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -3177,5 +3300,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T10:04:13+03:00
+updated_at: 2026-06-12T10:18:14+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl

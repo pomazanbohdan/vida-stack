@@ -73,6 +73,7 @@ function Test-ScorecardSection {
     $body = $Section.body
 
     $requiredHeadings = @(
+        "Proof:",
         "Post-Task Self-Analysis:",
         "Twenty criteria outcome:",
         "Implementation follow-up tasks:",
@@ -85,6 +86,32 @@ function Test-ScorecardSection {
     foreach ($heading in $requiredHeadings) {
         if ($body.IndexOf($heading, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
             $issues.Add((New-CheckIssue "missing_heading" "Missing required heading '$heading'." $sectionName))
+        }
+    }
+
+    $proofBlock = Get-BlockAfterHeading $body "Proof:" @("Executor / validator:", "Post-Task Self-Analysis:", "Twenty criteria outcome:", "Implementation follow-up tasks:", "PR / issue processing:", "Final dynamic criteria STOP point:", "Meta-analysis remediation:", "Next-task selection rule:", "-----")
+    if ($null -ne $proofBlock) {
+        $proofHasRationale = $proofBlock -match '(?i)\b(rationale|no_task_reason|zero_tests_expected|expected_zero_tests)\b'
+        if ($proofBlock -match '(?i)(\brunning\s+0\s+tests\b|\b0\s+tests?\b|\b0\s+passed\b)' -and -not $proofHasRationale) {
+            $issues.Add((New-CheckIssue "zero_test_proof" "Proof block reports zero tests without zero_tests_expected, no_task_reason, or rationale." $sectionName))
+        }
+
+        if ($proofBlock -match '(?i)(proof_count_shrinkage|under[- ]?run|unexpected\s+test[- ]count\s+shrinkage)' -and $proofBlock -notmatch '(?i)\brationale\s*:') {
+            $issues.Add((New-CheckIssue "proof_count_shrinkage_without_rationale" "Proof block reports test-count shrinkage or under-run without rationale." $sectionName))
+        }
+
+        $declaredMatch = [regex]::Match($proofBlock, "(?im)^\s*-\s*declared_proof\s*:\s*(?<value>.+?)\s*$")
+        $executedMatch = [regex]::Match($proofBlock, "(?im)^\s*-\s*executed_proof\s*:\s*(?<value>.+?)\s*$")
+        if ($declaredMatch.Success -and $executedMatch.Success) {
+            $declaredProof = $declaredMatch.Groups["value"].Value.Trim()
+            $executedProof = $executedMatch.Groups["value"].Value.Trim()
+            if ($declaredProof -ne $executedProof -and $proofBlock -notmatch '(?i)\brationale\s*:') {
+                $issues.Add((New-CheckIssue "declared_executed_proof_mismatch" "declared_proof and executed_proof differ without rationale." $sectionName))
+            }
+        }
+
+        if ($proofBlock -match '(?i)(omitted_declared_proof|declared proof omitted|command substitution|substituted command)' -and $proofBlock -notmatch '(?i)\brationale\s*:') {
+            $issues.Add((New-CheckIssue "proof_substitution_without_rationale" "Proof block reports omitted/substituted proof command without rationale." $sectionName))
         }
     }
 
