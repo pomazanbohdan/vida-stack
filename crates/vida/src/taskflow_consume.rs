@@ -1929,6 +1929,12 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
             role_selection.execution_plan["default_route"]["activation_agent_type"]
                 .as_str()
                 .map(str::to_string)
+                .or_else(|| {
+                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
+                        ["activation_agent_type"]
+                        .as_str()
+                        .map(str::to_string)
+                })
         } else {
             super::dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
                 .and_then(|route| route.get("activation_agent_type"))
@@ -1947,6 +1953,12 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
             role_selection.execution_plan["default_route"]["activation_runtime_role"]
                 .as_str()
                 .map(str::to_string)
+                .or_else(|| {
+                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
+                        ["activation_runtime_role"]
+                        .as_str()
+                        .map(str::to_string)
+                })
         } else {
             super::dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
                 .and_then(|route| route.get("activation_runtime_role"))
@@ -2247,6 +2259,55 @@ mod tests {
             Some("business_analyst")
         );
         assert_eq!(receipt.dispatch_command.as_deref(), Some("vida agent-init"));
+    }
+
+    #[test]
+    fn conversational_dispatch_receipt_uses_runtime_assignment_activation_fallback() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "clarify spec scope".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec![
+                "clarify".to_string(),
+                "spec".to_string(),
+                "scope".to_string(),
+            ],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "business_analyst",
+                    "selected_tier": "middle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-scope-discussion",
+            "latest_status": {
+                "next_node": "business_analyst",
+                "task_class": "scope_discussion"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "specification");
+        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
+        assert_eq!(
+            receipt.activation_runtime_role.as_deref(),
+            Some("business_analyst")
+        );
+        assert_eq!(receipt.selected_backend.as_deref(), Some("middle"));
     }
 
     #[test]

@@ -10246,7 +10246,14 @@ fn taskflow_consume_final_selects_pbi_discussion_role_for_backlog_queries() {
         .expect("dispatch packet path should be present");
     assert!(std::path::Path::new(dispatch_packet_path).is_file());
     assert!(parsed["payload"]["dispatch_receipt"]["dispatch_result_path"].is_null());
-    assert!(parsed["payload"]["dispatch_receipt"]["activation_agent_type"].is_null());
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["activation_agent_type"],
+        "middle"
+    );
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["activation_runtime_role"],
+        "pm"
+    );
     let matched_terms = parsed["payload"]["role_selection"]["matched_terms"]
         .as_array()
         .expect("matched terms should be an array");
