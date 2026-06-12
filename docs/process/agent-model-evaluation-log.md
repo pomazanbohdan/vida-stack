@@ -3415,6 +3415,116 @@ Next-task selection rule:
   `runtime-doctor-closed-task-active-run-projection-parity` before selecting
   unrelated self-analysis follow-ups.
 
+## 2026-06-12 - Runtime doctor terminal projection parity
+
+Scope:
+- Task: `runtime-doctor-closed-task-active-run-projection-parity`
+- Implementation TODO: `todo-runtime-doctor-closed-task-projection-diagnosis`
+- Scorecard TODO: `todo-runtime-doctor-projection-scorecard-log`
+- Parent: `self-analysis-runtime-snapshot-parity-task`
+- Files:
+  - `crates/vida/src/doctor_surface.rs`
+  - `docs/process/agent-model-evaluation-log.md`
+
+Proof:
+- `cargo +1.95.0 fmt --check`: pass.
+- `cargo +1.95.0 test -p vida
+  terminal_task_active_run_matching_uses_current_session_before_global_latest
+  -- --nocapture`: pass, 1 real test.
+- `cargo +1.95.0 test -p vida
+  doctor_operator_contracts_block_on_latest_run_graph_snapshot_inconsistent
+  -- --nocapture`: pass, 1 real test.
+- `vida release install --json`: pass, installed `vida` fingerprint
+  `a0d040ffa480d4b44fed6e300f78b8f9b8f7f2b8de1a5e2c7d70a4b3b8321874`.
+- `vida doctor --json`: pass, no blocker codes; current-session status,
+  recovery, checkpoint, and gate all point to
+  `self-analysis-runtime-snapshot-parity-task`; `latest_terminal` remains
+  `vida-scope` as non-current evidence.
+- `vida status --json`: blocked only by `continuation_binding_ambiguous`, no
+  `run_graph_latest_snapshot_inconsistent`.
+- `vida taskflow recovery latest --json`: pass, `run_id` is
+  `self-analysis-runtime-snapshot-parity-task`.
+- rationale: zero_tests_expected. Cargo filter output can include non-matching
+  test binaries; only the real matching test counts above were accepted as
+  proof.
+
+Executor / validator:
+- Executor: root orchestrator under active exception takeover, 8/10.
+- Validator: focused helper test, doctor operator-contract regression, release
+  install, and live doctor/status/recovery surfaces, 9/10.
+- Tokens/tool calls: `not_exposed_by_host`; observable extra cost came from
+  accidentally parallel focused cargo tests causing lock waits.
+
+Post-Task Self-Analysis:
+- Worked: doctor now matches status behavior by ignoring terminal active rows
+  that are orthogonal to the effective current-session run.
+- Waste: focused cargo tests were launched in parallel once and waited on cargo
+  locks; future Rust proof for the same package should stay sequential.
+- Risk: parent `self-analysis-runtime-snapshot-parity-task` still has an
+  active exception-takeover dispatch and one dispatcher-flow residual.
+- Next change: decide whether the parent can close after
+  `runtime-dispatch-flow-stuck-after-analyst`, or whether the active exception
+  run must be retired/reconciled first.
+- Docs update: yes, this scorecard records the STOP gate.
+- workflow_score_10: 8/10. Runtime proof is clean, but proof scheduling had
+  avoidable cargo lock waits.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `runtime-doctor-closed-task-active-run-projection-parity`.
+2. Wave/parent closure distance: pass, another priority-1 residual closed.
+3. Scope and non-goals stable: pass, limited to doctor projection parity.
+4. Dirty worktree handled: pass, only doctor source and scorecard changed.
+5. Executor cheapest capable: pass, root exception was already active.
+6. Validator matched risk: pass, unit plus installed public surfaces.
+7. Prompt packet shape: pass, no new delegated packet required.
+8. Agent handles: pass, no new host-agent handle launched.
+9. Token/tool/step telemetry: partial, host token counts unavailable.
+10. Avoidable commands: partial, parallel cargo caused lock waits.
+11. Proof strength: pass, live doctor cleared the reported blocker.
+12. Public/release proof: pass, installed binary verified.
+13. Debug build: pass, focused cargo tests compiled the changed path.
+14. TaskFlow state: pass, TODO and defect closed.
+15. Staging by invariant: pass, this commit will stay scoped to doctor parity.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass, this entry records the STOP gate.
+18. Parent/wave metrics: pass, parent epic progress increased to 27/37 closed.
+19. New defects/follow-ups: pass, no new task; `no_task_reason`: the remaining
+    active exception/dispatcher state is already tracked by
+    `runtime-dispatch-flow-stuck-after-analyst`.
+20. Next routing rule: pass, publish this slice, then continue with
+    `runtime-dispatch-flow-stuck-after-analyst` or parent closure readiness.
+
+Implementation follow-up tasks:
+- `runtime-dispatch-flow-stuck-after-analyst`
+- no_task_reason: no new task for `vida-scope`; doctor now treats it as
+  non-current evidence, and `run-graph status vida-scope` already provides a
+  concrete retire command when inspected directly.
+
+PR / issue processing:
+- open_prs: left_open_reason=`self-analysis-epic-pr-issue-closure-pass`
+  owns the epic-level PR pass; this slice did not process PRs directly.
+- processed_issues: no_processed_issues in this slice; upstream issue handling
+  remains part of the epic closure pass.
+
+Final dynamic criteria STOP point:
+1. Cargo-lock sequencing criterion: when two focused Rust proof commands target
+   the same package, run them sequentially unless they are known independent
+   binaries with no shared cargo artifact lock. Evidence source: both focused
+   tests in this slice passed, but parallel execution reported cargo package and
+   artifact lock waits.
+
+Meta-analysis remediation:
+- Code remediation: doctor now checks whether terminal active evidence matches
+  the effective current-session run before producing the closed-task mismatch.
+- Process remediation: this dynamic criterion updates the next proof scheduling
+  rule for adjacent Rust tests.
+
+Next-task selection rule:
+- Commit and push this doctor projection slice. Then continue with
+  `runtime-dispatch-flow-stuck-after-analyst` unless parent closure-readiness
+  proves the parent can close without another implementation fix.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc

@@ -108,6 +108,17 @@ fn selected_effective_bundle_receipt_id(
         .unwrap_or_else(|| effective_instruction_bundle.receipt_id.clone())
 }
 
+fn terminal_task_active_run_matches_effective_run(
+    terminal: &crate::state_store::RunGraphStatus,
+    current_session_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+) -> bool {
+    current_session_run_graph_status
+        .map(|current| current.run_id == terminal.run_id)
+        .or_else(|| latest_run_graph_status.map(|latest| latest.run_id == terminal.run_id))
+        .unwrap_or(true)
+}
+
 fn trace_evidence_blocker_codes(
     latest_task_reconciliation: Option<&crate::state_store::TaskReconciliationSummary>,
     runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
@@ -1035,9 +1046,38 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     }
                     _ => false,
                 };
+            let terminal_task_active_run_is_current =
+                match latest_terminal_task_active_run_graph_status.as_ref() {
+                    Some(terminal) if terminal_task_active_run_matches_effective_run(
+                        terminal,
+                        current_session_run_graph_status.as_ref(),
+                        latest_run_graph_status.as_ref(),
+                    ) =>
+                    {
+                        if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                            terminal,
+                        ) {
+                            match store
+                                .run_graph_terminal_closure_has_task_close_truth(terminal)
+                                .await
+                            {
+                                Ok(has_truth) => !has_truth,
+                                Err(error) => {
+                                    eprintln!(
+                                        "latest terminal task-active closure evidence: failed ({error})"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        } else {
+                            true
+                        }
+                    }
+                    _ => false,
+                };
             let unresolved_closed_task_active_run = !latest_run_graph_terminal_closure
                 && latest_run_graph_task_closed
-                || latest_terminal_task_active_run_graph_status.is_some()
+                || terminal_task_active_run_is_current
                 || latest_run_graph_terminal_closure_without_receipt_truth;
             let (trace_evidence, trace_evidence_blocker_codes, trace_evidence_next_actions) =
                 build_trace_evidence_summary(
@@ -2089,6 +2129,48 @@ mod tests {
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
             None
         );
+    }
+
+    #[test]
+    fn terminal_task_active_run_matching_uses_current_session_before_global_latest() {
+        let mut current = crate::taskflow_run_graph::default_run_graph_status(
+            "run-current",
+            "task-current",
+            "implementation",
+        );
+        current.run_id = "run-current".to_string();
+        let mut global = crate::taskflow_run_graph::default_run_graph_status(
+            "run-global",
+            "task-global",
+            "implementation",
+        );
+        global.run_id = "run-global".to_string();
+        let mut terminal = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal",
+            "task-terminal",
+            "implementation",
+        );
+        terminal.run_id = "run-terminal".to_string();
+
+        assert!(!super::terminal_task_active_run_matches_effective_run(
+            &terminal,
+            Some(&current),
+            Some(&global)
+        ));
+
+        terminal.run_id = "run-current".to_string();
+        assert!(super::terminal_task_active_run_matches_effective_run(
+            &terminal,
+            Some(&current),
+            Some(&global)
+        ));
+
+        terminal.run_id = "run-global".to_string();
+        assert!(super::terminal_task_active_run_matches_effective_run(
+            &terminal,
+            None,
+            Some(&global)
+        ));
     }
 
     #[test]
