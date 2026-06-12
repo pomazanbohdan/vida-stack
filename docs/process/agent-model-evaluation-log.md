@@ -1969,6 +1969,93 @@ Final dynamic criteria STOP point:
    already-written fixed criteria or prior dynamic criteria as satisfying this
    task's dynamic creation step.
 
+## 2026-06-12 - Consume-final configured lane labels
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `18c495abf label configured consume final lanes logically`
+- Goal: make design-first consume-final orchestration surfaces label configured
+  dev-team carrier ids as logical lane steps in JSON `active_cycle` and human
+  TOON `delegated_lanes`.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/src/development_flow_orchestration.rs crates/vida/src/taskflow_consume.rs`
+- `cargo +1.95.0 test -p vida dispatch_contract_uses_configured_dev_team_flow_lane_sequence -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_final_routes_mixed_feature_delivery_requests_to_spec_first -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_final_plain_prefers_bootstrap_spec_over_manual_design_steps -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_final_ -- --nocapture`: `17 passed`, `1 failed`; residual failure remained
+  `taskflow_consume_final_blocks_downstream_closure_when_docflow_verdict_blocks`
+  with `left: String("senior") right: Null`.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. Manual CLI replay showed carrier ids in
+  `execution_lane_sequence` and generic `delegate_lane` labels in `active_cycle`,
+  which identified the production owner precisely.
+- Validator: configured-flow unit plus two public exact smokes, 9/10. The
+  consume-final family filter was useful as residual clustering evidence but not
+  acceptance because one pre-existing docflow-verdict case remains red.
+
+Post-Task Self-Analysis:
+- Worked: replaying the exact CLI JSON before editing prevented treating the
+  mixed-feature assertion as stale; it exposed a real configured-carrier label
+  gap.
+- Waste: one manual replay used test timeout-wrapper args as if they were vida
+  args, producing unusable `-k` errors.
+- Risk: human TOON output and JSON orchestration labels had different audiences;
+  changing only JSON would leave the operator-facing summary stale.
+- Next change: when a configured-carrier id appears in an operator-facing lane
+  list, inspect both JSON contract fields and compact TOON renderers in the same
+  slice.
+- Docs update: yes; this STOP record adds dynamic criteria for wrapper-arg replay
+  and dual-surface label proof.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, two deterministic consume-final exacts
+   improved; broad family still has one residual red.
+3. Scope and non-goals stable: pass, logical lane labeling only.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged after
+   the pre-commit stash/restore cycle.
+5. Executor cheapest capable: pass, local fix from exact JSON/TOON evidence.
+6. Validator matched risk: pass, unit plus public exacts and family residual run.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no new handles used.
+9. Telemetry: partial, token/cost unavailable; proof commands recorded.
+10. Avoidable commands: partial, one invalid manual replay with wrapper args.
+11. Proof strength: pass for configured lane logical labels and compact TOON
+    summary.
+12. Public-surface proof: pass, JSON and default TOON consume-final surfaces
+    covered.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: partial, classification task remains active.
+15. Staging by invariant: pass, only the orchestration builder and consume-final
+    renderer were staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP record is being written before the next
+    runtime slice.
+18. Parent/wave metrics: consume-final family is now `17 passed`, `1 failed` for
+    the focused filter; full boot-smoke remains red.
+19. New defects/follow-ups: next deterministic consume-final blocker is the
+    docflow-verdict closure case with unexpected `selected_backend`.
+20. Next routing rule: pass, continue within the consume-final family on the
+    remaining deterministic exact before returning to broader run-graph/status
+    clusters.
+
+Final dynamic criteria STOP point:
+1. Wrapper-arg replay criterion: when reproducing a boot-smoke helper manually,
+   separate test harness timeout arguments from real `vida` CLI arguments before
+   trusting the replay output.
+2. Dual-surface label criterion: if a fix changes lane identity, verify both the
+   machine JSON contract and the human compact output; carrier ids are allowed in
+   deep contract fields but should not leak into operator summaries when logical
+   lane labels are available.
+3. Family-residual criterion: after a family filter leaves exactly one red case,
+   record that case as the next candidate instead of treating the whole family as
+   unclassified broad noise.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1978,5 +2065,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T07:08:00+03:00
+updated_at: 2026-06-12T07:28:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
