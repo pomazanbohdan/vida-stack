@@ -780,6 +780,109 @@ Next-task selection rule:
 - For blocker-critical analysis, use `gpt-5.5-medium` or split mini prompts into
   smaller single-question probes with shorter expected artifacts.
 
+## 2026-06-12 - wave-0-runtime-proof-bundle-check-final-resume-fix
+
+Scope:
+- Task: `wave-0-runtime-proof-bundle-check-final-resume-fix`
+- Parent: `wave-0-runtime-tests`
+- Commit: `9f119139e`
+- Files: `crates/vida/src/taskflow_consume_resume.rs`,
+  `crates/vida/src/status_surface_json_report.rs`,
+  `crates/vida/src/taskflow_operator_diagnostics.rs`
+- Process instruction update: `docs/process/project-orchestrator-operating-protocol.md`
+- Proof:
+  - `cargo +1.95.0 fmt --all -- --check`
+  - `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_continue_prefers_latest_final_snapshot_after_bundle_check -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_continue_resumes_from_persisted_final_snapshot -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test boot_smoke consume_continue_repeated_run_id_after_success_fails_closed_without_closure_projection -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --bin vida taskflow_consume_resume::tests::resolve_runtime_consumption_resume_inputs_without_run_id_switches_to_fresh_bound_task_run -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test doctor_surface_contract_smoke -- --nocapture`
+  - `cargo +1.95.0 test -p vida status_surface_json_report -- --nocapture`
+  - `cargo +1.95.0 test -p vida taskflow_operator_diagnostics -- --nocapture`
+  - `git diff --check -- crates/vida/src/taskflow_consume_resume.rs crates/vida/src/status_surface_json_report.rs crates/vida/src/taskflow_operator_diagnostics.rs docs/process/project-orchestrator-operating-protocol.md`
+  - `vida docflow check docs/process/project-orchestrator-operating-protocol.md --json`
+
+Observed model results:
+- Executor: local orchestrator plus read-only explorer Bohr, 8/10. Bohr found
+  the correct early stale-missing-task short-circuit and was closed after the
+  result was accepted.
+- Validator: local focused smoke tests plus doctor/status/diagnostics filters,
+  8/10. Targeted proof caught one over-broad replay regression and forced the
+  final distinction between admissible final snapshots and recorded blocked
+  final snapshots.
+- Residual risk: full `cargo +1.95.0 test -p vida --bin vida
+  taskflow_consume_resume -- --nocapture` still has one independent backend
+  rotation failure: expected `opencode_cli`, actual `internal_subagents`.
+
+Post-Task Self-Analysis:
+- Worked: the explorer diagnosis shortened root-cause search; targeted tests
+  exposed both the original stale-missing replay bug and the repeated-run
+  regression before commit.
+- Waste: several probe runs were spent before identifying the default
+  stale-preflight and status summary paths; future replay fixes should search all
+  stale emitters before patching one branch.
+- Risk: `cargo fmt --all` also touched pre-existing dirty files, and a broad
+  module filter surfaced an unrelated backend-selection failure.
+- Next change: for resume/status fixes, run a three-test guard immediately:
+  original failing smoke, persisted-final positive, and repeated-run negative.
+- Docs update: promoted the operator-requested dynamic-criteria rule so the
+  dynamic criteria step is explicitly final and expected to create at least one
+  new criterion after each task.
+- workflow_score_10: 8/10. The final patch is bounded and proven, but the first
+  implementation pass was too broad and required regression narrowing.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-proof-bundle-check-final-resume-fix`.
+2. Wave/parent closure distance: pass, Wave 0 runtime proof blocker reduced.
+3. Scope and non-goals stable: pass, consume-resume/status diagnostics only.
+4. Dirty worktree handled: partial, unrelated dirty files remain unstaged.
+5. Executor cheapest capable: pass, local fix plus one read-only explorer.
+6. Validator matched risk: pass, focused smoke plus doctor/status diagnostics.
+7. Prompt packet shape: pass for explorer; one bounded failing test and stop
+   condition.
+8. Agent handles: pass, Bohr was closed after result acceptance.
+9. Token/tool/wait telemetry: partial, exact host tokens not exposed.
+10. Avoidable commands: partial, repeated debug runs before all stale emitters
+    were mapped.
+11. Proof strength: pass, positive and negative replay contracts covered.
+12. Public-surface proof: pass, `status --json` runtime-consumption parity and
+    diagnostics classifier were covered by targeted filters.
+13. Debug build: pass, cargo test rebuilt the `vida` binary target.
+14. TaskFlow state: pass, task created and closed with proof evidence.
+15. Staging by invariant: pass, code commit staged only three owned code files.
+16. Publication authorization: pass, commit `9f119139e` pushed to `main`.
+17. Evaluation docs: pass, this scorecard records the STOP gate.
+18. Parent/wave metrics: pass, epic progress after close is 89/218 tasks
+    closed, 40.83%; waves closed remain 0/13.
+19. New defects/follow-ups: partial, backend-rotation unit failure remains a
+    residual runtime/config drift to classify before full wave closure.
+20. Next routing rule: pass, replay fixes must pair positive replay tests with
+    repeated-run negative tests.
+
+Meta-analysis remediation:
+- Waste remediation: added all-stale-emitter search as a dynamic criterion.
+- Risk remediation: narrowed recorded-final replay to missing-task stale
+  recovery and strict explicit-run protection.
+- Documentation remediation: updated the project orchestrator protocol so the
+  dynamic criteria step is final and expected after every task.
+- Follow-up: classify the backend-rotation unit failure before closing
+  `wave-0-runtime-tests`.
+
+Dynamic criteria final step:
+1. All-stale-emitter criterion: before changing a stale/blocker diagnostic,
+   search every emitter and preflight path for the blocker code; expected
+   evidence is an `rg` result or call-site list in the task note.
+2. Positive-negative replay criterion: any persisted-final replay fix must run
+   one positive replay test and one repeated/explicit-run negative test before
+   commit.
+3. Summary-field parity criterion: when a command writes a snapshot consumed by
+   `status --json`, verify the compact/default JSON surface still exposes the
+   legacy/public field expected by existing smoke tests.
+4. Dynamic-final-step criterion: after the fixed self-analysis criteria and
+   remediation are recorded, always add at least one session-derived dynamic
+   criterion or explicitly justify why none was created.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc

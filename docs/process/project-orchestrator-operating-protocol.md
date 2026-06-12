@@ -353,8 +353,8 @@ Every task in a long-running refactor epic uses:
 Post-Task Self-Analysis is a STOP gate after every closed task and before
 selecting unrelated work. The next unrelated task is blocked until the
 orchestrator records the base fields, checks all 20 fixed criteria below,
-creates the dynamic criteria from the just-finished session segment, and applies
-or records the meta-analysis remediation.
+applies or records the meta-analysis remediation, and then completes the final
+dynamic-criteria step for the just-finished session segment.
 
 Base fields:
 
@@ -402,20 +402,25 @@ Twenty fixed required criteria:
 20. The next task routing rule changed when the evidence justified changing it,
     or explicitly remained unchanged with reason.
 
-Dynamic criteria requirement:
+Dynamic criteria final step:
 
-1. After checking the 20 fixed criteria, analyze the session segment from the
-   previous task closure to the current task closure.
-2. Create additional dynamic criteria that capture new failure modes, waste
+1. Run this step last, after the base fields, all 20 fixed criteria, and
+   meta-analysis remediation have been recorded.
+2. Analyze the session segment from the previous task closure to the current
+   task closure, including user feedback, agent returns, command delays,
+   proof failures, dirty-tree surprises, and documentation changes.
+3. Create additional dynamic criteria that capture new failure modes, waste
    patterns, proof gaps, agent behavior, runtime/tooling friction, user feedback,
    or documentation drift that the fixed list did not cover.
-3. Each dynamic criterion must be actionable and testable in the next task, with
+4. Each dynamic criterion must be actionable and testable in the next task, with
    an expected evidence source or stop condition.
-4. Record which dynamic criteria become one-time checks for the next task and
+5. Record which dynamic criteria become one-time checks for the next task and
    which should be promoted into the fixed checklist, prompt template, script,
    code, test, or project documentation.
-5. If no new dynamic criteria are created, explicitly state why the fixed
-   checklist fully covered the session segment.
+6. The default expectation is that every task closure creates at least one new
+   dynamic criterion. If no new dynamic criteria are created, explicitly state
+   why the fixed checklist fully covered the session segment and what evidence
+   supports that exception.
 
 Meta-analysis remediation:
 
