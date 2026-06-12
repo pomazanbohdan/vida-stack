@@ -3827,6 +3827,110 @@ Next-task selection rule:
   `runtime-status-doctor-continuation-blocker-parity` currently carrying the
   newest live blocker evidence.
 
+## 2026-06-12 - Stale Continuation Parity Follow-Up Closure
+
+Task:
+- closed `runtime-status-doctor-continuation-blocker-parity` as stale after
+  sequential freshness proof.
+- implementation TODO: `todo-close-stale-status-doctor-continuation-parity`,
+  closed.
+- scorecard TODO: `todo-stale-continuation-parity-scorecard-log`, in progress
+  for this log update.
+
+What changed:
+- No code changed in this slice.
+- TaskFlow follow-up was closed because the mismatch did not reproduce after
+  the activation/cache refresh from commit `d19ce1a15`.
+
+Proof:
+- `vida status --json`: pass; active bounded unit
+  `self-analysis-runtime-snapshot-parity-task`, active node `analyst`,
+  `activation_pending=false`, continuation binding `bound`, no ambiguity.
+- `vida doctor --json`: pass in the sequential proof pass.
+- `vida orchestrator-init --json`: ready enough for normal work with the same
+  active exception-takeover binding.
+- `vida task validate-graph --json`: pass.
+- rationale: the earlier continuation mismatch appeared during concurrent
+  runtime reads and immediately after cache refresh; sequential freshness proof
+  is the authoritative acceptance path for this stale follow-up close.
+
+Agent classification:
+- Beauvoir (`019ebb4d-e05a-79c1-9622-186455292eef`) was closed while still
+  running after local proof made the investigation unnecessary; classified as
+  no-longer-needed, no evidence used.
+
+Executor / validator:
+- Executor: root orchestrator, 9/10.
+- Validator: sequential live runtime probes plus graph validation, 8/10.
+- Tokens/tool calls: `not_exposed_by_host`; avoidable cost was one exploratory
+  agent launched before sequential status replay proved staleness.
+
+Post-Task Self-Analysis:
+- Worked: did not implement against a stale transient mismatch; reran surfaces
+  sequentially and closed the follow-up only after live proof.
+- Waste: launched an explorer before the sequential rerun; earlier read-lock
+  contention should have made sequential replay the first step.
+- Risk: remaining parent work still includes predicate consolidation and latest
+  run-graph missing-task parity.
+- Next change: choose between
+  `runtime-active-exception-takeover-predicate-consolidation` and
+  `runtime-latest-run-graph-missing-task-parity-repair` using freshness audit.
+- Docs update: yes, this entry records the STOP gate.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `self-analysis-runtime-snapshot-parity-task`.
+2. Wave/parent closure distance: pass, parent now has two open priority-2
+   children.
+3. Scope and non-goals stable: pass, no code mutation.
+4. Dirty worktree handled: pass, log-only update after clean worktree.
+5. Executor cheapest capable: partial, an explorer was unnecessary.
+6. Validator matched risk: pass, sequential live probes were enough.
+7. Prompt packet shape: pass, explorer prompt was scoped even though unused.
+8. Agent handles: pass, Beauvoir closed.
+9. Token/tool/step telemetry: partial, host token counts unavailable.
+10. Avoidable commands: partial, sequential replay should precede agents after
+    lock-contention evidence.
+11. Proof strength: pass for stale-close classification.
+12. Public/release proof: pass, installed CLI surfaces used.
+13. Debug build: not_applicable, no code changed.
+14. TaskFlow state: pass, defect and TODO closed.
+15. Staging by invariant: pass, only this log will be staged.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass after this entry validates.
+18. Parent/wave metrics: pass, two open children remain.
+19. New defects/follow-ups: no new task needed; remaining tasks already cover
+    residuals.
+20. Next routing rule: pass, freshness audit before implementing either open
+    child.
+
+Implementation follow-up tasks:
+- `runtime-active-exception-takeover-predicate-consolidation`
+- `runtime-latest-run-graph-missing-task-parity-repair`
+- no_task_reason: no new task for the stale mismatch; the follow-up itself was
+  closed because live sequential proof no longer reproduced it.
+
+PR / issue processing:
+- open_prs: left_open_reason=`self-analysis-epic-pr-issue-closure-pass` owns the
+  epic-level PR pass.
+- processed_issues: no_processed_issues in this slice.
+
+Final dynamic criteria STOP point:
+1. Sequential replay before agent criterion: after lock-contention or
+   concurrency-sensitive runtime evidence, rerun the suspected public surfaces
+   sequentially before launching a new investigation agent. Evidence source:
+   this slice's status/doctor mismatch disappeared on sequential replay.
+
+Meta-analysis remediation:
+- TaskFlow remediation: closed the stale follow-up and its TODO after live
+  proof.
+- Process remediation: added the sequential replay criterion above.
+
+Next-task selection rule:
+- Run a freshness audit for the two remaining parent children, then bind the
+  one that still reproduces with the shortest closure distance.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
