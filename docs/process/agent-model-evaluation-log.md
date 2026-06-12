@@ -27,9 +27,10 @@ Required fields:
    fields, all 20 fixed criteria outcomes, meta-analysis remediation outcomes,
    and then run the mandatory final dynamic criteria STOP point as the last
    checklist item. That final point must analyze the session segment from the
-   previous task closure to the current task closure and create additional
-   criteria for the next task; it is separate from, and cannot be replaced by,
-   the fixed 20 criteria. Record `workflow_score_10`,
+   previous task closure to the current task closure and create at least one new
+   additional criterion for the next task every time; it is separate from, and
+   cannot be replaced by, the fixed 20 criteria or prior dynamic criteria.
+   Record `workflow_score_10`,
 7. next-task selection rule that changes future routing, prompt shape, proof
    bundle, or model choice.
 
@@ -118,9 +119,10 @@ Dynamic criteria created from this session segment:
    checklist answer, treat that as a missing explicit gate, not as a request for
    explanation only. Evidence: the next docs update must name the gate and show
    where it blocks continuation.
-2. Dynamic-extension criterion: every Post-Task Self-Analysis must create
-   session-specific criteria from events since the previous task closure, or
-   explicitly prove that the fixed list already covered all new events.
+2. Dynamic-extension criterion: every Post-Task Self-Analysis must create at
+   least one new session-specific criterion from events since the previous task
+   closure; fixed criteria and prior dynamic criteria cannot satisfy the final
+   dynamic STOP point by themselves.
 3. Closure-delay criterion: when acceptance expands during a docs task, do not
    close or commit until the expanded acceptance is reflected in the owner doc,
    top-level overlay, and scorecard template.

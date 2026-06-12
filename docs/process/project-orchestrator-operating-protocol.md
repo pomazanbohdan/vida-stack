@@ -355,8 +355,8 @@ selecting unrelated work. The next unrelated task is blocked until the
 orchestrator records the base fields, checks all 20 fixed criteria below,
 applies or records the meta-analysis remediation, and then completes the final
 dynamic-criteria STOP point for the just-finished session segment. The fixed
-list is the baseline only; it is not a substitute for generating additional
-session-derived criteria.
+list is the baseline only; it is not a substitute for generating at least one
+new additional session-derived criterion every time.
 
 Base fields:
 
@@ -411,18 +411,19 @@ Final dynamic criteria STOP point:
 2. Analyze the session segment from the previous task closure to the current
    task closure, including user feedback, agent returns, command delays,
    proof failures, dirty-tree surprises, and documentation changes.
-3. Create additional dynamic criteria that capture new failure modes, waste
-   patterns, proof gaps, agent behavior, runtime/tooling friction, user feedback,
-   or documentation drift that the fixed list did not cover.
+3. Create at least one new additional dynamic criterion that captures failure
+   modes, waste patterns, proof gaps, agent behavior, runtime/tooling friction,
+   user feedback, or documentation drift observed in that exact session segment
+   and not already captured by the fixed list or prior dynamic criteria.
 4. Each dynamic criterion must be actionable and testable in the next task, with
    an expected evidence source or stop condition.
 5. Record which dynamic criteria become one-time checks for the next task and
    which should be promoted into the fixed checklist, prompt template, script,
    code, test, or project documentation.
-6. The default expectation is that every task closure creates at least one new
-   dynamic criterion. If no new dynamic criteria are created, explicitly state
-   why the fixed checklist fully covered the session segment and what evidence
-   supports that exception.
+6. Do not close the STOP gate by reusing only fixed criteria or previous dynamic
+   criteria. If the session segment appears fully covered, create a narrower
+   criterion from the strongest observed risk, delay, proof gap, or user
+   correction in that segment and mark whether it stays one-time or is promoted.
 
 Meta-analysis remediation:
 
