@@ -1187,6 +1187,82 @@ Dynamic criteria final step:
    narrow importer boundary and stamp generated edges/fields with source
    metadata.
 
+## 2026-06-12 - TaskFlow help JSON contract compatibility
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `55973a902 restore taskflow help json contracts`
+- Goal: restore TaskFlow help compatibility for JSON-capable command examples
+  without reverting the newer default operator guidance that prefers compact
+  plain output.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/src/taskflow_layer4.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_proxy_help -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke` after the slice: `243 passed`,
+  `30 failed`; help failures were removed and remaining failures are non-help
+  runtime clusters.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The change was a narrow help-surface
+  compatibility patch after the current broad failure list showed six help
+  assertions.
+- Validator: focused `taskflow_proxy_help` boot_smoke filter, 9/10. It caught
+  missed top-level examples and topic variants before the slice was committed.
+- Residual: broad boot_smoke still has recovery/status/consume/run-graph clusters
+  and at least one stack overflow; those are separate slices.
+
+Post-Task Self-Analysis:
+- Worked: refreshed current broad evidence before choosing the slice, avoiding
+  stale `red-tests.md` failures.
+- Worked: focused filter exposed the compatibility surface incrementally until
+  all taskflow help variants were green.
+- Waste: the first patch updated topic help but missed top-level help examples,
+  causing two extra focused reruns.
+- Risk: adding compatibility examples can create duplicate help lines. This is
+  acceptable here because default command examples and machine-readable JSON
+  examples serve different operator paths.
+- Meta-analysis remediation: future help-contract fixes must inspect top-level
+  family help, topic help, and command `--help` together before editing.
+- Docs update: yes; this STOP record adds the dynamic help-contract criterion.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, help compatibility under
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: pass, broad boot_smoke improved to `243 passed`,
+   `30 failed`, while the classification child remains open.
+3. Scope and non-goals stable: pass, only `taskflow_layer4.rs` help strings.
+4. Dirty worktree handled: pass, unrelated dirty Rust files and scratch files
+   stayed unstaged.
+5. Executor cheapest capable: pass, local edit was sufficient for help strings.
+6. Validator matched risk: pass, focused help filter plus broad summary.
+7. Agent prompts: not applicable, no delegated executor used.
+8. Agent handles: pass, no active agents were launched or left open.
+9. Telemetry: partial, command durations observed; tokens/cost not exposed.
+10. Avoidable commands: partial, missed top-level examples caused reruns.
+11. Proof strength: pass for help contract; broad suite remains red by other
+    clusters.
+12. Public-surface proof: pass, public `vida taskflow help` topic family covered.
+13. Debug build: pass, cargo test rebuilt the binary.
+14. TaskFlow state: partial, classification child remains active.
+15. Staging by invariant: pass, only `taskflow_layer4.rs` was staged.
+16. Publication authorization: pass, code commit pushed to `main`.
+17. Evaluation docs: pass, this STOP gate is recorded before the next fix.
+18. Parent/wave metrics: unchanged until all remaining broad failures are
+    classified or fixed.
+19. New defects/follow-ups: next slice should target recovery/status projection
+    or consume-final routing, not help text.
+20. Dynamic criteria generation: pass, session segment produced the
+    help-contract surface-matrix criterion below.
+
+Dynamic criteria final step:
+1. Help-contract surface-matrix criterion: when fixing CLI/help drift, inspect
+   and prove all three surfaces together: top-level family help, topic help, and
+   command `--help`. A green single topic is not enough if the broad failure came
+   from family-level compatibility assertions.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1196,5 +1272,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T04:38:00+03:00
+updated_at: 2026-06-12T04:54:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
