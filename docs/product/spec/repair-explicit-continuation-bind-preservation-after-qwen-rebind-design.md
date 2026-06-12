@@ -64,9 +64,9 @@ Status: `approved`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-  - `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-  - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
-  - `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+  - `docs/product/spec/continuation-binding-fail-closed-contract.md`
+  - `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
+  - `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -254,9 +254,9 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-- `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-- `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
-- `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+- `docs/product/spec/continuation-binding-fail-closed-contract.md`
+- `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
+- `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 - `crates/vida/src/{taskflow_consume_resume,taskflow_continuation,init_surfaces,taskflow_run_graph}.rs`
 - task `feature-repair-explicit-continuation-bind-preservation-after-qwen-rebind`
 

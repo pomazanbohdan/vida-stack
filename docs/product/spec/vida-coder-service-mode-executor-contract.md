@@ -401,8 +401,8 @@ Will implement / choose:
 ## References
 - Related specs:
   - `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
-  - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
-  - `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
+  - `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
+  - `docs/product/spec/multi-orchestrator-session-ownership-claims-contract.md`
 - Related protocols:
   - `docs/process/agent-system.md`
   - `docs/process/team-development-and-orchestration-protocol.md`

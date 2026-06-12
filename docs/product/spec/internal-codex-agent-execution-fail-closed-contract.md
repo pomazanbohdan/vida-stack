@@ -68,7 +68,7 @@ Status: canonical
   - `docs/process/project-orchestrator-operating-protocol.md`
   - `docs/process/project-packet-and-lane-runtime-capsule.md`
   - `docs/process/codex-agent-configuration-guide.md`
-  - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+  - `docs/product/spec/project-agent-first-delegation-contract.md`
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - Framework protocols affected:
   - none beyond bootstrap-carried wording
@@ -160,7 +160,7 @@ Will implement / choose:
 - `docs/process/project-orchestrator-operating-protocol.md`
 - `docs/process/project-packet-and-lane-runtime-capsule.md`
 - `docs/process/codex-agent-configuration-guide.md`
-- `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+- `docs/product/spec/project-agent-first-delegation-contract.md`
 - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - `crates/vida/src/runtime_dispatch_execution.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
@@ -244,7 +244,7 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+  - `docs/product/spec/project-agent-first-delegation-contract.md`
   - `active runtime contract/profile specs`
 - Related protocols
   - `docs/process/project-orchestrator-operating-protocol.md`

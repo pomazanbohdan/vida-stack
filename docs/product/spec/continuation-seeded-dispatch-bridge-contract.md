@@ -1,14 +1,12 @@
-# Continuation And Seeded Dispatch Bridge Design
+# Continuation Seeded Dispatch Bridge Contract
 
-Status: `implemented`
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: add first-class continuation binding and seeded run dispatch-init/packet surfaces so a seeded TaskFlow run can progress lawfully without heuristic fallback or code-level rediscovery.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher`
-- Status: `implemented`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -70,7 +68,7 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
+  - `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/README.md`
@@ -163,11 +161,11 @@ Will implement / choose:
 - existing receipt/packet helpers in `taskflow_consume` and `runtime_dispatch_state`
 
 ### Bounded File Set
-- `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
+- `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
-- `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.changelog.jsonl`
+- `docs/product/spec/continuation-seeded-dispatch-bridge-contract.changelog.jsonl`
 - `crates/vida/src/main.rs`
 - `crates/vida/src/state_store.rs`
 - `crates/vida/src/continuation_binding_summary.rs`
@@ -190,7 +188,7 @@ Will implement / choose:
 ### Phase 1
 - Register the bounded design in the current spec canon.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
+  - `vida docflow check --root . docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
 
 ### Phase 2
 - Add persisted state rows plus new `continuation`, `packet`, and `run-graph dispatch-init` surfaces.
@@ -216,7 +214,7 @@ Will implement / choose:
   - `vida status --json`
   - `vida orchestrator-init --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
+  - `vida docflow check --root . docs/product/spec/continuation-seeded-dispatch-bridge-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
 
 ## Observability
 - New persisted rows make explicit binding and seeded dispatch context inspectable in the authoritative DB.
@@ -233,18 +231,18 @@ Will implement / choose:
 - Surface continuation-binding lineage in recovery views as a future follow-up.
 
 ## References
-- `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
+- `docs/product/spec/continuation-binding-fail-closed-contract.md`
 - current runtime contract profile
 - `AGENTS.md`
 
 -----
-artifact_path: product/spec/continuation-and-seeded-dispatch-bridge-design
+artifact_path: product/spec/continuation-seeded-dispatch-bridge-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-04-10'
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md
+source_path: docs/product/spec/continuation-seeded-dispatch-bridge-contract.md
 created_at: '2026-04-10T13:40:00+03:00'
 updated_at: '2026-04-10T13:40:00+03:00'
-changelog_ref: continuation-and-seeded-dispatch-bridge-design.changelog.jsonl
+changelog_ref: continuation-seeded-dispatch-bridge-contract.changelog.jsonl

@@ -1,20 +1,12 @@
-# TaskFlow Task Command Parity And Proxy Alignment Design
+# TaskFlow Task Command Parity Proxy Contract
 
-Status: `approved`
-
-Use this template for one bounded feature/change design before implementation.
-
-Structured-template rule:
-1. Keep headings stable.
-2. Replace placeholders rather than rewriting the shape.
-3. Prefer explicit fields and short bullets over long free-form prose.
-4. Link separate ADRs when one or more major decisions need durable decision records.
+Status: canonical
 
 ## Summary
 - Feature / change: align `vida task` and `vida taskflow task` so backlog mutation, display-id reservation, and help/proxy behavior follow one canonical command contract
 - Owner layer: `project`
 - Runtime surface: `launcher | taskflow`
-- Status: `approved`
+- Status: canonical
 
 ## Current Context
 - Existing system overview:
@@ -76,7 +68,7 @@ Structured-template rule:
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
   - active runtime contract/profile specs
-  - [`docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md`](/home/unnamed/project/vida-stack/docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md)
+  - [`docs/product/spec/taskflow-task-command-parity-proxy-contract.md`](/home/unnamed/project/vida-stack/docs/product/spec/taskflow-task-command-parity-proxy-contract.md)
 - Framework protocols affected:
   - command/help parity only; no protocol-law rewrite
 - Runtime families affected:
@@ -217,8 +209,8 @@ Will implement / choose:
   - `vida taskflow task create ... --json`
   - `vida task validate-graph --json`
 - Canonical checks:
-  - `vida docflow activation-check --root . docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md docs/product/spec/current-spec-map.md`
-  - `vida docflow check --root . docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow activation-check --root . docs/product/spec/taskflow-task-command-parity-proxy-contract.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/taskflow-task-command-parity-proxy-contract.md docs/product/spec/current-spec-map.md`
   - `vida docflow doctor --root .`
 
 ## Observability
@@ -263,13 +255,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/taskflow-task-command-parity-and-proxy-alignment-design
+artifact_path: product/spec/taskflow-task-command-parity-proxy-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-06-02'
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md
+source_path: docs/product/spec/taskflow-task-command-parity-proxy-contract.md
 created_at: '2026-04-03T12:58:30+03:00'
 updated_at: '2026-06-02T02:25:00+03:00'
-changelog_ref: taskflow-task-command-parity-and-proxy-alignment-design.changelog.jsonl
+changelog_ref: taskflow-task-command-parity-proxy-contract.changelog.jsonl

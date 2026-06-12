@@ -1,14 +1,12 @@
-# Ops State And Runtime Evidence Hygiene Design
+# Ops State Runtime Evidence Hygiene Contract
 
-Status: proposed
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: Define the safe operational boundary for `.vida/data/state/**`, separate durable authoritative state from generated runtime-consumption evidence, and standardize proof workflows for fresh temp-state versus long-lived project state.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | status | doctor | project activation | other`
-- Status: proposed
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -70,7 +68,7 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
+  - `docs/product/spec/ops-state-runtime-evidence-hygiene-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `docs/process/project-operations.md`
   - `docs/process/environments.md`
@@ -172,7 +170,7 @@ Will implement / choose:
   - Release-1 conformance and seam maps now treat functional closure as green, with datastore hygiene called out as the main operational caveat.
 
 ### Bounded File Set
-- `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
+- `docs/product/spec/ops-state-runtime-evidence-hygiene-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `.gitignore`
 - `docs/process/project-operations.md`
@@ -201,7 +199,7 @@ Will implement / choose:
 ### Phase 1
 - Land this design doc and register it in the current spec map.
 - First proof target
-  - `./target/debug/vida docflow check docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
+  - `./target/debug/vida docflow check docs/product/spec/ops-state-runtime-evidence-hygiene-contract.md`
 
 ### Phase 2
 - Update operator-facing docs with the explicit state-hygiene policy and temp-state workflow.
@@ -228,7 +226,7 @@ Will implement / choose:
   - fresh temp-state `vida status --json`
   - fresh temp-state `vida doctor --json`
 - Canonical checks:
-  - `./target/debug/vida docflow check docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
+  - `./target/debug/vida docflow check docs/product/spec/ops-state-runtime-evidence-hygiene-contract.md`
   - `./target/debug/vida docflow check docs/product/spec/current-spec-map.md`
 
 ## Observability
@@ -271,13 +269,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/ops-state-and-runtime-evidence-hygiene-design
+artifact_path: product/spec/ops-state-runtime-evidence-hygiene-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-08
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md
+source_path: docs/product/spec/ops-state-runtime-evidence-hygiene-contract.md
 created_at: 2026-04-08T15:30:00+03:00
 updated_at: 2026-04-08T06:53:51.194762855Z
-changelog_ref: ops-state-and-runtime-evidence-hygiene-design.changelog.jsonl
+changelog_ref: ops-state-runtime-evidence-hygiene-contract.changelog.jsonl

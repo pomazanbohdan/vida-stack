@@ -55,7 +55,7 @@ Current entrypoints:
 52. [user-facing-runtime-flow-and-operating-loop-model.md](spec/user-facing-runtime-flow-and-operating-loop-model.md)
 53. [bootstrap-carriers-and-project-activator-model.md](spec/bootstrap-carriers-and-project-activator-model.md)
 54. [execution-preparation-and-developer-handoff-model.md](spec/execution-preparation-and-developer-handoff-model.md)
-55. [taskflow-execution-semantics-and-scheduler-design.md](spec/taskflow-execution-semantics-and-scheduler-design.md)
+55. [taskflow-execution-semantics-scheduler-contract.md](spec/taskflow-execution-semantics-scheduler-contract.md)
 56. [instruction-packing-and-caching-survey.md](research/instruction-packing-and-caching-survey.md)
 57. [agent-governance-and-policy-hardening-survey.md](research/agent-governance-and-policy-hardening-survey.md)
 58. [langgraph-runtime-patterns-survey.md](research/langgraph-runtime-patterns-survey.md)

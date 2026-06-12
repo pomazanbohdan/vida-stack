@@ -69,7 +69,7 @@ Will implement / choose:
   - targeted `cargo test -p vida runtime_dispatch_state -- --nocapture`
 
 ## References
-- `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+- `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
 - current runtime contract profile
 - current runtime contract profile
 

@@ -148,7 +148,7 @@ Will implement / choose:
   - `AGENTS.sidecar.md` project working rules
   - `docs/product/spec/current-spec-map.md`
   - current runtime contract profile
-  - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+  - `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
 
 ### Bounded File Set
 - This specification packet:
@@ -240,7 +240,7 @@ Will implement / choose:
 ## References
 - Related specs
   - current runtime contract profile
-  - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+  - `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
   - `docs/product/spec/current-spec-map.md`
 - Related protocols
   - `vida orchestrator-init`

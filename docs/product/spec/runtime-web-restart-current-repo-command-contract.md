@@ -1,12 +1,12 @@
-# Add Runtime Web Restart Current Repo Command Design
+# Runtime Web Restart Current Repo Command Contract
 
-Status: `approved`
+Status: canonical
 
 ## Summary
 - Feature / change: add a canonical `vida runtime web restart --scope current-repo --include-edge-proxy` operator command.
 - Owner layer: `runtime-family`
 - Runtime surface: `runtime web`
-- Status: `approved`
+- Status: canonical
 
 ## Current Context
 - VIDA downstream projects currently restart local Flutter/Odoo/proxy/browser-proof stacks with project-local scripts.
@@ -36,7 +36,7 @@ Status: `approved`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
+  - `docs/product/spec/runtime-web-restart-current-repo-command-contract.md`
 - Runtime families affected:
   - runtime web diagnostics and restart operator surfaces
 - Config / receipts / runtime surfaces affected:
@@ -93,7 +93,7 @@ Will implement / choose:
 ### Bounded File Set
 - `crates/vida/src`
 - `docs/process`
-- `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
+- `docs/product/spec/runtime-web-restart-current-repo-command-contract.md`
 
 ## Fail-Closed Constraints
 - Do not stop a process when repository ownership is unknown.
@@ -126,7 +126,7 @@ Will implement / choose:
   - `cargo test -p vida runtime_web`
   - `cargo build -p vida`
 - Canonical checks:
-  - `docflow check-file --path docs/product/spec/add-runtime-web-restart-current-repo-design.md`
+  - `docflow check-file --path docs/product/spec/runtime-web-restart-current-repo-command-contract.md`
 
 ## Observability
 - Emit blocker codes for ambiguous ownership, missing restart adapter, and start failure.
@@ -148,13 +148,13 @@ Will implement / choose:
 - `docs/process/command-timing-and-gate-optimization-protocol.md`
 
 -----
-artifact_path: product/spec/add-runtime-web-restart-current-repo-design
+artifact_path: product/spec/runtime-web-restart-current-repo-command-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-06-03
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/add-runtime-web-restart-current-repo-design.md
+source_path: docs/product/spec/runtime-web-restart-current-repo-command-contract.md
 created_at: 2026-06-03T22:22:00+03:00
 updated_at: 2026-06-03T22:22:00+03:00
-changelog_ref: add-runtime-web-restart-current-repo-design.changelog.jsonl
+changelog_ref: runtime-web-restart-current-repo-command-contract.changelog.jsonl

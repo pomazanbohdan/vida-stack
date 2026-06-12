@@ -1,14 +1,12 @@
-# Continuation Binding Fail Closed Hardening Design
+# Continuation Binding Fail Closed Contract
 
-Status: `implemented`
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: harden continued-development routing so automatic continuation remains inside one explicitly bound bounded unit and fails closed when that binding is ambiguous.
 - Owner layer: `mixed`
 - Runtime surface: `launcher | taskflow | project activation`
-- Status: `implemented`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -145,7 +143,7 @@ Will implement / choose:
 - generated host-runtime instruction scaffolds
 
 ### Bounded File Set
-- `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
+- `docs/product/spec/continuation-binding-fail-closed-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `docs/product/spec/autonomous-report-continuation-law.md`
@@ -178,7 +176,7 @@ Will implement / choose:
 ### Phase 1
 - Register the bounded design and tighten the canonical instruction surfaces.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
+  - `vida docflow check --root . docs/product/spec/continuation-binding-fail-closed-contract.md`
 
 ### Phase 2
 - Add continuation-binding runtime/status surfaces and blocker enforcement.
@@ -201,7 +199,7 @@ Will implement / choose:
   - `vida status --json`
   - `vida orchestrator-init --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/continuation-binding-fail-closed-hardening-design.md docs/product/spec/autonomous-report-continuation-law.md docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md docs/process/project-orchestrator-operating-protocol.md docs/process/project-orchestrator-session-start-protocol.md docs/process/project-packet-and-lane-runtime-capsule.md docs/process/project-start-readiness-runtime-capsule.md`
+  - `vida docflow check --root . docs/product/spec/continuation-binding-fail-closed-contract.md docs/product/spec/autonomous-report-continuation-law.md docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md docs/process/project-orchestrator-operating-protocol.md docs/process/project-orchestrator-session-start-protocol.md docs/process/project-packet-and-lane-runtime-capsule.md docs/process/project-start-readiness-runtime-capsule.md`
 
 ## Observability
 - New status/init JSON fields expose continuation-binding posture directly.
@@ -227,13 +225,13 @@ Will implement / choose:
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 
 -----
-artifact_path: product/spec/continuation-binding-fail-closed-hardening-design
+artifact_path: product/spec/continuation-binding-fail-closed-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-04-10'
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/continuation-binding-fail-closed-hardening-design.md
+source_path: docs/product/spec/continuation-binding-fail-closed-contract.md
 created_at: '2026-04-10T12:30:00+03:00'
 updated_at: '2026-04-10T12:30:00+03:00'
-changelog_ref: continuation-binding-fail-closed-hardening-design.changelog.jsonl
+changelog_ref: continuation-binding-fail-closed-contract.changelog.jsonl

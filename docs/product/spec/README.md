@@ -24,13 +24,13 @@ Suggested homes:
 
 Active design docs:
 
-- `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+- `docs/product/spec/project-agent-first-delegation-contract.md`
 - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
-- `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-- `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
-- `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+- `docs/product/spec/continuation-binding-fail-closed-contract.md`
+- `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
+- `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 - `docs/product/spec/authoritative-state-lock-recovery-design.md`
-- `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+- `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
 - `docs/product/spec/specification-lane-scope-hardening-design.md`
 - `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
 - `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
@@ -39,7 +39,7 @@ Active design docs:
 - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
 - `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
-- `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
+- `docs/product/spec/runtime-web-restart-current-repo-command-contract.md`
 - `docs/product/spec/spec-compliant-exception-path-takeover-surface-contract.md`
 - `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
 
@@ -50,7 +50,7 @@ Current promoted runtime-control specs:
 - `docs/product/spec/autonomous-report-continuation-law.md`
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 - `docs/product/spec/checkpoint-commit-and-replay-model.md`
-- `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
+- `docs/product/spec/multi-orchestrator-session-ownership-claims-contract.md`
 - `docs/product/spec/config-driven-host-system-runtime-contract.md`
 - `docs/product/spec/internal-backend-executor-route-policy-contract.md`
 - `docs/product/spec/hybrid-host-executor-semantics-model.md`

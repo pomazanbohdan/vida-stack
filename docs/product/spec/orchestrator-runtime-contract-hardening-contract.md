@@ -144,7 +144,7 @@ Will implement:
 ## References
 - `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
 - `docs/process/codex-agent-configuration-guide.md`
-- `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+- `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
 - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 
 -----

@@ -1,12 +1,12 @@
-# Taskflow Execution Semantics And Scheduler Design
+# TaskFlow Execution Semantics Scheduler Contract
 
-Status: `implemented`
+Status: canonical
 
 ## Summary
 - Feature / change: add first-class execution semantics to TaskFlow tasks and expose a scheduler projection that separates graph readiness from parallel-safe admissibility
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`
-- Status: `implemented`
+- Status: canonical
 
 ## Current Context
 - The canonical task graph already models hard ordering through dependency edges such as `blocks` and `parent-child`.
@@ -41,7 +41,7 @@ Status: `implemented`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+  - `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
 - Framework protocols affected:
@@ -115,7 +115,7 @@ Will implement / choose:
   - `vida taskflow scheduling actualize --scope open-epics --apply --json` applies conservative serial semantics to previewed candidates
 
 ### Bounded File Set
-- `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+- `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `crates/vida/src/state_store_task_models.rs`
@@ -172,7 +172,7 @@ Will implement / choose:
   - inspect `vida task show --json`
   - inspect `vida taskflow graph-summary --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
+  - `vida docflow check --root . docs/product/spec/taskflow-execution-semantics-scheduler-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
 - Scheduler projection emits:
@@ -205,13 +205,13 @@ Will implement / choose:
   - Microsoft Agent Framework workflows: https://learn.microsoft.com/en-us/agent-framework/journey/workflows
 
 -----
-artifact_path: product/spec/taskflow-execution-semantics-and-scheduler-design
+artifact_path: product/spec/taskflow-execution-semantics-scheduler-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-17
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md
+source_path: docs/product/spec/taskflow-execution-semantics-scheduler-contract.md
 created_at: 2026-04-17T07:31:17.227818559Z
 updated_at: 2026-04-17T08:02:54.481753542Z
-changelog_ref: taskflow-execution-semantics-and-scheduler-design.changelog.jsonl
+changelog_ref: taskflow-execution-semantics-scheduler-contract.changelog.jsonl

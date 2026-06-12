@@ -1,14 +1,12 @@
-# Clarify Enforce Immediate Project Agent First Design
+# Project Agent First Delegation Contract
 
-Status: implemented
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: Clarify and enforce that project agent-first development means TaskFlow/VIDA delegated lanes through `vida agent-init`, not ad hoc root-session coding or host-tool-specific subagent APIs.
 - Owner layer: `mixed`
 - Runtime surface: `launcher | taskflow | project activation`
-- Status: implemented
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -178,7 +176,7 @@ Will implement / choose:
 - `docs/process/agent-system.md`
 - `docs/process/codex-agent-configuration-guide.md`
 - `docs/process/project-operations.md`
-- `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+- `docs/product/spec/project-agent-first-delegation-contract.md`
 - `crates/vida/src/init_surfaces.rs`
 - `crates/vida/src/main.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
@@ -207,7 +205,7 @@ Will implement / choose:
 - Update the design doc with the bounded file set and proof targets.
 - Update bootstrap and owner process docs to define project agent-first execution unambiguously.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+  - `vida docflow check --root . docs/product/spec/project-agent-first-delegation-contract.md`
 
 ### Phase 2
 - Update generated init/scaffold guidance and runtime packet/orchestration prompts.
@@ -232,7 +230,7 @@ Will implement / choose:
   - `vida orchestrator-init`
   - `vida status --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+  - `vida docflow check --root . docs/product/spec/project-agent-first-delegation-contract.md`
   - `cargo test -p vida release1_contracts -- --nocapture`
   - `cargo test -p vida boot_smoke -- --nocapture`
   - `cargo build --release -p vida`
@@ -277,13 +275,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/clarify-enforce-immediate-project-agent-first-design
+artifact_path: product/spec/project-agent-first-delegation-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-04
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md
+source_path: docs/product/spec/project-agent-first-delegation-contract.md
 created_at: 2026-04-04T17:55:40.339798941Z
 updated_at: 2026-04-07T18:19:15.954007245Z
-changelog_ref: clarify-enforce-immediate-project-agent-first-design.changelog.jsonl
+changelog_ref: project-agent-first-delegation-contract.changelog.jsonl

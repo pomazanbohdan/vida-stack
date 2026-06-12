@@ -1,6 +1,6 @@
-# Lawful Closure Continuation Rebinding Design
+# Lawful Closure Continuation Rebinding Contract
 
-Status: `implemented`
+Status: canonical
 
 Purpose: define the bounded architectural change that allows runtime to bind the next lawful bounded unit after completed closure using explicit canonical evidence rather than heuristic task picking.
 
@@ -8,7 +8,7 @@ Purpose: define the bounded architectural change that allows runtime to bind the
 - Feature / change: add a post-closure explicit continuation-binding path for backlog tasks so completed runs can be rebound lawfully from operator-cited task evidence.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher`
-- Status: `implemented`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -58,7 +58,7 @@ Purpose: define the bounded architectural change that allows runtime to bind the
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+  - `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/README.md`
@@ -127,7 +127,7 @@ Will implement / choose:
 - `vida orchestrator-init --json`
 
 ### Bounded File Set
-- `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+- `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
@@ -145,7 +145,7 @@ Will implement / choose:
 ### Phase 1
 - Register the bounded design in canonical spec maps and README.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+  - `vida docflow check --root . docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 
 ### Phase 2
 - Extend explicit continuation binding with backlog-task rebinding and summary admissibility rules.
@@ -169,7 +169,7 @@ Will implement / choose:
   - `vida status --json`
   - `vida orchestrator-init --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/lawful-closure-continuation-rebinding-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
+  - `vida docflow check --root . docs/product/spec/lawful-closure-continuation-rebinding-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
 
 ## Observability
 - Explicit backlog-task continuation binding is written to the existing authoritative binding row.
@@ -188,17 +188,17 @@ Will implement / choose:
 ## References
 - `docs/product/spec/autonomous-report-continuation-law.md`
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
-- `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-- `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
+- `docs/product/spec/continuation-binding-fail-closed-contract.md`
+- `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
 
 -----
-artifact_path: product/spec/lawful-closure-continuation-rebinding-design
+artifact_path: product/spec/lawful-closure-continuation-rebinding-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-13
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/lawful-closure-continuation-rebinding-design.md
+source_path: docs/product/spec/lawful-closure-continuation-rebinding-contract.md
 created_at: 2026-04-13T15:00:46.008185935Z
 updated_at: 2026-04-13T15:09:11.114126765Z
-changelog_ref: lawful-closure-continuation-rebinding-design.changelog.jsonl
+changelog_ref: lawful-closure-continuation-rebinding-contract.changelog.jsonl

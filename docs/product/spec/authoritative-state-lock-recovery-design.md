@@ -156,7 +156,7 @@ Will implement / choose:
   - dispatch execution runs without a live authoritative lock during long agent-lane waits
   - post-dispatch refresh reopens the store for preview and receipt persistence
 - Cross-document / cross-protocol dependencies
-  - `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
+  - `docs/product/spec/ops-state-runtime-evidence-hygiene-contract.md`
   - `docs/process/project-operations.md`
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 
@@ -242,7 +242,7 @@ Will implement / choose:
   - long-lived-state reset/reinit remains a future dedicated surface rather than part of this dispatch-focused refactor
 
 ## References
-- `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
+- `docs/product/spec/ops-state-runtime-evidence-hygiene-contract.md`
 - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - `docs/process/project-operations.md`
 - `docs/process/environments.md`

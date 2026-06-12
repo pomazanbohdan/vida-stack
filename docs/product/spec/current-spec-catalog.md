@@ -140,9 +140,9 @@ Companion rule:
     Registered path: `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
 20. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
     Config families: DB-first operational state, filesystem projection, Git lineage, synchronization law, conflict handling, and reactive domain routing
-21. [multi-orchestrator-session-ownership-and-claims-design.md](multi-orchestrator-session-ownership-and-claims-design.md)
+21. [multi-orchestrator-session-ownership-claims-contract.md](multi-orchestrator-session-ownership-claims-contract.md)
     Config families: orchestrator session identity, worktree-scoped claims, lease/heartbeat ownership, scoped status/continuation admission, foreign blocker visibility, and multi-session TaskFlow scheduling
-    Registered path: `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
+    Registered path: `docs/product/spec/multi-orchestrator-session-ownership-claims-contract.md`
 22. [session-scoped-orchestrator-protocol-foundation-contract.md](session-scoped-orchestrator-protocol-foundation-contract.md)
     Config families: session-scoped orchestrator protocol foundation, active claim admission, delegated lane ownership, exception takeover state naming, and continuation posture across TaskFlow, lane, status, and self-diagnostic surfaces
     Registered path: `docs/product/spec/session-scoped-orchestrator-protocol-foundation-contract.md`
@@ -188,21 +188,21 @@ Companion rule:
 
 ### Runtime Operator Follow-Up Designs
 
-1. [taskflow-task-command-parity-and-proxy-alignment-design.md](taskflow-task-command-parity-and-proxy-alignment-design.md)
+1. [taskflow-task-command-parity-proxy-contract.md](taskflow-task-command-parity-proxy-contract.md)
    Config families: bounded Release-1 command parity for root `vida task`, compatibility routing for `vida taskflow task`, shared task-store mutation law, and help/proxy alignment
-   Registered path: `docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md`
+   Registered path: `docs/product/spec/taskflow-task-command-parity-proxy-contract.md`
 2. [operator-output-envelope-and-bounded-rendering-contract.md](operator-output-envelope-and-bounded-rendering-contract.md)
    Config families: bounded operator-output policy/envelope seam, default-summary task list JSON, explicit full export through `--all`, and Release-1 envelope parity for task inspection surfaces
    Registered path: `docs/product/spec/operator-output-envelope-and-bounded-rendering-contract.md`
-3. [clarify-enforce-immediate-project-agent-first-design.md](clarify-enforce-immediate-project-agent-first-design.md)
+3. [project-agent-first-delegation-contract.md](project-agent-first-delegation-contract.md)
    Config families: bounded clarification and enforcement for project agent-first delegated execution, anti-pause continuation law, valid release-admission snapshot selection, and packet-minimum fail-closed runtime behavior
-   Registered path: `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+   Registered path: `docs/product/spec/project-agent-first-delegation-contract.md`
 26. [fix-release-admission-evidence-detection-artifac-design.md](fix-release-admission-evidence-detection-artifac-design.md)
    Config families: bounded release-admission evidence detection, admissible final-snapshot precedence, operator artifact-ref parity, and effective-bundle receipt citation stability
    Registered path: `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
-28. [ops-state-and-runtime-evidence-hygiene-design.md](ops-state-and-runtime-evidence-hygiene-design.md)
+28. [ops-state-runtime-evidence-hygiene-contract.md](ops-state-runtime-evidence-hygiene-contract.md)
    Config families: bounded post-release ops policy for authoritative state roots, runtime-consumption evidence hygiene, temp-state proof workflows, and generated-state working-tree posture
-   Registered path: `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
+   Registered path: `docs/product/spec/ops-state-runtime-evidence-hygiene-contract.md`
 29. [authoritative-state-lock-recovery-design.md](authoritative-state-lock-recovery-design.md)
    Config families: bounded authoritative state-store lock-lifetime reduction during agent-lane dispatch, lock-specific remediation hints, and fail-closed long-lived-state recovery posture without silent lock cleanup
    Registered path: `docs/product/spec/authoritative-state-lock-recovery-design.md`
@@ -224,24 +224,24 @@ Companion rule:
 35. [internal-codex-activation-view-timeout-holder-release-design.md](internal-codex-activation-view-timeout-holder-release-design.md)
    Config families: bounded stale in-flight reconciliation, canonical dispatch timeout reuse for internal-host handoff truth, legacy fallback compatibility, and truthful continue/recovery status for still-executing delegated work
    Registered path: `docs/product/spec/internal-codex-activation-view-timeout-holder-release-design.md`
-37. [taskflow-execution-semantics-and-scheduler-design.md](taskflow-execution-semantics-and-scheduler-design.md)
+37. [taskflow-execution-semantics-scheduler-contract.md](taskflow-execution-semantics-scheduler-contract.md)
    Config families: bounded TaskFlow task execution semantics schema, graph-plus-semantics scheduler projection, operator-visible parallel-admission truth, and fail-closed compatibility defaults for legacy tasks
-   Registered path: `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+   Registered path: `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
 38. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
    Config families: bounded external CLI carrier dispatch pinning, carrier readiness/status classification, normalized opencode/kilo/vibe project profiles, and operator-visible smoke-proof routing for sandbox/auth/model activation
    Registered path: `docs/product/spec/external-cli-carrier-hardening-design.md`
 39. [orchestrator-runtime-contract-hardening-contract.md](orchestrator-runtime-contract-hardening-contract.md)
    Config families: bounded orchestrator/agent/lane/status runtime contract hardening, path-scoped exception takeover truth, preview planner output, carrier selection API, lock-resilient init reads, and Codex App agent cleanup release rollout
    Registered path: `docs/product/spec/orchestrator-runtime-contract-hardening-contract.md`
-36. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
+36. [continuation-binding-fail-closed-contract.md](continuation-binding-fail-closed-contract.md)
    Config families: bounded continuation-binding fail-closed enforcement, explicit active-bounded-unit init/status surfaces, ambiguity blocker vocabulary, and generated host guidance against self-selecting adjacent work
-   Registered path: `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-37. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
+   Registered path: `docs/product/spec/continuation-binding-fail-closed-contract.md`
+37. [continuation-seeded-dispatch-bridge-contract.md](continuation-seeded-dispatch-bridge-contract.md)
    Config families: bounded explicit continuation binding records, seeded run dispatch-init bridges, persisted dispatch-context rows, and packet render/inspect operator surfaces for lawful resume inputs
-   Registered path: `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
-38. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
+   Registered path: `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
+38. [lawful-closure-continuation-rebinding-contract.md](lawful-closure-continuation-rebinding-contract.md)
    Config families: bounded explicit post-closure continuation rebinding, backlog-task continuation artifacts, completed-run summary admissibility, and fail-closed rejection of stale in-flight bindings
-   Registered path: `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+   Registered path: `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 39. [export-canonical-operator-command-map-through-design.md](export-canonical-operator-command-map-through-design.md)
    Config families: bounded operator command-family export through orchestrator-init and agent-init, help/discoverability alignment across root/task/taskflow surfaces, and canonical command-map parity between init views and primary help entrypoints
    Registered path: `docs/product/spec/export-canonical-operator-command-map-through-design.md`
@@ -278,9 +278,9 @@ Companion rule:
 49. [unified-hybrid-runtime-selection-policy-design.md](unified-hybrid-runtime-selection-policy-design.md)
    Config families: bounded follow-up wave after the carrier/model-profile contract rollout, including dynamic-versus-route selection truth, budget and route policy enforcement, internal-subagent candidate pooling, external reasoning/readiness enforcement, operator diagnostics, and residual qwen drift closure
    Registered path: `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
-50. [task-graph-adaptive-planner-design.md](task-graph-adaptive-planner-design.md)
+50. [task-graph-adaptive-planner-contract.md](task-graph-adaptive-planner-contract.md)
    Config families: bounded TaskFlow PlanGraph generation and materialization, adaptive task split/spawn/replan mutations, graph explain diagnostics, scheduler dispatch preview, and task-linked execution-preparation artifact shape
-   Registered path: `docs/product/spec/task-graph-adaptive-planner-design.md`
+   Registered path: `docs/product/spec/task-graph-adaptive-planner-contract.md`
 51. [model-provider-price-catalog-lifecycle-contract.md](model-provider-price-catalog-lifecycle-contract.md)
    Config families: bounded model/provider price-catalog source-of-truth, provider/model availability inventory, freshness/source metadata, dry-run/apply receipt lifecycle, init/status readiness projection, and price-aware selected/rejected candidate diagnostics
    Registered path: `docs/product/spec/model-provider-price-catalog-lifecycle-contract.md`
@@ -293,9 +293,9 @@ Companion rule:
 54. [pi-primary-environment-agent-carrier-spec.md](pi-primary-environment-agent-carrier-spec.md)
     Config families: Pi primary host environment selection/materialization, `pi_cli` external carrier profiles, `vida-pi-agent` adapter dispatch, Pi internal-agent projections, bounded write-scope guard, template propagation, and release/package proof
     Registered path: `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
-55. [add-runtime-web-restart-current-repo-design.md](add-runtime-web-restart-current-repo-design.md)
+55. [runtime-web-restart-current-repo-command-contract.md](runtime-web-restart-current-repo-command-contract.md)
     Config families: current-repo scoped web proof restart command, explicit edge-proxy restart opt-in, stale listener ownership checks, compact JSON restart receipts, and TaskFlow proof consumption for `vida runtime web restart`
-    Registered path: `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
+    Registered path: `docs/product/spec/runtime-web-restart-current-repo-command-contract.md`
 
 ## Routing Rule
 

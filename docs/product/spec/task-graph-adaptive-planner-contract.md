@@ -1,6 +1,6 @@
-# Task Graph Adaptive Planner Design
+# Task Graph Adaptive Planner Contract
 
-Status: `canonical`
+Status: canonical
 
 Purpose: define the bounded implementation wave that turns TaskFlow's existing graph and scheduler projection into a first practical task-planning and adaptive-replanning operator/runtime surface.
 
@@ -8,7 +8,7 @@ Purpose: define the bounded implementation wave that turns TaskFlow's existing g
 - Feature / change: add deterministic PlanGraph generation/materialization, graph explain diagnostics, adaptive task mutation commands, scheduler dispatch preview, and task-linked execution-preparation artifact shape.
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`
-- Status: `canonical`
+- Status: canonical
 
 ## Current Context
 - The task graph store already owns parent-child edges, non-parent dependencies, ready/blocked projections, critical path, and graph validation.
@@ -47,8 +47,8 @@ Purpose: define the bounded implementation wave that turns TaskFlow's existing g
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/task-graph-adaptive-planner-design.md`
-  - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+  - `docs/product/spec/task-graph-adaptive-planner-contract.md`
+  - `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
   - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
   - `docs/product/spec/current-spec-map.md`
@@ -145,7 +145,7 @@ Will implement / choose:
   - attach architecture-preparation and developer-handoff artifact references to concrete graph nodes before implementation dispatch.
 
 ### Bounded File Set
-- `docs/product/spec/task-graph-adaptive-planner-design.md`
+- `docs/product/spec/task-graph-adaptive-planner-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `crates/vida/src/taskflow_layer4.rs`
@@ -202,8 +202,8 @@ Will implement / choose:
   - `vida task validate-graph --json`
   - `vida taskflow graph-summary --json`
 - Canonical checks:
-  - `vida docflow finalize-edit docs/product/spec/task-graph-adaptive-planner-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history "record task graph adaptive planner design"`
-  - `vida docflow check --root . docs/product/spec/task-graph-adaptive-planner-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
+  - `vida docflow finalize-edit docs/product/spec/task-graph-adaptive-planner-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history "record task graph adaptive planner design"`
+  - `vida docflow check --root . docs/product/spec/task-graph-adaptive-planner-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
 - Plan generation emits draft id, source input summary, planned node count, planned edge count, and validation posture.
@@ -228,7 +228,7 @@ Will implement / choose:
 
 ## References
 - Related specs:
-  - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+  - `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
   - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
   - `docs/product/spec/partial-development-kernel-model.md`
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
@@ -241,13 +241,13 @@ Will implement / choose:
   - `crates/vida/src/taskflow_layer4.rs`
 
 -----
-artifact_path: product/spec/task-graph-adaptive-planner-design
+artifact_path: product/spec/task-graph-adaptive-planner-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-23
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/task-graph-adaptive-planner-design.md
+source_path: docs/product/spec/task-graph-adaptive-planner-contract.md
 created_at: 2026-04-23T11:27:37.608011388Z
 updated_at: 2026-04-23T11:29:17.899160983Z
-changelog_ref: task-graph-adaptive-planner-design.changelog.jsonl
+changelog_ref: task-graph-adaptive-planner-contract.changelog.jsonl

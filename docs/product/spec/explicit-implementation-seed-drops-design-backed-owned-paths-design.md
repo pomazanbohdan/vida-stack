@@ -163,7 +163,7 @@ Will implement / choose:
 - `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
 - `docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md`
 - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-- `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
+- `docs/product/spec/continuation-binding-fail-closed-contract.md`
 
 -----
 artifact_path: product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design

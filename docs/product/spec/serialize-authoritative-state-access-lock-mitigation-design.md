@@ -138,7 +138,7 @@ Will implement / choose:
   - mutation surfaces still open the authoritative store under guard
 - Cross-document / cross-protocol dependencies
   - `docs/product/spec/authoritative-state-lock-recovery-design.md`
-  - `docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md`
+  - `docs/product/spec/taskflow-task-command-parity-proxy-contract.md`
   - `docs/product/spec/reconciled-runtime-projection-output-design.md`
 
 ### Bounded File Set
@@ -222,7 +222,7 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/authoritative-state-lock-recovery-design.md`
-- `docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md`
+- `docs/product/spec/taskflow-task-command-parity-proxy-contract.md`
 - `docs/product/spec/reconciled-runtime-projection-output-design.md`
 - SurrealDB embedded guidance: use embedded/file-backed mode for single-application local storage and remote/server mode when multiple applications need shared access
 

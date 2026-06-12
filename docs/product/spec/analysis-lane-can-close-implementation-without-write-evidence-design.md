@@ -171,7 +171,7 @@ Will implement / choose:
 - `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
 - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
 - `docs/product/spec/repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md`
-- `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
+- `docs/product/spec/continuation-binding-fail-closed-contract.md`
 
 -----
 artifact_path: product/spec/analysis-lane-can-close-implementation-without-write-evidence-design

@@ -324,7 +324,7 @@ Agent-surface rule:
   - `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
   - `docs/product/spec/compiled-runtime-bundle-contract.md`
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
-  - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+  - `docs/product/spec/project-agent-first-delegation-contract.md`
 - Related protocols:
   - `AGENTS.md`
   - `AGENTS.sidecar.md`

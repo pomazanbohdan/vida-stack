@@ -1,4 +1,4 @@
-# Multi-Orchestrator Session Ownership And Claims Design
+# Multi-Orchestrator Session Ownership Claims Contract
 
 Purpose: Define session-scoped ownership, claims, leases, status semantics, and implementation work graph for multiple orchestrators in one project.
 
@@ -112,13 +112,13 @@ Required proof before closure:
 5. DocFlow readiness for this spec and touched operating protocols.
 
 -----
-artifact_path: product/spec/multi-orchestrator-session-ownership-and-claims-design
+artifact_path: product/spec/multi-orchestrator-session-ownership-claims-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-05-15
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md
+source_path: docs/product/spec/multi-orchestrator-session-ownership-claims-contract.md
 created_at: 2026-05-15T09:02:59.3833285Z
 updated_at: 2026-05-15T09:13:16.3690981Z
-changelog_ref: multi-orchestrator-session-ownership-and-claims-design.changelog.jsonl
+changelog_ref: multi-orchestrator-session-ownership-claims-contract.changelog.jsonl

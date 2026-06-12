@@ -200,9 +200,9 @@ Will implement / choose:
 - Extend parity classification if future run-graph receipt history becomes append-only instead of latest-row upsert.
 
 ## References
-- `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
+- `docs/product/spec/continuation-binding-fail-closed-contract.md`
 - Historical predecessor: continuation reconciliation repair packet.
-- `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+- `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 
 -----
 artifact_path: product/spec/reconciled-runtime-projection-output-design
