@@ -3916,6 +3916,31 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
             .map(|run_id| run_id == summary.run_id)
             .unwrap_or(true)
     });
+    let tasks = store.all_tasks().await.unwrap_or_default();
+    let task_ids = tasks.iter().map(|task| task.id.clone()).collect::<Vec<_>>();
+    let closed_task_ids = tasks
+        .iter()
+        .filter(|task| crate::state_store::StateStore::task_status_is_closed_like(&task.status))
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
+    let current_runtime_task_stale = latest_status.as_ref().and_then(|status| {
+        agent_status_runtime_task_stale_code(
+            &status.task_id,
+            &task_ids,
+            &closed_task_ids,
+            crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
+                latest_recovery.as_ref(),
+            ),
+        )
+    });
+    let current_runtime_task_missing =
+        current_runtime_task_stale.is_some_and(|code| code == "next_action_target_missing");
+    let current_runtime_task_closed = current_runtime_task_stale
+        .is_some_and(|code| code == "closed_task_active_run_projection_mismatch");
+    let latest_recovery_is_terminal_retired_runtime_run =
+        crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
+            latest_recovery.as_ref(),
+        );
     let active_lanes_count = latest_status
         .as_ref()
         .filter(|status| {
@@ -3973,7 +3998,8 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
     let reclaimable_lanes = latest_recovery
         .as_ref()
         .filter(|summary| {
-            !summary.delegation_gate.delegated_cycle_open
+            !latest_recovery_is_terminal_retired_runtime_run
+                && !summary.delegation_gate.delegated_cycle_open
                 && matches!(
                     summary.lifecycle_stage.as_str(),
                     "closure_complete" | "completed" | "lane_completed"
@@ -3995,10 +4021,7 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
                 )
             })
         } else if !reclaimable_lanes.is_empty() {
-            Some(format!(
-                "vida taskflow settle --run-id {}",
-                crate::shell_quote(&summary.run_id)
-            ))
+            Some("vida taskflow settle".to_string())
         } else {
             None
         }
@@ -4013,8 +4036,33 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
                 .unwrap_or_else(|| "blocked_dispatch".to_string()),
         );
     }
+    if current_runtime_task_missing {
+        blocker_codes.push("next_action_target_missing".to_string());
+    }
+    if current_runtime_task_closed {
+        blocker_codes.push("closed_task_active_run_projection_mismatch".to_string());
+    }
     let next_actions = if blocker_codes.is_empty() {
         Vec::new()
+    } else if current_runtime_task_missing || current_runtime_task_closed {
+        latest_status
+            .as_ref()
+            .map(|status| {
+                let mut actions = Vec::new();
+                if current_runtime_task_closed {
+                    actions.push(
+                        crate::status_surface_signals::closed_task_active_run_projection_mismatch_next_action(),
+                    );
+                }
+                actions.push(
+                    crate::status_surface_signals::runtime_binding_task_missing_next_action(
+                        Some(status.run_id.as_str()),
+                        &status.task_id,
+                    ),
+                );
+                actions
+            })
+            .unwrap_or_default()
     } else {
         next_recovery_command
             .as_ref()
@@ -4065,6 +4113,23 @@ fn agent_status_payload(
         extra_fields,
     )
     .expect("agent status operator payload should be valid")
+}
+
+fn agent_status_runtime_task_stale_code(
+    task_id: &str,
+    task_ids: &[String],
+    closed_task_ids: &[String],
+    terminal_retired_runtime_run: bool,
+) -> Option<&'static str> {
+    if terminal_retired_runtime_run {
+        None
+    } else if !task_ids.iter().any(|id| id == task_id) {
+        Some("next_action_target_missing")
+    } else if closed_task_ids.iter().any(|id| id == task_id) {
+        Some("closed_task_active_run_projection_mismatch")
+    } else {
+        None
+    }
 }
 
 fn print_agent_status_payload(payload: &serde_json::Value, json: bool) {
@@ -4671,11 +4736,12 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
-        configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
-        dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
-        host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
-        host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
+        agent_status_runtime_task_stale_code, apply_continuation_dispatch_gate_to_preview,
+        build_agent_dispatch_next_preview, configured_dev_team_first_step_for_task,
+        dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
+        dispatch_target_for_agent_dispatch_lane, host_bridge_adapter_payload,
+        host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
+        host_bridge_normalized_implementation_artifact_path,
         host_bridge_packet_matches_reconciled_active_request,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
@@ -4693,6 +4759,46 @@ mod tests {
     use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::{AgentDispatchNextArgs, AgentHostBridgeArgs};
     use std::process::ExitCode;
+
+    #[test]
+    fn agent_status_blocks_closed_runtime_task_target() {
+        assert_eq!(
+            agent_status_runtime_task_stale_code(
+                "closed-task",
+                &["closed-task".to_string()],
+                &["closed-task".to_string()],
+                false,
+            ),
+            Some("closed_task_active_run_projection_mismatch")
+        );
+        assert_eq!(
+            agent_status_runtime_task_stale_code(
+                "missing-task",
+                &["other-task".to_string()],
+                &[],
+                false
+            ),
+            Some("next_action_target_missing")
+        );
+        assert_eq!(
+            agent_status_runtime_task_stale_code(
+                "closed-task",
+                &["closed-task".to_string()],
+                &[],
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            agent_status_runtime_task_stale_code(
+                "closed-task",
+                &[],
+                &["closed-task".to_string()],
+                true
+            ),
+            None
+        );
+    }
 
     fn coach_dispatch_lane_preview(role_label: &str, task_id: &str) -> AgentDispatchLanePreview {
         AgentDispatchLanePreview {

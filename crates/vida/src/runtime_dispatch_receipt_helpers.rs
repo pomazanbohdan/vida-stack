@@ -205,6 +205,19 @@ pub(crate) fn dispatch_receipt_has_exception_takeover_continuation_evidence(
             .is_some_and(|value| !value.trim().is_empty())
 }
 
+pub(crate) fn recovery_summary_is_terminal_retired_runtime_run(
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> bool {
+    recovery.is_some_and(|summary| {
+        summary.resume_status == "completed"
+            && summary.lifecycle_stage == "closure_complete"
+            && !summary.delegation_gate.delegated_cycle_open
+            && summary.delegation_gate.blocker_code.is_none()
+            && summary.resume_target == "none"
+            && summary.task_id == summary.run_id
+    })
+}
+
 pub(crate) fn dispatch_receipt_downstream_blockers_superseded_by_ready_handoff(
     status: Option<&crate::state_store::RunGraphStatus>,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -638,5 +651,51 @@ mod tests {
             ),
             "recovery-ready downstream handoff should supersede stale source-lane blockers"
         );
+    }
+
+    fn recovery_summary_for(run_id: &str) -> crate::state_store::RunGraphRecoverySummary {
+        crate::state_store::RunGraphRecoverySummary {
+            run_id: run_id.to_string(),
+            task_id: run_id.to_string(),
+            active_node: "closure".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            handoff_state: "none".to_string(),
+            checkpoint_kind: "none".to_string(),
+            policy_gate: "closed_task_stale_run_retired".to_string(),
+            resume_status: "completed".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "closure".to_string(),
+                lifecycle_stage: "closure_complete".to_string(),
+                delegated_cycle_open: false,
+                delegated_cycle_state: "clear".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                blocker_code: None,
+                reporting_pause_gate: "closure_candidate".to_string(),
+                continuation_signal: "continue_after_reports".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn terminal_retired_runtime_run_requires_closed_clear_self_task_recovery() {
+        let terminal = recovery_summary_for("vida-scope");
+        assert!(recovery_summary_is_terminal_retired_runtime_run(Some(
+            &terminal
+        )));
+
+        let mut open_cycle = recovery_summary_for("vida-scope");
+        open_cycle.delegation_gate.delegated_cycle_open = true;
+        assert!(!recovery_summary_is_terminal_retired_runtime_run(Some(
+            &open_cycle
+        )));
+
+        let mut task_backed = terminal;
+        task_backed.task_id = "real-task".to_string();
+        assert!(!recovery_summary_is_terminal_retired_runtime_run(Some(
+            &task_backed
+        )));
     }
 }
