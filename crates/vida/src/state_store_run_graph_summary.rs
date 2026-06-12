@@ -3299,7 +3299,7 @@ impl StateStore {
                 continue;
             }
             if self
-                .run_graph_latest_receipt_row_supersedes_lane(&run_id)
+                .run_graph_latest_receipt_row_supersedes_current_session_lane(&run_id)
                 .await?
             {
                 continue;
@@ -3326,7 +3326,7 @@ impl StateStore {
                 continue;
             }
             if self
-                .run_graph_latest_receipt_row_supersedes_lane(&run_id)
+                .run_graph_latest_receipt_row_supersedes_current_session_lane(&run_id)
                 .await?
             {
                 continue;
@@ -3462,6 +3462,17 @@ impl StateStore {
         Ok((receipt.lane_status.as_deref() == Some("lane_superseded")
             && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref()))
             || stored_receipt_has_active_exception_takeover(&receipt))
+    }
+
+    async fn run_graph_latest_receipt_row_supersedes_current_session_lane(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let Some(receipt) = self.run_graph_dispatch_receipt_stored(run_id).await? else {
+            return Ok(false);
+        };
+        Ok(receipt.lane_status.as_deref() == Some("lane_superseded")
+            && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref()))
     }
 
     async fn run_graph_latest_row_points_to_terminal_task_active(
@@ -5905,6 +5916,124 @@ mod tests {
             .expect("open run should remain after closed-task run is skipped");
         assert_eq!(latest.run_id, "run-open-current");
         assert_eq!(latest.task_id, "task-open-current-run");
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_recovery_for_current_session_keeps_active_exception_takeover_run() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current-exception-takeover");
+        }
+        let root = temp_run_graph_root("vida-run-graph-current-session-exception-takeover");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "task-current-exception-takeover",
+                title: "Current session exception takeover task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create current exception takeover task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-current-exception-takeover",
+            "task-current-exception-takeover",
+            "implementation",
+        );
+        status.run_id = "run-current-exception-takeover".to_string();
+        status.task_id = "task-current-exception-takeover".to_string();
+        status.active_node = "analyst".to_string();
+        status.lifecycle_stage = "analyst_blocked".to_string();
+        status.status = "blocked".to_string();
+        status.resume_target = "dispatch.analyst".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist current exception takeover status");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "current-exception-takeover-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-current-exception-takeover".to_string(),
+                process_id: None,
+                task_id: Some("task-current-exception-takeover".to_string()),
+                run_id: Some("run-current-exception-takeover".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("current-exception-domain".to_string()),
+                owned_paths: vec!["crates/vida/src".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire current exception takeover claim");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-current-exception-takeover".to_string(),
+                dispatch_target: "analyst".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("exception-receipt-1".to_string()),
+                exception_path_receipt_id: Some("exception-receipt-1".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+                dispatch_command: Some(
+                    "vida lane complete run-current-exception-takeover --json".to_string(),
+                ),
+                dispatch_packet_path: Some("/tmp/current-exception-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/current-exception-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-12T08:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist active exception takeover receipt");
+
+        let latest = store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .expect("read current-session latest")
+            .expect("active exception takeover run remains current-session latest");
+        assert_eq!(latest.run_id, "run-current-exception-takeover");
+
+        let recovery = store
+            .latest_run_graph_recovery_summary_for_current_session()
+            .await
+            .expect("read current-session recovery")
+            .expect("active exception takeover recovery remains current-session latest");
+        assert_eq!(recovery.run_id, "run-current-exception-takeover");
 
         let _ = fs::remove_dir_all(&root);
         restore_vida_session_id(saved_session_id);

@@ -3073,6 +3073,9 @@ Proof:
 - `vida docflow check docs/process/agent-model-evaluation-log.md
   docs/process/project-orchestrator-operating-protocol.md --json`: pass.
 - `vida task validate-graph --json`: pass.
+- rationale: zero_tests_expected. Cargo filter output can include non-matching
+  test binaries; only the real matching test counts above were accepted as
+  proof.
 - `git diff --check -- scripts/check-agent-evaluation-log.ps1
   scripts/vida-dev-gate.ps1 tests/fixtures/agent-evaluation-log
   docs/process/agent-model-evaluation-log.md
@@ -3290,6 +3293,127 @@ Next-task selection rule:
   After publication, the next priority-1 choices are runtime residual defects
   `self-analysis-runtime-snapshot-parity-task` and
   `self-analysis-release-install-asset-task`.
+
+## 2026-06-12 - Runtime recovery latest current-session parity
+
+Scope:
+- Task: `runtime-recovery-latest-current-session-parity`
+- Implementation TODO: `todo-runtime-recovery-latest-shared-selector-fix`
+- Scorecard TODO: `todo-runtime-recovery-parity-scorecard-log`
+- Parent: `self-analysis-runtime-snapshot-parity-task`
+- Files:
+  - `crates/vida/src/state_store_run_graph_summary.rs`
+  - `crates/vida/src/doctor_surface.rs`
+  - `docs/process/agent-model-evaluation-log.md`
+
+Proof:
+- `cargo +1.95.0 fmt --check`: pass.
+- `cargo +1.95.0 test -p vida latest_run_graph_status -- --nocapture`:
+  pass, 19 real tests.
+- `cargo +1.95.0 test -p vida
+  doctor_operator_contracts_block_on_latest_run_graph_snapshot_inconsistent
+  -- --nocapture`: pass, 1 real test.
+- `vida release install --json`: pass, installed `vida` fingerprint
+  `4a59bcf6a09b249dfcac76f8c83ca0b87cef188394b4b41b8067e70faaaedc80`.
+- `vida taskflow recovery latest --json`: pass, `run_id` is
+  `self-analysis-runtime-snapshot-parity-task`.
+- `vida status --json`: pass, no `run_graph_latest_snapshot_inconsistent`.
+- `vida doctor --json`: blocked only by
+  `closed_task_active_run_projection_mismatch`; current-session status,
+  recovery, checkpoint, gate, and dispatch receipt all point to
+  `self-analysis-runtime-snapshot-parity-task`.
+- `vida task validate-graph --json`: pass.
+- rationale: zero_tests_expected. Cargo filter output can include non-matching
+  test binaries; only the real matching test counts above were accepted as
+  proof.
+
+Executor / validator:
+- Executor: root orchestrator under active exception takeover, 8/10.
+- Validator: focused selector tests, doctor operator-contract test, release
+  install, and live status/recovery/doctor surfaces, 9/10.
+- Tokens/tool calls: `not_exposed_by_host`; avoidable cost noted below.
+
+Post-Task Self-Analysis:
+- Worked: splitting global lane-supersession filtering from current-session
+  exception-takeover filtering fixed `recovery latest` without weakening global
+  stale-run protection.
+- Waste: the first release install happened before the doctor patch; future
+  adjacent parity fixes should batch code edits before install.
+- Risk: doctor still has a separate terminal/global projection blocker tracked
+  by `runtime-doctor-closed-task-active-run-projection-parity`.
+- Next change: handle the remaining `vida-scope` terminal active projection
+  separately before closing `self-analysis-runtime-snapshot-parity-task`.
+- Docs update: yes, this scorecard records the STOP gate and residual task ids.
+- workflow_score_10: 8/10. The runtime symptom is fixed and installed, but one
+  related doctor residual remains outside this slice.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `runtime-recovery-latest-current-session-parity`.
+2. Wave/parent closure distance: pass, one child residual closed under
+   `self-analysis-runtime-snapshot-parity-task`.
+3. Scope and non-goals stable: pass, limited to state-store selector and doctor
+   current-session projection.
+4. Dirty worktree handled: pass, only two Rust files plus this scorecard.
+5. Executor cheapest capable: partial, root exception was lawful, but no fresh
+   advisory sweep was launched for the small second doctor edit.
+6. Validator matched risk: pass, focused tests plus installed public surfaces.
+7. Prompt packet shape: pass, existing analyst receipt
+   `self-analysis-runtime-snapshot-parity-task-analyst-host-bridge-receipt-2`
+   remained the exception authority.
+8. Agent handles: pass, no completed host handle was left open in this slice.
+9. Token/tool/step telemetry: partial, host token counts unavailable.
+10. Avoidable commands: partial, second release install was avoidable with a
+    broader first code-read pass.
+11. Proof strength: pass, public CLI proof covered `status`, `doctor`, and
+    `recovery latest`.
+12. Public/release proof: pass, installed binary verified.
+13. Debug build: pass, focused cargo tests compiled the changed Rust.
+14. TaskFlow state: pass, implementation TODO and task closed; graph validated.
+15. Staging by invariant: pass, commit stage is limited to this
+    recovery/doctor parity slice.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass, this entry records the STOP gate.
+18. Parent/wave metrics: pass, parent epic progress increased to 23/33 closed.
+19. New defects/follow-ups: pass,
+    `runtime-doctor-closed-task-active-run-projection-parity` created for the
+    remaining doctor blocker.
+20. Next routing rule: pass, publish this slice, then continue with the new
+    doctor projection residual before unrelated open tasks.
+
+Implementation follow-up tasks:
+- `runtime-doctor-closed-task-active-run-projection-parity`
+- `runtime-dispatch-flow-stuck-after-analyst`
+- no_task_reason: no extra task for release-install fingerprint drift; direct
+  `where.exe vida` and file hashes showed current and release binaries matched.
+
+PR / issue processing:
+- open_prs: left_open_reason=`self-analysis-epic-pr-issue-closure-pass`
+  owns the epic-level PR pass; this slice did not process PRs directly.
+- processed_issues: no_processed_issues in this slice; upstream issue handling
+  remains part of the epic closure pass.
+
+Final dynamic criteria STOP point:
+1. Install-before-final-surface criterion: if a runtime fix needs installed CLI
+   proof across more than one public surface, do not run `vida release install`
+   until all adjacent source edits for that surface family are complete, unless
+   a live binary check is the only way to decide the next edit. Evidence source:
+   this slice required two release installs because the doctor parity edit was
+   discovered after the first installed `recovery latest` proof.
+
+Meta-analysis remediation:
+- Code remediation: current-session latest-run selection no longer treats
+  active exception takeover receipts as lane supersession.
+- Code remediation: doctor reads current-session recovery/checkpoint/gate from
+  one effective current run id, using status first and dispatch receipt second.
+- TaskFlow remediation: created
+  `runtime-doctor-closed-task-active-run-projection-parity` for the remaining
+  terminal projection blocker.
+
+Next-task selection rule:
+- Commit and push this recovery parity slice. Continue with
+  `runtime-doctor-closed-task-active-run-projection-parity` before selecting
+  unrelated self-analysis follow-ups.
 
 -----
 artifact_path: process/agent-model-evaluation-log

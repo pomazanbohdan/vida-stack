@@ -734,28 +734,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             let current_session_run_graph_run_id = current_session_run_graph_status
                 .as_ref()
                 .map(|status| status.run_id.as_str());
-            let current_session_run_graph_checkpoint = match current_session_run_graph_run_id {
-                Some(run_id) => match store.run_graph_checkpoint_summary(run_id).await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("current-session run graph checkpoint: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                }
-                .into(),
-                None => None,
-            };
-            let current_session_run_graph_gate = match current_session_run_graph_run_id {
-                Some(run_id) => match store.run_graph_gate_summary(run_id).await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("current-session run graph gate: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                }
-                .into(),
-                None => None,
-            };
             let mut current_session_run_graph_dispatch_receipt_checkpoint_leakage = false;
             let current_session_run_graph_dispatch_receipt = match current_session_run_graph_status
                 .as_ref()
@@ -794,12 +772,37 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     }
                 },
             };
-            let current_session_run_graph_recovery =
-                match current_session_run_graph_run_id.or_else(|| {
+            let current_session_effective_run_graph_run_id = current_session_run_graph_run_id
+                .or_else(|| {
                     current_session_run_graph_dispatch_receipt
                         .as_ref()
                         .map(|receipt| receipt.run_id.as_str())
-                }) {
+                });
+            let current_session_run_graph_checkpoint =
+                match current_session_effective_run_graph_run_id {
+                    Some(run_id) => match store.run_graph_checkpoint_summary(run_id).await {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            eprintln!("current-session run graph checkpoint: failed ({error})");
+                            return ExitCode::from(1);
+                        }
+                    }
+                    .into(),
+                    None => None,
+                };
+            let current_session_run_graph_gate = match current_session_effective_run_graph_run_id {
+                Some(run_id) => match store.run_graph_gate_summary(run_id).await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("current-session run graph gate: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                }
+                .into(),
+                None => None,
+            };
+            let current_session_run_graph_recovery =
+                match current_session_effective_run_graph_run_id {
                     Some(run_id) => match store.run_graph_recovery_summary(run_id).await {
                         Ok(summary) => summary,
                         Err(error) => {
