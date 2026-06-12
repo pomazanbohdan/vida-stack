@@ -4405,6 +4405,133 @@ Next-task selection rule:
   close `post-epic-self-analysis-optimization-followups` and create the
   requested host-bridge dispatch consistency epic as the next work item.
 
+## 2026-06-12 - Wave 0 stale-run projection and stale-retire bridge fix
+
+Task:
+- Closed `runtime-blocker-closed-task-active-run-projection-stale`.
+- Closed TODOs:
+  `todo-reconcile-closed-runs-20260612`,
+  `todo-retire-stale-missing-task-runs-20260612`, and
+  `todo-fix-task-close-skips-stale-retire-receipts-20260612`.
+
+Proof:
+- `cargo +1.95.0 fmt --package vida`: pass.
+- `cargo +1.95.0 test -p vida
+  runtime_dispatch_state::tests::task_close_bridges_ignore_stale_run_retire_receipts_without_packet_context -- --nocapture`:
+  pass.
+- `cargo +1.95.0 test -p vida
+  lane_surface::tests::lane_retire_synthesizes_receipt_for_missing_task_stale_run_without_receipt -- --nocapture`:
+  pass.
+- `cargo +1.95.0 test -p vida --test task_smoke
+  missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action -- --nocapture`:
+  pass.
+- `target\debug\vida.exe task validate-graph --json`: pass.
+- zero_tests_expected: no. Filtered cargo output includes zero-test harness
+  lines for unrelated binaries, but the selected regression test ran and passed.
+
+Agent classification:
+- No delegated agent was launched. Root orchestrator handled the runtime
+  repair because the active blocker was the canonical runtime close path itself.
+- Completed handle cleanup: not_applicable; no host-agent handles were opened.
+
+Executor / validator:
+- Executor: root orchestrator, 8/10.
+- Validator: focused unit and public-surface smoke coverage, 8/10.
+- Telemetry: tokens=`not_exposed_by_host`; tool_calls=`approximate`; waits=`exact`
+  one compile timeout followed by a successful rerun; agent_count=`exact: 0`;
+  rework_count=`exact: 2` for close-reason canonical wording and the discovered
+  stale-retire receipt bridge regression.
+
+Post-Task Self-Analysis:
+- Worked: treating `reconcile-closed-runs` skipped rows as leads exposed two
+  stale missing-task runs and avoided direct state edits.
+- Waste: running `lane retire` in parallel produced two valid receipts, but the
+  latest synthetic receipt then masked the original task-close intent; future
+  retire batches should immediately run a task-close smoke check against a
+  synthetic latest receipt.
+- Risk: installed `vida` diverged before release install; release proof refreshed
+  the system binary after this scorecard was drafted.
+- Next change: commit and push the scoped runtime fix, then return to
+  `wave-0-runtime-tests` and `wave-0-baseline-proof`.
+- Docs update: yes, this scorecard records the closure and the dynamic
+  criterion below.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `runtime-blocker-closed-task-active-run-projection-stale`.
+2. Wave/parent closure distance: pass, Wave 0 remaining active children reduced
+   to runtime tests and baseline proof after blocker closure.
+3. Scope and non-goals stable: pass, code change confined to
+   `runtime_dispatch_state.rs`.
+4. Dirty worktree handled: pass, single source file plus this log.
+5. Executor cheapest capable: pass, root repair was necessary while close path
+   was defective.
+6. Validator matched risk: pass, direct bridge test plus stale-run public tests.
+7. Prompt packet shape: not_applicable, no delegated prompt.
+8. Agent handles: pass, none opened.
+9. Token/tool/step telemetry: pass, structured fields recorded above.
+10. Avoidable commands: partial, parallel retire commands created a latest
+   synthetic receipt edge case that required immediate repair.
+11. Proof strength: pass for focused defect class; broader doctor smoke remains
+   active Wave 0 work.
+12. Public/release proof: pass, release install refreshed PATH-resolved `vida`
+   to the fixed 0.9.7 build.
+13. Debug build: pass, debug binary closed the previously blocked TODOs.
+14. TaskFlow state: pass, graph validation passed after closure.
+15. Staging by invariant: pass, stage only runtime bridge fix and scorecard.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass after this entry is validated.
+18. Parent/wave metrics: pass, Wave 0 remains open with two active child work
+   streams.
+19. New defects/follow-ups: pass, runtime close feedback wording false-positive
+   observed but not split because neutral retry succeeded and the stronger
+   close-reason parser task class is already represented by operator-surface
+   hardening work.
+20. Next routing rule: pass, after install/commit return to `wave-0-runtime-tests`
+   before creating the user-requested next epic.
+
+Implementation follow-up tasks:
+- `todo-fix-task-close-skips-stale-retire-receipts-20260612`: implemented the
+  non-agent receipt skip before `role_selection_full` decoding.
+- `runtime-blocker-closed-task-active-run-projection-stale`: closed with
+  runtime evidence and focused proof.
+- `no_task_reason`: close-reason wording false-positive did not create a new
+  task because the close succeeded with neutral wording and no code path was
+  changed for that parser in this bounded fix.
+
+Final dynamic criteria STOP point:
+Evidence source: task closure failed because a synthetic cleanup receipt became
+the latest dispatch receipt and lacked bridge-only packet context.
+1. Synthetic cleanup receipt criterion: after using a runtime cleanup command
+   that writes a synthetic receipt, run one close/bridge smoke check before
+   parent task closure; if the receipt is not bridgeable, bridge code must skip
+   it before decoding agent-lane-only packet fields.
+
+Dynamic criteria registry:
+| criterion_id | owner | expected_evidence | task_ref | promotion_decision | duplicate_of |
+| --- | --- | --- | --- | --- | --- |
+| dynamic-2026-06-12-synthetic-cleanup-receipt-bridge-skip | root-orchestrator | focused close bridge test plus stale-run public-surface tests | `todo-fix-task-close-skips-stale-retire-receipts-20260612` | local-runtime-rule | none |
+
+Meta-analysis remediation:
+- Code remediation: task-close bridge entrypoints now skip non-agent receipts
+  before decoding `role_selection_full`.
+- Test remediation: added regression coverage for `stale_run_retire` receipts
+  without packet context.
+- Process remediation: cleanup receipt batches now require an immediate
+  close/bridge smoke check before parent closure.
+
+PR / issue processing:
+- open_prs: not_applicable for this bounded runtime repair; no GitHub PR state
+  was changed in this slice.
+- processed_issues: not_applicable for this bounded runtime repair; no GitHub
+  issue state was changed in this slice.
+
+Next-task selection rule:
+- Commit and push this scoped runtime fix, then resume Wave 0 by explicitly
+  binding `wave-0-runtime-tests` or `wave-0-baseline-proof` according to current
+  TaskFlow evidence.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc

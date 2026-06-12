@@ -6014,6 +6014,9 @@ pub(crate) async fn maybe_bridge_closed_implementer_task_into_receipt(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     closed_task_id: Option<&str>,
 ) -> Result<bool, String> {
+    if receipt.dispatch_kind != "agent_lane" {
+        return Ok(false);
+    }
     let (role_selection, run_graph_bootstrap) = decode_receipt_packet_context(receipt)?;
     maybe_bridge_closed_implementer_task_into_receipt_with_context(
         store,
@@ -6055,6 +6058,9 @@ pub(crate) async fn maybe_bridge_closed_specification_task_into_receipt(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     closed_task_id: Option<&str>,
 ) -> Result<bool, String> {
+    if receipt.dispatch_kind != "agent_lane" {
+        return Ok(false);
+    }
     let (role_selection, run_graph_bootstrap) = decode_receipt_packet_context(receipt)?;
     if closed_task_id.is_some_and(|value| {
         tracked_specification_task_id(&role_selection).as_deref() != Some(value)
@@ -18538,6 +18544,76 @@ host_environment:
         assert!(!bridged);
         assert_eq!(receipt.dispatch_status, "executing");
         assert!(!receipt.downstream_dispatch_ready);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn task_close_bridges_ignore_stale_run_retire_receipts_without_packet_context() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-stale-retire-bridge-skip-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.join("state"))
+            .await
+            .expect("open state store");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "stale-retire-run".to_string(),
+            dispatch_target: "planning".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "stale_run_retire".to_string(),
+            dispatch_surface: Some("vida lane retire".to_string()),
+            dispatch_command: Some(
+                "vida lane retire stale-retire-run --receipt-id stale-retire-run".to_string(),
+            ),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some("synthetic cleanup receipt".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("retired_closed_task_run".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("closure".to_string()),
+            downstream_dispatch_last_target: Some("closure".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-12T00:00:00Z".to_string(),
+        };
+
+        let mut specification_receipt = receipt.clone();
+        let specification_bridged = maybe_bridge_closed_specification_task_into_receipt(
+            &store,
+            &mut specification_receipt,
+            Some("closed-task"),
+        )
+        .await
+        .expect("non-agent specification bridge should skip cleanly");
+        assert!(!specification_bridged);
+
+        let mut implementer_receipt = receipt;
+        let implementer_bridged = maybe_bridge_closed_implementer_task_into_receipt(
+            &store,
+            &mut implementer_receipt,
+            Some("closed-task"),
+        )
+        .await
+        .expect("non-agent implementer bridge should skip cleanly");
+        assert!(!implementer_bridged);
 
         let _ = std::fs::remove_dir_all(&root);
     }
