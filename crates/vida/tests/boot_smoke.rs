@@ -736,11 +736,17 @@ fn overwrite_launcher_activation_snapshot_in_process(
                 source_config_path: config_path.to_string(),
                 source_config_digest: config_digest,
                 captured_at: "2026-03-13T00:00:00Z".to_string(),
-                compiled_bundle,
+                compiled_bundle: compiled_bundle.clone(),
                 pack_router_keywords: serde_json::json!({}),
             })
             .await
             .expect("launcher activation snapshot should update");
+        let read_back: Option<TestLauncherActivationSnapshot> = db
+            .select(("launcher_activation_snapshot", "launcher_live"))
+            .await
+            .expect("launcher activation snapshot should read back");
+        let read_back = read_back.expect("launcher activation snapshot should exist after update");
+        assert_eq!(read_back.compiled_bundle, compiled_bundle);
         drop(db);
     });
 }
@@ -4127,7 +4133,7 @@ fn taskflow_protocol_binding_bridge_syncs_into_authoritative_state_store() {
 }
 
 #[test]
-fn taskflow_protocol_binding_check_fails_closed_without_compiled_payload_import_evidence() {
+fn taskflow_protocol_binding_check_refreshes_snapshot_without_compiled_payload_import_evidence() {
     let state_dir = unique_state_dir();
 
     let boot = vida()
@@ -4154,13 +4160,19 @@ fn taskflow_protocol_binding_check_fails_closed_without_compiled_payload_import_
     );
 
     let check = run_protocol_binding_check_with_timeout(Path::new(&state_dir));
-    assert!(!check.status.success());
-    assert_ne!(
-        check.status.code(),
-        Some(124),
-        "protocol-binding check timed out under lock contention: {}{}",
+    assert!(
+        check.status.success(),
+        "protocol-binding check should refresh stale launcher activation evidence: {}{}",
         String::from_utf8_lossy(&check.stdout),
         String::from_utf8_lossy(&check.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&check.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("protocol-binding check json should parse");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(
+        parsed["compiled_payload_import_evidence"]["compiled_payload_summary"]["agent_system_mode"],
+        "native"
     );
 }
 
@@ -4278,8 +4290,7 @@ fn task_list_supports_compact_json_summary_view() {
 }
 
 #[test]
-fn taskflow_protocol_binding_check_fails_closed_when_init_compiled_bundle_missing_agent_system_mode(
-) {
+fn taskflow_protocol_binding_check_refreshes_init_compiled_bundle_missing_agent_system_mode() {
     let state_dir = unique_state_dir();
 
     let boot = vida()
@@ -4304,27 +4315,26 @@ fn taskflow_protocol_binding_check_fails_closed_when_init_compiled_bundle_missin
     );
 
     let check = run_protocol_binding_check_with_timeout(Path::new(&state_dir));
-    assert!(!check.status.success());
-    assert_ne!(
-        check.status.code(),
-        Some(124),
-        "protocol-binding check timed out under lock contention: {}{}",
+    assert!(
+        check.status.success(),
+        "protocol-binding check should refresh stale launcher activation evidence: {}{}",
         String::from_utf8_lossy(&check.stdout),
         String::from_utf8_lossy(&check.stderr)
     );
     let stdout = String::from_utf8_lossy(&check.stdout);
-    let check_stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        stdout.contains("invalid_compiled_bundle_agent_system_mode")
-            || stdout.contains("protocol_binding_not_runtime_ready")
-            || check_stderr.contains("LOCK is already locked")
-            || check_stderr.contains("protocol-binding")
-            || check_stderr.contains("Failed to")
-            || check_stderr.contains("Invalid launcher activation snapshot")
-            || check_stderr.contains("invalid launcher activation snapshot"),
-        "expected fail-closed protocol-binding diagnostics\nstdout:\n{}\nstderr:\n{}",
-        stdout,
-        check_stderr
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("protocol-binding check json should parse");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(
+        parsed["compiled_payload_import_evidence"]["compiled_payload_summary"]["agent_system_mode"],
+        "native"
+    );
+    assert_eq!(
+        parsed["compiled_payload_import_evidence"]["blockers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
     );
 }
 
