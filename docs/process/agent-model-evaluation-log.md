@@ -2378,6 +2378,101 @@ Dynamic criteria created from this session segment:
    `fully covered`; remove or narrow any wording that weakens the mandatory
    rule before starting the next task.
 
+## 2026-06-12 - Dispatch-init bounded JSON smoke output
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `a05da4c3d bound dispatch init smoke output`
+- Goal: fix the `taskflow_factual_sandbox_h6_h8_runtime_packet_runner`
+  dispatch-init failure by bounding the `dispatch-init --json` handoff-plan
+  payload and aligning recovery assertions with the open delegated cycle gate.
+- Files:
+  - `crates/vida/src/taskflow_run_graph.rs`
+  - `crates/vida/tests/boot_smoke.rs`
+- Proof:
+  - `cargo +1.95.0 fmt --all -- --check`
+  - `git diff --check -- crates/vida/src/taskflow_run_graph.rs crates/vida/tests/boot_smoke.rs`
+  - `cargo +1.95.0 test -p vida --test boot_smoke taskflow_factual_sandbox_h6_h8_runtime_packet_runner -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test boot_smoke taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test task_smoke agent_status -- --nocapture`
+- Residual:
+  - `cargo +1.95.0 test -p vida --test boot_smoke taskflow_dispatch_init_uses_configured_dev_team_slice_for_owned_task -- --nocapture --exact`
+    still fails with the pre-existing stack overflow cluster and is not claimed
+    as fixed by this output-bounding slice.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The stage trace showed dispatch-init had
+  reached packet rendering and command extraction before the wrapper timeout,
+  so the failure was classified as oversized operator JSON rather than payload
+  construction.
+- Validator: exact H8 smoke, packet-latest exact, task_smoke agent-status exact,
+  fmt, and diff hygiene, 8/10. The configured-dev-team stack-overflow exact was
+  intentionally left as a separate residual.
+
+Post-Task Self-Analysis:
+- Worked: stage tracing separated build/lock work from JSON output cost; raw test
+  capture confirmed the exact moved from timeout to recovery-contract assertion
+  and then green.
+- Waste: the first store-close patch was plausible but insufficient; it should
+  have been treated as a hypothesis until the next raw verdict.
+- Risk: lean-ctx compression reported an exit code that conflicted with the
+  visible failed test summary, so proof needed raw rerun before classification.
+- Next change: when compressed output says both success and failure, rerun raw or
+  inspect the captured test log before counting proof.
+- Docs update: yes; this STOP record adds the compressed-verdict contradiction
+  criterion below.
+- workflow_score_10: 8/10. The final fix is narrow and verified, but one
+  hypothesis patch and one wrong test filter added avoidable work.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, one more boot_smoke exact is green.
+3. Scope and non-goals stable: pass, dispatch-init output and the H8 recovery
+   assertion only.
+4. Dirty worktree handled: pass, unrelated Rust and untracked files left
+   unstaged.
+5. Executor cheapest capable: pass, local orchestrator was sufficient for a
+   focused runtime smoke fix.
+6. Validator matched risk: pass, exact smokes plus task_smoke contract check.
+7. Prompt packet shape: not applicable, no delegated packet launched.
+8. Agent handles: pass, no new handles used.
+9. Token/tool/step telemetry: partial, host token/tool counts are
+   `not_exposed_by_host`.
+10. Avoidable commands: partial, one wrong exact filter produced `0 tests` and
+    the store-close hypothesis did not fix the timeout.
+11. Proof strength: pass for claimed H8/output-bounding behavior.
+12. Public-surface proof: pass, dispatch-init JSON, packet latest, run-graph
+    latest, recovery status, and agent-status consumers were covered.
+13. Debug build: pass through cargo test rebuilds.
+14. TaskFlow graph: partial, active classification task remains in progress.
+15. Staging by invariant: pass, only `taskflow_run_graph.rs` and `boot_smoke.rs`
+    were staged.
+16. Publication authorization: pass, pushed as active epic continuation.
+17. Evaluation docs: pass, this STOP record is written before the next task.
+18. Parent/wave metrics: exact count improved; broad boot_smoke count not
+    refreshed in this slice.
+19. New defects/follow-ups: configured-dev-team dispatch-init stack overflow
+    remains a separate residual cluster.
+20. Next routing rule: pass, continue with deterministic residuals, but treat
+    stack overflow separately from output-size fixes.
+
+Meta-analysis remediation:
+- Bounded `dispatch-init --json` by replacing the full handoff plan with a
+  summary while keeping the full plan available through the dispatch packet.
+- Preserved existing JSON assertions that require `taskflow_handoff_plan.status`
+  and `design_packet_activation_source`.
+- Updated the H8 recovery assertion to expect the current open delegated cycle
+  blocker and lawful continue command.
+
+Dynamic criteria created from this session segment:
+1. Compressed-verdict contradiction criterion: if compressed tool output reports
+   success while the visible test summary says failed, rerun raw or inspect the
+   captured log before using the result as proof or deciding the next patch.
+2. Wrong-filter proof criterion: any cargo proof command that reports `0 tests`
+   must be treated as no proof, corrected immediately, and recorded as waste in
+   the STOP entry.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
