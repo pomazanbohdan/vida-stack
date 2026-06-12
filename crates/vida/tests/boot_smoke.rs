@@ -1220,6 +1220,18 @@ fn command_output_with_retry(command: &mut Command) -> std::process::Output {
     last.expect("command retry helper should capture at least one output")
 }
 
+fn command_output_with_state_lock_retry(command: &mut Command) -> std::process::Output {
+    retry_with_backoff(
+        &mut || {
+            command
+                .output()
+                .unwrap_or_else(|error| panic!("command should run: {error}"))
+        },
+        MAX_BOOT_RETRY_ATTEMPTS,
+        |output, _| is_state_lock_error(output),
+    )
+}
+
 fn is_retryable_temporary_failure(output: &std::process::Output) -> bool {
     output.status.code() == Some(124)
         || (is_state_lock_error(output) && !is_deterministic_lock_contention_surface(output))
@@ -1235,8 +1247,12 @@ fn is_state_lock_error_text(text: &str) -> bool {
 }
 
 fn is_state_lock_error(output: &std::process::Output) -> bool {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    is_state_lock_error_text(&stderr)
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    is_state_lock_error_text(&combined)
 }
 
 fn is_deterministic_lock_contention_surface(output: &std::process::Output) -> bool {
@@ -1505,13 +1521,13 @@ fn status_with_timeout(project_root: &str, state_dir: &str, args: &[&str]) -> st
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", state_dir);
-    command_output_with_retry(&mut command)
+    command_output_with_state_lock_retry(&mut command)
 }
 
 fn doctor_with_timeout(state_dir: &str, args: &[&str]) -> std::process::Output {
     let mut command = vida();
     command.args(args).env("VIDA_STATE_DIR", state_dir);
-    command_output_with_retry(&mut command)
+    command_output_with_state_lock_retry(&mut command)
 }
 
 fn taskflow_run_graph_latest_with_timeout(state_dir: &str, json: bool) -> std::process::Output {
@@ -16415,7 +16431,7 @@ fn status_surface_reports_backend_and_bundle_receipt() {
 
     let mut command = vida();
     command.arg("status").env("VIDA_STATE_DIR", &state_dir);
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_lock_retry(&mut command);
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -16452,7 +16468,7 @@ fn status_surface_supports_color_emoji_render_mode_via_env() {
         .arg("status")
         .env("VIDA_STATE_DIR", &state_dir)
         .env("VIDA_RENDER", "color_emoji");
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_lock_retry(&mut command);
     assert!(
         output.status.success(),
         "status color emoji stdout={} stderr={}",
@@ -16640,7 +16656,7 @@ fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
     status_command
         .args(["status", "--json"])
         .env("VIDA_STATE_DIR", &state_dir);
-    let status = command_output_with_retry(&mut status_command);
+    let status = command_output_with_state_lock_retry(&mut status_command);
     let status_json = parse_json_output(&status, "status");
     assert_eq!(
         status_json["view"], "summary",
@@ -16651,7 +16667,7 @@ fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
     doctor_command
         .args(["doctor", "--json"])
         .env("VIDA_STATE_DIR", &state_dir);
-    let doctor = command_output_with_retry(&mut doctor_command);
+    let doctor = command_output_with_state_lock_retry(&mut doctor_command);
     let doctor_json = parse_json_output(&doctor, "doctor");
 
     let blocker = "closed_task_active_run_projection_mismatch";
