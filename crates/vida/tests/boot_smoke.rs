@@ -1232,6 +1232,18 @@ fn command_output_with_state_lock_retry(command: &mut Command) -> std::process::
     )
 }
 
+fn command_output_with_state_access_retry(command: &mut Command) -> std::process::Output {
+    retry_with_backoff(
+        &mut || {
+            command
+                .output()
+                .unwrap_or_else(|error| panic!("command should run: {error}"))
+        },
+        MAX_BOOT_RETRY_ATTEMPTS,
+        |output, _| is_state_lock_error(output) || is_degraded_lock_contention_surface(output),
+    )
+}
+
 fn is_retryable_temporary_failure(output: &std::process::Output) -> bool {
     output.status.code() == Some(124)
         || (is_state_lock_error(output) && !is_deterministic_lock_contention_surface(output))
@@ -1256,14 +1268,34 @@ fn is_state_lock_error(output: &std::process::Output) -> bool {
 }
 
 fn is_deterministic_lock_contention_surface(output: &std::process::Output) -> bool {
+    is_degraded_lock_contention_surface(output)
+        || is_failed_fast_lock_contention_surface(output)
+        || {
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            combined.contains("memory governance guard timed out")
+        }
+}
+
+fn is_degraded_lock_contention_surface(output: &std::process::Output) -> bool {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    combined.contains("degraded_lock_contention")
+}
+
+fn is_failed_fast_lock_contention_surface(output: &std::process::Output) -> bool {
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     combined.contains("failed fast")
-        || combined.contains("degraded_lock_contention")
-        || combined.contains("memory governance guard timed out")
 }
 
 fn retry_backoff_delay(attempt: usize) -> Duration {
@@ -1770,6 +1802,17 @@ where
     F: FnMut() -> Command,
 {
     run_with_state_lock_retry(|| build().output().expect("command should run"))
+}
+
+fn run_command_with_state_access_retry<F>(mut build: F) -> std::process::Output
+where
+    F: FnMut() -> Command,
+{
+    support::retry_with_backoff(
+        &mut || build().output().expect("command should run"),
+        600,
+        |output| is_state_lock_error(output) || is_degraded_lock_contention_surface(output),
+    )
 }
 
 fn command_output_via_files(
@@ -11454,7 +11497,7 @@ fn status_and_doctor_text_surfaces_report_non_empty_latest_flow_state() {
         .expect("taskflow run-graph update should run");
     assert!(update.status.success());
 
-    let status_output = run_command_with_state_lock_retry(|| {
+    let status_output = run_command_with_state_access_retry(|| {
         let mut cmd = vida();
         cmd.arg("status");
         cmd.env("VIDA_STATE_DIR", &state_dir);
@@ -11469,7 +11512,7 @@ fn status_and_doctor_text_surfaces_report_non_empty_latest_flow_state() {
     assert!(status_stdout.contains("checkpoint=execution_cursor"));
     assert!(status_stdout.contains("gate=policy_gate_required"));
 
-    let doctor_output = run_command_with_state_lock_retry(|| {
+    let doctor_output = run_command_with_state_access_retry(|| {
         let mut cmd = vida();
         cmd.arg("doctor");
         cmd.env("VIDA_STATE_DIR", &state_dir);
@@ -14085,7 +14128,7 @@ else:
         .args(["taskflow", "task", "ready", "--json"])
         .current_dir(&nested_pwd)
         .env_remove("VIDA_ROOT");
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
 
     assert!(
         output.status.success(),
@@ -16554,7 +16597,7 @@ fn status_surface_reports_backend_and_bundle_receipt() {
 
     let mut command = vida();
     command.arg("status").env("VIDA_STATE_DIR", &state_dir);
-    let output = command_output_with_state_lock_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -16591,7 +16634,7 @@ fn status_surface_supports_color_emoji_render_mode_via_env() {
         .arg("status")
         .env("VIDA_STATE_DIR", &state_dir)
         .env("VIDA_RENDER", "color_emoji");
-    let output = command_output_with_state_lock_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
     assert!(
         output.status.success(),
         "status color emoji stdout={} stderr={}",
@@ -17183,7 +17226,7 @@ fn status_surface_supports_json_summary() {
     command
         .args(["status", "--json", "--view", "full"])
         .env("VIDA_STATE_DIR", &state_dir);
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
     assert!(
         output.status.success(),
         "status json stdout={} stderr={}",
