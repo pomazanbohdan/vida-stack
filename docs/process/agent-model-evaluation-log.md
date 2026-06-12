@@ -24,9 +24,9 @@ Required fields:
    cleanup,
 6. Post-Task Self-Analysis: cite the canonical STOP gate in
    `docs/process/project-orchestrator-operating-protocol.md`, record the base
-   fields, all 20 fixed criteria outcomes, dynamic criteria created from the
-   latest session segment, meta-analysis remediation outcomes, and
-   `workflow_score_10`,
+   fields, all 20 fixed criteria outcomes, meta-analysis remediation outcomes,
+   the mandatory final dynamic criteria STOP point created from the latest
+   session segment, and `workflow_score_10`,
 7. next-task selection rule that changes future routing, prompt shape, proof
    bundle, or model choice.
 
@@ -869,7 +869,7 @@ Meta-analysis remediation:
 - Follow-up: classify the backend-rotation unit failure before closing
   `wave-0-runtime-tests`.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. All-stale-emitter criterion: before changing a stale/blocker diagnostic,
    search every emitter and preflight path for the blocker code; expected
    evidence is an `rg` result or call-site list in the task note.
@@ -938,7 +938,7 @@ Twenty criteria outcome:
 20. Next routing rule: output changes must separate plain human, compact default,
     and explicit JSON contracts.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. Plain-vs-json output criterion: for every command-output repair, explicitly
    name whether the task owns plain human text, default compact output, explicit
    JSON, or all three; run at least one proof per owned mode.
@@ -1026,7 +1026,7 @@ Twenty criteria outcome:
 20. Dynamic criteria generation: pass, session segment from previous task closure
     to this commit produced the new criterion below.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. Parallel-suite and pipe-budget criterion: after an exact-green command-surface
    repair, run at least one default-parallel scoped filter or otherwise explain
    why it is unsafe; for Windows tests that spawn bounded child commands with
@@ -1112,7 +1112,7 @@ Twenty criteria outcome:
 20. Dynamic criteria generation: pass, session segment produced the staged-gate
     criterion below.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. Staged-gate criterion: when a failing test advances through multiple
    assertions after each fix, record each newly exposed assertion as a separate
    gate in the self-analysis; do not treat the first green sub-assertion as task
@@ -1180,7 +1180,7 @@ Twenty criteria outcome:
 20. Dynamic criteria generation: pass, session segment produced the import
     normalization criterion below.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. Import-normalization criterion: before changing importer compatibility, first
    identify whether the failure is parse/schema aliasing, provider mapping,
    graph validation, or post-import rendering; normalize legacy data only in the
@@ -1257,7 +1257,7 @@ Twenty criteria outcome:
 20. Dynamic criteria generation: pass, session segment produced the
     help-contract surface-matrix criterion below.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. Help-contract surface-matrix criterion: when fixing CLI/help drift, inspect
    and prove all three surfaces together: top-level family help, topic help, and
    command `--help`. A green single topic is not enough if the broad failure came
@@ -1329,7 +1329,7 @@ Twenty criteria outcome:
 20. Dynamic criteria generation: pass, session segment produced the
     smoke-vs-contract criterion below.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. Smoke-vs-contract criterion: before changing production behavior for a public
    smoke failure, search for a lower-level contract/unit test that defines the
    same invariant. If the lower-level contract is explicit and green, update the
@@ -1403,7 +1403,7 @@ Twenty criteria outcome:
 20. Dynamic criteria generation: pass, session segment produced the
     self-healing command criterion below.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. Self-healing command criterion: when a public command now repairs stale state
    before evaluating a lower-level gate, update smoke tests to prove repair at
    the command level and keep separate unit coverage for the pure fail-closed
@@ -1476,7 +1476,7 @@ Twenty criteria outcome:
 20. Dynamic criteria generation: pass, session segment produced the Windows
     pipe-drain criterion below.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. Windows pipe-drain criterion: do not run large JSON-producing commands through
    custom bounded wait loops that do not drain stdout/stderr. Use
    `Command::output()`-based retry helpers or a pipe-draining bounded runner, and
@@ -1548,11 +1548,88 @@ Twenty criteria outcome:
 20. Dynamic criteria generation: pass, session segment produced the family-wide
     pipe-drain audit criterion below.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 1. Status/doctor family pipe-drain criterion: after fixing one large JSON command
    in a smoke test, search adjacent status/doctor diagnostics for the same custom
    bounded runner and migrate them as a family before treating remaining failures
    as product-runtime defects.
+
+## 2026-06-12 - Shared status/doctor smoke helper pipe-drain migration
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `d0c1a0a65 drain status doctor shared smoke helpers`
+- Goal: migrate shared `status_with_timeout` and `doctor_with_timeout` smoke
+  helpers away from bounded wait loops that do not drain large JSON output.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_and_doctor -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke doctor_surface_ -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_json_exposes_host_agent_summary -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke` after the slice: `250 passed`,
+  `23 failed`.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The dynamic rule from the previous slice
+  correctly identified the shared helper family.
+- Validator: focused status/doctor filters, 9/10. Broad run still reports a
+  `diagnostics_status...` default-view mismatch under full-suite concurrency,
+  which is now separate from pipe draining.
+
+Post-Task Self-Analysis:
+- Worked: family audit found the shared helper rather than only individual test
+  callsites.
+- Worked: focused filters confirmed status/doctor surfaces no longer fail through
+  helper pipe buffering.
+- Waste: broad run still includes the diagnostics test as failed because its
+  status default-view behavior differs under full-suite conditions.
+- Risk: a broad count can stay flat even when a real family fix landed; closure
+  evidence must record focused pass and residual cluster separately.
+- Meta-analysis remediation: after a family harness fix, immediately classify the
+  next residual as new semantic mismatch vs same harness class.
+- Docs update: yes; this STOP record adds the flat-broad-count classification
+  criterion.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, shared status/doctor helper family under
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, focused family green; broad stayed
+   `250 passed`, `23 failed`.
+3. Scope and non-goals stable: pass, helper migration only.
+4. Dirty worktree handled: pass, unrelated dirty files stayed unstaged.
+5. Executor cheapest capable: pass, local harness edit.
+6. Validator matched risk: pass, three focused status/doctor filters plus broad
+   sample.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no active agents launched.
+9. Telemetry: partial, durations observed; tokens/cost unavailable.
+10. Avoidable commands: pass, followed the dynamic family audit criterion.
+11. Proof strength: pass for status/doctor helper pipe-drain behavior.
+12. Public-surface proof: pass, status and doctor public smoke filters covered.
+13. Debug build: pass, cargo tests rebuilt the binary.
+14. TaskFlow state: partial, classification child remains active.
+15. Staging by invariant: pass, only `boot_smoke.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP gate is recorded before next fix.
+18. Parent/wave metrics: unchanged until broad classification closes.
+19. New defects/follow-ups: remaining diagnostics default-view mismatch should be
+    treated as a new semantic/concurrency defect.
+20. Dynamic criteria generation: pass, session segment produced the
+    flat-broad-count criterion below.
+
+Final dynamic criteria STOP point:
+1. Flat-broad-count criterion: if focused family proof turns green but broad
+   failure count stays flat, do not assume the fix failed. Compare failure
+   identities and classify the next red item as same harness class, new semantic
+   mismatch, or unrelated runtime cluster before selecting the next slice.
+2. Operator-correction dynamic-gate criterion: if the operator points out that
+   dynamic criteria were described as optional or merely part of the fixed list,
+   update the owner instructions before continuing. Evidence: the next STOP
+   record must name the final dynamic criteria STOP point separately from the 20
+   fixed baseline criteria.
 
 -----
 artifact_path: process/agent-model-evaluation-log
@@ -1563,5 +1640,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T05:39:00+03:00
+updated_at: 2026-06-12T06:02:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl

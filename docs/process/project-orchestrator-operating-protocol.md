@@ -354,7 +354,9 @@ Post-Task Self-Analysis is a STOP gate after every closed task and before
 selecting unrelated work. The next unrelated task is blocked until the
 orchestrator records the base fields, checks all 20 fixed criteria below,
 applies or records the meta-analysis remediation, and then completes the final
-dynamic-criteria step for the just-finished session segment.
+dynamic-criteria STOP point for the just-finished session segment. The fixed
+list is the baseline only; it is not a substitute for generating additional
+session-derived criteria.
 
 Base fields:
 
@@ -372,7 +374,7 @@ Base fields:
 6. `workflow_score_10`: orchestrator process score considering cost, tool calls,
    proof strength, rework, elapsed time, and closure quality.
 
-Twenty fixed required criteria:
+Twenty fixed required criteria (baseline list, not the final dynamic step):
 
 1. Active bounded unit was explicit before write-producing work.
 2. Wave/parent closure distance improved or the task had a documented reason to
@@ -402,7 +404,7 @@ Twenty fixed required criteria:
 20. The next task routing rule changed when the evidence justified changing it,
     or explicitly remained unchanged with reason.
 
-Dynamic criteria final step:
+Final dynamic criteria STOP point:
 
 1. Run this step last, after the base fields, all 20 fixed criteria, and
    meta-analysis remediation have been recorded.
