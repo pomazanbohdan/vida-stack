@@ -1545,7 +1545,10 @@ impl StateStore {
         let mut touched_task_ids = BTreeSet::new();
         let import_root_task_ids = records
             .iter()
-            .filter(|(_, record)| !work_item_requires_parent(&record.issue_type))
+            .filter(|(_, record)| {
+                !work_item_requires_parent(&record.issue_type)
+                    && !Self::task_status_is_closed_like(&record.status)
+            })
             .map(|(_, record)| record.id.trim().to_string())
             .filter(|id| !id.is_empty())
             .collect::<Vec<_>>();

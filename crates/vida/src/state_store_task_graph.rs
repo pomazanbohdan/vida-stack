@@ -927,7 +927,7 @@ impl StateStore {
             let Some(children) = parent_children.get(&task.id) else {
                 continue;
             };
-            if task.status == "closed" {
+            if Self::task_status_is_closed_like(&task.status) {
                 for child_id in children {
                     let Some(child) = by_id.get(child_id) else {
                         continue;
@@ -1374,6 +1374,24 @@ mod tests {
     fn validate_task_graph_flags_closed_parent_with_paused_child() {
         let parent = task_record("parent", "closed");
         let mut child = task_record("child", "paused");
+        child
+            .dependencies
+            .push(parent_child_dependency("child", "parent"));
+
+        let issues = StateStore::validate_task_graph_rows(&[parent, child]);
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "closed_parent_has_non_closed_child"
+                && issue.issue_id == "parent"
+                && issue.depends_on_id.as_deref() == Some("child")
+                && issue.edge_type.as_deref() == Some("parent-child")
+        }));
+    }
+
+    #[test]
+    fn validate_task_graph_flags_completed_parent_with_open_child() {
+        let parent = task_record("parent", "completed");
+        let mut child = task_record("child", "open");
         child
             .dependencies
             .push(parent_child_dependency("child", "parent"));
