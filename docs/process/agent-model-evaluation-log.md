@@ -2222,6 +2222,75 @@ Final dynamic criteria STOP point:
    while still carrying valid bridged state. Tests whose purpose is state
    projection should assert both the blocking code and the projected state.
 
+## 2026-06-12 - H17/H20 parent-edge projection smoke
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `b91286d86 align h17 h20 projection smoke with parent edge`
+- Goal: align the H17/H20 projection consistency smoke with the current compact
+  task-list JSON contract, where parent-child projection is exposed as
+  `parent_edge` while full dependencies remain available on `task show`.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_testing_h17_h20_projection_consistency_after_child_mutation -- --nocapture --exact`
+- Manual replay confirmed `task show h17-h20-child --json` still exposes the
+  authoritative dependency row and `task list --all --json` exposes compact
+  `parent_edge`.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The failure was a stale assertion against
+  an older verbose list projection rather than a task graph mutation defect.
+- Validator: exact smoke plus manual show/list payload comparison, 8/10.
+
+Post-Task Self-Analysis:
+- Worked: comparing `task show` and `task list` prevented weakening graph
+  coverage; the test now asserts the list projection field that actually owns
+  compact parent linkage.
+- Waste: none beyond the manual replay needed to classify the contract.
+- Risk: compact list JSON and full show JSON intentionally differ, so future
+  tests can accidentally demand verbose show fields on compact list rows.
+- Next change: when list/show projections differ, assert the specific owner field
+  for each surface instead of forcing parity on every nested field.
+- Docs update: yes; this STOP record adds the compact-vs-full projection
+  criterion below.
+- workflow_score_10: 9/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, one deterministic projection exact
+   improved.
+3. Scope and non-goals stable: pass, one assertion block changed.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged.
+5. Executor cheapest capable: pass, local test assertion update.
+6. Validator matched risk: pass, exact smoke plus manual payload comparison.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no new handles used.
+9. Telemetry: partial, token/cost unavailable; proof commands recorded.
+10. Avoidable commands: pass, no broad/noisy command used in this slice.
+11. Proof strength: pass for compact parent-edge projection.
+12. Public-surface proof: pass, `task show`, `task list`, and validate-graph
+    surfaces covered by the smoke/manual replay.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: partial, classification task remains active.
+15. Staging by invariant: pass, only `boot_smoke.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP record is being written before next work.
+18. Parent/wave metrics: exact projection case green; broad count not refreshed.
+19. New defects/follow-ups: none from this slice.
+20. Next routing rule: pass, continue with deterministic fast residuals unless
+    explicitly entering the dispatch-init timeout/output cluster.
+
+Final dynamic criteria STOP point:
+1. Compact-vs-full-projection criterion: when a compact list surface and a full
+   show surface differ, assert each surface's owner field (`parent_edge` for
+   compact list, `dependencies` for full show) instead of demanding full parity.
+2. Manual-contract-replay criterion: for projection assertion failures, run one
+   minimal manual show/list replay before deciding whether production or test
+   expectations own the fix.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -2231,5 +2300,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T08:01:00+03:00
+updated_at: 2026-06-12T08:09:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
