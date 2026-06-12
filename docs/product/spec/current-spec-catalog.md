@@ -83,18 +83,24 @@ Companion rule:
    Config families: `docs/process/agent-extensions/**`, `vida.config.yaml`, `.vida/logs/problem-party/**`, single-agent or multi-agent Party Chat execution plans, and runtime consumption by the TaskFlow runtime family
 5. [autonomous-report-continuation-law.md](autonomous-report-continuation-law.md)
    Config families: `vida.config.yaml`, `vida/config/instructions/**`, TaskFlow routing and autonomous execution behavior
-8. [codex-host-agent-boundary-and-cli-bridge-design.md](codex-host-agent-boundary-and-cli-bridge-design.md)
+8. [config-driven-host-system-runtime-contract.md](config-driven-host-system-runtime-contract.md)
+   Config families: `vida.config.yaml -> host_environment.systems`, host-system template roots, runtime roots, selected host-system resolution, and config-backed host-system materialization
+   Registered path: `docs/product/spec/config-driven-host-system-runtime-contract.md`
+8. [internal-backend-executor-route-policy-contract.md](internal-backend-executor-route-policy-contract.md)
+   Config families: `vida.config.yaml -> agent_system.subagents`, route-level executor backend fields, internal/external backend registry authority, and compatibility aliases for legacy route hints
+   Registered path: `docs/product/spec/internal-backend-executor-route-policy-contract.md`
+8. [codex-host-agent-boundary-and-cli-bridge-contract.md](codex-host-agent-boundary-and-cli-bridge-contract.md)
    Config families: `vida.config.yaml -> host_environment.systems.codex`, `agent_system.subagents.internal_subagents`, `agent_system.subagents.codex_cli_exec`, TaskFlow host-bridge dispatch requests
-   Registered path: `docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md`
-9. [host-agent-bridge-adapter-contract-design.md](host-agent-bridge-adapter-contract-design.md)
+   Registered path: `docs/product/spec/codex-host-agent-boundary-and-cli-bridge-contract.md`
+9. [host-agent-bridge-adapter-contract.md](host-agent-bridge-adapter-contract.md)
    Config families: `vida.config.yaml -> host_environment.host_agent_bridge_contract`, `host_environment.systems.<system>.host_tool_bridge`, TaskFlow host-bridge request/result/receipt adapters for Codex, Claude Code, Pi, Vibe Kanban, OpenCode, and custom host adapters
-   Registered path: `docs/product/spec/host-agent-bridge-adapter-contract-design.md`
+   Registered path: `docs/product/spec/host-agent-bridge-adapter-contract.md`
 9. [vida-coder-service-mode-executor-design.md](vida-coder-service-mode-executor-design.md)
    Config families: `vida.config.yaml -> agent_system.subagents.vida_coder`, `vida.config.yaml -> host_environment.systems.vida_coder`, `vida.config.yaml -> service`, `vida coder`, `vida service`, typed VIDA runtime tools, session state, service worker leases, provider auth/model readiness, MCP policy gateway, and receipt-backed TaskFlow execution
    Registered path: `docs/product/spec/vida-coder-service-mode-executor-design.md`
-9. [hybrid-host-executor-semantics-host-environment-design.md](hybrid-host-executor-semantics-host-environment-design.md)
+9. [hybrid-host-executor-semantics-model.md](hybrid-host-executor-semantics-model.md)
    Config families: `vida.config.yaml -> host_environment`, `agent_system.subagents`, policy-selected internal/external executor semantics, and host posture versus executor backend separation
-   Registered path: `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+   Registered path: `docs/product/spec/hybrid-host-executor-semantics-model.md`
 9. [compiled-autonomous-delivery-runtime-architecture.md](compiled-autonomous-delivery-runtime-architecture.md)
    Config families: `vida/config/instructions/**`, `.vida/config/**`, `.vida/project/**`, `.vida/cache/**`, transitional source-mode bridge surfaces such as root `vida.config.yaml` and `docs/process/agent-extensions/**`, TaskFlow runtime-family implementation surfaces, DocFlow runtime-family implementation surfaces, and future compiled orchestration bundle surfaces
 10. [emerging-architectural-patterns-model.md](emerging-architectural-patterns-model.md)
@@ -262,9 +268,9 @@ Companion rule:
 47. [explicit-implementation-seed-drops-design-backed-owned-paths-design.md](explicit-implementation-seed-drops-design-backed-owned-paths-design.md)
    Config families: design-backed explicit implementation seeding, tracked design-doc injection into run-graph seed, implementer packet owned-path derivation from bounded file sets, and fail-closed dispatch-init without generic placeholder scope
    Registered path: `docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md`
-48. [carrier-model-profile-selection-runtime-design.md](carrier-model-profile-selection-runtime-design.md)
+48. [carrier-model-profile-selection-runtime-model.md](carrier-model-profile-selection-runtime-model.md)
    Config families: bounded carrier plus model-profile contract normalization across Codex/internal/external execution surfaces, profile-aware runtime assignment truth, dispatch/status profile projection, and parity-safe materialization from legacy and new-style config
-   Registered path: `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+   Registered path: `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
 49. [unified-hybrid-runtime-selection-policy-design.md](unified-hybrid-runtime-selection-policy-design.md)
    Config families: bounded follow-up wave after the carrier/model-profile contract rollout, including dynamic-versus-route selection truth, budget and route policy enforcement, internal-subagent candidate pooling, external reasoning/readiness enforcement, operator diagnostics, and residual qwen drift closure
    Registered path: `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`

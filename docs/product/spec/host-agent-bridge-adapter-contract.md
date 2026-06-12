@@ -1,15 +1,15 @@
-# Host Agent Bridge Adapter Contract Design
+# Host Agent Bridge Adapter Contract
 
-Status: proposed
+Status: active product contract
 
-Use this design as the carrier-neutral contract for host-mediated internal agent execution across Codex App/CLI host APIs, Claude Code, Pi sub-agent plugins, Vibe Kanban, OpenCode, and future host runtimes. Vendor-specific launch mechanics are adapter capabilities, not VIDA runtime law.
+Use this contract as the carrier-neutral contract for host-mediated internal agent execution across Codex App/CLI host APIs, Claude Code, Pi sub-agent plugins, Vibe Kanban, OpenCode, and future host runtimes. Vendor-specific launch mechanics are adapter capabilities, not VIDA runtime law.
 
 ## Summary
 
-- Feature / change: generalize `host_tool_bridge` into a host-agent bridge adapter contract.
+- Contract: generalize `host_tool_bridge` into a host-agent bridge adapter contract.
 - Owner layer: `mixed`
 - Runtime surface: `launcher | taskflow | agent-init | lane | status`
-- Status: proposed
+- Status: active product contract
 
 ## Problem
 
@@ -272,13 +272,13 @@ Internal host bridge transport must not be prelaunch-classified as `internal_cod
 - OpenCode agents: `https://opencode.ai/docs/agents/`
 
 -----
-artifact_path: product/spec/host-agent-bridge-adapter-contract-design
+artifact_path: product/spec/host-agent-bridge-adapter-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-06-01
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/host-agent-bridge-adapter-contract-design.md
+source_path: docs/product/spec/host-agent-bridge-adapter-contract.md
 created_at: 2026-06-01T11:40:00+03:00
 updated_at: 2026-06-01T11:40:00+03:00
-changelog_ref: host-agent-bridge-adapter-contract-design.changelog.jsonl
+changelog_ref: host-agent-bridge-adapter-contract.changelog.jsonl

@@ -1,11 +1,11 @@
-# Explicit Policy Selected Internal Backend Execution Design
+# Internal Backend Executor Route Policy Contract
 
-Status: implemented
+Status: active product contract
 
-Use this design to record the canonical agent registry and explicit route policy contract that now back the runtime selection logic.
+Use this contract to record the canonical agent registry and explicit route policy contract that back runtime executor selection.
 
 ## Summary
-- Feature / change: keep `host_environment.cli_system` independent from `agent_system.subagents`, treat `agent_system.subagents` as the canonical registry for all executor backends, and make routes point to explicit executor backend fields rather than vague `subagents` hints.
+- Contract: keep `host_environment.cli_system` independent from `agent_system.subagents`, treat `agent_system.subagents` as the canonical registry for all executor backends, and make routes point to explicit executor backend fields rather than vague `subagents` hints.
 - Core rule: `internal_subagents` stays internal-only and is selected by policy, not by changing the active host system.
 - Compatibility rule: legacy `subagents` / `fanout_subagents` / `bridge_fallback_subagent` entries may remain as shims until runtime code is updated, but they are not the canonical contract.
 
@@ -55,7 +55,7 @@ Use this design to record the canonical agent registry and explicit route policy
 - Project docs / specs affected:
   - `docs/process/agent-system.md`
   - `docs/process/environments.md`
-  - `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
+  - `docs/product/spec/internal-backend-executor-route-policy-contract.md`
 - Config surfaces affected:
   - `vida.config.yaml`
 - Runtime families affected:
@@ -128,7 +128,7 @@ Will implement / choose:
   - Existing consumers may still read legacy fields, but runtime selection now prefers explicit executor backend fields first.
 
 ## Bounded File Set
-- `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
+- `docs/product/spec/internal-backend-executor-route-policy-contract.md`
 - `vida.config.yaml`
 - `docs/process/agent-system.md`
 - `docs/process/environments.md`
@@ -148,7 +148,7 @@ Will implement / choose:
 ## Implementation Plan
 
 ### Phase 1
-- Update the design/spec and process docs to make the registry/policy split explicit.
+- Update the product spec and process docs to make the registry/policy split explicit.
 - Add explicit executor backend fields to the config routes while keeping compatibility aliases.
 
 ### Phase 2
@@ -156,7 +156,7 @@ Will implement / choose:
 - Keep policy-selected `internal_subagents` on `vida agent-init` even when the active host system remains external.
 
 ## Validation / Proof
-- `vida docflow check --root . docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
+- `vida docflow check --root . docs/product/spec/internal-backend-executor-route-policy-contract.md`
 - Config review:
   - confirm route blocks carry `executor_backend` / `fanout_executor_backends` / `fallback_executor_backend`
   - confirm internal backend remains under `agent_system.subagents`
@@ -173,7 +173,7 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
+  - `docs/product/spec/config-driven-host-system-runtime-contract.md`
 - Related protocols
   - `docs/process/agent-system.md`
   - `docs/process/environments.md`
@@ -183,13 +183,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/explicit-policy-selected-internal-backend-execut-design
+artifact_path: product/spec/internal-backend-executor-route-policy-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-04-09'
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md
+source_path: docs/product/spec/internal-backend-executor-route-policy-contract.md
 created_at: '2026-04-08T21:55:36.892136577Z'
 updated_at: 2026-04-08T22:06:57.906378163Z
-changelog_ref: explicit-policy-selected-internal-backend-execut-design.changelog.jsonl
+changelog_ref: internal-backend-executor-route-policy-contract.changelog.jsonl

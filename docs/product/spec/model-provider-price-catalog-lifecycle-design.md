@@ -87,7 +87,7 @@ Status: proposed
   - `docs/product/spec/README.md`
   - `docs/product/spec/project-activation-and-configurator-model.md`
   - `docs/product/spec/status-families-and-query-surface-model.md`
-  - `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+  - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
 - Framework protocols affected:
   - none in this slice beyond existing activation/status/query law
@@ -277,7 +277,7 @@ Will implement / choose:
 - Cross-document / cross-protocol dependencies
   - `docs/product/spec/project-activation-and-configurator-model.md`
   - `docs/product/spec/status-families-and-query-surface-model.md`
-  - `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+  - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
   - current runtime contract profile
 
@@ -495,7 +495,7 @@ Will implement / choose:
 - Related specs
   - `docs/product/spec/project-activation-and-configurator-model.md`
   - `docs/product/spec/status-families-and-query-surface-model.md`
-  - `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+  - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
   - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
 - Related protocols

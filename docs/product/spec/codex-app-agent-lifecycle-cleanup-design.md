@@ -186,7 +186,7 @@ Will implement / choose:
 
 - `docs/process/codex-agent-configuration-guide.md`
 - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
-- `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+- `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
 
 -----
 artifact_path: product/spec/codex-app-agent-lifecycle-cleanup-design

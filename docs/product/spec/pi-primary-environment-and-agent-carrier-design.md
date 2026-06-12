@@ -424,11 +424,11 @@ Concise proof commands recorded across the implementation slices:
 ## References
 - Related specs:
   - `docs/product/spec/external-cli-carrier-hardening-design.md`
-  - `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+  - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
   - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
   - `docs/product/spec/host-agent-layer-status-matrix.md`
-  - `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+  - `docs/product/spec/hybrid-host-executor-semantics-model.md`
   - `docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md`
 - Related process docs:
   - `docs/process/agent-system.md`

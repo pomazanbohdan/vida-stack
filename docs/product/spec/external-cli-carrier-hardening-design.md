@@ -171,8 +171,8 @@ Will implement / choose:
   - config scaffold must emit the same dispatch schema runtime expects
 - Cross-document / cross-protocol dependencies
   - `docs/process/agent-system.md`
-  - `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
-  - `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+  - `docs/product/spec/config-driven-host-system-runtime-contract.md`
+  - `docs/product/spec/hybrid-host-executor-semantics-model.md`
 
 ### Bounded File Set
 - `docs/product/spec/external-cli-carrier-hardening-design.md`
@@ -262,8 +262,8 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
-  - `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+  - `docs/product/spec/config-driven-host-system-runtime-contract.md`
+  - `docs/product/spec/hybrid-host-executor-semantics-model.md`
 - Related protocols
   - `docs/process/agent-system.md`
 - Related ADRs

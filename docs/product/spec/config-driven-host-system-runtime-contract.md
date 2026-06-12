@@ -1,14 +1,14 @@
-# Config Driven Host System Runtime Keep Design
+# Config Driven Host System Runtime Contract
 
-Status: implemented
+Status: active product contract
 
-Bounded feature/change design implemented in the current project runtime/config surfaces.
+Current product contract for config-driven host-system discovery, runtime-root resolution, and active host-system selection.
 
 ## Summary
-- Feature / change: Keep framework templates available for all host CLI systems, but derive the active host-system list, runtime roots, and selection behavior only from `vida.config.yaml`; remove hardcoded host-system inventories from runtime logic; add Hermes as a template/config-backed external system.
+- Contract: Keep framework templates available for all host CLI systems, but derive the active host-system list, runtime roots, and selection behavior only from `vida.config.yaml`; remove hardcoded host-system inventories from runtime logic; add Hermes as a template/config-backed external system.
 - Owner layer: `mixed`
 - Runtime surface: `project activation | launcher | taskflow`
-- Status: implemented
+- Status: active product contract
 
 ## Current Context
 - Existing system overview
@@ -63,7 +63,7 @@ Bounded feature/change design implemented in the current project runtime/config 
 - Project docs / specs affected:
   - `docs/process/agent-system.md`
   - `docs/process/environments.md`
-  - `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
+  - `docs/product/spec/config-driven-host-system-runtime-contract.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -163,7 +163,7 @@ Will implement / choose:
 - `crates/vida/src/main.rs`
 - `docs/process/agent-system.md`
 - `docs/process/environments.md`
-- `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
+- `docs/product/spec/config-driven-host-system-runtime-contract.md`
 
 ## Fail-Closed Constraints
 - Forbidden fallback paths
@@ -181,10 +181,10 @@ Will implement / choose:
 ## Implementation Plan
 
 ### Phase 1
-- Fill this design with the config-driven authority rules and bounded file set.
+- Keep this contract aligned with the config-driven authority rules and bounded file set.
 - Update config/template inventory with Hermes and remove Kilo from the active project config where needed.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/config-driven-host-system-runtime-keep-design.md`
+  - `vida docflow check --root . docs/product/spec/config-driven-host-system-runtime-contract.md`
 
 ### Phase 2
 - Refactor runtime-root discovery and carrier projection to stop depending on fixed host-root constants.
@@ -210,7 +210,7 @@ Will implement / choose:
   - `vida taskflow consume agent-system --json`
   - `vida project-activator --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/config-driven-host-system-runtime-keep-design.md`
+  - `vida docflow check --root . docs/product/spec/config-driven-host-system-runtime-contract.md`
   - `cargo test -p vida`
 
 ## Implementation Outcome
@@ -260,13 +260,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/config-driven-host-system-runtime-keep-design
+artifact_path: product/spec/config-driven-host-system-runtime-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-04-09'
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/config-driven-host-system-runtime-keep-design.md
+source_path: docs/product/spec/config-driven-host-system-runtime-contract.md
 created_at: '2026-04-08T21:02:35.297108952Z'
 updated_at: 2026-04-08T21:30:25.30536044Z
-changelog_ref: config-driven-host-system-runtime-keep-design.changelog.jsonl
+changelog_ref: config-driven-host-system-runtime-contract.changelog.jsonl

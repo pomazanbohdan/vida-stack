@@ -62,8 +62,8 @@ Status: `approved`
   - `active spec/catalog maps and Git history`
   - `docs/process/external-cli-carrier-operator-procedure.md`
   - `docs/process/agent-system.md`
-  - `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
-  - `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+  - `docs/product/spec/internal-backend-executor-route-policy-contract.md`
+  - `docs/product/spec/hybrid-host-executor-semantics-model.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -166,8 +166,8 @@ Will implement / choose:
 - `active spec/catalog maps and Git history`
 - `docs/process/external-cli-carrier-operator-procedure.md`
 - `docs/process/agent-system.md`
-- `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
-- `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+- `docs/product/spec/internal-backend-executor-route-policy-contract.md`
+- `docs/product/spec/hybrid-host-executor-semantics-model.md`
 - `crates/vida/src/init_surfaces.rs`
 - `crates/vida/src/runtime_dispatch_execution.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
@@ -255,8 +255,8 @@ Will implement / choose:
 - `vida.config.yaml`
 - `docs/process/agent-system.md`
 - `docs/process/external-cli-carrier-operator-procedure.md`
-- `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
-- `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+- `docs/product/spec/internal-backend-executor-route-policy-contract.md`
+- `docs/product/spec/hybrid-host-executor-semantics-model.md`
 - `crates/vida/src/{init_surfaces,runtime_dispatch_execution,runtime_dispatch_state,runtime_lane_summary,status_surface,status_surface_external_cli,status_surface_host_agents,taskflow_consume,taskflow_consume_resume,taskflow_routing,taskflow_run_graph}.rs`
 - task `feature-reconcile-qwen-cli-carrier-drift-across-config-code`
 

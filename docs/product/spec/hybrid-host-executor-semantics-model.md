@@ -1,11 +1,11 @@
-# Hybrid Host Executor Semantics Host Environment Design
+# Hybrid Host Executor Semantics Model
 
-Status: implemented
+Status: active product model
 
-Use this design to record the hybrid runtime contract now implemented in bounded dispatch and status surfaces.
+Use this model to record the hybrid runtime contract implemented in bounded dispatch and status surfaces.
 
 ## Summary
-- Feature / change: keep `host_environment.cli_system` as the primary runtime posture, but allow route policy to lawfully dispatch both internal and external executor backends.
+- Model: keep `host_environment.cli_system` as the primary runtime posture, but allow route policy to lawfully dispatch both internal and external executor backends.
 - Core rule: host selection is a posture and materialization choice, not a hard gate on executor backend class.
 - Compatibility rule: `agent_system.subagents` remains the canonical executor registry; legacy route hints stay as compatibility aliases only.
 - Safety rule: `internal_subagents` stays internal-only and does not acquire an external CLI dispatch contract.
@@ -56,7 +56,7 @@ Use this design to record the hybrid runtime contract now implemented in bounded
 - Project docs / specs affected:
   - `docs/process/agent-system.md`
   - `docs/process/environments.md`
-  - `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+  - `docs/product/spec/hybrid-host-executor-semantics-model.md`
 - Config surfaces affected:
   - `vida.config.yaml`
 - Runtime families affected:
@@ -135,7 +135,7 @@ Will implement / choose:
   - `host_environment.systems.<system>.execution_class` remains a host-level posture signal, not a universal dispatch blocker.
 
 ## Bounded File Set
-- `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+- `docs/product/spec/hybrid-host-executor-semantics-model.md`
 - `docs/process/agent-system.md`
 - `docs/process/environments.md`
 
@@ -150,7 +150,7 @@ Will implement / choose:
 ## Implementation Plan
 
 ### Phase 1
-- Update the design/spec and process docs to make hybrid semantics explicit.
+- Update the product spec and process docs to make hybrid semantics explicit.
 - Keep canonical registry and route policy terminology stable.
 
 ### Phase 2
@@ -163,7 +163,7 @@ Will implement / choose:
 - Status/preflight now surface `hybrid_external_cli_relevant` and treat enabled external backends as operationally relevant even when the selected host posture is internal.
 
 ## Validation / Proof
-- `vida docflow check --root . docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+- `vida docflow check --root . docs/product/spec/hybrid-host-executor-semantics-model.md`
 - Runtime proof targets:
   - internal host dispatching an external backend when route policy selects it
   - external host dispatching `internal_subagents` when route policy selects it
@@ -178,9 +178,9 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
-  - `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
-  - `docs/product/spec/host-agent-bridge-adapter-contract-design.md`
+  - `docs/product/spec/config-driven-host-system-runtime-contract.md`
+  - `docs/product/spec/internal-backend-executor-route-policy-contract.md`
+  - `docs/product/spec/host-agent-bridge-adapter-contract.md`
 - Related protocols
   - `docs/process/agent-system.md`
   - `docs/process/environments.md`
@@ -190,13 +190,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/hybrid-host-executor-semantics-host-environment-design
+artifact_path: product/spec/hybrid-host-executor-semantics-model
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-04-09'
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md
+source_path: docs/product/spec/hybrid-host-executor-semantics-model.md
 created_at: '2026-04-09T05:42:06.076300966Z'
 updated_at: 2026-04-09T05:49:49.39642382Z
-changelog_ref: hybrid-host-executor-semantics-host-environment-design.changelog.jsonl
+changelog_ref: hybrid-host-executor-semantics-model.changelog.jsonl

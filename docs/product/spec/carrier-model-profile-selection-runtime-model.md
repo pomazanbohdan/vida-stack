@@ -1,14 +1,14 @@
-# Carrier Model Profile Selection Runtime Design
+# Carrier Model Profile Selection Runtime Model
 
-Status: `approved`
+Status: active product model
 
-Use this design to land one bounded carrier/model-profile contract slice for runtime selection, dispatch truth, and operator proof.
+Use this model to define the carrier/model-profile contract for runtime selection, dispatch truth, and operator proof.
 
 ## Summary
-- Feature / change: unify carrier + model_profile selection/runtime truth for Codex carriers, internal subagent profiles, and external CLI backends
+- Model: unify carrier + model_profile selection/runtime truth for Codex carriers, internal subagent profiles, and external CLI backends
 - Owner layer: `mixed`
 - Runtime surface: `launcher | project activation | taskflow | status`
-- Status: `approved`
+- Status: active product model
 
 ## Current Context
 - Existing system overview
@@ -241,7 +241,7 @@ Will implement / choose:
 - land `Task A` schema/doc contract and normalize `vida.config.yaml` into profile-aware shapes
 - add synthetic-profile compatibility helpers for legacy carrier/backend fields
 - First proof target
-  - design doc, owner docs, and normalized config shapes all agree on the profile contract
+- product spec, owner docs, and normalized config shapes all agree on the profile contract
 
 ### Phase 2
 - land `Task B` and `Task C`: runtime normalization plus profile-aware assignment and diagnostics
@@ -270,8 +270,8 @@ Will implement / choose:
   - `cargo test -p vida status_surface_host_agents`
   - `cargo test -p vida status_surface_external_cli`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/carrier-model-profile-selection-runtime-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
-  - `vida docflow proofcheck --profile active-canon docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+  - `vida docflow check --root . docs/product/spec/carrier-model-profile-selection-runtime-model.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
+  - `vida docflow proofcheck --profile active-canon docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `vida docflow readiness-check --profile active-canon`
 
 ## Observability
@@ -321,13 +321,13 @@ Will implement / choose:
   - OpenAI Codex config reference and config sample cited in the handoff report
 
 -----
-artifact_path: product/spec/carrier-model-profile-selection-runtime-design
+artifact_path: product/spec/carrier-model-profile-selection-runtime-model
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-22
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/carrier-model-profile-selection-runtime-design.md
+source_path: docs/product/spec/carrier-model-profile-selection-runtime-model.md
 created_at: 2026-04-22T09:43:31.446725801Z
 updated_at: 2026-04-22T10:13:29.70930412Z
-changelog_ref: carrier-model-profile-selection-runtime-design.changelog.jsonl
+changelog_ref: carrier-model-profile-selection-runtime-model.changelog.jsonl

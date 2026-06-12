@@ -46,8 +46,6 @@ Active design docs:
 - `docs/product/spec/test-first-runtime-defect-remediation-design.md`
 - `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
 - `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
-- `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
-- `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
 - `docs/product/spec/mempalace-against-vida-specs-project-design-design.md`
 - `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
 - `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
@@ -61,6 +59,12 @@ Current promoted runtime-control specs:
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 - `docs/product/spec/checkpoint-commit-and-replay-model.md`
 - `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
+- `docs/product/spec/config-driven-host-system-runtime-contract.md`
+- `docs/product/spec/internal-backend-executor-route-policy-contract.md`
+- `docs/product/spec/hybrid-host-executor-semantics-model.md`
+- `docs/product/spec/codex-host-agent-boundary-and-cli-bridge-contract.md`
+- `docs/product/spec/host-agent-bridge-adapter-contract.md`
+- `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
 
 -----
 artifact_path: product/spec/readme

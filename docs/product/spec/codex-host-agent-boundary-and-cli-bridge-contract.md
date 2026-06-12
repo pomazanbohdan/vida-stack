@@ -1,14 +1,14 @@
-# Codex Host Agent Boundary And CLI Bridge Design
+# Codex Host Agent Boundary And CLI Bridge Contract
 
-Status: proposed
+Status: active product contract
 
-Use this design as the bounded Codex adapter slice of the generic host-agent bridge contract. The carrier-neutral owner design is `docs/product/spec/host-agent-bridge-adapter-contract-design.md`; this document applies it to Codex App/CLI surfaces and separates true Codex host/internal agents from process-based `codex exec` execution.
+Use this contract as the bounded Codex adapter slice of the generic host-agent bridge contract. The carrier-neutral owner contract is `docs/product/spec/host-agent-bridge-adapter-contract.md`; this document applies it to Codex App/CLI surfaces and separates true Codex host/internal agents from process-based `codex exec` execution.
 
 ## Summary
-- Feature / change: make `internal_subagents` a host-mediated internal-agent backend and move `codex exec` to an explicit process-based carrier.
+- Contract: make `internal_subagents` a host-mediated internal-agent backend and move `codex exec` to an explicit process-based carrier.
 - Owner layer: `mixed`
 - Runtime surface: `launcher | taskflow | agent-init | status`
-- Status: proposed
+- Status: active product contract
 
 ## Current Context
 - `vida.config.yaml -> host_environment.systems.codex.execution_class` is internal.
@@ -139,21 +139,21 @@ Host bridge request shape:
 ## References
 - `docs/process/agent-system.md`
 - `docs/process/codex-agent-configuration-guide.md`
-- `docs/product/spec/host-agent-bridge-adapter-contract-design.md`
+- `docs/product/spec/host-agent-bridge-adapter-contract.md`
 - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
-- `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+- `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
 - `docs/product/spec/compiled-runtime-bundle-contract.md`
 - OpenAI Codex CLI non-interactive mode: `https://developers.openai.com/codex/noninteractive`
 - OpenAI Codex subagents: `https://developers.openai.com/codex/concepts/subagents`
 
 -----
-artifact_path: product/spec/codex-host-agent-boundary-and-cli-bridge-design
+artifact_path: product/spec/codex-host-agent-boundary-and-cli-bridge-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-06-01
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md
+source_path: docs/product/spec/codex-host-agent-boundary-and-cli-bridge-contract.md
 created_at: 2026-06-01T10:00:00+03:00
 updated_at: 2026-06-01T10:00:00+03:00
-changelog_ref: codex-host-agent-boundary-and-cli-bridge-design.changelog.jsonl
+changelog_ref: codex-host-agent-boundary-and-cli-bridge-contract.changelog.jsonl

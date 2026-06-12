@@ -240,7 +240,7 @@ Will implement / choose:
   - effective backend/profile resolution -> dispatch packets and receipts
   - dispatch packets and receipts -> operator status/recovery/continue summaries
 - Cross-document / cross-protocol dependencies
-  - `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+  - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/external-cli-carrier-hardening-design.md`
   - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
@@ -361,7 +361,7 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+  - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/external-cli-carrier-hardening-design.md`
   - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
