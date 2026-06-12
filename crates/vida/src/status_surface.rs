@@ -64,6 +64,14 @@ pub(crate) fn dispatch_packet_json_from_project_path(
     project_root: &std::path::Path,
     packet_path: &str,
 ) -> Option<serde_json::Value> {
+    dispatch_packet_json_and_path_from_project_path(project_root, packet_path)
+        .map(|(packet, _path)| packet)
+}
+
+pub(crate) fn dispatch_packet_json_and_path_from_project_path(
+    project_root: &std::path::Path,
+    packet_path: &str,
+) -> Option<(serde_json::Value, std::path::PathBuf)> {
     let packet_path = packet_path.trim();
     if packet_path.is_empty() {
         return None;
@@ -100,7 +108,7 @@ pub(crate) fn dispatch_packet_json_from_project_path(
     if !candidate.starts_with(&project_root) {
         return None;
     }
-    let Ok(file) = std::fs::File::open(candidate) else {
+    let Ok(file) = std::fs::File::open(&candidate) else {
         return None;
     };
     let mut raw = String::new();
@@ -111,7 +119,9 @@ pub(crate) fn dispatch_packet_json_from_project_path(
     if raw.len() as u64 > DISPATCH_PACKET_REF_READ_LIMIT_BYTES {
         return None;
     }
-    serde_json::from_str::<serde_json::Value>(&raw).ok()
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .map(|packet| (packet, candidate))
 }
 
 fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {

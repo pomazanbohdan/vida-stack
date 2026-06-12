@@ -3076,30 +3076,65 @@ fn normalize_top_level_packet_scope_mirrors(
 }
 
 fn dispatch_packet_json_from_current_project(path: &str) -> Option<serde_json::Value> {
+    dispatch_packet_json_and_path_from_current_project(path).map(|(packet, _path)| packet)
+}
+
+fn dispatch_packet_json_and_path_from_current_project(
+    path: &str,
+) -> Option<(serde_json::Value, std::path::PathBuf)> {
     let project_root = std::env::current_dir().ok()?;
-    crate::status_surface::dispatch_packet_json_from_project_path(&project_root, path)
+    crate::status_surface::dispatch_packet_json_and_path_from_project_path(&project_root, path)
+}
+
+fn persist_normalized_dispatch_packet(
+    path: &std::path::Path,
+    packet: &serde_json::Value,
+) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Failed to persist normalized dispatch packet `{}`: missing parent directory",
+            path.display()
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| {
+            format!(
+                "Failed to persist normalized dispatch packet `{}`: invalid file name",
+                path.display()
+            )
+        })?;
+    let encoded = serde_json::to_string_pretty(packet)
+        .map_err(|error| format!("Failed to encode normalized dispatch packet: {error}"))?;
+    let temp_path = parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&temp_path, encoded).map_err(|error| {
+        format!(
+            "Failed to persist normalized dispatch packet `{}`: {error}",
+            path.display()
+        )
+    })?;
+    std::fs::rename(&temp_path, path).map_err(|error| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!(
+            "Failed to persist normalized dispatch packet `{}`: {error}",
+            path.display()
+        )
+    })
 }
 
 pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, String> {
-    let direct_path = std::path::Path::new(path);
-    let mut packet = if direct_path.exists() {
-        let raw = std::fs::read_to_string(direct_path).map_err(|error| {
-            format!("Failed to read persisted dispatch packet `{path}`: {error}")
-        })?;
-        serde_json::from_str(&raw).map_err(|error| {
-            format!("Failed to decode persisted dispatch packet `{path}`: {error}")
-        })?
-    } else {
-        dispatch_packet_json_from_current_project(path)
-            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{path}`"))?
-    };
+    let (mut packet, resolved_path) = dispatch_packet_json_and_path_from_current_project(path)
+        .ok_or_else(|| format!("Failed to read persisted dispatch packet `{path}`"))?;
     if normalize_runtime_dispatch_packet(&mut packet) {
-        std::fs::write(
-            path,
-            serde_json::to_string_pretty(&packet)
-                .map_err(|error| format!("Failed to encode normalized dispatch packet: {error}"))?,
-        )
-        .map_err(|error| format!("Failed to persist normalized dispatch packet: {error}"))?;
+        persist_normalized_dispatch_packet(&resolved_path, &packet)?;
     }
     crate::validate_runtime_dispatch_packet_contract(&packet, "Persisted dispatch packet")
         .map_err(|error| {
@@ -19208,6 +19243,63 @@ agent_system:
             .expect("current dir")
             .join("target")
             .join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn read_dispatch_packet_rejects_untrusted_paths_before_decode_or_persist() {
+        let packet_root = unique_dispatch_packet_test_root("vida-dispatch-packet-trust-boundary");
+        fs::create_dir_all(&packet_root).expect("create packet dir");
+
+        let out_of_project_path = std::env::temp_dir().join(format!(
+            "vida-out-of-project-packet-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::write(&out_of_project_path, "{}").expect("write out-of-project packet");
+        let error = read_dispatch_packet(
+            out_of_project_path
+                .to_str()
+                .expect("out-of-project path should be utf-8"),
+        )
+        .expect_err("out-of-project packet should be rejected before decode");
+        assert!(error.contains("Failed to read persisted dispatch packet"));
+
+        let dot_segment_path = packet_root.join("nested").join("..").join("packet.json");
+        fs::write(packet_root.join("packet.json"), "{}").expect("write dot-segment packet");
+        let error = read_dispatch_packet(
+            dot_segment_path
+                .to_str()
+                .expect("dot-segment path should be utf-8"),
+        )
+        .expect_err("dot-segment packet should be rejected before decode");
+        assert!(error.contains("Failed to read persisted dispatch packet"));
+
+        let oversized_path = packet_root.join("oversized.json");
+        fs::write(&oversized_path, "x".repeat(1024 * 1024 + 1)).expect("write oversized packet");
+        let error = read_dispatch_packet(
+            oversized_path
+                .to_str()
+                .expect("oversized path should be utf-8"),
+        )
+        .expect_err("oversized packet should be rejected before decode");
+        assert!(error.contains("Failed to read persisted dispatch packet"));
+
+        #[cfg(unix)]
+        {
+            let symlink_path = packet_root.join("symlink.json");
+            std::os::unix::fs::symlink(&out_of_project_path, &symlink_path)
+                .expect("create symlink packet");
+            let error =
+                read_dispatch_packet(symlink_path.to_str().expect("symlink path should be utf-8"))
+                    .expect_err("symlink packet should be rejected before decode");
+            assert!(error.contains("Failed to read persisted dispatch packet"));
+        }
+
+        let _ = fs::remove_file(out_of_project_path);
+        let _ = fs::remove_dir_all(packet_root);
     }
 
     #[test]
