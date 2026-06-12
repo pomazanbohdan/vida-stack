@@ -833,6 +833,12 @@ async fn latest_stale_run_graph_task_authority_error(
         if !verdict.task_missing() {
             continue;
         }
+        if !crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+            Some(&status),
+            true,
+        ) {
+            continue;
+        }
         if resume_from_persisted_final_snapshot(store, &status.run_id)? {
             continue;
         }
@@ -989,7 +995,10 @@ async fn validate_run_graph_resume_state(
     {
         return Err(error);
     }
-    if task_missing {
+    if crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+        Some(&status),
+        task_missing,
+    ) {
         return Err(stale_missing_task_run_graph_resume_error(
             &status,
             active_receipt.as_ref(),
@@ -1075,7 +1084,10 @@ async fn validate_run_graph_resume_state_strict(
     {
         return Err(error);
     }
-    if task_missing {
+    if crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+        Some(&status),
+        task_missing,
+    ) {
         return Err(stale_missing_task_run_graph_resume_error(
             &status,
             active_receipt.as_ref(),
@@ -1535,7 +1547,10 @@ async fn completed_task_close_reconcile_resume_target(
             .await
             .ok()
             .flatten();
-        return if verdict.task_missing() {
+        return if crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+            Some(&status),
+            verdict.task_missing(),
+        ) {
             Err(stale_missing_task_run_graph_resume_error(
                 &status,
                 dispatch_receipt.as_ref(),
@@ -1570,10 +1585,16 @@ async fn completed_task_close_reconcile_resume_target(
                 .await
                 .ok()
                 .flatten();
-            return Err(stale_missing_task_run_graph_resume_error(
-                &status,
-                dispatch_receipt.as_ref(),
-            ));
+            if crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+                Some(&status),
+                true,
+            ) {
+                return Err(stale_missing_task_run_graph_resume_error(
+                    &status,
+                    dispatch_receipt.as_ref(),
+                ));
+            }
+            return Ok(None);
         }
         Err(error) => {
             return Err(format!(
@@ -2697,7 +2718,10 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
                 )
             })?;
     let task_missing = task_authority.task_missing();
-    if task_missing {
+    if crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+        Some(&status),
+        task_missing,
+    ) {
         return Err(stale_missing_task_run_graph_resume_error(
             &status,
             active_receipt.as_ref(),
@@ -5345,7 +5369,10 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                     resolved_run_id
                 )
             })?;
-        if task_authority.task_missing() {
+        if crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+            Some(&status),
+            task_authority.task_missing(),
+        ) {
             Some(status)
         } else {
             None
@@ -5772,10 +5799,15 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                     return Ok(resume);
                 }
             }
-            return Err(stale_missing_task_run_graph_resume_error(
-                status,
-                Some(&receipt),
-            ));
+            if crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+                Some(status),
+                true,
+            ) {
+                return Err(stale_missing_task_run_graph_resume_error(
+                    status,
+                    Some(&receipt),
+                ));
+            }
         }
     }
     let active_executable_receipt =
@@ -6592,7 +6624,10 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     .await
                     {
                         Ok(verdict)
-                            if verdict.task_missing()
+                            if crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+                                Some(&status),
+                                verdict.task_missing(),
+                            )
                                 && (status.active_node == "host_bridge"
                                     || status.policy_gate == "host_tool_bridge_adapter_required")
                                 && !resume_from_persisted_final_snapshot(&store, run_id)
@@ -7510,7 +7545,8 @@ mod tests {
         dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
         dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
         enforce_consume_continue_execution_preparation_gate,
-        fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
+        fail_fast_state_store_open_read_only_with_timeout,
+        latest_stale_run_graph_task_authority_error, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
         persisted_dispatch_packet_lineage_task_id,
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
@@ -17679,6 +17715,45 @@ agent_system:
         assert!(
             error.contains("vida lane retire run-missing-task-stale"),
             "unexpected error: {error}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_stale_authority_ignores_terminal_resolved_missing_task_status() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-terminal-missing-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-terminal-missing-task";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "closure", "delivery");
+        status.task_id = "task-terminal-missing".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.resume_target = "none".to_string();
+        status.handoff_state = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist terminal missing-task status");
+
+        let error = latest_stale_run_graph_task_authority_error(&store)
+            .await
+            .expect("terminal missing-task authority scan should succeed");
+        assert!(
+            error.is_none(),
+            "terminal resolved missing-task status must not request stale cleanup: {error:?}"
         );
 
         let _ = fs::remove_dir_all(&root);

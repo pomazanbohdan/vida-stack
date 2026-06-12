@@ -200,8 +200,18 @@ fn completed_status_signal(value: &str) -> bool {
     normalized == "completed" || normalized == "complete" || normalized.ends_with("_complete")
 }
 
-fn terminal_run_graph_status_resolved(status: &RunGraphStatus) -> bool {
+pub(crate) fn terminal_run_graph_status_resolved(status: &RunGraphStatus) -> bool {
     completed_status_signal(&status.status) && completed_status_signal(&status.lifecycle_stage)
+}
+
+pub(crate) fn missing_task_run_graph_requires_stale_cleanup(
+    status: Option<&RunGraphStatus>,
+    task_missing: bool,
+) -> bool {
+    task_missing
+        && status
+            .map(|status| !terminal_run_graph_status_resolved(status))
+            .unwrap_or(false)
 }
 
 fn terminal_recovery_summary_resolved(
@@ -1532,14 +1542,14 @@ fn next_lawful_operator_action_for_projection(
     terminal_consume_continue_run_id: Option<&str>,
     task_missing: bool,
 ) -> Option<String> {
-    if task_missing && terminal_run_graph_status_resolved(status) {
-        return None;
-    }
-    if task_missing {
+    if missing_task_run_graph_requires_stale_cleanup(Some(status), task_missing) {
         return Some(format!(
             "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"",
             status.run_id, status.run_id
         ));
+    }
+    if task_missing {
+        return None;
     }
     if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
@@ -11275,6 +11285,36 @@ mod tests {
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
                 .as_deref(),
             Some("vida lane show run-timeout --json")
+        );
+    }
+
+    #[test]
+    fn missing_task_stale_cleanup_is_not_actionable_for_terminal_resolved_status() {
+        let mut terminal =
+            default_run_graph_status("run-terminal-missing", "implementation", "closure");
+        terminal.status = "completed".to_string();
+        terminal.lifecycle_stage = "closure_complete".to_string();
+        let mut active = default_run_graph_status("run-active-missing", "implementation", "coach");
+        active.status = "blocked".to_string();
+        active.lifecycle_stage = "coach_blocked".to_string();
+
+        assert!(!missing_task_run_graph_requires_stale_cleanup(
+            Some(&terminal),
+            true
+        ));
+        assert!(missing_task_run_graph_requires_stale_cleanup(
+            Some(&active),
+            true
+        ));
+        assert!(!missing_task_run_graph_requires_stale_cleanup(
+            Some(&active),
+            false
+        ));
+        assert!(next_lawful_operator_action_for_projection(&terminal, None, None, true).is_none());
+        assert!(
+            next_lawful_operator_action_for_projection(&active, None, None, true)
+                .as_deref()
+                .is_some_and(|action| action.starts_with("vida lane retire run-active-missing"))
         );
     }
 

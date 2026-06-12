@@ -1202,6 +1202,25 @@ pub(crate) fn add_taskflow_active_work_truth(
     summary
 }
 
+pub(crate) fn add_stale_missing_task_run_graph_status(
+    mut continuation_binding: serde_json::Value,
+    status: &crate::state_store::RunGraphStatus,
+) -> serde_json::Value {
+    if let Some(object) = continuation_binding.as_object_mut() {
+        object.insert(
+            "stale_missing_task_run_graph_status".to_string(),
+            serde_json::json!({
+                "task_id": status.task_id,
+                "run_id": status.run_id,
+                "active_node": status.active_node,
+                "status": status.status,
+                "lifecycle_stage": status.lifecycle_stage,
+            }),
+        );
+    }
+    continuation_binding
+}
+
 pub(crate) fn apply_closed_task_active_run_projection_mismatch_gate(
     mut summary: serde_json::Value,
 ) -> serde_json::Value {

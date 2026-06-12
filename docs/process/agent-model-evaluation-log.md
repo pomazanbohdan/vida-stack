@@ -4667,6 +4667,163 @@ Next-task selection rule:
 - Commit and push this scoped residual fix and scorecard, then re-run
   orchestrator binding to choose between remaining Wave 0 children.
 
+## 2026-06-12 - Terminal task-active projection parity audit
+
+Closed task:
+- `todo-audit-terminal-task-active-projection-parity-surfaces-20260612`.
+- Parent/wave: `wave-0-runtime-tests`.
+- Invariant: terminal/resolved missing-task run-graph evidence must not produce
+  stale cleanup or `vida lane retire` recovery guidance; every changed status,
+  graph-summary, next-decision, closeout, runtime-bundle, and consume-resume
+  path must share one predicate for actionable missing-task cleanup.
+
+Proof bundle:
+- `cargo +1.95.0 test -p vida
+  latest_stale_authority_ignores_terminal_resolved_missing_task_status --
+  --nocapture`: pass.
+- `cargo +1.95.0 test -p vida
+  missing_task_stale_cleanup_is_not_actionable_for_terminal_resolved_status --
+  --nocapture`: pass.
+- `cargo +1.95.0 test -p vida
+  taskflow_next_decision_does_not_retire_terminal_missing_task_run --
+  --nocapture`: pass.
+- `cargo +1.95.0 test -p vida --test task_smoke
+  terminal_exception_takeover_run_does_not_reemit_missing_task_retire_action
+  -- --exact --nocapture --test-threads=1`: pass.
+- `cargo +1.95.0 test -p vida --test task_smoke
+  latest_run_projection_consistency_aligns_explicit_binding_scheduler_next_lawful_and_graph_explain
+  -- --exact --nocapture --test-threads=1`: pass.
+- `cargo +1.95.0 test -p vida --test task_smoke
+  latest_run_projection_consistency_aligns_graph_summary_current_task --
+  --exact --nocapture --test-threads=1`: pass.
+- `cargo +1.95.0 test -p vida --test task_smoke
+  task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_drift
+  -- --exact --nocapture --test-threads=1`: pass.
+- `cargo +1.95.0 test -p vida --test doctor_surface_contract_smoke
+  taskflow_closeout_outputs_default_toon_json_compact_and_help_contracts --
+  --exact --nocapture --test-threads=1`: pass.
+- `cargo +1.95.0 test -p vida --test boot_smoke
+  taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_and_doctor
+  -- --exact --nocapture --test-threads=1`: pass.
+- `cargo +1.95.0 fmt --all -- --check`: pass.
+- `git diff --check`: pass.
+- `vida task validate-graph --json`: pass.
+
+Agent classification:
+- Hooke `019ebd45-cfa6-72d1-ad49-7a33e374c2ce`: accepted. Found the
+  current-scope graph-summary stale cleanup predicate gap.
+- Bacon `019ebd46-0327-7ca2-97fc-4ff3abeb66f5`: accepted. Found the
+  current-scope closeout/runtime-bundle terminal task-active marker gap.
+- Archimedes `019ebd46-2740-7062-84d9-ddfc7dae3b76`: accepted as follow-up
+  evidence. Agent status/diagnostics actionability is tracked separately in
+  `todo-audit-agent-status-diagnostics-ready-downstream-actionability-20260612`.
+- Boyle `019ebd52-37ae-7691-a5de-5c961ac99d9d`: closed before result use
+  because local sweep already found the consume-resume residual and completed
+  cleanup was mandatory before continuing.
+- Completed handle cleanup: pass; no active agent handles remain for this
+  task segment.
+
+Executor / validator:
+- Executor: root orchestrator, 8/10.
+- Validator: focused helper/unit tests, public task/boot/doctor smoke tests,
+  local pattern sweep, and TaskFlow graph validation, 9/10.
+- Telemetry: tokens=`not_exposed_by_host`; tool_calls=`approximate`;
+  agent_count=`exact: 4`; rework_count=`exact: 2` for consume-resume residual
+  expansion and test-scope import correction.
+
+Post-Task Self-Analysis:
+- Worked: the shared predicate made the invariant explicit and removed
+  duplicated stale cleanup logic across run-graph next action, graph summary,
+  closeout, runtime bundle, status binding markers, and consume-resume.
+- Waste: the first post-fix sweep initially treated `lane retire` text as
+  suspicious without separating helper/test/help text from runtime-forming
+  code; future sweeps should classify evidence by generation path first.
+- Risk: agent status and diagnostics ready-downstream actionability remain a
+  broader parity problem, tracked as a follow-up instead of bundled into this
+  patch.
+- Next change: commit and push this scoped parity fix and scorecard, then
+  continue Wave 0 from current TaskFlow evidence.
+- Docs update: yes, this scorecard records the closure and dynamic criterion.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `todo-audit-terminal-task-active-projection-parity-surfaces-20260612`.
+2. Wave/parent closure distance: pass, one Wave 0 runtime-test child closes
+   and one follow-up remains explicit.
+3. Scope and non-goals stable: pass, agent status/diagnostics moved to a
+   follow-up rather than hidden expansion.
+4. Dirty worktree handled: pass, unrelated product spec changes remain
+   unstaged.
+5. Executor cheapest capable: partial, root handled coupled projection code;
+   agents were used only for read-only classification.
+6. Validator matched risk: pass, helper tests plus public smoke paths passed.
+7. Prompt packet shape: pass for the three accepted read-only agents.
+8. Agent handles: pass, all known handles closed.
+9. Token/tool/step telemetry: pass, approximate telemetry recorded above.
+10. Avoidable commands: partial, one broad `rg` produced noisy output; future
+    sweeps should use narrower path/function filters.
+11. Proof strength: pass for terminal missing-task stale cleanup parity.
+12. Public/release proof: partial, release install remains deferred to
+    wave/slice closure.
+13. Debug build: pass, cargo tests compiled and passed.
+14. TaskFlow state: pass, child consume-resume TODO closed and graph validation
+    passed.
+15. Staging by invariant: pass, commit scope is runtime parity files plus this
+    evaluation log.
+16. Publication authorization: active, user requested commit/push
+    continuation.
+17. Evaluation docs: pass after this entry and linter.
+18. Parent/wave metrics: pass, close output will update epic progress after
+    parent closure.
+19. New defects/follow-ups: pass,
+    `todo-audit-agent-status-diagnostics-ready-downstream-actionability-20260612`.
+20. Next routing rule: pass, continue Wave 0; create the user-requested
+    host-bridge completion epic only after this active epic closure gate.
+
+Implementation follow-up tasks:
+- `todo-audit-agent-status-diagnostics-ready-downstream-actionability-20260612`:
+  created for broader agent status/diagnostics ready-downstream actionability.
+- `no_task_reason`: terminal missing-task consume-resume residual was fixed in
+  the current task via `todo-fix-consume-resume-terminal-missing-task-parity-20260612`.
+
+Final dynamic criteria STOP point:
+Evidence source: local pattern sweep found that a helper-level fix was
+insufficient because `taskflow_consume_resume.rs` had multiple independent
+missing-task-to-retire branches.
+1. Generation-path criterion: when a defect is phrased as bad next-action text,
+   classify every matching string by whether it is static help/test fixture or
+   runtime-generated guidance; every runtime-generated path must share the
+   canonical predicate before closure.
+
+Dynamic criteria registry:
+| criterion_id | owner | expected_evidence | task_ref | promotion_decision | duplicate_of |
+| --- | --- | --- | --- | --- | --- |
+| dynamic-2026-06-12-runtime-guidance-generation-path-sweep | root-orchestrator | grep classification plus focused public tests for each runtime-generated path | `todo-audit-terminal-task-active-projection-parity-surfaces-20260612` | local-runtime-rule | none |
+
+Meta-analysis remediation:
+- Code remediation: added
+  `missing_task_run_graph_requires_stale_cleanup` and reused it in graph
+  next-action, graph-summary next decision, closeout, runtime bundle, and
+  consume-resume stale authority paths.
+- Test remediation: added unit regressions for terminal missing-task
+  non-actionability and reran public smoke paths that forbid impossible
+  `vida lane retire` guidance.
+- TaskFlow remediation: converted out-of-scope agent status/diagnostics parity
+  into `todo-audit-agent-status-diagnostics-ready-downstream-actionability-20260612`.
+- Process remediation: dynamic generation-path criterion added above.
+
+PR / issue processing:
+- open_prs: deferred until epic closure; left_open_reason=active user
+  instruction says to process PRs at the end of the epic, not during this
+  bounded task.
+- processed_issues: not_applicable for this bounded task; no GitHub issue
+  state was changed in this slice.
+
+Next-task selection rule:
+- Commit and push this scoped parity fix and scorecard, then re-run
+  orchestrator binding to continue the remaining Wave 0 runtime-test work.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc

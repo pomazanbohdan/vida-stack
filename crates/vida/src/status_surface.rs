@@ -140,25 +140,6 @@ pub(crate) fn non_empty_str(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
-fn add_stale_missing_task_run_graph_status(
-    mut continuation_binding: serde_json::Value,
-    status: &crate::state_store::RunGraphStatus,
-) -> serde_json::Value {
-    if let Some(object) = continuation_binding.as_object_mut() {
-        object.insert(
-            "stale_missing_task_run_graph_status".to_string(),
-            serde_json::json!({
-                "task_id": status.task_id,
-                "run_id": status.run_id,
-                "active_node": status.active_node,
-                "status": status.status,
-                "lifecycle_stage": status.lifecycle_stage,
-            }),
-        );
-    }
-    continuation_binding
-}
-
 fn effective_latest_run_graph_status(
     current_session_status: Option<crate::state_store::RunGraphStatus>,
     global_status: Option<&crate::state_store::RunGraphStatus>,
@@ -1015,7 +996,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let continuation_binding = if terminal_task_active_run_graph_task_missing {
                     match latest_terminal_task_active_run_graph_status.as_ref() {
                         Some(status) => {
-                            add_stale_missing_task_run_graph_status(continuation_binding, status)
+                            crate::continuation_binding_summary::add_stale_missing_task_run_graph_status(
+                                continuation_binding,
+                                status,
+                            )
                         }
                         None => continuation_binding,
                     }
@@ -2066,7 +2050,12 @@ async fn refresh_cached_status_projection_runtime_fields(
         || latest_run_graph_terminal_closure_without_truth;
     let continuation_binding = if terminal_task_active_run_graph_task_missing {
         match latest_terminal_task_active_run_graph_status.as_ref() {
-            Some(status) => add_stale_missing_task_run_graph_status(continuation_binding, status),
+            Some(status) => {
+                crate::continuation_binding_summary::add_stale_missing_task_run_graph_status(
+                    continuation_binding,
+                    status,
+                )
+            }
             None => continuation_binding,
         }
     } else {
