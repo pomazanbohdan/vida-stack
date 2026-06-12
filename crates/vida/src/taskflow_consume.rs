@@ -254,6 +254,40 @@ fn consume_final_toon_bool(value: bool) -> &'static str {
     }
 }
 
+fn consume_final_design_first_delegated_lanes(execution_plan: &serde_json::Value) -> String {
+    let active_cycle = execution_plan["orchestration_contract"]["active_cycle"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    let mut lanes = Vec::new();
+    if active_cycle
+        .iter()
+        .any(|step| *step == "delegate_specification_or_research_lane")
+    {
+        lanes.push("specification");
+    }
+    if active_cycle
+        .iter()
+        .any(|step| *step == "delegate_implementer_lane")
+    {
+        lanes.push("implementer");
+    }
+    if lanes.is_empty() {
+        execution_plan["orchestration_contract"]["delegation_policy"]["required_lanes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(display_lane_label)
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        lanes.join(", ")
+    }
+}
+
 fn consume_final_toon_text(
     payload: &super::TaskflowDirectConsumptionPayload,
     snapshot_path: &str,
@@ -320,15 +354,8 @@ fn consume_final_toon_text(
                 &consume_final_operator_command_text(command),
             ));
         }
-        let required_lanes = payload.role_selection.execution_plan["orchestration_contract"]
-            ["delegation_policy"]["required_lanes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-            .map(display_lane_label)
-            .collect::<Vec<_>>()
-            .join(", ");
+        let required_lanes =
+            consume_final_design_first_delegated_lanes(&payload.role_selection.execution_plan);
         if !required_lanes.is_empty() {
             lines.push(consume_final_toon_line("delegated_lanes", &required_lanes));
         }
