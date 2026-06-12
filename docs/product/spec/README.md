@@ -25,7 +25,6 @@ Suggested homes:
 Active design docs:
 
 - `docs/product/spec/spec-proof-auto-flow-design.md`
-- `docs/product/spec/release-1-shared-operator-envelope-closure-design.md`
 - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
 - `docs/product/spec/clarify-enforce-immediate-continuation-shell-saf-design.md`
 - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`

@@ -141,7 +141,8 @@ Host bridge request shape:
 - `docs/process/codex-agent-configuration-guide.md`
 - `docs/product/spec/host-agent-bridge-adapter-contract-design.md`
 - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
-- `docs/product/spec/release-1-carrier-neutral-runtime-and-host-materialization-design.md`
+- `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+- `docs/product/spec/compiled-runtime-bundle-contract.md`
 - OpenAI Codex CLI non-interactive mode: `https://developers.openai.com/codex/noninteractive`
 - OpenAI Codex subagents: `https://developers.openai.com/codex/concepts/subagents`
 

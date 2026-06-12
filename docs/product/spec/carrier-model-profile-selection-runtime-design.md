@@ -309,7 +309,8 @@ Will implement / choose:
 ## References
 - Related specs
   - `docs/product/spec/agent-role-skill-profile-flow-model.md`
-  - `docs/product/spec/release-1-carrier-neutral-runtime-and-host-materialization-design.md`
+  - `docs/product/spec/compiled-runtime-bundle-contract.md`
+  - `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
   - `docs/product/spec/external-cli-carrier-hardening-design.md`
 - Related protocols
   - `docs/process/codex-agent-configuration-guide.md`
