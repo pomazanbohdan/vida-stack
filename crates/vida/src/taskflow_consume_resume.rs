@@ -4948,6 +4948,26 @@ async fn sync_run_graph_after_retry_artifact(
 }
 
 async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<String, String> {
+    if let Some(active_exception_receipt) = store
+        .latest_active_exception_takeover_dispatch_receipt()
+        .await
+        .map_err(|error| {
+            format!("Failed to read latest active exception takeover receipt: {error}")
+        })?
+    {
+        let active_exception_run_id = active_exception_receipt.run_id.trim();
+        let current_session_can_mutate_active_exception = store
+            .current_session_can_mutate_run_graph_run(active_exception_run_id)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to validate current-session ownership for active exception takeover run `{active_exception_run_id}`: {error}"
+                )
+        })?;
+        if current_session_can_mutate_active_exception {
+            return Ok(active_exception_run_id.to_string());
+        }
+    }
     let global_latest_status = store
         .latest_run_graph_status()
         .await
@@ -4995,26 +5015,6 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
             Ok(summary) => summary,
             Err(_) => None,
         };
-    if let Some(active_exception_receipt) = store
-        .latest_active_exception_takeover_dispatch_receipt()
-        .await
-        .map_err(|error| {
-            format!("Failed to read latest active exception takeover receipt: {error}")
-        })?
-    {
-        let active_exception_run_id = active_exception_receipt.run_id.trim();
-        let current_session_can_mutate_active_exception = store
-            .current_session_can_mutate_run_graph_run(active_exception_run_id)
-            .await
-            .map_err(|error| {
-                format!(
-                    "Failed to validate current-session ownership for active exception takeover run `{active_exception_run_id}`: {error}"
-                )
-        })?;
-        if current_session_can_mutate_active_exception {
-            return Ok(active_exception_run_id.to_string());
-        }
-    }
     let continuation_binding_evidence_ambiguous = latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
@@ -18085,6 +18085,13 @@ agent_system:
             .expect("persist stale explicit binding");
 
         let active_run_id = "run-active-exception";
+        taskflow_consume_resume_test_create_authority_task(
+            &store,
+            "task-active-exception",
+            "Active exception task",
+            "active exception takeover authority",
+        )
+        .await;
         let mut active_status =
             crate::taskflow_run_graph::default_run_graph_status(active_run_id, "coach", "delivery");
         active_status.task_id = "task-active-exception".to_string();
@@ -18102,6 +18109,17 @@ agent_system:
             .record_run_graph_status(&active_status)
             .await
             .expect("persist active exception status");
+        let active_packet_path = root.join("active-exception-dispatch-packet.json");
+        fs::write(
+            &active_packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "run_id": active_run_id,
+                "dispatch_target": "coach"
+            })
+            .to_string(),
+        )
+        .expect("write active exception dispatch packet");
         store
             .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
                 run_id: active_run_id.to_string(),
@@ -18115,7 +18133,7 @@ agent_system:
                 dispatch_command: Some(format!(
                     "vida taskflow consume continue --run-id {active_run_id} --json"
                 )),
-                dispatch_packet_path: None,
+                dispatch_packet_path: Some(active_packet_path.display().to_string()),
                 dispatch_result_path: None,
                 blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
                 downstream_dispatch_target: None,
@@ -18161,6 +18179,13 @@ agent_system:
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let stale_run_id = "run-stale-exception-takeover";
+        taskflow_consume_resume_test_create_authority_task(
+            &store,
+            "task-stale-exception-takeover",
+            "Stale exception task",
+            "stale exception takeover authority",
+        )
+        .await;
         let mut stale_status = crate::taskflow_run_graph::default_run_graph_status(
             stale_run_id,
             "verification",
@@ -18181,6 +18206,17 @@ agent_system:
             .record_run_graph_status(&stale_status)
             .await
             .expect("persist stale ready handoff status");
+        let stale_packet_path = root.join("stale-exception-dispatch-packet.json");
+        fs::write(
+            &stale_packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "run_id": stale_run_id,
+                "dispatch_target": "coach"
+            })
+            .to_string(),
+        )
+        .expect("write stale exception dispatch packet");
         store
             .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
                 run_id: stale_run_id.to_string(),
@@ -18194,7 +18230,7 @@ agent_system:
                 dispatch_command: Some(format!(
                     "vida taskflow consume continue --run-id {stale_run_id} --json"
                 )),
-                dispatch_packet_path: None,
+                dispatch_packet_path: Some(stale_packet_path.display().to_string()),
                 dispatch_result_path: None,
                 blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
                 downstream_dispatch_target: None,
@@ -18218,6 +18254,13 @@ agent_system:
             .expect("persist stale exception receipt");
 
         let current_run_id = "run-current-ready-handoff";
+        taskflow_consume_resume_test_create_authority_task(
+            &store,
+            "task-current-ready-handoff",
+            "Current ready handoff task",
+            "current ready handoff authority",
+        )
+        .await;
         let mut current_status = crate::taskflow_run_graph::default_run_graph_status(
             current_run_id,
             "verification",

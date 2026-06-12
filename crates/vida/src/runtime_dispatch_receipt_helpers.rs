@@ -140,6 +140,25 @@ pub(crate) fn dispatch_summary_has_active_exception_takeover(
             .is_some_and(|value| !value.trim().is_empty())
 }
 
+pub(crate) fn dispatch_summary_has_exception_takeover_continuation_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
+    expected_run_id: Option<&str>,
+) -> bool {
+    expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+        && matches!(
+            receipt.lane_status.as_str(),
+            "lane_exception_takeover" | "lane_exception_recorded"
+        )
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
 pub(crate) fn dispatch_receipt_has_clean_completed_lane(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     expected_run_id: Option<&str>,
@@ -157,6 +176,25 @@ pub(crate) fn dispatch_receipt_has_active_exception_takeover(
 ) -> bool {
     expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
         && receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn dispatch_receipt_has_exception_takeover_continuation_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    expected_run_id: Option<&str>,
+) -> bool {
+    expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+        && matches!(
+            receipt.lane_status.as_str(),
+            "lane_exception_takeover" | "lane_exception_recorded"
+        )
         && receipt
             .exception_path_receipt_id
             .as_deref()
@@ -480,6 +518,58 @@ mod tests {
             &receipt,
             Some("run-1")
         ));
+    }
+
+    #[test]
+    fn continuation_exception_takeover_evidence_accepts_recorded_or_active_lane() {
+        let mut summary = summary_for("run-1");
+        summary.lane_status = "lane_exception_recorded".to_string();
+        summary.exception_path_receipt_id = Some("exception-1".to_string());
+        summary.supersedes_receipt_id = Some("exception-1".to_string());
+
+        assert!(
+            dispatch_summary_has_exception_takeover_continuation_evidence(&summary, Some("run-1"))
+        );
+        assert!(!dispatch_summary_has_active_exception_takeover(
+            &summary,
+            Some("run-1")
+        ));
+
+        summary.lane_status = "lane_exception_takeover".to_string();
+        assert!(
+            dispatch_summary_has_exception_takeover_continuation_evidence(&summary, Some("run-1"))
+        );
+
+        summary.supersedes_receipt_id = None;
+        assert!(
+            !dispatch_summary_has_exception_takeover_continuation_evidence(&summary, Some("run-1"))
+        );
+    }
+
+    #[test]
+    fn full_receipt_continuation_exception_evidence_accepts_recorded_or_active_lane() {
+        let mut receipt = receipt_for("run-1");
+        receipt.lane_status = "lane_exception_recorded".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+
+        assert!(
+            dispatch_receipt_has_exception_takeover_continuation_evidence(&receipt, Some("run-1"))
+        );
+        assert!(!dispatch_receipt_has_active_exception_takeover(
+            &receipt,
+            Some("run-1")
+        ));
+
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        assert!(
+            dispatch_receipt_has_exception_takeover_continuation_evidence(&receipt, Some("run-1"))
+        );
+
+        receipt.exception_path_receipt_id = None;
+        assert!(
+            !dispatch_receipt_has_exception_takeover_continuation_evidence(&receipt, Some("run-1"))
+        );
     }
 
     #[test]

@@ -4031,6 +4031,247 @@ Next-task selection rule:
   failing proof is
   `blocked_latest_run_graph_status_accepts_superseded_exception_even_when_lane_status_is_stale_recorded`.
 
+## 2026-06-12 - Active Exception Predicate Consolidation
+
+Task:
+- closed `runtime-active-exception-takeover-predicate-consolidation`.
+- implementation TODO: `todo-active-exception-predicate-consolidation-fix`,
+  closed.
+- release TODO: `todo-active-exception-predicate-release-install`, closed.
+- scorecard TODO: `todo-active-exception-predicate-scorecard-log`, in progress
+  for this log update.
+
+What changed:
+- Added shared continuation-specific exception takeover predicates for summary
+  and full dispatch receipts.
+- Moved continuation binding, consume-resume ready-handoff suppression, and
+  run-graph dispatch-resolution classification onto the shared predicate.
+- Kept strict active-takeover evidence separate for write-guard and status
+  authority decisions.
+- Repaired fixtures and expectations exposed by the broader
+  `active_exception_takeover` proof family.
+
+Proof:
+- `cargo +1.95.0 test -p vida --bin vida
+  full_receipt_continuation_exception_evidence_accepts_recorded_or_active_lane
+  -- --nocapture`: 1 passed.
+- `cargo +1.95.0 test -p vida --bin vida
+  runtime_consumption_resume_ignores_stale_exception_takeover_receipt_after_ready_handoff
+  -- --nocapture`: 1 passed.
+- `cargo +1.95.0 test -p vida --bin vida latest_run_graph_status
+  -- --nocapture`: 19 passed.
+- `cargo +1.95.0 test -p vida --bin vida active_exception_takeover
+  -- --nocapture --test-threads=1`: 18 passed.
+- `cargo +1.95.0 test -p vida --bin vida status_surface_write_guard
+  -- --nocapture`: 6 passed.
+- `git diff --check`: pass.
+- `vida task validate-graph --json`: pass.
+- `vida release install --json`: pass, installed `vida` fingerprint
+  `a14cf68549ea374864e28505c49cae194ee7564cc239de94e1197574aa4b8c93`.
+- `vida status --json`: installed path pass and active exception write guard
+  visible; continuation still reports `continuation_binding_ambiguous`.
+- `vida doctor --json`: pass.
+- rationale: zero_tests_expected marker documents that earlier discarded
+  `0 tests` filters are not counted as proof in this block.
+
+Agent classification:
+- Wegener (`019ebb56-fea9-78c3-92c7-532bb07d34c2`) accepted evidence and
+  closed before implementation. It identified the remaining duplicate/looser
+  call sites in `taskflow_consume_resume_receipt.rs` and
+  `taskflow_run_graph.rs`; strict write-guard/status helpers remained
+  intentionally isolated.
+
+Executor / validator:
+- Executor: root orchestrator under active exception takeover, 8/10.
+- Validator: focused tests plus serial broad filter, installed runtime status,
+  and doctor, 8/10.
+- Tokens/tool calls: `not_exposed_by_host`; tool count was elevated by
+  compact re-entry, runtime binding diagnosis, and replacing two `0 tests`
+  false-green filters.
+
+Post-Task Self-Analysis:
+- Worked: split strict active-takeover authority from continuation-only
+  evidence instead of weakening the write guard.
+- Waste: two initial proof filters returned `0 tests`; corrected before
+  closure, so they were not used as proof.
+- Risk: public `status` still reports parent-level
+  `continuation_binding_ambiguous`; this is now outside the closed predicate
+  slice and remains under `self-analysis-runtime-snapshot-parity-task`.
+- Next change: run parent closure readiness and decide whether the remaining
+  ambiguity is an existing parent residual or a new TaskFlow follow-up.
+- Docs update: yes, this entry records the STOP gate.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: partial, runtime init stayed ambiguous but the
+   open TODO and root write guard identified the current predicate slice.
+2. Wave/parent closure distance: pass, parent has fewer open children after
+   this close.
+3. Scope and non-goals stable: pass, no unrelated PR or wave-0 code included.
+4. Dirty worktree handled: pass, six source files only.
+5. Executor cheapest capable: pass, root finished after accepted pattern sweep.
+6. Validator matched risk: pass, broad filter used serial execution.
+7. Prompt packet shape: pass, advisory sweep was scoped to duplicate predicate
+   call sites.
+8. Agent handles: pass, Wegener was classified and closed.
+9. Token/tool/step telemetry: partial, host token counts unavailable.
+10. Avoidable commands: partial, two false-green filters returned `0 tests`.
+11. Proof strength: pass, helper, call-site, family, release, status, doctor.
+12. Public/release proof: pass, release install and installed status/doctor ran.
+13. Debug build: pass, focused cargo tests compiled and ran.
+14. TaskFlow state: pass, implementation and release TODOs closed.
+15. Staging by invariant: pass, source predicate slice plus this log only.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass after this entry validates.
+18. Parent/wave metrics: pass, parent closure readiness is next.
+19. New defects/follow-ups: no new task yet; continuation ambiguity is already
+    owned by `self-analysis-runtime-snapshot-parity-task` until parent audit
+    proves otherwise.
+20. Next routing rule: pass, run parent closure-ready before unrelated work.
+
+Implementation follow-up tasks:
+- `self-analysis-runtime-snapshot-parity-task`
+- `self-analysis-epic-pr-issue-closure-pass`
+- `vida-runtime-dispatch-host-bridge-consistency-epic`
+- `host-bridge-persisted-result-schema-reconciliation`
+- no_task_reason: no separate task for the `0 tests` proof mistake; the
+  existing proof-command guard process already covers false-green filters, and
+  this entry adds a dynamic criterion.
+
+PR / issue processing:
+- open_prs: left_open_reason=`self-analysis-epic-pr-issue-closure-pass` owns the
+  epic-level PR pass before final epic closure.
+- processed_issues: no_processed_issues in this slice.
+
+Final dynamic criteria STOP point:
+Evidence source: this slice first ran two discarded cargo filters that returned
+`0 tests`, then replaced them with non-empty exact filters and the serial
+`active_exception_takeover` family.
+1. Non-empty proof filter criterion: every cargo/test filter cited as proof must
+   report at least one executed test. A `0 tests` result is a blocker and must be
+   replaced with the exact test name or a broader non-empty family before task
+   closure.
+2. Serial global-state criterion: when Rust tests mutate current session,
+   current directory, state root, or runtime owner claims, broad family proof may
+   require `--test-threads=1`; preserve individual focused reruns before
+   changing production code for a parallel-only failure.
+
+Meta-analysis remediation:
+- Code remediation: moved duplicated continuation predicates into shared helper
+  functions.
+- Test remediation: changed fixture authority tasks and dispatch-packet evidence
+  to satisfy current owner/write-guard law.
+- Process remediation: added the non-empty proof and serial global-state
+  criteria above.
+
+Next-task selection rule:
+- Check `self-analysis-runtime-snapshot-parity-task` closure readiness. If the
+  parent is not closeable, classify the remaining blocker before selecting the
+  PR/issue closure pass or the next epic.
+
+## 2026-06-12 - Runtime Snapshot Parity Parent Closure
+
+Task:
+- closed `self-analysis-runtime-snapshot-parity-task`.
+- parent scorecard TODO:
+  `todo-runtime-snapshot-parity-parent-scorecard-log`, in progress for this log
+  update.
+
+What changed:
+- No new source code beyond the child predicate consolidation slice.
+- Closed the parent after all 28 descendants were closed and parent proof no
+  longer reproduced the original latest-snapshot parity defect.
+
+Proof:
+- `vida task closure-ready self-analysis-runtime-snapshot-parity-task --json`:
+  descendants 28/28 closed; parent required leaf proof.
+- `vida status --json`: pass, continuation bound to
+  `self-analysis-runtime-snapshot-parity-task`, installed fingerprint
+  `a14cf68549ea374864e28505c49cae194ee7564cc239de94e1197574aa4b8c93`.
+- `vida taskflow run-graph status self-analysis-runtime-snapshot-parity-task
+  --json`: pass, reconciled projection, `stale_state_suspected=false`.
+- `vida taskflow recovery latest --json`: pass, same run id, recovery blocked
+  only by the known open delegated cycle posture.
+- `vida lane show self-analysis-runtime-snapshot-parity-task --json`: pass,
+  exception takeover evidence present and write scope limited to `crates/vida/src`
+  plus the evaluation log.
+- `vida doctor --json`: pass on sequential replay after a parallel
+  lock-contention response.
+- `vida task validate-graph --json`: pass.
+
+Agent classification:
+- No new agent launched for the parent close; child-level Wegener evidence
+  remained accepted and already closed.
+
+Executor / validator:
+- Executor: root orchestrator, 8/10.
+- Validator: parent public-surface proof bundle plus sequential replay after
+  lock contention, 8/10.
+- Tokens/tool calls: `not_exposed_by_host`; command count increased because
+  parent closure required a second proof layer after child closure.
+
+Post-Task Self-Analysis:
+- Worked: did not close the parent until child closure and scorecard child
+  side-effects were reflected in TaskFlow.
+- Waste: first doctor proof was run in parallel and hit lock contention.
+- Risk: `doctor` still reports a historical latest run-graph dispatch receipt in
+  full output; status/current-session fields point to the closed parent repair.
+- Next change: commit/push this runtime parity slice, then process the epic PR
+  and issue closure pass before epic closure.
+- Docs update: yes, this entry records the parent STOP gate.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `self-analysis-runtime-snapshot-parity-task`.
+2. Wave/parent closure distance: pass, all descendants closed.
+3. Scope and non-goals stable: pass, no unrelated source edits.
+4. Dirty worktree handled: pass, scoped source files plus evaluation log.
+5. Executor cheapest capable: pass, no new agent needed.
+6. Validator matched risk: pass, public runtime surfaces checked.
+7. Prompt packet shape: not_applicable, no new agent prompt.
+8. Agent handles: pass, no completed handle left open.
+9. Token/tool/step telemetry: partial, host token counts unavailable.
+10. Avoidable commands: partial, avoid parallel state-store readers for doctor.
+11. Proof strength: pass, status/doctor/run-graph/recovery/lane/graph.
+12. Public/release proof: pass, installed runtime fingerprint recorded.
+13. Debug build: covered by child proof.
+14. TaskFlow state: pass, parent and children closed.
+15. Staging by invariant: pass, one runtime parity commit planned.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass after this entry validates.
+18. Parent/wave metrics: pass, epic now 48/55 closed before this scorecard TODO.
+19. New defects/follow-ups: no new TaskFlow item; PR/issue pass already exists.
+20. Next routing rule: pass, commit/push then bind PR/issue closure pass.
+
+Implementation follow-up tasks:
+- `self-analysis-epic-pr-issue-closure-pass`
+- `vida-runtime-dispatch-host-bridge-consistency-epic`
+- `host-bridge-persisted-result-schema-reconciliation`
+- no_task_reason: no new task for the transient lock contention; the existing
+  sequential replay criterion covers it.
+
+PR / issue processing:
+- open_prs: left_open_reason=`self-analysis-epic-pr-issue-closure-pass` owns
+  the required end-of-epic PR pass.
+- processed_issues: no_processed_issues in this parent closure slice.
+
+Final dynamic criteria STOP point:
+Evidence source: parent closure required a second proof pass after child
+scorecard TODO creation briefly reopened the just-closed child task.
+1. Parent-after-child side-effect criterion: after adding a scorecard or proof
+   TODO under a recently closed task, re-check and, if needed, re-close the
+   parent/child before using closure-ready output as final evidence.
+
+Meta-analysis remediation:
+- TaskFlow remediation: reclosed the predicate child after the scorecard child
+  completed, then closed the parent only after closure-ready and parent proof.
+- Process remediation: added the side-effect criterion above.
+
+Next-task selection rule:
+- Commit and push this scoped runtime parity slice, then bind
+  `self-analysis-epic-pr-issue-closure-pass` before considering the next epic.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc

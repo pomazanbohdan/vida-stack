@@ -6036,7 +6036,7 @@ mod tests {
             .contains(&"open_delegated_cycle".to_string()));
         assert!(truth
             .blocker_codes
-            .contains(&"tool_execution_failed".to_string()));
+            .contains(&"internal_dispatch_timeout_without_receipt".to_string()));
         assert!(truth
             .next_actions
             .iter()
@@ -8128,9 +8128,9 @@ mod tests {
         assert_eq!(advanced_status.active_node, "implementer");
         assert_eq!(advanced_status.next_node.as_deref(), Some("coach"));
         assert_eq!(advanced_status.status, "ready");
-        assert_eq!(advanced_status.lifecycle_stage, "implementer_active");
+        assert_eq!(advanced_status.lifecycle_stage, "implementer_complete");
         assert_eq!(advanced_status.handoff_state, "awaiting_coach");
-        assert_eq!(advanced_status.resume_target, "dispatch.coach");
+        assert_eq!(advanced_status.resume_target, "dispatch.coach_lane");
         assert!(advanced_status.recovery_ready);
         assert_eq!(binding.binding_source, "lane_complete");
         assert_eq!(binding.active_bounded_unit["kind"], "run_graph_task");
@@ -11479,9 +11479,9 @@ mod tests {
         assert_eq!(advanced_status.active_node, "implementer");
         assert_eq!(advanced_status.next_node.as_deref(), Some("coach"));
         assert_eq!(advanced_status.status, "ready");
-        assert_eq!(advanced_status.lifecycle_stage, "implementer_active");
+        assert_eq!(advanced_status.lifecycle_stage, "implementer_complete");
         assert_eq!(advanced_status.handoff_state, "awaiting_coach");
-        assert_eq!(advanced_status.resume_target, "dispatch.coach");
+        assert_eq!(advanced_status.resume_target, "dispatch.coach_lane");
         assert!(advanced_status.recovery_ready);
         assert_eq!(binding.binding_source, "lane_complete");
         assert_eq!(binding.active_bounded_unit["kind"], "run_graph_task");

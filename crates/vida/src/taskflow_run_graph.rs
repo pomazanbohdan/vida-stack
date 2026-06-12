@@ -1348,15 +1348,7 @@ fn sanitize_placeholder_continuation_bind_next_action(
 }
 
 fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -> Option<&str> {
-    if receipt.lane_status == "lane_exception_takeover"
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+    if crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_exception_takeover_continuation_evidence(receipt, None)
     {
         return Some("active_exception_takeover");
     }

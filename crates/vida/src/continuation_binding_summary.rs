@@ -96,7 +96,7 @@ fn active_exception_takeover_evidence_matches_status(
     if terminal_continue_run_id == Some(status.run_id.as_str()) && !supersedes_distinct_exception {
         return false;
     }
-    crate::runtime_dispatch_receipt_helpers::dispatch_summary_has_active_exception_takeover(
+    crate::runtime_dispatch_receipt_helpers::dispatch_summary_has_exception_takeover_continuation_evidence(
         dispatch,
         Some(&status.run_id),
     )
