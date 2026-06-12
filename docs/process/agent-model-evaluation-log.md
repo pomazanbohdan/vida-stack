@@ -2293,6 +2293,91 @@ Final dynamic criteria STOP point:
    minimal manual show/list replay before deciding whether production or test
    expectations own the fix.
 
+## 2026-06-12 - Dynamic self-analysis criteria hardening
+
+Task / slice:
+- `todo-dynamic-self-analysis-criteria-hardening`
+- Commit: `fcfdf2e5a require dynamic self analysis criteria every task`
+- Goal: remove the remaining exception path that allowed a Post-Task
+  Self-Analysis closure to skip creating new dynamic criteria.
+- Files:
+  - `docs/process/project-orchestrator-operating-protocol.md`
+  - `docs/process/agent-model-evaluation-log.md`
+- Proof:
+  - `git diff --check -- docs/process/project-orchestrator-operating-protocol.md docs/process/agent-model-evaluation-log.md`
+  - `vida docflow check docs/process/project-orchestrator-operating-protocol.md docs/process/agent-model-evaluation-log.md --json`
+  - `vida task validate-graph --json`
+
+Observed model results:
+- Orchestrator-only docs correction: 9/10. The operator clarified that the final
+  STOP item must create additional criteria every time, so the owner protocol
+  and scorecard template were updated directly without launching a worker lane.
+  Tokens and exact tool-call usage are `not_exposed_by_host`.
+- Validator: local diff hygiene, DocFlow, and TaskFlow graph validation. No
+  separate model validator was used because the task was a narrow owner-doc
+  consistency correction.
+
+Post-Task Self-Analysis:
+- Worked: the user correction exposed a concrete conflict, the old escape hatch
+  was removed, and both the owner protocol and scorecard template now require a
+  new session-specific dynamic criterion every task closure.
+- Waste: the earlier docs wording kept a default-exception path, causing this
+  extra correction pass.
+- Risk: allowing "fixed checklist fully covered it" would let future tasks
+  bypass the user-required dynamic learning loop.
+- Next change: when a user correction names a missing mandatory behavior, scan
+  both owner docs and examples for exception language before treating the rule
+  as fixed.
+- Docs update: yes; owner protocol and evaluation log template updated.
+- workflow_score_10: 9/10. The correction was precise and verified, with one
+  avoidable follow-up caused by the previous permissive wording.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `todo-dynamic-self-analysis-criteria-hardening`.
+2. Wave/parent closure distance: pass, this process hardening blocks future
+   task starts until the required dynamic STOP work is done.
+3. Scope and non-goals stable: pass, docs-only instruction correction.
+4. Dirty worktree handled: pass, unrelated Rust and untracked files left
+   unstaged.
+5. Executor cheapest capable: pass, local orchestrator was sufficient for a
+   narrow wording conflict.
+6. Validator matched risk: pass, local DocFlow and graph proof matched docs-only
+   scope.
+7. Prompt packet shape: pass for local correction; no delegated prompt used.
+8. Agent handles: pass, no new agents launched.
+9. Token/tool/step telemetry: partial, host token/tool exact counts are
+   `not_exposed_by_host`.
+10. Avoidable commands: pass, identified the earlier exception wording as the
+    avoidable cause.
+11. Proof strength: pass, diff hygiene, DocFlow, and graph validation covered
+    the claimed instruction behavior.
+12. Public/release proof: not applicable, no CLI or release behavior changed.
+13. Debug build: not applicable, docs-only rule correction with DocFlow proof.
+14. TaskFlow graph: pass, `vida task validate-graph --json`.
+15. Staging by invariant: pass, only the two process docs were staged.
+16. Publication authorization: pass, pushed as the active continuation of the
+    operator-requested process hardening.
+17. Evaluation docs: pass, this scorecard records the correction and STOP.
+18. Parent/wave metrics: not refreshed as epic metrics because this was a
+    process-rule correction, not a TaskFlow leaf close.
+19. New defects/follow-ups: none required; the conflict was fixed in owner docs.
+20. Next routing rule: pass, after every task closure the next task is blocked
+    until a new session-specific dynamic criterion is created.
+
+Meta-analysis remediation:
+- Removed the exception path from the canonical STOP gate.
+- Updated the scorecard template and prior dynamic-extension criterion so fixed
+  criteria and older dynamic criteria cannot satisfy the final dynamic STOP
+  point by themselves.
+
+Dynamic criteria created from this session segment:
+1. Exception-language scan criterion: after any user correction that says a
+   behavior must happen "every time", search owner docs, templates, and examples
+   for exception words such as `if no`, `or prove`, `default expectation`, and
+   `fully covered`; remove or narrow any wording that weakens the mandatory
+   rule before starting the next task.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
