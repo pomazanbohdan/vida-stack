@@ -4302,9 +4302,20 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
             emit_host_bridge_payload(&payload, command.json)
         }
         Err(error) => {
-            let blocker_codes = vec!["host_bridge_request_unreadable".to_string()];
-            let next_actions =
-                vec!["provide a readable host_tool_bridge_request JSON artifact".to_string()];
+            let path_safety_error = error.contains("dot-segment")
+                || error.contains("escapes VIDA state root")
+                || error.contains("symlink");
+            let blocker_codes = vec![if path_safety_error {
+                "host_bridge_request_untrusted_path".to_string()
+            } else {
+                "host_bridge_request_unreadable".to_string()
+            }];
+            let next_actions = vec![if path_safety_error {
+                "provide a host_tool_bridge_request JSON artifact under the VIDA state root"
+                    .to_string()
+            } else {
+                "provide a readable host_tool_bridge_request JSON artifact".to_string()
+            }];
             let artifact_refs = serde_json::json!({
                 "request_path": command.request.display().to_string()
             });
