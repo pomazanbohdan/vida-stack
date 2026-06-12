@@ -3931,6 +3931,106 @@ Next-task selection rule:
 - Run a freshness audit for the two remaining parent children, then bind the
   one that still reproduces with the shortest closure distance.
 
+## 2026-06-12 - Stale Latest Run-Graph Missing-Task Closure
+
+Task:
+- closed `runtime-latest-run-graph-missing-task-parity-repair` as stale after
+  focused audit.
+- implementation TODO:
+  `todo-close-stale-latest-run-graph-missing-task-parity`, closed.
+- scorecard TODO: `todo-latest-run-graph-stale-scorecard-log`, in progress for
+  this log update.
+
+What changed:
+- No code changed in this slice.
+- The old task notes named dirty WIP and four failing latest-run-graph tests;
+  the current worktree is clean and those named state-store cases now pass.
+
+Proof:
+- `cargo +1.95.0 test -p vida --bin vida latest_run_graph_status
+  -- --nocapture`: 18 passed, 1 failed.
+- Passing named cases included
+  `latest_run_graph_status_skips_active_run_for_missing_task`,
+  `latest_run_graph_status_for_current_session_uses_owner_evidence_without_claim`,
+  and `latest_run_graph_status_prefers_highest_run_id_when_updated_at_ties`.
+- The only failure was
+  `blocked_latest_run_graph_status_accepts_superseded_exception_even_when_lane_status_is_stale_recorded`,
+  which belongs to `runtime-active-exception-takeover-predicate-consolidation`.
+- rationale: this close is a stale-task classification, not a green full-suite
+  claim; the remaining failure is owned by the remaining open predicate task.
+
+Agent classification:
+- No agent evidence used for this close.
+
+Executor / validator:
+- Executor: root orchestrator, 9/10.
+- Validator: focused freshness audit against the task's named failing tests,
+  8/10.
+- Tokens/tool calls: `not_exposed_by_host`; command cost was bounded to one
+  focused cargo filter plus task lookups.
+
+Post-Task Self-Analysis:
+- Worked: did not reopen a stale task when its named failures were already
+  fixed; reassigned the live failure to the correct remaining child.
+- Waste: the focused filter also ran continuation-binding tests, but that
+  exposed the right remaining defect.
+- Risk: parent closure still depends on predicate consolidation proof.
+- Next change: implement or close
+  `runtime-active-exception-takeover-predicate-consolidation` after freshness
+  audit.
+- Docs update: yes, this entry records the STOP gate.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `runtime-latest-run-graph-missing-task-parity-repair`.
+2. Wave/parent closure distance: pass, parent now has one open child.
+3. Scope and non-goals stable: pass, stale close only.
+4. Dirty worktree handled: pass, no code changes.
+5. Executor cheapest capable: pass, root freshness audit sufficient.
+6. Validator matched risk: pass, exact named failing tests checked.
+7. Prompt packet shape: not_applicable, no agent used.
+8. Agent handles: pass, no active agent remains.
+9. Token/tool/step telemetry: partial, host token counts unavailable.
+10. Avoidable commands: pass, one focused audit.
+11. Proof strength: pass for stale classification.
+12. Public/release proof: not_applicable, no runtime behavior changed.
+13. Debug build: pass, focused cargo test executed.
+14. TaskFlow state: pass, defect and TODO closed.
+15. Staging by invariant: pass, only this log will be staged.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass after this entry validates.
+18. Parent/wave metrics: pass, one open child remains.
+19. New defects/follow-ups: no new task; remaining failure maps to existing
+    `runtime-active-exception-takeover-predicate-consolidation`.
+20. Next routing rule: pass, bind predicate consolidation next.
+
+Implementation follow-up tasks:
+- `runtime-active-exception-takeover-predicate-consolidation`
+- no_task_reason: no new task for the failing continuation-binding test because
+  it is already covered by the remaining open predicate-consolidation task.
+
+PR / issue processing:
+- open_prs: left_open_reason=`self-analysis-epic-pr-issue-closure-pass` owns the
+  epic-level PR pass.
+- processed_issues: no_processed_issues in this slice.
+
+Final dynamic criteria STOP point:
+1. Stale-task reassignment criterion: when a task's named failing tests now pass
+   but the same filter exposes a different failing invariant, close the stale
+   task and reassign the live failure to the existing matching task instead of
+   rewriting the stale task scope. Evidence source: this slice reassigned the
+   superseded-exception failure to predicate consolidation.
+
+Meta-analysis remediation:
+- TaskFlow remediation: closed stale missing-task parity task and TODO.
+- Process remediation: added the stale-task reassignment criterion above.
+
+Next-task selection rule:
+- Bind `runtime-active-exception-takeover-predicate-consolidation`; its focused
+  failing proof is
+  `blocked_latest_run_graph_status_accepts_superseded_exception_even_when_lane_status_is_stale_recorded`.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
