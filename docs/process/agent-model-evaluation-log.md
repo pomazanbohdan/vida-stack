@@ -1409,6 +1409,80 @@ Dynamic criteria final step:
    the command level and keep separate unit coverage for the pure fail-closed
    decision gate.
 
+## 2026-06-12 - Status surface smoke harness stabilization
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `b3fbdfb53 stabilize status surface smoke harness`
+- Goal: remove full-suite status-surface harness flakes caused by parallel
+  status tests and the Windows bounded runner deadlocking on large JSON output.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_surface_ -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke` after the slice: `250 passed`,
+  `23 failed`.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The first retry-wrapper attempt exposed a
+  Windows pipe-buffer issue: bounded process waiting without stdout draining can
+  time out on large JSON even when the command produced valid output.
+- Validator: focused status-surface filter plus broad boot_smoke snapshot, 8/10.
+- Residual: `diagnostics_status_and_doctor_share_closed_run_projection_blocker`
+  still has a separate status JSON parse/view failure path and should be handled
+  independently.
+
+Post-Task Self-Analysis:
+- Worked: exact `status_surface_` filter proved the status product behavior was
+  already green when isolated.
+- Worked: mutex serialization plus `command_output_with_retry` removed status
+  cluster flakes without changing production code.
+- Waste: an initial broad patch accidentally changed unrelated helpers; this was
+  caught in diff review and reverted before commit.
+- Risk: serializing tests can hide true concurrency bugs. This is acceptable here
+  because the serialized tests validate status rendering, while the suite already
+  has an explicit parallel read-only state-lock contention test.
+- Meta-analysis remediation: large JSON command tests on Windows must avoid
+  custom wait loops that do not drain stdout/stderr.
+- Docs update: yes; this STOP record adds the Windows pipe-drain criterion.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, status-surface harness cluster under
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: pass, broad boot_smoke reached `250 passed`,
+   `23 failed`.
+3. Scope and non-goals stable: pass, test harness only; production status code
+   unchanged.
+4. Dirty worktree handled: pass, unrelated dirty files stayed unstaged.
+5. Executor cheapest capable: pass, local harness edit.
+6. Validator matched risk: pass, focused filter plus broad snapshot.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no active agents launched.
+9. Telemetry: partial, durations observed; tokens/cost unavailable.
+10. Avoidable commands: partial, one accidental broad patch was reverted.
+11. Proof strength: pass for status-surface harness stability.
+12. Public-surface proof: pass, status default, color, full JSON, and summary JSON
+    smoke tests passed.
+13. Debug build: pass, cargo test rebuilt the binary.
+14. TaskFlow state: partial, classification child remains active.
+15. Staging by invariant: pass, only `boot_smoke.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP gate is recorded before next fix.
+18. Parent/wave metrics: unchanged until broad classification closes.
+19. New defects/follow-ups: diagnostics/status bounded parse path remains a
+    separate next target.
+20. Dynamic criteria generation: pass, session segment produced the Windows
+    pipe-drain criterion below.
+
+Dynamic criteria final step:
+1. Windows pipe-drain criterion: do not run large JSON-producing commands through
+   custom bounded wait loops that do not drain stdout/stderr. Use
+   `Command::output()`-based retry helpers or a pipe-draining bounded runner, and
+   serialize only the minimal shared-state test cluster when parallel harness
+   contention is the failure source.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1418,5 +1492,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T05:13:00+03:00
+updated_at: 2026-06-12T05:32:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
