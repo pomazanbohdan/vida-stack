@@ -1,12 +1,12 @@
-# Split Oversized Runtime Modules By Ownership Design
+# Oversized Runtime Module Split Contract
 
-Status: `execution-preparation`
+Status: canonical
 
 ## Summary
 - Feature / change: split oversized runtime modules by runtime ownership while preserving current behavior.
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`, launcher shell `vida`
-- Status: `execution-preparation baseline ready`
+- Status: canonical
 
 ## Current Context
 - The runtime request targets compatibility-preserving splits for oversized Rust files named in the packet: `runtime_dispatch_state`, `taskflow_consume_resume`, `taskflow_run_graph`, `taskflow_proxy`, `task_surface`, and `init_surfaces`.
@@ -41,11 +41,11 @@ Status: `execution-preparation`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`
+  - `docs/product/spec/oversized-runtime-module-split-contract.md`
   - current runtime contract profile
   - `current TaskFlow runtime owner specs`
   - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
-  - `docs/product/spec/specification-lane-scope-hardening-design.md`
+  - `docs/product/spec/specification-lane-scope-hardening-contract.md`
 - Framework protocols affected:
   - none directly; execution must follow existing TaskFlow and lane handoff law.
 - Runtime families affected:
@@ -128,7 +128,7 @@ Expected implementation candidates for the next execution-preparation lane:
 - new child modules under the same runtime-family ownership areas, named only after execution-preparation dependency mapping.
 
 Specification-lane files changed:
-- `docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`
+- `docs/product/spec/oversized-runtime-module-split-contract.md`
 - `.vida/data/state/host-tool-bridge/results/architecture-refactor-oversized-module-split-specification-architecture-refactor-oversized-module-split-2026-06-03T03-55-38.7902773Z-host-tool-bridge.json`
 - `.vida/data/state/host-tool-bridge/receipts/architecture-refactor-oversized-module-split-specification-architecture-refactor-oversized-module-split-2026-06-03T03-55-38.7902773Z-host-tool-bridge.json`
 
@@ -192,7 +192,7 @@ Execution order:
   - updated dispatch receipt,
   - `vida taskflow consume continue --run-id architecture-refactor-oversized-module-split --json`.
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`
+  - `vida docflow check --root . docs/product/spec/oversized-runtime-module-split-contract.md`
   - `cargo test runtime`
   - `cargo test surfaces`
   - targeted `cargo test` for moved modules
@@ -218,17 +218,17 @@ Execution order:
 - current runtime contract profile
 - `current TaskFlow runtime owner specs`
 - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
-- `docs/product/spec/specification-lane-scope-hardening-design.md`
+- `docs/product/spec/specification-lane-scope-hardening-contract.md`
 - `.vida/data/state/runtime-consumption/dispatch-packets/architecture-refactor-oversized-module-split-2026-06-03T03-55-38.7902773Z.json`
 
 -----
-artifact_path: product/spec/split-oversized-runtime-modules-ownership-execut-design
+artifact_path: product/spec/oversized-runtime-module-split-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-06-04
 schema_version: 1
-status: execution-preparation
-source_path: docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md
+status: canonical
+source_path: docs/product/spec/oversized-runtime-module-split-contract.md
 created_at: 2026-06-03T03:55:38.7902773Z
 updated_at: 2026-06-04T00:00:00Z
-changelog_ref: split-oversized-runtime-modules-ownership-execut-design.changelog.jsonl
+changelog_ref: oversized-runtime-module-split-contract.changelog.jsonl

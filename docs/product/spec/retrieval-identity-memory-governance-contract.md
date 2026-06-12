@@ -1,14 +1,14 @@
-# Bounded Release Retrieval Identity Memory Govern Design
+# Retrieval Identity Memory Governance Contract
 
-Status: `draft`
+Status: canonical
 
-Use this document as the tracked spec-pack design packet for the Release-1 retrieval / identity / memory governance wave bootstrapped by `vida taskflow consume final`.
+This contract defines retrieval trust, explicit principal/delegation identity, and canonical memory-governance operational requirements.
 
 ## Summary
 - Feature / change: bounded Release-1 closure for retrieval trust registry semantics, principal identity/delegation modeling, and memory-governance operationalization
 - Owner layer: `mixed`
 - Runtime surface: `taskflow`
-- Status: `draft`
+- Status: canonical
 
 ## Current Context
 - Retrieval trust currently exists as a fail-closed signal with the fields `source`, `citation`, `freshness`, and `acl`.
@@ -120,7 +120,7 @@ Will implement / choose:
 - `consume_final_operator_surface.rs`
 
 ### Bounded File Set
-- `docs/product/spec/bounded-release-retrieval-identity-memory-govern-design.md`
+- `docs/product/spec/retrieval-identity-memory-governance-contract.md`
 - `docs/product/spec/README.md`
 - `crates/vida/src/release1_contracts.rs`
 - `crates/vida/src/runtime_consumption_state.rs`
@@ -168,7 +168,7 @@ Will implement / choose:
   - `vida doctor --json`
   - `vida taskflow consume bundle check --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/bounded-release-retrieval-identity-memory-govern-design.md`
+  - `vida docflow check --root . docs/product/spec/retrieval-identity-memory-governance-contract.md`
 
 ## Observability
 - Keep new governance/trust fields visible in operator JSON surfaces.
@@ -194,13 +194,13 @@ Will implement / choose:
 - current runtime contract profile
 
 -----
-artifact_path: product/spec/bounded-release-retrieval-identity-memory-govern-design
+artifact_path: product/spec/retrieval-identity-memory-governance-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-20
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/bounded-release-retrieval-identity-memory-govern-design.md
+source_path: docs/product/spec/retrieval-identity-memory-governance-contract.md
 created_at: 2026-04-20T10:26:05.476772467Z
 updated_at: 2026-04-20T10:27:46.503375433Z
-changelog_ref: bounded-release-retrieval-identity-memory-govern-design.changelog.jsonl
+changelog_ref: retrieval-identity-memory-governance-contract.changelog.jsonl

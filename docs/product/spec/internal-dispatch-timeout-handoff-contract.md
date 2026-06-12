@@ -140,7 +140,7 @@ Will implement / choose:
   - `taskflow consume continue` -> internal delegated dispatch -> dispatch receipt/result reconciliation
 - Cross-document / cross-protocol dependencies
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
-  - `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
+  - `docs/product/spec/authoritative-state-access-serialization-contract.md`
   - `docs/product/spec/design-backed-implementation-routing-contract.md`
 
 ### Bounded File Set
@@ -225,7 +225,7 @@ Will implement / choose:
 ## References
 - Related specs
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
-  - `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
+  - `docs/product/spec/authoritative-state-access-serialization-contract.md`
   - `docs/product/spec/design-backed-implementation-routing-contract.md`
 - Related protocols
   - `docs/process/project-orchestrator-operating-protocol.md`

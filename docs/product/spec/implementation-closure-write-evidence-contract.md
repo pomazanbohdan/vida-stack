@@ -168,9 +168,8 @@ Will implement / choose:
   - confirm downstream closure packet is absent or blocked until lawful write-capable terminal evidence exists
 
 ## References
-- `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
-- `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-- `docs/product/spec/repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md`
+- `docs/product/spec/external-coach-retry-fallback-contract.md`
+- `docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
 - `docs/product/spec/continuation-binding-fail-closed-contract.md`
 
 -----

@@ -1,14 +1,14 @@
-# Unified Hybrid Runtime Selection Policy Design
+# Unified Hybrid Runtime Selection Policy Contract
 
-Status: `approved`
+Status: canonical
 
-Use this design to finish the post-`carrier + model_profile` wave so runtime can select one effective carrier/backend/profile truth across internal and external execution paths.
+This contract defines effective carrier/backend/profile selection truth across internal and external execution paths after the `carrier + model_profile` wave.
 
 ## Summary
 - Feature / change: complete unified hybrid runtime selection and routing policy after the carrier/model-profile contract wave
 - Owner layer: `mixed`
 - Runtime surface: `launcher | taskflow | status | init`
-- Status: `approved`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -82,7 +82,7 @@ Use this design to finish the post-`carrier + model_profile` wave so runtime can
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
+  - `docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/README.md`
@@ -243,11 +243,11 @@ Will implement / choose:
   - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
-  - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
+  - `docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
   - current runtime contract profile
 
 ### Bounded File Set
-- `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
+- `docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
@@ -324,7 +324,7 @@ Will implement / choose:
   - `vida taskflow validate-routing --json`
 - Canonical checks:
   - `vida docflow protocol-coverage-check --profile active-canon`
-  - `vida docflow check --root . docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
+  - `vida docflow check --root . docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md`
   - `vida docflow doctor --root . --show-warnings`
 
 ## Observability
@@ -364,7 +364,7 @@ Will implement / choose:
   - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
   - `docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
-  - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
+  - `docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
 - Related protocols
   - `docs/process/project-orchestrator-operating-protocol.md`
   - `docs/process/team-development-and-orchestration-protocol.md`
@@ -375,13 +375,13 @@ Will implement / choose:
   - external static audit provided by the user on 2026-04-23
 
 -----
-artifact_path: product/spec/unified-hybrid-runtime-selection-policy-design
+artifact_path: product/spec/unified-hybrid-runtime-selection-policy-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-23
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/unified-hybrid-runtime-selection-policy-design.md
+source_path: docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md
 created_at: 2026-04-23T06:48:11.627277958Z
 updated_at: 2026-04-23T06:56:05.322963218Z
-changelog_ref: unified-hybrid-runtime-selection-policy-design.changelog.jsonl
+changelog_ref: unified-hybrid-runtime-selection-policy-contract.changelog.jsonl

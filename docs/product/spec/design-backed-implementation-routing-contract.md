@@ -136,8 +136,8 @@ Will implement / choose:
   - design-first intake remains `spec-pack`
   - implementation-ready continuation becomes `dev-pack` / implementer path
 - Cross-document / cross-protocol dependencies
-  - `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
-  - `docs/product/spec/specification-lane-scope-hardening-design.md`
+  - `docs/product/spec/selector-precedence-bounded-repair-contract.md`
+  - `docs/product/spec/specification-lane-scope-hardening-contract.md`
   - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 
 ### Bounded File Set
@@ -214,8 +214,8 @@ Will implement / choose:
   - broader tracked-flow simplification across spec/work-pool/dev remains a later architectural wave
 
 ## References
-- `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
-- `docs/product/spec/specification-lane-scope-hardening-design.md`
+- `docs/product/spec/selector-precedence-bounded-repair-contract.md`
+- `docs/product/spec/specification-lane-scope-hardening-contract.md`
 - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 
 -----

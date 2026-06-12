@@ -1,14 +1,14 @@
-# Internal Codex activation-view timeout holder release design
+# Internal Codex Timeout Reconciliation Contract
 
 Purpose: Bound the current-release fix where stale read/status/resume reconciliation rewrites a legitimately executing internal-host delegated dispatch to terminal `internal_activation_view_only` after a fixed `10s`, even though live dispatch execution is still inside its canonical handoff timeout window.
 
-Status: `proposed`
+Status: canonical
 
 ## Summary
 - Feature / change: make stale in-flight reconciliation derive timeout truth from the same canonical handoff timeout contract used by live internal dispatch execution.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher | recovery`
-- Status: `proposed`
+- Status: canonical
 
 ## Current Context
 - `execute_and_record_dispatch_receipt(...)` records an in-flight runtime dispatch result with `execution_state = "executing"` and `stale_after_seconds = handoff_timeout_seconds`.
@@ -30,7 +30,7 @@ Status: `proposed`
   - `taskflow_consume_resume.rs`
 
 ## Bounded File Set
-- `docs/product/spec/internal-codex-activation-view-timeout-holder-release-design.md`
+- `docs/product/spec/internal-codex-timeout-reconciliation-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `crates/vida/src/runtime_dispatch_state.rs`
 - `crates/vida/src/taskflow_consume_resume.rs`
@@ -47,13 +47,13 @@ Status: `proposed`
 - Compatibility test: artifacts without `stale_after_seconds` still use the legacy fallback window.
 
 -----
-artifact_path: product/spec/internal-codex-activation-view-timeout-holder-release-design
+artifact_path: product/spec/internal-codex-timeout-reconciliation-contract
 artifact_type: design_doc
 artifact_version: '1'
 artifact_revision: '2026-04-21'
 schema_version: '1'
-status: proposed
-source_path: docs/product/spec/internal-codex-activation-view-timeout-holder-release-design.md
+status: canonical
+source_path: docs/product/spec/internal-codex-timeout-reconciliation-contract.md
 created_at: '2026-04-21T00:00:00Z'
 updated_at: 2026-04-22T12:59:31.418999703Z
-changelog_ref: internal-codex-activation-view-timeout-holder-release-design.changelog.jsonl
+changelog_ref: internal-codex-timeout-reconciliation-contract.changelog.jsonl

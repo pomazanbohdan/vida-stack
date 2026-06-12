@@ -161,8 +161,7 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/implementation-closure-write-evidence-contract.md`
-- `docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md`
-- `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
+- `docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
 - `docs/product/spec/continuation-binding-fail-closed-contract.md`
 
 -----

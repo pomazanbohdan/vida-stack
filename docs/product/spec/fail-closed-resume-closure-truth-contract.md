@@ -1,6 +1,6 @@
-# Repair Fail Closed Resume Closure Truth Design
+# Fail Closed Resume Closure Truth Contract
 
-Status: active bounded design
+Status: canonical
 
 Purpose: define the bounded architectural repair that keeps `consume continue` and resume-time packet reconciliation fail-closed while still repairing stale persisted specification packet lineage into the tracked design-doc scope before validation.
 
@@ -8,12 +8,12 @@ Purpose: define the bounded architectural repair that keeps `consume continue` a
 - Feature / change: fail-closed resume and persisted specification packet reconciliation
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`
-- Status: `approved`
+- Status: canonical
 
 ## Current Context
 - `taskflow_consume_resume::read_dispatch_packet(...)` reads the persisted dispatch packet, applies bounded normalization, and then validates the packet contract.
 - Runtime law now requires `delivery_task_packet` packets with `handoff_task_class=specification` to keep `owned_paths` exactly equal to `tracked_flow_bootstrap.design_doc_path`.
-- The live A1 run `task-recovery-cluster-fail-closed-resume-rewrite-truth` still carried a persisted specification packet whose `owned_paths` pointed at `crates/vida/src/taskflow_consume_resume.rs` even though the tracked design document is `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`.
+- The live A1 run `task-recovery-cluster-fail-closed-resume-rewrite-truth` still carried a persisted specification packet whose `owned_paths` pointed at `crates/vida/src/taskflow_consume_resume.rs` even though the tracked design document is `docs/product/spec/fail-closed-resume-closure-truth-contract.md`.
 - Because normalization only repaired missing `owned_paths`, `vida taskflow consume continue` failed closed on the stale packet before the specification gate could progress.
 
 ## Goal
@@ -36,7 +36,7 @@ Purpose: define the bounded architectural repair that keeps `consume continue` a
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
+  - `docs/product/spec/fail-closed-resume-closure-truth-contract.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -89,7 +89,7 @@ Will implement / choose:
 - `vida taskflow consume continue`
 
 ### Bounded File Set
-- `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
+- `docs/product/spec/fail-closed-resume-closure-truth-contract.md`
 - `crates/vida/src/taskflow_consume_resume.rs`
 
 ## Fail-Closed Constraints
@@ -122,8 +122,8 @@ Will implement / choose:
   - inspect the persisted dispatch packet after normalization
   - inspect status/recovery summaries for the active run
 - Canonical checks:
-  - `vida docflow finalize-edit docs/product/spec/repair-fail-closed-resume-closure-truth-design.md "record bounded A1 repair design"`
-  - `vida docflow check --root . docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
+  - `vida docflow finalize-edit docs/product/spec/fail-closed-resume-closure-truth-contract.md "record bounded A1 repair design"`
+  - `vida docflow check --root . docs/product/spec/fail-closed-resume-closure-truth-contract.md`
 
 ## Observability
 - persisted packet JSON shows repaired `owned_paths`
@@ -140,18 +140,18 @@ Will implement / choose:
 - consider broader stale-packet reconciliation for other task classes only when there is a concrete fail-closed runtime need
 
 ## References
-- `docs/product/spec/specification-lane-scope-hardening-design.md`
+- `docs/product/spec/specification-lane-scope-hardening-contract.md`
 - `crates/vida/src/taskflow_consume_resume.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
 
 -----
-artifact_path: product/spec/repair-fail-closed-resume-closure-truth-design
+artifact_path: product/spec/fail-closed-resume-closure-truth-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-16
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/repair-fail-closed-resume-closure-truth-design.md
+source_path: docs/product/spec/fail-closed-resume-closure-truth-contract.md
 created_at: 2026-04-16T06:11:37.967559197Z
 updated_at: 2026-04-17T11:49:34.294393255Z
-changelog_ref: repair-fail-closed-resume-closure-truth-design.changelog.jsonl
+changelog_ref: fail-closed-resume-closure-truth-contract.changelog.jsonl

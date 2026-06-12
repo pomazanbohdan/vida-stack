@@ -1,6 +1,6 @@
-# Specification Lane Scope Hardening Design
+# Specification Lane Scope Hardening Contract
 
-Status: active bounded design
+Status: canonical
 
 Purpose: define the architectural hardening that keeps `specification` and other design-first lanes inside lawful design-doc scope instead of inheriting code write scope from free-form request text.
 
@@ -8,7 +8,7 @@ Purpose: define the architectural hardening that keeps `specification` and other
 - Feature / change: fail-closed packet-scope hardening for specification/design lanes
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`
-- Status: `approved`
+- Status: canonical
 
 ## Current Context
 - `runtime_delivery_task_packet(...)` currently derives `owned_paths` from `explicit_request_scope_paths(request_text)` for every delivery packet.
@@ -38,7 +38,7 @@ Purpose: define the architectural hardening that keeps `specification` and other
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
-  - `docs/product/spec/specification-lane-scope-hardening-design.md`
+  - `docs/product/spec/specification-lane-scope-hardening-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
 - Framework protocols affected:
@@ -103,7 +103,7 @@ Will implement / choose:
 - consume/resume normalization for older packets
 
 ### Bounded File Set
-- `docs/product/spec/specification-lane-scope-hardening-design.md`
+- `docs/product/spec/specification-lane-scope-hardening-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `crates/vida/src/runtime_dispatch_packets.rs`
@@ -141,7 +141,7 @@ Will implement / choose:
 - Runtime checks:
   - inspect active dispatch packet JSON for spec lanes
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/specification-lane-scope-hardening-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
+  - `vida docflow check --root . docs/product/spec/specification-lane-scope-hardening-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
 - packet JSON keeps effective `owned_paths`
@@ -163,13 +163,13 @@ Will implement / choose:
 - `docs/product/spec/feature-design-and-adr-model.md`
 
 -----
-artifact_path: product/spec/specification-lane-scope-hardening-design
+artifact_path: product/spec/specification-lane-scope-hardening-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-17
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/specification-lane-scope-hardening-design.md
+source_path: docs/product/spec/specification-lane-scope-hardening-contract.md
 created_at: 2026-04-17T11:01:58.519248194Z
 updated_at: 2026-04-17T11:08:56.934773106Z
-changelog_ref: specification-lane-scope-hardening-design.changelog.jsonl
+changelog_ref: specification-lane-scope-hardening-contract.changelog.jsonl

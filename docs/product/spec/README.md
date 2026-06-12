@@ -19,7 +19,7 @@ Default rule:
 
 Suggested homes:
 
-- `docs/product/spec/<feature>-design.md` for committed feature/change designs
+- `docs/product/spec/<feature>-contract.md` or `docs/product/spec/<feature>-spec.md` for committed product/runtime contracts and specifications
 - `docs/product/research/<topic>-survey.md` for exploratory research before design closure
 
 Active design docs:
@@ -31,17 +31,17 @@ Active design docs:
 - `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 - `docs/product/spec/authoritative-state-lock-recovery-contract.md`
 - `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
-- `docs/product/spec/specification-lane-scope-hardening-design.md`
-- `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
-- `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
-- `docs/product/spec/bounded-release-retrieval-identity-memory-govern-design.md`
+- `docs/product/spec/specification-lane-scope-hardening-contract.md`
+- `docs/product/spec/fail-closed-resume-closure-truth-contract.md`
+- `docs/product/spec/selector-precedence-bounded-repair-contract.md`
+- `docs/product/spec/retrieval-identity-memory-governance-contract.md`
 - `docs/product/spec/lane-supersede-shared-truth-envelope-contract.md`
 - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
-- `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
-- `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
+- `docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md`
+- `docs/product/spec/taskflow-happy-path-test-catalog-contract.md`
 - `docs/product/spec/runtime-web-restart-current-repo-command-contract.md`
 - `docs/product/spec/spec-compliant-exception-path-takeover-surface-contract.md`
-- `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
+- `docs/product/spec/dead-code-removal-admission-contract.md`
 
 Current promoted runtime-control specs:
 

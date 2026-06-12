@@ -425,7 +425,7 @@ Concise proof commands recorded across the implementation slices:
 - Related specs:
   - `docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
-  - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
+  - `docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md`
   - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
   - `docs/product/spec/host-agent-layer-status-matrix.md`
   - `docs/product/spec/hybrid-host-executor-semantics-model.md`

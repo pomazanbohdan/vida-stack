@@ -1,10 +1,8 @@
-# Serialize authoritative state access lock mitigation design
+# Authoritative State Access Serialization Contract
 
 Purpose: Bound the current-release design for authoritative state access serialization and snapshot-first read-surface mitigation of SurrealKV lock contention.
 
-Status: `proposed`
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: serialize authoritative state access and move read-oriented task/runtime surfaces toward snapshot-first or lock-tolerant behavior so operator reads stop contending aggressively on `.vida/data/state`.
@@ -62,7 +60,7 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
+  - `docs/product/spec/authoritative-state-access-serialization-contract.md`
   - `docs/product/spec/current-spec-map.md`
 - Framework protocols affected:
   - none
@@ -142,7 +140,7 @@ Will implement / choose:
   - `docs/product/spec/reconciled-runtime-projection-output-contract.md`
 
 ### Bounded File Set
-- `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
+- `docs/product/spec/authoritative-state-access-serialization-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `crates/vida/src/state_store_open.rs`
 - `crates/vida/src/task_surface.rs`
@@ -167,7 +165,7 @@ Will implement / choose:
 ### Phase 1
 - Register this design and make the current read/open architecture explicit.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/authoritative-state-access-serialization-contract.md docs/product/spec/current-spec-map.md`
 
 ### Phase 2
 - Implement a bounded local serialization guard for authoritative opens.
@@ -192,7 +190,7 @@ Will implement / choose:
   - `vida task list --json --status in_progress`
   - `vida task show feature-current-release-delivery-efficiency-hardening --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/authoritative-state-access-serialization-contract.md docs/product/spec/current-spec-map.md`
 
 ## Observability
 - Logging points
@@ -227,13 +225,13 @@ Will implement / choose:
 - SurrealDB embedded guidance: use embedded/file-backed mode for single-application local storage and remote/server mode when multiple applications need shared access
 
 -----
-artifact_path: product/spec/serialize-authoritative-state-access-lock-mitigation-design
+artifact_path: product/spec/authoritative-state-access-serialization-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-21
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md
+source_path: docs/product/spec/authoritative-state-access-serialization-contract.md
 created_at: 2026-04-21T10:32:49.194766213Z
 updated_at: 2026-04-21T10:34:55.137566929Z
-changelog_ref: serialize-authoritative-state-access-lock-mitigation-design.changelog.jsonl
+changelog_ref: authoritative-state-access-serialization-contract.changelog.jsonl

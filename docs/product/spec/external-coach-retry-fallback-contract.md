@@ -1,14 +1,14 @@
-# Coach Retry Reuses Same Blocked Hermes Packet Without Fallback Design
+# External Coach Retry Fallback Contract
 
 Purpose: Bound the audit blocker where repeated `vida taskflow consume continue` retries relaunch the same blocked coach packet on `hermes_cli` instead of rotating to another admissible review backend, rewriting a fresh retry packet, or failing closed with a non-retry posture.
 
-Status: `proposed`
+Status: canonical
 
 ## Summary
 - Feature / change: repair coach-lane retry semantics so a blocked external review packet cannot be reopened indefinitely on the same packet identity without a lawful retry transition.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher`
-- Status: `proposed`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -58,7 +58,7 @@ Status: `proposed`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
+  - `docs/product/spec/external-coach-retry-fallback-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
 - Runtime families affected:
@@ -117,7 +117,7 @@ Will implement / choose:
   - keep blocked truth when no lawful retry transition exists
 
 ### Bounded File Set
-- `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
+- `docs/product/spec/external-coach-retry-fallback-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `crates/vida/src/taskflow_consume_resume.rs`
@@ -138,7 +138,7 @@ Will implement / choose:
 ### Phase 1
 - Register this blocker in the active spec maps and finalize the bounded design.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
+  - `vida docflow check --root . docs/product/spec/external-coach-retry-fallback-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ### Phase 2
 - Tighten retry eligibility and packet rewrite semantics for blocked coach receipts.
@@ -160,17 +160,17 @@ Will implement / choose:
   - confirm repeated `consume continue` does not reuse the same coach packet file/path for the unchanged timeout case
 
 ## References
-- `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-- `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
+- `docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
+- `docs/product/spec/stale-blocked-dispatch-artifact-reconciliation-contract.md`
 
 -----
-artifact_path: product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design
+artifact_path: product/spec/external-coach-retry-fallback-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-21
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md
+source_path: docs/product/spec/external-coach-retry-fallback-contract.md
 created_at: 2026-04-21T19:49:30.468539654Z
 updated_at: 2026-04-21T19:51:57.255540405Z
-changelog_ref: coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.changelog.jsonl
+changelog_ref: external-coach-retry-fallback-contract.changelog.jsonl

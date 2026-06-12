@@ -148,17 +148,17 @@ Companion rule:
     Registered path: `docs/product/spec/session-scoped-orchestrator-protocol-foundation-contract.md`
 23. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
     Config families: host-agent activation layers, overlay-owned tier ladders, tier selection economics, local score/state surfaces, task-close feedback ingestion, and status/budget observability over `.vida/state/**`
-24. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
+24. [specification-lane-scope-hardening-contract.md](specification-lane-scope-hardening-contract.md)
     Config families: runtime dispatch packet scope policy, tracked design-doc write ownership for specification lanes, downstream packet parity, and legacy packet normalization for task-class-aware scope hardening
-25. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
+25. [fail-closed-resume-closure-truth-contract.md](fail-closed-resume-closure-truth-contract.md)
     Config families: fail-closed resume-time packet reconciliation, persisted specification packet repair toward tracked design-doc scope, and active A1 recovery-truth closure for stale dispatch lineage
 26. [lane-supersede-shared-truth-envelope-contract.md](lane-supersede-shared-truth-envelope-contract.md)
    Config families: explicit lane supersession mutation, shared lane-envelope truth derivation across `show`/`exception-takeover`/`supersede`, admissible-versus-active takeover posture, and recovery-adjacent lane-command discoverability
 27. [implementation-backend-admissibility-selection-truth-contract.md](implementation-backend-admissibility-selection-truth-contract.md)
    Config families: implementation-lane backend admissibility truth, canonical selected-backend resolution, route-primary versus effective-backend diagnostic split, and packet/summary/status projection alignment
-29. [blocked-external-coach-artifact-truth-not-reconciled-design.md](blocked-external-coach-artifact-truth-not-reconciled-design.md)
+29. [stale-blocked-dispatch-artifact-reconciliation-contract.md](stale-blocked-dispatch-artifact-reconciliation-contract.md)
    Config families: blocked dispatch semantic-mismatch detection, run-graph projection stale truth beyond executing-only timeout cases, consume-resume continuation repair for obsolete blocked artifacts, and lane/status operator parity for mismatched blocked evidence
-   Registered path: `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
+   Registered path: `docs/product/spec/stale-blocked-dispatch-artifact-reconciliation-contract.md`
 30. [test-first-runtime-defect-remediation-model.md](test-first-runtime-defect-remediation-model.md)
    Config families: test-first runtime defect repair, cross-surface scenario contracts, operator actionability proof, paused defect reparenting, and one-bounded-defect-at-a-time remediation across TaskFlow runtime-family surfaces
    Registered path: `docs/product/spec/test-first-runtime-defect-remediation-model.md`
@@ -206,24 +206,24 @@ Companion rule:
 29. [authoritative-state-lock-recovery-contract.md](authoritative-state-lock-recovery-contract.md)
    Config families: bounded authoritative state-store lock-lifetime reduction during agent-lane dispatch, lock-specific remediation hints, and fail-closed long-lived-state recovery posture without silent lock cleanup
    Registered path: `docs/product/spec/authoritative-state-lock-recovery-contract.md`
-30. [serialize-authoritative-state-access-lock-mitigation-design.md](serialize-authoritative-state-access-lock-mitigation-design.md)
+30. [authoritative-state-access-serialization-contract.md](authoritative-state-access-serialization-contract.md)
    Config families: bounded authoritative state-access serialization, snapshot-first read-surface mitigation for lock contention, and explicit degraded-read truth for operator/task inspection surfaces
-   Registered path: `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
+   Registered path: `docs/product/spec/authoritative-state-access-serialization-contract.md`
 31. [design-backed-implementation-routing-contract.md](design-backed-implementation-routing-contract.md)
    Config families: bounded design-gate suppression for implementation-ready tasks, tracked-flow routing repair away from stale spec-pack re-entry, and implementation-oriented dispatch truth for already finalized design-backed work
    Registered path: `docs/product/spec/design-backed-implementation-routing-contract.md`
-33. [split-oversized-runtime-modules-ownership-execut-design.md](split-oversized-runtime-modules-ownership-execut-design.md)
+33. [oversized-runtime-module-split-contract.md](oversized-runtime-module-split-contract.md)
    Config families: bounded ownership-based split plan for oversized TaskFlow runtime modules, compatibility-preserving facade seams, execution-preparation requirements, module-map proof targets, and guarded rollout across `crates/vida/src/runtime_dispatch_state.rs`, `taskflow_consume_resume.rs`, `taskflow_run_graph.rs`, `taskflow_proxy.rs`, `task_surface.rs`, and `init_surfaces.rs`
-   Registered path: `docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`
+   Registered path: `docs/product/spec/oversized-runtime-module-split-contract.md`
 33. [internal-codex-agent-execution-fail-closed-contract.md](internal-codex-agent-execution-fail-closed-contract.md)
    Config families: bounded internal-host activation-view fail-closed semantics, truthful agent-lane execution state, root-session anti-bypass guidance, and runtime dispatch bridge hardening for Codex/internal execution
    Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 34. [internal-dispatch-timeout-handoff-contract.md](internal-dispatch-timeout-handoff-contract.md)
    Config families: bounded internal-host delegated handoff timeout return semantics, prompt blocked receipt/result truth for stranded implementer handoffs, and runtime dispatch wrapper hardening beyond in-flight `executing` artifacts
    Registered path: `docs/product/spec/internal-dispatch-timeout-handoff-contract.md`
-35. [internal-codex-activation-view-timeout-holder-release-design.md](internal-codex-activation-view-timeout-holder-release-design.md)
+35. [internal-codex-timeout-reconciliation-contract.md](internal-codex-timeout-reconciliation-contract.md)
    Config families: bounded stale in-flight reconciliation, canonical dispatch timeout reuse for internal-host handoff truth, legacy fallback compatibility, and truthful continue/recovery status for still-executing delegated work
-   Registered path: `docs/product/spec/internal-codex-activation-view-timeout-holder-release-design.md`
+   Registered path: `docs/product/spec/internal-codex-timeout-reconciliation-contract.md`
 37. [taskflow-execution-semantics-scheduler-contract.md](taskflow-execution-semantics-scheduler-contract.md)
    Config families: bounded TaskFlow task execution semantics schema, graph-plus-semantics scheduler projection, operator-visible parallel-admission truth, and fail-closed compatibility defaults for legacy tasks
    Registered path: `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
@@ -251,18 +251,14 @@ Companion rule:
 41. [task-close-closure-truth-exception-contract.md](task-close-closure-truth-exception-contract.md)
    Config families: bounded downstream closure/task-close receipt sanitation for exception-path lineage, authoritative closure truth after lawful exception-backed task close, and resume/run-graph parity without stale implementer rebinding
    Registered path: `docs/product/spec/task-close-closure-truth-exception-contract.md`
-42. [reconcile-qwen-cli-carrier-drift-design.md](reconcile-qwen-cli-carrier-drift-design.md)
+42. [qwen-cli-reference-only-carrier-contract.md](qwen-cli-reference-only-carrier-contract.md)
    Config families: bounded reconciliation of stale `qwen_cli` assumptions across active docs/specs and Rust test fixtures, template-only retention policy for qwen references, and runtime/operator parity with the current config-driven external carrier catalog
-   Registered path: `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-43. [repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md](repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md)
+   Registered path: `docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
    Config families: bounded repair for explicit post-closure task binding authority, agent-init activation-view truth preservation, and fail-closed consume-continue behavior until fresh same-task packet evidence exists
-   Registered path: `docs/product/spec/repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md`
-44. [repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md](repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md)
    Config families: design-backed reseed routing, dispatch-target canonicalization, and activation/backend alignment so explicit qwen remediation does not deadlock in `pbi_discussion/specification`
-   Registered path: `docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md`
-45. [coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md](coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md)
+45. [external-coach-retry-fallback-contract.md](external-coach-retry-fallback-contract.md)
    Config families: coach-lane retry artifact law, explicit review-backend rotation before internal fallback, fresh runtime-dispatch packet materialization for lawful retries, and fail-closed prevention of identical same-packet timeout loops
-   Registered path: `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
+   Registered path: `docs/product/spec/external-coach-retry-fallback-contract.md`
 46. [codex-app-agent-lifecycle-cleanup-contract.md](codex-app-agent-lifecycle-cleanup-contract.md)
    Config families: bounded Codex App agent lifecycle cleanup discipline, debug-safe `agent-init` startup rendering, configured reasoning-profile projection proof, and `.codex/**` materialization parity with `vida.config.yaml`
    Registered path: `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
@@ -275,9 +271,9 @@ Companion rule:
 48. [carrier-model-profile-selection-runtime-model.md](carrier-model-profile-selection-runtime-model.md)
    Config families: bounded carrier plus model-profile contract normalization across Codex/internal/external execution surfaces, profile-aware runtime assignment truth, dispatch/status profile projection, and parity-safe materialization from legacy and new-style config
    Registered path: `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
-49. [unified-hybrid-runtime-selection-policy-design.md](unified-hybrid-runtime-selection-policy-design.md)
+49. [unified-hybrid-runtime-selection-policy-contract.md](unified-hybrid-runtime-selection-policy-contract.md)
    Config families: bounded follow-up wave after the carrier/model-profile contract rollout, including dynamic-versus-route selection truth, budget and route policy enforcement, internal-subagent candidate pooling, external reasoning/readiness enforcement, operator diagnostics, and residual qwen drift closure
-   Registered path: `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
+   Registered path: `docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md`
 50. [task-graph-adaptive-planner-contract.md](task-graph-adaptive-planner-contract.md)
    Config families: bounded TaskFlow PlanGraph generation and materialization, adaptive task split/spawn/replan mutations, graph explain diagnostics, scheduler dispatch preview, and task-linked execution-preparation artifact shape
    Registered path: `docs/product/spec/task-graph-adaptive-planner-contract.md`
@@ -287,9 +283,9 @@ Companion rule:
 52. [closure-admission-evidence-table-contract.md](closure-admission-evidence-table-contract.md)
    Config families: bounded closure-admission evidence crosswalk, canonical evidence-family minimums, operator blocker parity, and closure-bundle fail-closed semantics
    Registered path: `docs/product/spec/closure-admission-evidence-table-contract.md`
-53. [taskflow-happy-path-test-catalog-design.md](taskflow-happy-path-test-catalog-design.md)
+53. [taskflow-happy-path-test-catalog-contract.md](taskflow-happy-path-test-catalog-contract.md)
    Config families: bounded ordered TaskFlow happy-path test catalog, proof-target mapping, parent/child closure consistency gate, and immediate defect-epic repair through agent mode
-   Registered path: `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
+   Registered path: `docs/product/spec/taskflow-happy-path-test-catalog-contract.md`
 54. [pi-primary-environment-agent-carrier-spec.md](pi-primary-environment-agent-carrier-spec.md)
     Config families: Pi primary host environment selection/materialization, `pi_cli` external carrier profiles, `vida-pi-agent` adapter dispatch, Pi internal-agent projections, bounded write-scope guard, template propagation, and release/package proof
     Registered path: `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`

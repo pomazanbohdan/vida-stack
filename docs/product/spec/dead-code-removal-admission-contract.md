@@ -1,4 +1,4 @@
-# Find Remove Proven Dead Rust Run Design
+# Dead Code Removal Admission Contract
 
 Purpose:
 Define the bounded dead-code removal pass for the architecture refactor epic. The work removes only Rust code that is proven unreachable from CLI command surfaces, runtime dispatch paths, TaskFlow/DocFlow proxies, tests, generated packet normalization, and release/install entrypoints.
@@ -60,13 +60,13 @@ This table is the admission gate for follow-up dead-code removal packets. It rec
 3. Splitting oversized modules in the same implementation packet, rejected because that belongs to `architecture-refactor-oversized-module-split` and would mix risk domains.
 
 -----
-artifact_path: product/spec/find-remove-proven-dead-rust-run-design
+artifact_path: product/spec/dead-code-removal-admission-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-06-02
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/find-remove-proven-dead-rust-run-design.md
+source_path: docs/product/spec/dead-code-removal-admission-contract.md
 created_at: 2026-06-02T23:16:52.9321129Z
 updated_at: 2026-06-02T23:18:32.2756038Z
-changelog_ref: find-remove-proven-dead-rust-run-design.changelog.jsonl
+changelog_ref: dead-code-removal-admission-contract.changelog.jsonl

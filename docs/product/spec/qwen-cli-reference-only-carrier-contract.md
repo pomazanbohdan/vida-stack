@@ -1,12 +1,12 @@
-# Reconcile Qwen Cli Carrier Drift Design
+# Qwen CLI Reference Only Carrier Contract
 
-Status: `approved`
+Status: canonical
 
 ## Summary
 - Feature / change: reconcile stale `qwen_cli` drift across active docs, specs, and Rust test fixtures so the live project treats `qwen_cli` as template/reference-only and not as an active carrier.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher | docflow`
-- Status: approved
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -57,7 +57,7 @@ Status: `approved`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
+  - `docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/process/external-cli-carrier-operator-procedure.md`
@@ -161,7 +161,7 @@ Will implement / choose:
   - template/reference retention must remain explicit
 
 ### Bounded File Set
-- `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
+- `docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `docs/process/external-cli-carrier-operator-procedure.md`
@@ -198,7 +198,7 @@ Will implement / choose:
 - Finalize this bounded design and register it in the current spec canon.
 - Confirm the exact qwen drift split between active docs/specs and test fixtures.
 - First proof target
-  - `cargo run -p vida -- docflow check --root . docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
+  - `cargo run -p vida -- docflow check --root . docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
 
 ### Phase 2
 - Rewrite active docs/specs that still present `qwen_cli` as current.
@@ -223,7 +223,7 @@ Will implement / choose:
   - `cargo run -p vida -- status --json`
   - `cargo run -p vida -- orchestrator-init --json`
 - Canonical checks:
-  - `cargo run -p vida -- docflow check --root . docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
+  - `cargo run -p vida -- docflow check --root . docs/product/spec/qwen-cli-reference-only-carrier-contract.md`
   - `cargo run -p vida -- docflow check --root . docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
@@ -261,13 +261,13 @@ Will implement / choose:
 - task `feature-reconcile-qwen-cli-carrier-drift-across-config-code`
 
 -----
-artifact_path: product/spec/reconcile-qwen-cli-carrier-drift-design
+artifact_path: product/spec/qwen-cli-reference-only-carrier-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-21
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md
+source_path: docs/product/spec/qwen-cli-reference-only-carrier-contract.md
 created_at: 2026-04-21T18:09:02.303032316Z
 updated_at: 2026-04-21T18:12:02.711563052Z
-changelog_ref: reconcile-qwen-cli-carrier-drift-design.changelog.jsonl
+changelog_ref: qwen-cli-reference-only-carrier-contract.changelog.jsonl

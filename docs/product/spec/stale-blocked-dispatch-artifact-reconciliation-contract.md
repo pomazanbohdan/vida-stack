@@ -1,14 +1,14 @@
-# Blocked External Coach Artifact Truth Not Reconciled Design
+# Stale Blocked Dispatch Artifact Reconciliation Contract
 
 Purpose: Bound the current-release blocker where an external coach dispatch can remain canonically blocked by an obsolete `internal_activation_view_only` artifact even after backend-routing and timeout-return repairs land.
 
-Status: `proposed`
+Status: canonical
 
 ## Summary
 - Feature / change: reconcile blocked external coach dispatch truth so semantically obsolete blocked artifacts are surfaced as mismatched/stale and expose a lawful continuation path instead of a status-only loop.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | lane | status`
-- Status: `proposed`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -57,7 +57,7 @@ Status: `proposed`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
+  - `docs/product/spec/stale-blocked-dispatch-artifact-reconciliation-contract.md`
   - `docs/product/spec/current-spec-map.md`
 - Runtime families affected:
   - `taskflow`
@@ -104,7 +104,7 @@ Will implement / choose:
   - lane/status surfaces mirror the same canonical diagnosis
 
 ### Bounded File Set
-- `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
+- `docs/product/spec/stale-blocked-dispatch-artifact-reconciliation-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `crates/vida/src/taskflow_run_graph.rs`
 - `crates/vida/src/taskflow_consume_resume.rs`
@@ -126,7 +126,7 @@ Will implement / choose:
 ### Phase 1
 - Register this bounded blocker design in the current spec map.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/stale-blocked-dispatch-artifact-reconciliation-contract.md docs/product/spec/current-spec-map.md`
 
 ### Phase 2
 - Teach projection truth and consume/resume logic to recognize and surface blocked semantic mismatch.
@@ -148,17 +148,17 @@ Will implement / choose:
   - `vida lane show feature-serialize-authoritative-state-access-lock-mitigation --json`
 
 ## References
-- `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
+- `docs/product/spec/authoritative-state-access-serialization-contract.md`
 - `docs/product/spec/lane-supersede-shared-truth-envelope-contract.md`
 
 -----
-artifact_path: product/spec/blocked-external-coach-artifact-truth-not-reconciled-design
+artifact_path: product/spec/stale-blocked-dispatch-artifact-reconciliation-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-21
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md
+source_path: docs/product/spec/stale-blocked-dispatch-artifact-reconciliation-contract.md
 created_at: 2026-04-21T12:57:15.709372253Z
 updated_at: 2026-04-21T12:58:45.27747414Z
-changelog_ref: blocked-external-coach-artifact-truth-not-reconciled-design.changelog.jsonl
+changelog_ref: stale-blocked-dispatch-artifact-reconciliation-contract.changelog.jsonl

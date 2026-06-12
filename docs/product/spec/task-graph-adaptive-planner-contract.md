@@ -232,7 +232,7 @@ Will implement / choose:
   - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
   - `docs/product/spec/partial-development-kernel-model.md`
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
-  - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
+  - `docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md`
 - Related runtime code:
   - `crates/vida/src/state_store_task_graph.rs`
   - `crates/vida/src/state_store_task_store.rs`

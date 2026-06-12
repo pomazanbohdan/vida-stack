@@ -1,14 +1,12 @@
-# TaskFlow Happy-Path Test Catalog Design
+# TaskFlow Happy-Path Test Catalog Contract
 
-Status: `proposed`
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: define a concise happy-path test catalog for TaskFlow, ordered from the simplest operator flows to full delegated execution and closure flows.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | status | agent-init | run-graph | doctor`
-- Status: `proposed`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -58,8 +56,8 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
-  - `docs/product/spec/taskflow-happy-path-test-catalog-design.changelog.jsonl`
+  - `docs/product/spec/taskflow-happy-path-test-catalog-contract.md`
+  - `docs/product/spec/taskflow-happy-path-test-catalog-contract.changelog.jsonl`
   - `docs/product/spec/README.md`
   - `docs/product/spec/current-spec-map.md`
 - Framework protocols affected:
@@ -152,8 +150,8 @@ Will implement / choose:
 
 ### Bounded File Set
 - This specification packet:
-  - `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
-  - `docs/product/spec/taskflow-happy-path-test-catalog-design.changelog.jsonl`
+  - `docs/product/spec/taskflow-happy-path-test-catalog-contract.md`
+  - `docs/product/spec/taskflow-happy-path-test-catalog-contract.changelog.jsonl`
   - `docs/product/spec/README.md`
   - `docs/product/spec/current-spec-map.md`
 - Future implementation packets may touch:
@@ -179,7 +177,7 @@ Will implement / choose:
 ### Phase 1
 - Land this design doc and register it in the active spec map surfaces.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/taskflow-happy-path-test-catalog-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/taskflow-happy-path-test-catalog-contract.md docs/product/spec/current-spec-map.md`
 
 ### Phase 2
 - Implement missing H1-H5 happy-path tests and align existing tests to the catalog vocabulary.
@@ -251,13 +249,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/taskflow-happy-path-test-catalog-design
+artifact_path: product/spec/taskflow-happy-path-test-catalog-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-05-18
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/taskflow-happy-path-test-catalog-design.md
+source_path: docs/product/spec/taskflow-happy-path-test-catalog-contract.md
 created_at: 2026-05-18T00:00:00Z
 updated_at: 2026-05-18T00:00:00Z
-changelog_ref: taskflow-happy-path-test-catalog-design.changelog.jsonl
+changelog_ref: taskflow-happy-path-test-catalog-contract.changelog.jsonl

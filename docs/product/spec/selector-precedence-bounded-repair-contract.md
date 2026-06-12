@@ -1,12 +1,12 @@
-# Repair Selector Precedence Crates Vida Src Design
+# Selector Precedence Bounded Repair Contract
 
-Status: `approved`
+Status: canonical
 
 ## Summary
 - Feature / change: repair selector precedence in `crates/vida/src/runtime_lane_summary.rs` so bounded Rust-file repair requests route to implementation/worker instead of planning/specification.
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`
-- Status: `approved`
+- Status: canonical
 
 ## Current Context
 - `build_runtime_lane_selection_from_bundle(...)` scores conversation-mode keyword candidates before selecting a runtime role.
@@ -36,7 +36,7 @@ Status: `approved`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
+  `docs/product/spec/selector-precedence-bounded-repair-contract.md`
 - Framework protocols affected:
   none
 - Runtime families affected:
@@ -123,7 +123,7 @@ Will implement / choose:
 - seeded run-graph route derivation that must keep implementation requests off the `spec-pack` path
 
 ### Bounded File Set
-- `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
+- `docs/product/spec/selector-precedence-bounded-repair-contract.md`
 - `crates/vida/src/runtime_lane_summary.rs`
 - `crates/vida/src/taskflow_run_graph.rs`
 
@@ -160,8 +160,8 @@ Will implement / choose:
 - Runtime checks:
   - seeded route derivation for bounded repair wording must not yield `business_analyst` / `spec-pack`
 - Canonical checks:
-  - `vida docflow finalize-edit docs/product/spec/repair-selector-precedence-crates-vida-src-design.md "record bounded selector-precedence repair design"`
-  - `vida docflow check --root . docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
+  - `vida docflow finalize-edit docs/product/spec/selector-precedence-bounded-repair-contract.md "record bounded selector-precedence repair design"`
+  - `vida docflow check --root . docs/product/spec/selector-precedence-bounded-repair-contract.md`
 
 ## Observability
 - Operator-visible outcome:
@@ -199,13 +199,13 @@ Will implement / choose:
 - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 
 -----
-artifact_path: product/spec/repair-selector-precedence-crates-vida-src-design
+artifact_path: product/spec/selector-precedence-bounded-repair-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-16
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/repair-selector-precedence-crates-vida-src-design.md
+source_path: docs/product/spec/selector-precedence-bounded-repair-contract.md
 created_at: 2026-04-16T06:45:45.126690531Z
 updated_at: 2026-04-20T08:45:55.304729458Z
-changelog_ref: repair-selector-precedence-crates-vida-src-design.changelog.jsonl
+changelog_ref: selector-precedence-bounded-repair-contract.changelog.jsonl
