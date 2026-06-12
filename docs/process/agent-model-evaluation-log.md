@@ -2567,6 +2567,110 @@ Dynamic criteria created from this session segment:
    known, then keep only low-noise trace hooks that are gated by an explicit env
    variable.
 
+## 2026-06-12 - wave-0-runtime-tests-run-graph-recovery-fixture-stabilization
+
+Scope:
+- Task: `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Parent: `wave-0-runtime-tests`
+- Commit: `ccf769640`
+- Files: `crates/vida/tests/boot_smoke.rs`
+- Proof:
+  - `cargo +1.95.0 fmt --all -- --check`
+  - `git diff --check -- crates/vida/tests/boot_smoke.rs`
+  - `cargo +1.95.0 test -p vida --test boot_smoke recovery -- --nocapture`
+  - `cargo +1.95.0 test -p vida --test boot_smoke run_graph -- --nocapture`
+  - `cargo +1.95.0 test -p vida --test boot_smoke taskflow_dispatch_init_ -- --nocapture`
+  - `cargo +1.95.0 test -p vida --test boot_smoke -- --nocapture --test-threads=1`
+  - `vida task list --json`
+  - `vida taskflow graph explain --json`
+  - `vida taskflow recovery latest --json`
+- Non-closure signal:
+  - `cargo +1.95.0 test -p vida --test boot_smoke -- --nocapture` returned
+    271/273 with two status-surface lock-contention failures; both failed
+    tests passed as exact tests and the serial full suite passed 273/273.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. No delegated executor was launched for the
+  test-only fixture stabilization because the failure cluster had exact local
+  reproduction and the active repo instructions required sequential mutation
+  after runtime ambiguity.
+- Validator: local Rust proof bundle, 9/10. The focused recovery/run_graph
+  filters and serial full boot_smoke suite covered the changed fixture semantics.
+- Tokens/tool calls: `not_exposed_by_host`; native long-runner was used once
+  because `ctx_shell` timed out before returning full-suite proof.
+
+Post-Task Self-Analysis:
+- Worked: manual reproduction separated stale missing-task fixture drift from the
+  newer open delegated-cycle exit semantics.
+- Waste: the first helper patch assumed backing task creation was the only issue;
+  the recovery command also intentionally exits blocked while JSON reports a
+  ready continuation.
+- Risk: a parallel full-suite failure can look like a product regression when it
+  is lock contention; closure must state serial vs parallel proof explicitly.
+- Next change: classify proof mode in every similar runtime test closure:
+  focused filter, exact retry, parallel broad result, and serial broad result.
+- Docs update: yes, this STOP entry adds the dynamic proof-mode criterion.
+- workflow_score_10: 8/10. The final proof is strong, but one hypothesis patch
+  and one invalid graph-summary command added avoidable work.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: pass for one residual boot_smoke cluster;
+   broader epic continuation remains open.
+3. Scope and non-goals stable: pass, test fixture and assertions only.
+4. Dirty worktree handled: pass, unrelated dirty production files and untracked
+   notes remained unstaged.
+5. Executor cheapest capable: pass, local orchestrator was sufficient for exact
+   test fixture repair.
+6. Validator matched risk: pass, recovery/run_graph filters plus serial full
+   boot_smoke suite.
+7. Prompt packet shape: not applicable, no delegated executor prompt.
+8. Agent handles: pass, no new agents launched.
+9. Token/tool/step telemetry: partial, host token/tool counts not exposed.
+10. Avoidable commands: partial, one invalid `taskflow graph summary` command
+    and one incomplete hypothesis patch were avoidable.
+11. Proof strength: pass, `run_graph` 27/27, `recovery` 20/20, serial
+    `boot_smoke` 273/273.
+12. Public/release proof: pass for CLI behavior via boot_smoke surfaces.
+13. Debug build: pass through cargo test rebuilds.
+14. TaskFlow graph: pass for inspection; active task remains in progress for
+    continued epic work.
+15. Staging by invariant: pass, only `boot_smoke.rs` was staged.
+16. Publication authorization: pass, active epic continuation was already sticky.
+17. Evaluation docs: pass, STOP entry written before next task starts.
+18. Parent/wave metrics: partial, current slice proof improved but no wave was
+    closed.
+19. New defects/follow-ups: status-surface parallel lock contention observed in
+    broad parallel boot_smoke; exact and serial proof passed, so it is a
+    diagnostic signal rather than this slice blocker.
+20. Next routing rule: pass, next runtime test work should start from remaining
+    broad/focused failures, not from already green run_graph/recovery filters.
+
+Meta-analysis remediation:
+- Added backing TaskFlow task creation for run-graph seed fixtures so recovery
+  tests no longer accidentally exercise stale missing-task guards.
+- Added a shared recovery assertion for the intentional `open_delegated_cycle`
+  blocked exit with `resume_status=ready`.
+- Converted the compiled-snapshot missing-route test into a fallback-contract
+  regression, matching the direct seeded route behavior fixed in the prior
+  slice.
+- Classified broad parallel lock contention separately from serial closure proof.
+
+Dynamic criteria created from this session segment:
+1. Parallel-vs-serial proof criterion: when a broad Rust integration suite fails
+   with lock contention but exact tests pass, run or cite a serial full-suite
+   proof before classifying the result. Record both the parallel broad signal and
+   the serial verdict so future task selection does not chase already-green
+   product code.
+2. Blocked-ready recovery criterion: for recovery surfaces, do not equate
+   non-zero exit with failed recovery projection. Inspect JSON `status`,
+   `blocker_codes`, `recovery.resume_status`, and `projection_truth` before
+   deciding whether the expected contract is blocked-ready or failed-closed.
+3. Fixture-authority criterion: when runtime adds stricter stale-state guards,
+   seeded test helpers must create the backing TaskFlow authority unless the
+   specific test is explicitly about missing backing state.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -2576,5 +2680,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T08:09:00+03:00
+updated_at: 2026-06-12T08:32:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
