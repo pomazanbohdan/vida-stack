@@ -2799,6 +2799,12 @@ Scope:
     and doctor still report `run_graph_latest_snapshot_inconsistent` after
     reconcile. Added reproduction comment to GitHub issue #114:
     https://github.com/pomazanbohdan/vida-stack/issues/114#issuecomment-4688073637
+  - Release/install diagnostic: `cargo build -p vida -p vida-pi-agent --release`
+    passed and installed `vida.exe` hash matched `target/release/vida.exe`;
+    `vida --version` and installed epic progress smoke passed. `vida release
+    install --json` still reported release asset materialization blockers;
+    opened GitHub issue #364:
+    https://github.com/pomazanbohdan/vida-stack/issues/364
 
 Observed model results:
 - Executor: local orchestrator, 8/10. The work was already in a dirty final
@@ -2852,9 +2858,10 @@ Twenty criteria outcome:
 16. Publication authorization: pending commit/push under active epic pattern.
 17. Evaluation docs: pass, this scorecard records the STOP gate.
 18. Parent/wave metrics: pass, epic is 100% closed after final sweep closure.
-19. New defects/follow-ups: none yet; lock/reopen fixes were handled inside the
+19. New defects/follow-ups: pass, lock/reopen fixes were handled inside the
     active final sweep. Runtime self-diagnostic residual latest-snapshot
-    mismatch was recorded on upstream issue #114 instead of opening a duplicate.
+    mismatch was recorded on upstream issue #114 instead of opening a duplicate;
+    release install asset materialization was opened as issue #364.
 20. Next routing rule: pass, next work is blocked until commit/push, runtime
     self-diagnostic, and epic closeout checks finish.
 
