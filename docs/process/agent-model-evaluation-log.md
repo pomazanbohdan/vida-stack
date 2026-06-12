@@ -2056,6 +2056,86 @@ Final dynamic criteria STOP point:
    record that case as the next candidate instead of treating the whole family as
    unclassified broad noise.
 
+## 2026-06-12 - Consume-final docflow verdict downstream block
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `2b96429cb block downstream dispatch on docflow verdict`
+- Goal: prevent `taskflow consume final` from retaining a downstream dispatch
+  target when the final handoff is blocked by DocFlow verdict evidence, while
+  preserving conversational tracked-flow downstream targets.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/src/taskflow_consume.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_final_blocks_downstream_closure_when_docflow_verdict_blocks -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_final_selects_scope_discussion_role_for_spec_queries -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_final_ -- --nocapture`: `18 passed`, `0 failed`.
+- `cargo +1.95.0 test -p vida --test boot_smoke -- --nocapture`: attempted after commit, but the tool timed out at 120 seconds and no captured verdict log was available; the process finished after a follow-up wait, so this is not counted as pass/fail proof.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The failure showed the gate result already
+  carried `docflow_verdict_block`, while the primary receipt blocker was
+  `closure_admission_block`; the fix needed to use the actual DocFlow readiness
+  signal, not only the selected blocker code.
+- Validator: exact red, scope regression exact, and the full 18-test
+  consume-final family, 9/10.
+
+Post-Task Self-Analysis:
+- Worked: adding the scope-discussion regression guard caught the first overbroad
+  `docflow_ready=false` cleanup before commit.
+- Waste: broad boot-smoke was launched before checking expected runtime length
+  and timed out without a usable verdict.
+- Risk: DocFlow readiness is also false for conversational tracked-flow cases,
+  so a gate-order fix can accidentally erase lawful downstream planning targets.
+- Next change: for gate-order fixes, run one positive preservation exact beside
+  the negative blocking exact before family/broad proof.
+- Docs update: yes; this STOP record adds dynamic criteria for paired gate proof
+  and long-gate capture.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, consume-final family is green; full
+   boot-smoke remains unverified after timeout.
+3. Scope and non-goals stable: pass, downstream cleanup contract only.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged after
+   pre-commit stash/restore.
+5. Executor cheapest capable: pass, local exact-driven fix.
+6. Validator matched risk: pass, negative exact, positive preservation exact,
+   and full consume-final family.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no new handles used.
+9. Telemetry: partial, token/cost unavailable; proof commands recorded.
+10. Avoidable commands: partial, broad run should have been bounded or deferred
+    until after a captured-output plan.
+11. Proof strength: pass for consume-final family; broad suite proof not counted.
+12. Public-surface proof: pass, public `taskflow consume final` JSON paths covered.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: partial, classification task remains active.
+15. Staging by invariant: pass, only `taskflow_consume.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP record is being written before the next
+    runtime slice.
+18. Parent/wave metrics: focused consume-final family is `18 passed`, `0 failed`;
+    full broad count was not captured.
+19. New defects/follow-ups: broad proof needs a longer bounded runner or captured
+    log path before it can be used as closure evidence.
+20. Next routing rule: pass, move from consume-final family to the next
+    deterministic cluster only after this STOP record and docs commit.
+
+Final dynamic criteria STOP point:
+1. Paired-gate-proof criterion: every gate-order fix must prove both the blocked
+   negative case and at least one allowed positive case that could be accidentally
+   erased by the new gate.
+2. Broad-log-capture criterion: before launching a long broad suite, choose a
+   command path that preserves a verdict beyond the tool timeout; otherwise
+   classify it as exploratory and do not count it as proof.
+3. Primary-vs-secondary-blocker criterion: when a surface has multiple blocker
+   codes, do not key downstream behavior only from the selected primary blocker;
+   inspect the underlying gate readiness that owns the behavior.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -2065,5 +2145,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T07:28:00+03:00
+updated_at: 2026-06-12T07:42:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
