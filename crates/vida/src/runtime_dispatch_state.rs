@@ -6496,11 +6496,21 @@ pub(crate) fn runtime_dispatch_packet_kind(
     dispatch_target: &str,
     dispatch_kind: &str,
 ) -> String {
-    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
     if dispatch_kind == "taskflow_pack" {
         return "tracked_flow_packet".to_string();
     }
-    dispatch_contract_lane(execution_plan, &dispatch_target)
+    let requested_dispatch_target = dispatch_target.trim();
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, requested_dispatch_target);
+    for target in [requested_dispatch_target, policy_dispatch_target.as_str()] {
+        if let Some(packet_template_kind) = dispatch_contract_lane(execution_plan, target)
+            .and_then(|lane| json_string(lane.get("packet_template_kind")))
+            .filter(|value| !value.is_empty())
+        {
+            return packet_template_kind;
+        }
+    }
+    dispatch_contract_lane(execution_plan, &policy_dispatch_target)
         .and_then(|lane| json_string(lane.get("packet_template_kind")))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "delivery_task_packet".to_string())

@@ -2529,18 +2529,6 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
             })?;
     let task_missing = task_authority.task_missing();
     if task_missing {
-        if candidate_packet.is_some_and(|(packet, packet_path)| {
-            downstream_packet_candidate_has_receipt_backed_ready_evidence(
-                packet,
-                packet_path,
-                run_id,
-            )
-        }) || active_receipt
-            .as_ref()
-            .is_some_and(receipt_or_packet_has_ready_downstream_packet)
-        {
-            return Ok(());
-        }
         return Err(stale_missing_task_run_graph_resume_error(
             &status,
             active_receipt.as_ref(),
