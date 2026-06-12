@@ -1118,6 +1118,75 @@ Dynamic criteria final step:
    gate in the self-analysis; do not treat the first green sub-assertion as task
    closure until the full original test passes.
 
+## 2026-06-12 - single-root JSONL import compatibility
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `b3e4b0f11 normalize single-root task jsonl imports`
+- Goal: restore legacy JSONL import compatibility for tests where one epic root
+  and rootless open blocker tasks are imported together, while keeping live graph
+  validation strict after import.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/src/state_store_task_store.rs crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke task_blocked_supports_compact_json_summary_view -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke installed_vida_ready_filters_blocked_siblings_via_helper_backed_task_store -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke installed_vida_ready_orders_multiple_rows_and_filters_blocked_siblings -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke installed_vida_ready -- --nocapture`
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The failure required seeing the import
+  error payload, then making a narrow importer compatibility change.
+- Validator: exact import/ready tests, 8/10. No broad boot_smoke rerun yet because
+  the classification child still has several known clusters.
+
+Post-Task Self-Analysis:
+- Worked: temporary stderr/stdout print exposed the real import graph error
+  instead of assuming JSON field alias drift.
+- Worked: normalization is importer-only and only when the batch has exactly one
+  root-like work item, preserving strict live graph validation.
+- Waste: initial hypothesis focused on `type` vs `edge_type`, but the model had
+  already supported both.
+- Risk: auto-parenting legacy rows changes imported graph shape; metadata marks
+  the edge source as `single_root_jsonl_import_compat`.
+- Next change: continue with remaining boot_smoke clusters after refreshing the
+  current failure list.
+- Docs update: dynamic import-normalization criterion added below.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, JSONL import/ready list cluster.
+2. Wave/parent closure distance: pass, three exact boot_smoke failures removed.
+3. Scope and non-goals stable: pass, no task ready/list renderer rewrite.
+4. Dirty worktree handled: pass, unrelated dirty files stayed unstaged.
+5. Executor cheapest capable: pass, local code edit.
+6. Validator matched risk: pass, exact import/ready and substring ready filter.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no active agent remained.
+9. Telemetry: partial, command durations observed; cost unavailable.
+10. Avoidable commands: pass, debug print was removed before commit.
+11. Proof strength: pass for import compatibility.
+12. Public-surface proof: pass, `vida task import-jsonl`, `task blocked`, and
+    installed `vida task ready` paths covered.
+13. Debug build: pass, cargo rebuilt `vida`.
+14. TaskFlow state: partial, classification child remains active.
+15. Staging by invariant: pass, only `state_store_task_store.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this scorecard.
+18. Parent/wave metrics: unchanged until parent closure proof passes.
+19. New defects/follow-ups: current broad failure list must be refreshed because
+    `red-tests.md` contains already-fixed failures.
+20. Dynamic criteria generation: pass, session segment produced the import
+    normalization criterion below.
+
+Dynamic criteria final step:
+1. Import-normalization criterion: before changing importer compatibility, first
+   identify whether the failure is parse/schema aliasing, provider mapping,
+   graph validation, or post-import rendering; normalize legacy data only in the
+   narrow importer boundary and stamp generated edges/fields with source
+   metadata.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1127,5 +1196,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T04:32:00+03:00
+updated_at: 2026-06-12T04:38:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
