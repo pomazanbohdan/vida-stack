@@ -1794,6 +1794,86 @@ Final dynamic criteria STOP point:
    evidence for noisy boot_smoke clusters; require either two consistent broad
    snapshots or a focused exact proof for the claimed behavior.
 
+## 2026-06-12 - Consume-continue packet mismatch blocker classification
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `ad92f52f5 classify consume continue packet mismatch blocker`
+- Goal: classify persisted dispatch receipt packet-path mismatch as
+  `consume_continue_resume_blocked` instead of generic
+  `run_graph_recovery_not_ready`.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/src/taskflow_operator_diagnostics.rs crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida persisted_dispatch_packet_path_mismatch_is_consume_continue_resume_blocked -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_continue_rejects_explicit_downstream_packet_without_receipt_authority -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke consume_continue_repeated_run_id_after_success_fails_closed_without_closure_projection -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke consume_continue -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke` before sibling assertion update:
+  `251 passed`, `22 failed`.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The error text already identified receipt
+  path mismatch; production classifier was the right owner.
+- Validator: classifier unit, two exact smokes, and 15-test consume-continue
+  family, 9/10.
+
+Post-Task Self-Analysis:
+- Worked: resisted weakening the smoke test and fixed the diagnostic classifier
+  so the operator contract exposes the more specific blocker code.
+- Worked: broad snapshot exposed a sibling assertion that still expected the old
+  generic blocker; fixing it in the same slice kept the classifier invariant
+  consistent.
+- Waste: one cargo command tried to pass two positional test filters and failed
+  before any useful proof.
+- Risk: changing a shared diagnostic classifier can break adjacent tests that
+  assert exact blocker-code arrays.
+- Meta-analysis remediation: after classifier changes, run a family filter, not
+  just the first exact red test.
+- Docs update: yes; this STOP record adds the sibling-assertion criterion below.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, consume-continue exact and family
+   cluster green; broad still blocked.
+3. Scope and non-goals stable: pass, one diagnostic classifier plus two smoke
+   expectations.
+4. Dirty worktree handled: pass, unrelated dirty files stayed unstaged.
+5. Executor cheapest capable: pass, local classifier fix from concrete exact
+   payload.
+6. Validator matched risk: pass, unit plus public smoke family.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, none used.
+9. Telemetry: partial, token/cost unavailable; command proof recorded.
+10. Avoidable commands: partial, one invalid multi-filter cargo command.
+11. Proof strength: pass, unit and 15-test consume-continue family covered the
+    shared classifier invariant.
+12. Public-surface proof: pass, `taskflow consume continue` JSON surfaces covered.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: partial, classification task remains active.
+15. Staging by invariant: pass, classifier and directly affected smoke assertions
+    staged together.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, STOP gate recorded before next slice.
+18. Parent/wave metrics: latest broad evidence remains red; previous broad around
+    this slice was `251 passed`, `22 failed`.
+19. New defects/follow-ups: remaining deterministic exact clusters include
+    consume-final role routing, run-graph recovery/status projection, stack
+    overflow, and child-dependency projection.
+20. Next routing rule: pass, when a classifier change affects a blocker code,
+    immediately search or filter for sibling assertions before committing.
+
+Final dynamic criteria STOP point:
+1. Classifier-sibling criterion: any change to diagnostic kind or blocker-code
+   mapping must run the focused public-surface family filter and update every
+   sibling assertion that names the old blocker.
+2. Cargo-filter criterion: do not pass multiple positional test names to one
+   `cargo test` command. Use one exact filter per command or a shared substring
+   family filter.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1803,5 +1883,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T06:33:00+03:00
+updated_at: 2026-06-12T06:52:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
