@@ -40,9 +40,7 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `docs/process/command-timing-and-gate-optimization-protocol.md`
 13. Project Error Search runtime diagnostics protocol:
     - `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-14. Generic runtime protocol promotion plan:
-    - `docs/process/generic-runtime-protocol-promotion-plan.md`
-15. Project-local TaskFlow runtime state and operator surfaces:
+14. Project-local TaskFlow runtime state and operator surfaces:
     - `.vida/data/state/`
     - `vida taskflow help`
 ## Bootstrap Read Path
@@ -65,32 +63,31 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 11. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/README.md`.
 12. For command timing, slow gates, script optimization, CI/local proof latency, or operator-friction diagnostics, continue to `docs/process/command-timing-and-gate-optimization-protocol.md`.
 13. For runtime defects, multi-defect pools, TaskFlow/DocFlow contradictions, run-graph/recovery/lane/dispatch/receipt blockers, session/worktree ownership conflicts, provider/model/carrier routing blockers, or CI failure clusters, continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
-14. For project-side workflow rules that may belong in generic runtime protocols, continue to `docs/process/generic-runtime-protocol-promotion-plan.md` before editing framework owner instructions.
-15. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
-16. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
-17. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
-18. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
-19. For repeatable development-session startup, prefer the compact startup bundle:
+14. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
+15. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
+16. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
+17. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
+18. For repeatable development-session startup, prefer the compact startup bundle:
    - `docs/process/project-orchestrator-startup-bundle.md`
-20. Expand to the full session-start protocol and reusable prompt only when the bundle does not settle the startup question:
+19. Expand to the full session-start protocol and reusable prompt only when the bundle does not settle the startup question:
    - `docs/process/project-orchestrator-session-start-protocol.md`
    - `docs/process/project-orchestrator-reusable-prompt.md`
-21. If startup readiness, skill gating, packet rendering, or packet/lane defaults remain unclear after the bundle, expand only the needed compact project runtime capsules:
+20. If startup readiness, skill gating, packet rendering, or packet/lane defaults remain unclear after the bundle, expand only the needed compact project runtime capsules:
    - `docs/process/project-start-readiness-runtime-capsule.md`
    - `docs/process/project-packet-rendering-runtime-capsule.md`
    - `docs/process/project-packet-and-lane-runtime-capsule.md`
-22. Open deeper owner docs only when those compact project surfaces still leave an edge case unresolved:
+21. Open deeper owner docs only when those compact project surfaces still leave an edge case unresolved:
    - `docs/process/project-skill-initialization-and-activation-protocol.md`
    - `docs/process/project-development-packet-template-protocol.md`
    - `docs/process/project-agent-prompt-stack-protocol.md`
    - `docs/process/project-boot-readiness-validation-protocol.md`
-23. For long-running epic execution, model/cost optimization, per-task
+22. For long-running epic execution, model/cost optimization, per-task
     executor/validator scorecards, wave-first closure, post-task optimization,
     or task-completion checklists, continue early to:
    - `docs/process/project-orchestrator-operating-protocol.md`
    - `docs/process/team-development-and-orchestration-protocol.md`
    - `docs/process/agent-model-evaluation-log.md`
-24. This path set is mandatory bootstrap context, not an optional later lookup.
+23. This path set is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
 
@@ -128,7 +125,6 @@ Project-routing rule:
 14. The expected local operator path is plain `vida taskflow ...` with project-local defaults already bound to this repository root; manual `VIDA_ROOT=...` overrides are fallback-only.
 15. Project-local development routing is intentionally thin after generic runtime protocol promotion:
    - use `docs/process/project-orchestrator-operating-protocol.md` for the vida-stack top-level loop and local read set,
-   - use `docs/process/generic-runtime-protocol-promotion-plan.md` to decide whether a reusable rule belongs in generic runtime owners or remains local residue,
    - use `docs/process/command-timing-and-gate-optimization-protocol.md` for local proof ladder, slow gates, script timing, and CI/non-blocking iteration decisions,
    - use `docs/process/project-error-search-runtime-diagnostics-protocol.md` for VIDA-specific application of the generic `Error Search / Bug Reasoning` algorithm.
 16. Generic runtime owner law is not duplicated here. Resolve these owners through `vida protocol view <id>` or the mapped runtime instruction docs when a case needs the full rule:
@@ -186,7 +182,7 @@ Generic defective-runtime recovery law is owned by the orchestration, TaskFlow, 
 
 1. Prefer normal `vida orchestrator-init`, TaskFlow, run-graph, lane, dispatch, `vida agent-init`, `vida doctor`, and DocFlow surfaces before emulation.
 2. If one of those surfaces is itself defective, record the blocker in TaskFlow when writable and keep `active_bounded_unit`, `why_this_unit`, and `sequential_vs_parallel_posture` explicit.
-3. Use `docs/process/project-error-search-runtime-diagnostics-protocol.md` for VIDA command/blocker evidence and `docs/process/generic-runtime-protocol-promotion-plan.md` before promoting any reusable repair rule.
+3. Use `docs/process/project-error-search-runtime-diagnostics-protocol.md` for VIDA command/blocker evidence and promote reusable repair rules only through the mapped generic runtime owner protocols.
 4. Keep local emulation bounded to diagnosis, shaping, or the smallest active recovery unit needed to restore the canonical runtime path.
 5. Never invent receipts, delete runtime state by hand, or treat advisory output as write authority.
 6. Exit emulation when canonical surfaces can again select, dispatch, continue, recover, diagnose, and close the active bounded unit with receipt-backed evidence.

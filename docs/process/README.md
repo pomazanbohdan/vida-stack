@@ -61,43 +61,39 @@ Canonical entrypoints:
    - canonical framework naming law and sequential rename-wave protocol for instruction artifacts
 24. `docs/process/framework-source-lineage-index.md`
    - project-owned provenance index for deleted framework-formation plans/research documents and their promoted canonical homes
-25. `docs/process/framework-three-layer-refactoring-audit.md`
-   - unified-format consolidated report for the first three refactored framework layers: `core`, orchestration shell, and runtime-family execution
-26. `docs/process/release-formatting-protocol.md`
+25. `docs/process/release-formatting-protocol.md`
    - canonical project process for rendering clean public GitHub release pages from canonical release-note artifacts
-27. `docs/process/external-cli-carrier-operator-procedure.md`
+26. `docs/process/external-cli-carrier-operator-procedure.md`
    - canonical project operator procedure for external CLI carrier auth repair, model fixation, and smoke validation
-28. `docs/process/github-issues-triage-guide.md`
+27. `docs/process/github-issues-triage-guide.md`
    - project-owned process for GitHub Issues label taxonomy, triage, diagnostic publication, and issue-form alignment
-29. `docs/process/github-pr-processing-protocol.md`
+28. `docs/process/github-pr-processing-protocol.md`
    - project-owned process for validating, merging or closing PRs, manually integrating useful stale fixes, deleting branches, and returning to `main`
-30. `docs/process/command-timing-and-gate-optimization-protocol.md`
+29. `docs/process/command-timing-and-gate-optimization-protocol.md`
     - project-owned process for timing significant operations, diagnosing slow gates, and turning repeated command/script/CI latency into optimization work
-31. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
+30. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
      - project-owned process overlay for applying generic `Error Search / Bug Reasoning` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
-32. `docs/process/generic-runtime-protocol-promotion-plan.md`
-     - project-owned plan for promoting reusable project workflow law into generic runtime protocols while keeping local residue in project overlays
-33. `docs/process/multi-agent-stage-ensemble-protocol.md`
+31. `docs/process/multi-agent-stage-ensemble-protocol.md`
      - proposed project process architecture for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
-34. `docs/process/vida-runtime-development-environment.md`
+32. `docs/process/vida-runtime-development-environment.md`
      - compact project-owned runbook for keeping runtime development skills, TaskFlow, DocFlow, GitHub issue processing, and operator-efficiency work aligned
-35. `docs/product/spec/feature-design-and-adr-model.md`
+33. `docs/product/spec/feature-design-and-adr-model.md`
     - product-law owner for the split between structured feature/change design documents and linked ADRs
-36. `docs/framework/templates/feature-design-document.template.md`
+34. `docs/framework/templates/feature-design-document.template.md`
     - framework-owned reusable feature/change design template with stable sections and bounded variable fields
-37. `docs/process/runtime-defect-function-option-matrix-protocol.md`
+35. `docs/process/runtime-defect-function-option-matrix-protocol.md`
      - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
-38. `docs/process/agent-model-evaluation-log.md`
+36. `docs/process/agent-model-evaluation-log.md`
      - project-owned log for per-task agent model quality, routing, validation, token/tool telemetry, and next-task model-selection evidence
 
 -----
 artifact_path: process/readme
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-06-07
+artifact_revision: 2026-06-12
 schema_version: '1'
 status: canonical
 source_path: docs/process/README.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: 2026-06-07T00:00:00+03:00
+updated_at: 2026-06-12T00:00:00+03:00
 changelog_ref: README.changelog.jsonl

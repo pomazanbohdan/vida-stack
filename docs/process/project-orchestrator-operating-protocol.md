@@ -42,8 +42,7 @@ For active project development orchestration, the minimum project-side read set 
 
 1. `docs/process/project-orchestrator-operating-protocol.md`
 2. `docs/process/project-packet-and-lane-runtime-capsule.md`
-3. `docs/process/generic-runtime-protocol-promotion-plan.md` when a rule may belong in generic runtime owners
-4. `docs/product/spec/current-spec-map.md` when product/spec closure context is active
+3. `docs/product/spec/current-spec-map.md` when product/spec closure context is active
 
 The orchestrator should not widen beyond that set unless a blocker or ambiguity requires it.
 
@@ -545,10 +544,10 @@ If those answers are not visible from the minimum read set, do not continue into
 artifact_path: process/project-orchestrator-operating-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-02'
+artifact_revision: '2026-06-12'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: 2026-06-03T15:45:00+03:00
+updated_at: 2026-06-12T00:00:00+03:00
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl

@@ -78,14 +78,13 @@ Runtime matrix rule:
 
 Primary owner references for the three-level spine:
 
-1. `docs/process/framework-three-layer-refactoring-audit.md`
-2. `instruction-contracts/meta.core-protocol-standard-protocol.md`
-3. `docs/product/spec/framework-project-documentation-layer-model.md`
-4. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-5. `docs/process/framework-source-lineage-index.md`
-6. `system-maps/framework.protocol-layers-map.md`
-7. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
-8. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
+1. `instruction-contracts/meta.core-protocol-standard-protocol.md`
+2. `docs/product/spec/framework-project-documentation-layer-model.md`
+3. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
+4. `docs/process/framework-source-lineage-index.md`
+5. `system-maps/framework.protocol-layers-map.md`
+6. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
+7. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
 
 Upper-layer derivation rule:
 
@@ -462,10 +461,10 @@ This spec absorbs and concentrates runtime-layer law previously scattered across
 artifact_path: product/spec/canonical-runtime-layer-matrix
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-15'
+artifact_revision: '2026-06-12'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-runtime-layer-matrix.md
 created_at: '2026-03-10T15:01:10+02:00'
-updated_at: 2026-05-15T09:13:16.6074088Z
+updated_at: 2026-06-12T00:00:00+03:00
 changelog_ref: canonical-runtime-layer-matrix.changelog.jsonl

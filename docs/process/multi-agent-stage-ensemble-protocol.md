@@ -16,7 +16,7 @@ model profiles before the main orchestrator accepts a canonical result.
 
 This protocol records the follow-up architecture requested after the active
 codebase refactoring epic. It is project process guidance until promoted into
-generic runtime owners through `docs/process/generic-runtime-protocol-promotion-plan.md`.
+the mapped generic runtime owner protocols.
 
 ## External Architecture Inputs
 
@@ -364,10 +364,10 @@ attempt and consolidation workflow depends on safe task-note mutation.
 artifact_path: process/multi-agent-stage-ensemble-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-06-03
+artifact_revision: 2026-06-12
 schema_version: '1'
 status: proposed
 source_path: docs/process/multi-agent-stage-ensemble-protocol.md
 created_at: 2026-06-03T14:40:00+03:00
-updated_at: 2026-06-03T18:30:00+03:00
+updated_at: 2026-06-12T00:00:00+03:00
 changelog_ref: multi-agent-stage-ensemble-protocol.changelog.jsonl

@@ -26,7 +26,6 @@
 > - some proof-surface commands declared in specs are still fail-closed/unsupported in the launcher.
 >
 > **Internal validation status:** the current framework/spec stack has passed bounded documentation/runtime checks (`check`, `activation-check`, `protocol-coverage-check`, `proofcheck`), exact-version release manifest checks, and post-fix CLI smoke for the installed `vida` binary.
-> - consolidated audit: [docs/process/framework-three-layer-refactoring-audit.md](docs/process/framework-three-layer-refactoring-audit.md)
 > - proven environment/status conditions: [docs/process/vida1-development-conditions.md](docs/process/vida1-development-conditions.md)
 
 > [!IMPORTANT]
@@ -456,10 +455,10 @@ For detailed rules, read [CONTRIBUTING.md](CONTRIBUTING.md).
 artifact_path: project/repository/readme
 artifact_type: repository_doc
 artifact_version: '1'
-artifact_revision: '2026-06-01'
+artifact_revision: '2026-06-12'
 schema_version: '1'
 status: canonical
 source_path: README.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-06-01T17:45:00+03:00'
+updated_at: '2026-06-12T00:00:00+03:00'
 changelog_ref: README.changelog.jsonl
