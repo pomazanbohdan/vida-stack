@@ -1554,6 +1554,12 @@ impl StateStore {
             .map(|task| (task.id.clone(), task))
             .collect::<BTreeMap<_, _>>();
         let mut touched_task_ids = BTreeSet::new();
+        let import_root_task_ids = records
+            .iter()
+            .filter(|(_, record)| !work_item_requires_parent(&record.issue_type))
+            .map(|(_, record)| record.id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
 
         for (line, mut record) in records {
             let task_id = record.id.trim().to_string();
@@ -1600,6 +1606,29 @@ impl StateStore {
                         ),
                         thread_id: String::new(),
                     });
+                }
+            }
+            let has_parent_edge = record
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.edge_type == "parent-child");
+            if !has_parent_edge
+                && !Self::task_status_is_closed_like(&record.status)
+                && work_item_requires_parent(&record.issue_type)
+            {
+                if let [root_task_id] = import_root_task_ids.as_slice() {
+                    if root_task_id != &task_id {
+                        record.dependencies.push(TaskDependencyJsonlRecord {
+                            issue_id: task_id.clone(),
+                            depends_on_id: root_task_id.clone(),
+                            edge_type: "parent-child".to_string(),
+                            created_at: record.updated_at.clone(),
+                            created_by: record.created_by.clone(),
+                            metadata: "{\"source\":\"single_root_jsonl_import_compat\"}"
+                                .to_string(),
+                            thread_id: String::new(),
+                        });
+                    }
                 }
             }
 
