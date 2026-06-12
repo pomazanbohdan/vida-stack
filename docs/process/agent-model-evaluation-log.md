@@ -1263,6 +1263,78 @@ Dynamic criteria final step:
    command `--help`. A green single topic is not enough if the broad failure came
    from family-level compatibility assertions.
 
+## 2026-06-12 - Consume advance TOON expectation alignment
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `c385179fc align consume advance toon expectation`
+- Goal: align the consume-advance default TOON smoke assertion with the
+  canonical operator-contract behavior that lowercases `next_actions`.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_advance_default_output_is_compact_toon_when_blocked -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida operator_contracts::tests:: -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke` after the slice: `247 passed`,
+  `26 failed`.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The failure looked like a missing action
+  string, but source review showed `canonical_next_action_entries` intentionally
+  lowercases actions and its unit tests enforce that contract.
+- Validator: exact smoke plus `operator_contracts::tests::`, 9/10. The proof
+  tied the public assertion to the lower-level contract instead of weakening the
+  check blindly.
+- Residual: broad boot_smoke still fails in status/recovery/consume-final,
+  protocol-binding, run-graph, and stack-overflow clusters.
+
+Post-Task Self-Analysis:
+- Worked: checked contract owner before changing product renderer.
+- Worked: exact smoke and contract unit proof made the test-only change
+  defensible.
+- Waste: one manual reproduction was flawed because it did not run inside the
+  bootstrapped project root, but it still exposed the lowercased output shape.
+- Risk: test-only fixes can hide regressions; this one is acceptable because the
+  expected case now matches an explicit unit-tested contract.
+- Meta-analysis remediation: when a public smoke assertion conflicts with a
+  contract unit, classify whether the smoke test is stale before editing product
+  code.
+- Docs update: yes; this STOP record adds the smoke-vs-contract criterion.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, consume-advance TOON assertion under
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: pass, broad boot_smoke improved to `247 passed`,
+   `26 failed`.
+3. Scope and non-goals stable: pass, one assertion only.
+4. Dirty worktree handled: pass, unrelated dirty files stayed unstaged.
+5. Executor cheapest capable: pass, local test correction.
+6. Validator matched risk: pass, exact smoke plus operator contract unit family.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no active agents were launched.
+9. Telemetry: partial, durations observed; tokens/cost unavailable.
+10. Avoidable commands: partial, manual reproduction missed `current_dir`.
+11. Proof strength: pass for expectation alignment.
+12. Public-surface proof: pass, public consume-advance smoke covered.
+13. Debug build: pass, cargo test rebuilt the binary.
+14. TaskFlow state: partial, classification child remains active.
+15. Staging by invariant: pass, only `boot_smoke.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP gate is recorded before next fix.
+18. Parent/wave metrics: unchanged until broad classification completes.
+19. New defects/follow-ups: next slice should target high-count status/recovery
+    and run-graph failures.
+20. Dynamic criteria generation: pass, session segment produced the
+    smoke-vs-contract criterion below.
+
+Dynamic criteria final step:
+1. Smoke-vs-contract criterion: before changing production behavior for a public
+   smoke failure, search for a lower-level contract/unit test that defines the
+   same invariant. If the lower-level contract is explicit and green, update the
+   stale smoke expectation and prove both levels together.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1272,5 +1344,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T04:54:00+03:00
+updated_at: 2026-06-12T05:03:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
