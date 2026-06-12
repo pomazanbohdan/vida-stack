@@ -670,6 +670,9 @@ async fn latest_stale_run_graph_task_authority_error(
     if !verdict.task_missing() {
         return Ok(None);
     }
+    if resume_from_persisted_final_snapshot(store, &status.run_id)? {
+        return Ok(None);
+    }
     let dispatch_receipt = store
         .run_graph_dispatch_receipt(&status.run_id)
         .await
@@ -1964,6 +1967,163 @@ fn resume_from_persisted_final_snapshot(
     Ok(!final_snapshot_missing_failure_control_evidence(
         &snapshot_path,
     ))
+}
+
+fn resume_from_latest_admissible_final_snapshot(
+    store: &super::StateStore,
+    run_id: &str,
+) -> Result<bool, String> {
+    let Some(snapshot_path) = super::latest_final_runtime_consumption_snapshot_path(store.root())?
+    else {
+        return Ok(false);
+    };
+    let snapshot_body = match std::fs::read_to_string(&snapshot_path) {
+        Ok(body) => body,
+        Err(_) => return Ok(false),
+    };
+    let snapshot_json = match serde_json::from_str::<serde_json::Value>(&snapshot_body) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Ok(false),
+    };
+    let snapshot_run_id = snapshot_json
+        .get("source_run_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            snapshot_json
+                .pointer("/payload/dispatch_receipt/run_id")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if snapshot_run_id != Some(run_id) {
+        return Ok(false);
+    }
+    Ok(!final_snapshot_missing_failure_control_evidence(
+        &snapshot_path,
+    ))
+}
+
+fn resume_from_recorded_final_snapshot(
+    store: &super::StateStore,
+    run_id: &str,
+) -> Result<bool, String> {
+    let Some(snapshot_path) =
+        super::latest_recorded_final_runtime_consumption_snapshot_path(store.root())?
+    else {
+        return Ok(false);
+    };
+    let snapshot_body = match std::fs::read_to_string(&snapshot_path) {
+        Ok(body) => body,
+        Err(_) => return Ok(false),
+    };
+    let snapshot_json = match serde_json::from_str::<serde_json::Value>(&snapshot_body) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Ok(false),
+    };
+    let snapshot_run_id = snapshot_json
+        .get("source_run_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            snapshot_json
+                .pointer("/payload/dispatch_receipt/run_id")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if snapshot_run_id != Some(run_id) {
+        return Ok(false);
+    }
+    Ok(!final_snapshot_missing_failure_control_evidence(
+        &snapshot_path,
+    ))
+}
+
+fn resume_inputs_from_latest_final_snapshot(
+    store: &super::StateStore,
+    run_id: &str,
+) -> Result<Option<ResumeInputs>, String> {
+    let Some(snapshot_path) =
+        (match super::latest_final_runtime_consumption_snapshot_path(store.root()) {
+            Ok(Some(path)) => Some(path),
+            Ok(None) | Err(_) => {
+                super::latest_recorded_final_runtime_consumption_snapshot_path(store.root())?
+            }
+        })
+    else {
+        return Ok(None);
+    };
+    if final_snapshot_missing_failure_control_evidence(&snapshot_path) {
+        return Ok(None);
+    }
+    let snapshot_body = std::fs::read_to_string(&snapshot_path).map_err(|error| {
+        format!("Failed to read latest final runtime-consumption snapshot: {error}")
+    })?;
+    let snapshot_json =
+        serde_json::from_str::<serde_json::Value>(&snapshot_body).map_err(|error| {
+            format!("Failed to parse latest final runtime-consumption snapshot: {error}")
+        })?;
+    let payload_json = snapshot_json.get("payload").unwrap_or(&snapshot_json);
+    let snapshot_run_id = snapshot_json
+        .get("source_run_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            payload_json
+                .get("dispatch_receipt")
+                .and_then(|receipt| receipt.get("run_id"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if snapshot_run_id != Some(run_id) {
+        return Ok(None);
+    }
+    let Some(packet_path) = snapshot_json
+        .get("source_dispatch_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            payload_json
+                .get("source_dispatch_packet_path")
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            payload_json
+                .get("dispatch_receipt")
+                .and_then(|receipt| receipt.get("dispatch_packet_path"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let dispatch_receipt = serde_json::from_value::<crate::state_store::RunGraphDispatchReceipt>(
+        payload_json
+            .get("dispatch_receipt")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|error| {
+        format!("Failed to decode dispatch_receipt from latest final runtime-consumption snapshot: {error}")
+    })?;
+    let packet = read_dispatch_packet(packet_path)?;
+    let role_selection = match serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(
+        payload_json
+            .get("role_selection")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    ) {
+        Ok(role_selection) => role_selection,
+        Err(_) => decode_role_selection_from_packet(
+            &packet,
+            "latest final runtime-consumption snapshot source packet",
+        )?,
+    };
+    Ok(Some(build_resume_inputs(
+        dispatch_receipt,
+        packet_path.to_string(),
+        packet,
+        role_selection,
+    )))
 }
 
 async fn runtime_consumption_resume_blocker_code(
@@ -4997,8 +5157,10 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         Ok(None) => match recover_missing_first_dispatch_receipt(store, &resolved_run_id).await? {
             Some(inputs) => return Ok(inputs),
             None => {
-                if let Some(status) = missing_task_run_graph_status.as_ref() {
-                    return Err(stale_missing_task_run_graph_resume_error(status, None));
+                if !strict_blocked_receipts {
+                    if let Some(status) = missing_task_run_graph_status.as_ref() {
+                        return Err(stale_missing_task_run_graph_resume_error(status, None));
+                    }
                 }
                 return Err(missing_dispatch_receipt_error(&resolved_run_id));
             }
@@ -5081,12 +5243,13 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         receipt.downstream_dispatch_target.as_deref().map(str::trim) == Some("closure")
             && receipt.downstream_dispatch_ready
             && receipt.downstream_dispatch_blockers.is_empty()
-            && resume_from_persisted_final_snapshot(store, &resolved_run_id)?;
+            && resume_from_latest_admissible_final_snapshot(store, &resolved_run_id)?;
     let recorded_final_hidden_by_bundle_check = !strict_blocked_receipts
         && !terminal_closure_complete
+        && missing_task_run_graph_status.is_some()
         && receipt.downstream_dispatch_target.as_deref().map(str::trim) == Some("closure")
         && receipt.downstream_dispatch_ready
-        && resume_from_persisted_final_snapshot(store, &resolved_run_id)?
+        && resume_from_latest_admissible_final_snapshot(store, &resolved_run_id)?
         && latest_runtime_consumption_snapshot_after_recorded_final_is_bundle_check(store.root())?;
     let explicit_task_graph_task_binding = store
         .run_graph_continuation_binding(&resolved_run_id)
@@ -5345,19 +5508,24 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         }
     }
     if recorded_final_hidden_by_bundle_check && !explicit_task_graph_task_binding {
-        let packet_path = receipt
-            .dispatch_packet_path
-            .clone()
-            .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
-        let packet = read_dispatch_packet(&packet_path)?;
-        validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
-        let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
-        let resume = terminal_closure_complete_resume_from_root_receipt(
-            &receipt,
-            packet_path,
-            packet,
-            role_selection,
-        );
+        let resume = if missing_task_run_graph_status.is_some() {
+            resume_inputs_from_latest_final_snapshot(store, &resolved_run_id)?
+                .ok_or_else(|| missing_dispatch_packet_path_error(false))?
+        } else {
+            let packet_path = receipt
+                .dispatch_packet_path
+                .clone()
+                .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
+            let packet = read_dispatch_packet(&packet_path)?;
+            validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
+            let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
+            terminal_closure_complete_resume_from_root_receipt(
+                &receipt,
+                packet_path,
+                packet,
+                role_selection,
+            )
+        };
         record_run_graph_replay_lineage_receipt_for_resume(
             store,
             &receipt,
@@ -5369,6 +5537,22 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     }
     if !explicit_task_graph_task_binding && !followed_explicit_task_graph_binding_redirect {
         if let Some(status) = missing_task_run_graph_status.as_ref() {
+            if !strict_blocked_receipts
+                && resume_from_persisted_final_snapshot(store, &resolved_run_id)?
+            {
+                if let Some(resume) =
+                    resume_inputs_from_latest_final_snapshot(store, &resolved_run_id)?
+                {
+                    record_run_graph_replay_lineage_receipt_for_resume(
+                        store,
+                        &receipt,
+                        &resume,
+                        "persisted_final_snapshot",
+                    )
+                    .await?;
+                    return Ok(resume);
+                }
+            }
             return Err(stale_missing_task_run_graph_resume_error(
                 status,
                 Some(&receipt),
@@ -6174,7 +6358,9 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         Ok(verdict)
                             if verdict.task_missing()
                                 && (status.active_node == "host_bridge"
-                                    || status.policy_gate == "host_tool_bridge_adapter_required") =>
+                                    || status.policy_gate == "host_tool_bridge_adapter_required")
+                                && !resume_from_persisted_final_snapshot(&store, run_id)
+                                    .unwrap_or(false) =>
                         {
                             let receipt = store.run_graph_dispatch_receipt(run_id).await.ok().flatten();
                             let error =

@@ -126,6 +126,8 @@ fn consume_resume_error_kind(error: &str) -> TaskflowDiagnosticKind {
         TaskflowDiagnosticKind::ContinuationBindingNotResumeable
     } else if error.contains("Run-graph resume gate denied") && error.contains("recovery_ready") {
         TaskflowDiagnosticKind::RunGraphRecoveryNotReady
+    } else if error.contains("Persisted dispatch receipt expects dispatch_packet_path") {
+        TaskflowDiagnosticKind::RunGraphRecoveryNotReady
     } else if error.contains("No persisted run-graph dispatch receipt exists")
         || error.contains("missing receipt recovery could not load dispatch context")
     {
