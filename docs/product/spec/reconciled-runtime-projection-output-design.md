@@ -201,7 +201,7 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-- `docs/product/spec/fix-continuation-reconciliation-resumed-executed-design.md`
+- Historical predecessor: continuation reconciliation repair packet.
 - `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
 
 -----

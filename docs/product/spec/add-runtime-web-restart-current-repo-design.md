@@ -143,7 +143,7 @@ Will implement / choose:
 - Add downstream project adapters through config-owned process groups.
 
 ## References
-- `docs/product/spec/fix-status-surface-external-cli-readiness-design.md`
+- Historical predecessor: external CLI readiness repair packet.
 - `docs/process/project-error-search-runtime-diagnostics-protocol.md`
 - `docs/process/command-timing-and-gate-optimization-protocol.md`
 
