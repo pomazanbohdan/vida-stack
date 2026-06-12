@@ -6280,6 +6280,10 @@ async fn derive_seeded_run_graph_status_with_stage(
             );
             selection.execution_plan =
                 build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
+            inject_configured_dev_team_route_into_execution_plan(
+                &mut selection.execution_plan,
+                &route,
+            );
             inject_task_planner_metadata(&mut selection, &task.planner_metadata);
             if let Some(path) =
                 existing_design_backed_task_design_doc_path(store, &bounded_task_id).await
@@ -6484,50 +6488,48 @@ fn collect_disabled_external_backend_refs_from_value(
     refs: &mut Vec<serde_json::Value>,
     seen: &mut BTreeSet<String>,
 ) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, child) in map {
-                let child_path = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
-                if ACTUATABLE_SELECTED_BACKEND_KEYS.contains(&key.as_str()) {
-                    if let Some(backend_id) = child.as_str().map(str::trim) {
-                        let seen_key = format!("{child_path}\u{1f}{backend_id}");
-                        if seen.insert(seen_key) {
-                            if let Some(reference) = disabled_external_backend_ref_from_overlay(
-                                overlay,
-                                backend_id,
-                                &child_path,
-                            ) {
-                                refs.push(reference);
+    const MAX_BACKEND_REF_SCAN_DEPTH: usize = 96;
+    const MAX_BACKEND_REF_SCAN_NODES: usize = 20_000;
+
+    let mut stack = vec![(value, path.to_string(), 0usize)];
+    let mut visited_nodes = 0usize;
+    while let Some((value, path, depth)) = stack.pop() {
+        visited_nodes += 1;
+        if visited_nodes > MAX_BACKEND_REF_SCAN_NODES || depth > MAX_BACKEND_REF_SCAN_DEPTH {
+            continue;
+        }
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    let child_path = if path.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    if ACTUATABLE_SELECTED_BACKEND_KEYS.contains(&key.as_str()) {
+                        if let Some(backend_id) = child.as_str().map(str::trim) {
+                            let seen_key = format!("{child_path}\u{1f}{backend_id}");
+                            if seen.insert(seen_key) {
+                                if let Some(reference) = disabled_external_backend_ref_from_overlay(
+                                    overlay,
+                                    backend_id,
+                                    &child_path,
+                                ) {
+                                    refs.push(reference);
+                                }
                             }
                         }
                     }
+                    stack.push((child, child_path, depth + 1));
                 }
-                collect_disabled_external_backend_refs_from_value(
-                    overlay,
-                    child,
-                    &child_path,
-                    refs,
-                    seen,
-                );
             }
-        }
-        serde_json::Value::Array(values) => {
-            for (index, child) in values.iter().enumerate() {
-                let child_path = format!("{path}[{index}]");
-                collect_disabled_external_backend_refs_from_value(
-                    overlay,
-                    child,
-                    &child_path,
-                    refs,
-                    seen,
-                );
+            serde_json::Value::Array(values) => {
+                for (index, child) in values.iter().enumerate() {
+                    stack.push((child, format!("{path}[{index}]"), depth + 1));
+                }
             }
+            _ => {}
         }
-        _ => {}
     }
 }
 
@@ -6556,15 +6558,19 @@ fn dispatch_context_route_assignment_catalog_drift(
     state_root: &std::path::Path,
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Option<serde_json::Value> {
+    set_dispatch_init_timeout_stage(None, "drift_resolve_project_root");
     let project_root =
         crate::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(state_root);
+    set_dispatch_init_timeout_stage(None, "drift_load_model_profile_catalog");
     let catalog = crate::runtime_dispatch_state::current_project_model_profile_catalog_for_root(
         project_root.as_ref(),
     );
+    set_dispatch_init_timeout_stage(None, "drift_load_project_overlay");
     let overlay =
         crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root.as_ref())
             .ok();
     if let Some(overlay) = overlay.as_ref() {
+        set_dispatch_init_timeout_stage(None, "drift_scan_execution_plan_disabled_backends");
         if let Some(drift) = disabled_external_backend_refs_payload_for_value_from_overlay(
             overlay,
             &role_selection.execution_plan,
@@ -6579,17 +6585,21 @@ fn dispatch_context_route_assignment_catalog_drift(
             }));
         }
     }
+    set_dispatch_init_timeout_stage(None, "drift_collect_dispatch_targets");
     for target in dispatch_init_route_targets(&role_selection.execution_plan) {
+        set_dispatch_init_timeout_stage(None, "drift_lookup_route_for_target");
         let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
             &role_selection.execution_plan,
             &target,
         );
+        set_dispatch_init_timeout_stage(None, "drift_build_route_explain_payload");
         let payload = crate::taskflow_routing::route_explain_payload(
             &role_selection.execution_plan,
             &target,
             route,
         );
         if !catalog.is_empty() {
+            set_dispatch_init_timeout_stage(None, "drift_check_catalog_drift");
             if let Some(drift) =
                 crate::runtime_dispatch_state::route_assignment_catalog_drift_payload(
                     &payload, &catalog,
@@ -6602,6 +6612,7 @@ fn dispatch_context_route_assignment_catalog_drift(
             }
         }
         if let Some(overlay) = overlay.as_ref() {
+            set_dispatch_init_timeout_stage(None, "drift_check_overlay_disabled_backends");
             if let Some(drift) =
                 crate::taskflow_proxy::disabled_external_backend_refs_payload_from_overlay(
                     overlay, &payload,
@@ -7315,6 +7326,61 @@ fn configured_dev_team_lane_selection_from_snapshot(
         execution_plan: serde_json::Value::Null,
         reason: "configured_dev_team_first_step_dispatch_init".to_string(),
     }
+}
+
+fn inject_configured_dev_team_route_into_execution_plan(
+    execution_plan: &mut serde_json::Value,
+    route: &crate::dev_team_sequence_contract::ConfiguredDevTeamTaskRoute,
+) {
+    let Some(root) = execution_plan.as_object_mut() else {
+        return;
+    };
+    let development_flow = root
+        .entry("development_flow".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(development_flow) = development_flow.as_object_mut() else {
+        return;
+    };
+    let dispatch_contract = development_flow
+        .entry("dispatch_contract".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(dispatch_contract) = dispatch_contract.as_object_mut() else {
+        return;
+    };
+    let lane_catalog = dispatch_contract
+        .entry("lane_catalog".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(lane_catalog) = lane_catalog.as_object_mut() else {
+        return;
+    };
+    lane_catalog.insert(
+        route.dispatch_target.clone(),
+        serde_json::json!({
+            "dispatch_target": route.dispatch_target,
+            "runtime_role": route.runtime_role,
+            "task_class": route.task_class,
+            "runtime_assignment": {
+                "enabled": true,
+                "runtime_role": route.runtime_role,
+                "task_class": route.task_class,
+                "activation_runtime_role": route.runtime_role,
+                "selected_backend_id": "internal_subagents",
+                "selected_dispatch_backend_id": "internal_subagents",
+            },
+            "carrier_runtime_assignment": {
+                "enabled": true,
+                "runtime_role": route.runtime_role,
+                "task_class": route.task_class,
+                "activation_runtime_role": route.runtime_role,
+                "selected_backend_id": "internal_subagents",
+                "selected_dispatch_backend_id": "internal_subagents",
+            },
+            "activation": {
+                "activation_runtime_role": route.runtime_role,
+                "task_class": route.task_class,
+            },
+        }),
+    );
 }
 
 fn apply_configured_dev_team_route_to_status(

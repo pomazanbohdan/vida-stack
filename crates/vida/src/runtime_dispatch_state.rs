@@ -1163,11 +1163,10 @@ pub(crate) fn downstream_activation_fields(
         ),
         "closure" => ("closure".to_string(), None, None, None),
         _ => {
-            let lane =
-                dispatch_contract_lane(&role_selection.execution_plan, &policy_dispatch_target)
-                    .or_else(|| {
-                        dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)
-                    });
+            let lane = dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)
+                .or_else(|| {
+                    dispatch_contract_lane(&role_selection.execution_plan, &policy_dispatch_target)
+                });
             (
                 "agent_lane".to_string(),
                 Some("vida agent-init".to_string()),
@@ -1188,50 +1187,68 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
     execution_plan: &'a serde_json::Value,
     dispatch_target: &str,
 ) -> Option<&'a serde_json::Value> {
-    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
-    let dispatch_target = dispatch_target.as_str();
+    let requested_dispatch_target = dispatch_target.trim();
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, requested_dispatch_target);
+    let dispatch_target = policy_dispatch_target.as_str();
     let development_flow = &execution_plan["development_flow"];
-    if dispatch_target == "analysis" {
-        if let Some(route) = development_flow
-            .get("analysis")
-            .filter(|value| !value.is_null())
-        {
-            return Some(route);
+
+    let mut targets = Vec::new();
+    for target in [requested_dispatch_target, dispatch_target] {
+        if !target.is_empty() && !targets.iter().any(|seen| seen == target) {
+            targets.push(target.to_string());
         }
-        return development_flow
-            .get("implementation")
-            .filter(|value| !value.is_null());
     }
     if let Some(canonical_target) =
         dispatch_target_for_runtime_role(execution_plan, dispatch_target)
             .filter(|target| target != dispatch_target)
     {
-        if let Some(route) =
-            execution_plan_route_for_dispatch_target(execution_plan, &canonical_target)
-        {
-            return Some(route);
+        if !targets.iter().any(|seen| seen == &canonical_target) {
+            targets.push(canonical_target);
         }
     }
-    let canonical_route_key = match dispatch_target {
-        "implementer" | "writer" => Some("implementation"),
-        "execution_preparation" => Some("architecture"),
-        _ => None,
-    };
-    if let Some(route_key) = canonical_route_key {
+
+    for target in targets {
+        let target = target.as_str();
+        if target == "analysis" {
+            if let Some(route) = development_flow
+                .get("analysis")
+                .filter(|value| !value.is_null())
+            {
+                return Some(route);
+            }
+            if let Some(route) = development_flow
+                .get("implementation")
+                .filter(|value| !value.is_null())
+            {
+                return Some(route);
+            }
+        }
+        let canonical_route_key = match target {
+            "implementer" | "writer" => Some("implementation"),
+            "execution_preparation" => Some("architecture"),
+            _ => None,
+        };
+        if let Some(route_key) = canonical_route_key {
+            if let Some(route) = development_flow
+                .get(route_key)
+                .filter(|value| !value.is_null())
+            {
+                return Some(route);
+            }
+        }
         if let Some(route) = development_flow
-            .get(route_key)
+            .get(target)
             .filter(|value| !value.is_null())
         {
             return Some(route);
         }
+        if let Some(route) = dispatch_contract_lane(execution_plan, target) {
+            return Some(route);
+        }
     }
-    if let Some(route) = development_flow
-        .get(dispatch_target)
-        .filter(|value| !value.is_null())
-    {
-        return Some(route);
-    }
-    dispatch_contract_lane(execution_plan, dispatch_target)
+
+    None
 }
 
 fn non_empty_assignment_string(assignment: &serde_json::Value, key: &str) -> bool {
@@ -1318,45 +1335,55 @@ pub(crate) fn dispatch_target_runtime_assignment(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> (serde_json::Value, &'static str) {
-    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
-    let dispatch_target = dispatch_target.as_str();
-    if let Some((assignment, source)) =
-        execution_plan_route_for_dispatch_target(execution_plan, dispatch_target).and_then(
-            |route| {
-                authoritative_runtime_assignment_candidate(runtime_assignment_from_route(route))
-                    .map(|assignment| {
-                        let source = if route.get("carrier_runtime_assignment").is_some() {
-                            "route_carrier_runtime_assignment"
-                        } else {
-                            "route_runtime_assignment"
-                        };
-                        (assignment, source)
-                    })
-            },
-        )
-    {
-        return (assignment, source);
+    let requested_dispatch_target = dispatch_target.trim();
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, requested_dispatch_target);
+    let mut targets = Vec::new();
+    for target in [requested_dispatch_target, policy_dispatch_target.as_str()] {
+        if !target.is_empty() && !targets.iter().any(|seen| seen == target) {
+            targets.push(target.to_string());
+        }
     }
 
-    if let Some((assignment, source)) =
-        legacy_dispatch_contract_activation_for_target(execution_plan, dispatch_target).and_then(
-            |(activation, source)| {
+    for dispatch_target in targets {
+        let dispatch_target = dispatch_target.as_str();
+        if let Some((assignment, source)) =
+            execution_plan_route_for_dispatch_target(execution_plan, dispatch_target).and_then(
+                |route| {
+                    authoritative_runtime_assignment_candidate(runtime_assignment_from_route(route))
+                        .map(|assignment| {
+                            let source = if route.get("carrier_runtime_assignment").is_some() {
+                                "route_carrier_runtime_assignment"
+                            } else {
+                                "route_runtime_assignment"
+                            };
+                            (assignment, source)
+                        })
+                },
+            )
+        {
+            return (assignment, source);
+        }
+
+        if let Some((assignment, source)) =
+            legacy_dispatch_contract_activation_for_target(execution_plan, dispatch_target)
+                .and_then(|(activation, source)| {
+                    authoritative_runtime_assignment_candidate(activation)
+                        .map(|assignment| (assignment, source))
+                })
+        {
+            return (assignment, source);
+        }
+
+        if let Some((assignment, source)) = dispatch_contract_lane(execution_plan, dispatch_target)
+            .map(dispatch_contract_lane_activation)
+            .and_then(|activation| {
                 authoritative_runtime_assignment_candidate(activation)
-                    .map(|assignment| (assignment, source))
-            },
-        )
-    {
-        return (assignment, source);
-    }
-
-    if let Some((assignment, source)) = dispatch_contract_lane(execution_plan, dispatch_target)
-        .map(dispatch_contract_lane_activation)
-        .and_then(|activation| {
-            authoritative_runtime_assignment_candidate(activation)
-                .map(|assignment| (assignment, "dispatch_contract_lane_activation"))
-        })
-    {
-        return (assignment, source);
+                    .map(|assignment| (assignment, "dispatch_contract_lane_activation"))
+            })
+        {
+            return (assignment, source);
+        }
     }
 
     if let Some(assignment) = authoritative_runtime_assignment_candidate(
@@ -7140,15 +7167,20 @@ pub(crate) fn runtime_packet_handoff_task_class_for_plan(
     dispatch_target: &str,
     handoff_runtime_role: &str,
 ) -> String {
-    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
-    dispatch_contract_lane(execution_plan, &dispatch_target)
-        .and_then(|lane| lane["task_class"].as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            runtime_packet_handoff_task_class(&dispatch_target, handoff_runtime_role).to_string()
-        })
+    let requested_dispatch_target = dispatch_target.trim();
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, requested_dispatch_target);
+    for target in [requested_dispatch_target, policy_dispatch_target.as_str()] {
+        if let Some(task_class) = dispatch_contract_lane(execution_plan, target)
+            .and_then(|lane| lane["task_class"].as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        {
+            return task_class;
+        }
+    }
+    runtime_packet_handoff_task_class(&policy_dispatch_target, handoff_runtime_role).to_string()
 }
 
 fn packet_nonempty_string(value: Option<&serde_json::Value>) -> bool {
