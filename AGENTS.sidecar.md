@@ -20,27 +20,29 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `docs/product/index.md`
 3. Product spec map:
    - `docs/product/spec/current-spec-map.md`
-4. Product spec provenance companion:
+4. Product spec detailed catalog:
+   - `docs/product/spec/current-spec-catalog.md`
+5. Product spec provenance companion:
    - `docs/product/spec/current-spec-provenance-map.md`
-5. Project documentation system:
+6. Project documentation system:
    - `docs/product/spec/project-documentation-law.md`
-6. Documentation/product alignment matrix:
+7. Documentation/product alignment matrix:
    - `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-7. Canonical runtime readiness law used by the project:
+8. Canonical runtime readiness law used by the project:
    - `docs/product/spec/canonical-runtime-readiness-law.md`
-8. Canonical runtime layer matrix:
+9. Canonical runtime layer matrix:
    - `docs/product/spec/canonical-runtime-layer-matrix.md`
-9. Documentation tooling map:
+10. Documentation tooling map:
    - `docs/process/documentation-tooling-map.md`
-10. Project agent-extension map:
+11. Project agent-extension map:
    - `docs/process/agent-extensions/README.md`
-11. Command timing and gate optimization protocol:
+12. Command timing and gate optimization protocol:
    - `docs/process/command-timing-and-gate-optimization-protocol.md`
-12. Project Error Search runtime diagnostics protocol:
+13. Project Error Search runtime diagnostics protocol:
     - `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-13. Generic runtime protocol promotion plan:
+14. Generic runtime protocol promotion plan:
     - `docs/process/generic-runtime-protocol-promotion-plan.md`
-14. Project-local TaskFlow runtime state and operator surfaces:
+15. Project-local TaskFlow runtime state and operator surfaces:
     - `.vida/data/state/`
     - `vida taskflow help`
 ## Bootstrap Read Path
@@ -246,10 +248,10 @@ Verification checklist for complex or architectural work:
 artifact_path: project/repository/agents.sidecar
 artifact_type: bootstrap_doc
 artifact_version: '1'
-artifact_revision: '2026-03-15'
+artifact_revision: '2026-06-12'
 schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-06-05T11:08:00+03:00
+updated_at: 2026-06-12T00:00:00+03:00
 changelog_ref: AGENTS.sidecar.changelog.jsonl
