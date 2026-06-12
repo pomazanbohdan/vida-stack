@@ -1,12 +1,12 @@
-# Model Provider Price Catalog Lifecycle Design
+# Model Provider Price Catalog Lifecycle Contract
 
-Status: proposed
+Status: active product contract
 
 ## Summary
-- Feature / change: define the first-class model/provider price-catalog lifecycle contract for source-of-truth ownership, provider/model availability inventory, freshness metadata, update receipts, readiness/status projection, and price-aware candidate diagnostics
+- Contract: define the first-class model/provider price-catalog lifecycle contract for source-of-truth ownership, provider/model availability inventory, freshness metadata, update receipts, readiness/status projection, and price-aware candidate diagnostics
 - Owner layer: `mixed`
 - Runtime surface: `project activation | init | status | taskflow`
-- Status: `proposed`
+- Status: active product contract
 
 ## Current Context
 - Existing system overview
@@ -81,7 +81,7 @@ Status: proposed
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
+  - `docs/product/spec/model-provider-price-catalog-lifecycle-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/README.md`
@@ -403,8 +403,8 @@ Will implement / choose:
     - if a single pricing command cannot answer the bounded question because required snapshot or receipt truth is missing, the command must emit explicit blockers and next actions rather than silently telling the operator to inspect unrelated surfaces
 
 ### Bounded File Set
-- `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
-- `docs/product/spec/model-provider-price-catalog-lifecycle-design.changelog.jsonl`
+- `docs/product/spec/model-provider-price-catalog-lifecycle-contract.md`
+- `docs/product/spec/model-provider-price-catalog-lifecycle-contract.changelog.jsonl`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
@@ -428,7 +428,7 @@ Will implement / choose:
 ## Implementation Plan
 
 ### Phase 1
-- land this design doc and register it in the active spec canon
+- keep this contract registered in the active spec canon
 - define canonical schema rows for provider inventory, model inventory, price records, freshness metadata, and update receipts
 - First proof target
   - active docs explicitly define bridge source, runtime source, receipt classes, and readiness fields without widening into code changes
@@ -454,8 +454,8 @@ Will implement / choose:
   - current evidence anchor: `vida agent-init --json --role business_analyst "<request>"`
   - future runtime check: price catalog status/query surface over active snapshot truth
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/model-provider-price-catalog-lifecycle-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
-  - `vida docflow finalize-edit docs/product/spec/model-provider-price-catalog-lifecycle-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md "record model/provider price catalog lifecycle design"`
+  - `vida docflow check --root . docs/product/spec/model-provider-price-catalog-lifecycle-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
+  - `vida docflow finalize-edit docs/product/spec/model-provider-price-catalog-lifecycle-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md "record model/provider price catalog lifecycle design"`
 
 ## Observability
 - Logging points
@@ -506,13 +506,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/model-provider-price-catalog-lifecycle-design
+artifact_path: product/spec/model-provider-price-catalog-lifecycle-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-04-24'
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/model-provider-price-catalog-lifecycle-design.md
+source_path: docs/product/spec/model-provider-price-catalog-lifecycle-contract.md
 created_at: '2026-04-24T00:00:00Z'
 updated_at: 2026-04-24T16:14:03.947458343Z
-changelog_ref: model-provider-price-catalog-lifecycle-design.changelog.jsonl
+changelog_ref: model-provider-price-catalog-lifecycle-contract.changelog.jsonl

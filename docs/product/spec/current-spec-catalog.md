@@ -83,6 +83,18 @@ Companion rule:
    Config families: `docs/process/agent-extensions/**`, `vida.config.yaml`, `.vida/logs/problem-party/**`, single-agent or multi-agent Party Chat execution plans, and runtime consumption by the TaskFlow runtime family
 5. [autonomous-report-continuation-law.md](autonomous-report-continuation-law.md)
    Config families: `vida.config.yaml`, `vida/config/instructions/**`, TaskFlow routing and autonomous execution behavior
+8. [fast-high-signal-pre-commit-contract.md](fast-high-signal-pre-commit-contract.md)
+   Config families: repository-local pre-commit hook matrix, file hygiene gates, lightweight script/diff checks, and Cargo-heavy hook exclusions for fast local proof
+   Registered path: `docs/product/spec/fast-high-signal-pre-commit-contract.md`
+8. [mempalace-vida-memory-implementation-model.md](mempalace-vida-memory-implementation-model.md)
+   Config families: VIDA memory owner-law boundaries, MemPalace donor-pattern mapping, memory validity/supersession mechanics, and ordinary-search-first runtime implementation posture
+   Registered path: `docs/product/spec/mempalace-vida-memory-implementation-model.md`
+8. [production-observability-and-operator-baselines-contract.md](production-observability-and-operator-baselines-contract.md)
+   Config families: production observability baselines, operator/tool contract fields, trace/evidence linkage, runtime SLO posture, and incident evidence bundle minimums
+   Registered path: `docs/product/spec/production-observability-and-operator-baselines-contract.md`
+8. [prompt-lifecycle-evaluation-and-safety-baseline-contract.md](prompt-lifecycle-evaluation-and-safety-baseline-contract.md)
+   Config families: prompt rollout lifecycle, evaluation runs, feedback events, safety/adversarial baseline coverage, and operator-visible prompt-change evidence
+   Registered path: `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract.md`
 8. [config-driven-host-system-runtime-contract.md](config-driven-host-system-runtime-contract.md)
    Config families: `vida.config.yaml -> host_environment.systems`, host-system template roots, runtime roots, selected host-system resolution, and config-backed host-system materialization
    Registered path: `docs/product/spec/config-driven-host-system-runtime-contract.md`
@@ -95,9 +107,9 @@ Companion rule:
 9. [host-agent-bridge-adapter-contract.md](host-agent-bridge-adapter-contract.md)
    Config families: `vida.config.yaml -> host_environment.host_agent_bridge_contract`, `host_environment.systems.<system>.host_tool_bridge`, TaskFlow host-bridge request/result/receipt adapters for Codex, Claude Code, Pi, Vibe Kanban, OpenCode, and custom host adapters
    Registered path: `docs/product/spec/host-agent-bridge-adapter-contract.md`
-9. [vida-coder-service-mode-executor-design.md](vida-coder-service-mode-executor-design.md)
+9. [vida-coder-service-mode-executor-contract.md](vida-coder-service-mode-executor-contract.md)
    Config families: `vida.config.yaml -> agent_system.subagents.vida_coder`, `vida.config.yaml -> host_environment.systems.vida_coder`, `vida.config.yaml -> service`, `vida coder`, `vida service`, typed VIDA runtime tools, session state, service worker leases, provider auth/model readiness, MCP policy gateway, and receipt-backed TaskFlow execution
-   Registered path: `docs/product/spec/vida-coder-service-mode-executor-design.md`
+   Registered path: `docs/product/spec/vida-coder-service-mode-executor-contract.md`
 9. [hybrid-host-executor-semantics-model.md](hybrid-host-executor-semantics-model.md)
    Config families: `vida.config.yaml -> host_environment`, `agent_system.subagents`, policy-selected internal/external executor semantics, and host posture versus executor backend separation
    Registered path: `docs/product/spec/hybrid-host-executor-semantics-model.md`
@@ -149,12 +161,12 @@ Companion rule:
 29. [blocked-external-coach-artifact-truth-not-reconciled-design.md](blocked-external-coach-artifact-truth-not-reconciled-design.md)
    Config families: blocked dispatch semantic-mismatch detection, run-graph projection stale truth beyond executing-only timeout cases, consume-resume continuation repair for obsolete blocked artifacts, and lane/status operator parity for mismatched blocked evidence
    Registered path: `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
-30. [test-first-runtime-defect-remediation-design.md](test-first-runtime-defect-remediation-design.md)
+30. [test-first-runtime-defect-remediation-model.md](test-first-runtime-defect-remediation-model.md)
    Config families: test-first runtime defect repair, cross-surface scenario contracts, operator actionability proof, paused defect reparenting, and one-bounded-defect-at-a-time remediation across TaskFlow runtime-family surfaces
-   Registered path: `docs/product/spec/test-first-runtime-defect-remediation-design.md`
-31. [agent-mode-test-first-delivery-flow-design.md](agent-mode-test-first-delivery-flow-design.md)
+   Registered path: `docs/product/spec/test-first-runtime-defect-remediation-model.md`
+31. [agent-mode-test-first-delivery-flow-model.md](agent-mode-test-first-delivery-flow-model.md)
     Config families: config-derived agent-mode delivery, middle-tier test authoring, orchestrator-only root posture, continuous TaskFlow actualization, cost/effectiveness telemetry, and sequential/parallel lane gating
-    Registered path: `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
+    Registered path: `docs/product/spec/agent-mode-test-first-delivery-flow-model.md`
 32. [vida-service-tui-wizard-execution-spec.md](vida-service-tui-wizard-execution-spec.md)
     Config families: service/TUI/wizard command envelope, `vida-contracts`, operation catalog, project registry, wizard state machine, service-home coordination state, fixture/in-process client proof, and staged TUI/transport rollout
     Registered path: `docs/product/spec/vida-service-tui-wizard-execution-spec.md`
@@ -181,9 +193,9 @@ Companion rule:
 1. [taskflow-task-command-parity-and-proxy-alignment-design.md](taskflow-task-command-parity-and-proxy-alignment-design.md)
    Config families: bounded Release-1 command parity for root `vida task`, compatibility routing for `vida taskflow task`, shared task-store mutation law, and help/proxy alignment
    Registered path: `docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md`
-2. [operator-output-envelope-and-bounded-rendering-design.md](operator-output-envelope-and-bounded-rendering-design.md)
+2. [operator-output-envelope-and-bounded-rendering-contract.md](operator-output-envelope-and-bounded-rendering-contract.md)
    Config families: bounded operator-output policy/envelope seam, default-summary task list JSON, explicit full export through `--all`, and Release-1 envelope parity for task inspection surfaces
-   Registered path: `docs/product/spec/operator-output-envelope-and-bounded-rendering-design.md`
+   Registered path: `docs/product/spec/operator-output-envelope-and-bounded-rendering-contract.md`
 3. [clarify-enforce-immediate-project-agent-first-design.md](clarify-enforce-immediate-project-agent-first-design.md)
    Config families: bounded clarification and enforcement for project agent-first delegated execution, anti-pause continuation law, valid release-admission snapshot selection, and packet-minimum fail-closed runtime behavior
    Registered path: `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
@@ -259,9 +271,9 @@ Companion rule:
 45. [coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md](coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md)
    Config families: coach-lane retry artifact law, explicit review-backend rotation before internal fallback, fresh runtime-dispatch packet materialization for lawful retries, and fail-closed prevention of identical same-packet timeout loops
    Registered path: `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
-46. [codex-app-agent-lifecycle-cleanup-design.md](codex-app-agent-lifecycle-cleanup-design.md)
+46. [codex-app-agent-lifecycle-cleanup-contract.md](codex-app-agent-lifecycle-cleanup-contract.md)
    Config families: bounded Codex App agent lifecycle cleanup discipline, debug-safe `agent-init` startup rendering, configured reasoning-profile projection proof, and `.codex/**` materialization parity with `vida.config.yaml`
-   Registered path: `docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md`
+   Registered path: `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
 46. [analysis-lane-can-close-implementation-without-write-evidence-design.md](analysis-lane-can-close-implementation-without-write-evidence-design.md)
    Config families: implementation completion truth, closure-candidate reconciliation gates, diagnostic-lane versus write-evidence law, and fail-closed prevention of closure-ready projection from read-only analysis execution
    Registered path: `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
@@ -277,9 +289,9 @@ Companion rule:
 50. [task-graph-adaptive-planner-design.md](task-graph-adaptive-planner-design.md)
    Config families: bounded TaskFlow PlanGraph generation and materialization, adaptive task split/spawn/replan mutations, graph explain diagnostics, scheduler dispatch preview, and task-linked execution-preparation artifact shape
    Registered path: `docs/product/spec/task-graph-adaptive-planner-design.md`
-51. [model-provider-price-catalog-lifecycle-design.md](model-provider-price-catalog-lifecycle-design.md)
+51. [model-provider-price-catalog-lifecycle-contract.md](model-provider-price-catalog-lifecycle-contract.md)
    Config families: bounded model/provider price-catalog source-of-truth, provider/model availability inventory, freshness/source metadata, dry-run/apply receipt lifecycle, init/status readiness projection, and price-aware selected/rejected candidate diagnostics
-   Registered path: `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
+   Registered path: `docs/product/spec/model-provider-price-catalog-lifecycle-contract.md`
 52. [closure-admission-evidence-table-contract.md](closure-admission-evidence-table-contract.md)
    Config families: bounded closure-admission evidence crosswalk, canonical evidence-family minimums, operator blocker parity, and closure-bundle fail-closed semantics
    Registered path: `docs/product/spec/closure-admission-evidence-table-contract.md`

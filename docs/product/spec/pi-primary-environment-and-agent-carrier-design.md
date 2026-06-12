@@ -429,7 +429,7 @@ Concise proof commands recorded across the implementation slices:
   - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
   - `docs/product/spec/host-agent-layer-status-matrix.md`
   - `docs/product/spec/hybrid-host-executor-semantics-model.md`
-  - `docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md`
+  - `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
 - Related process docs:
   - `docs/process/agent-system.md`
   - `docs/process/external-cli-carrier-operator-procedure.md`

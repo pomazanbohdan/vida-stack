@@ -35,21 +35,14 @@ Active design docs:
 - `docs/product/spec/specification-lane-scope-hardening-design.md`
 - `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
 - `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
-- `docs/product/spec/production-observability-and-operator-contract-baselines-design.md`
-- `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-design.md`
 - `docs/product/spec/bounded-release-retrieval-identity-memory-govern-design.md`
 - `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
 - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
 - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
-- `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
 - `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
-- `docs/product/spec/test-first-runtime-defect-remediation-design.md`
-- `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
 - `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
-- `docs/product/spec/mempalace-against-vida-specs-project-design-design.md`
 - `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
 - `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
-- `docs/product/spec/design-fast-high-signal-pre-commit-design.md`
 
 Current promoted runtime-control specs:
 
@@ -65,6 +58,16 @@ Current promoted runtime-control specs:
 - `docs/product/spec/codex-host-agent-boundary-and-cli-bridge-contract.md`
 - `docs/product/spec/host-agent-bridge-adapter-contract.md`
 - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
+- `docs/product/spec/test-first-runtime-defect-remediation-model.md`
+- `docs/product/spec/agent-mode-test-first-delivery-flow-model.md`
+- `docs/product/spec/fast-high-signal-pre-commit-contract.md`
+- `docs/product/spec/mempalace-vida-memory-implementation-model.md`
+- `docs/product/spec/vida-coder-service-mode-executor-contract.md`
+- `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
+- `docs/product/spec/model-provider-price-catalog-lifecycle-contract.md`
+- `docs/product/spec/operator-output-envelope-and-bounded-rendering-contract.md`
+- `docs/product/spec/production-observability-and-operator-baselines-contract.md`
+- `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract.md`
 
 -----
 artifact_path: product/spec/readme

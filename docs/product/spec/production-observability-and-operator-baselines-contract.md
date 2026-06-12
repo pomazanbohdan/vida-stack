@@ -1,12 +1,12 @@
-# Production Observability And Operator Contract Baselines Design
+# Production Observability And Operator Baselines Contract
 
-Status: `approved`
+Status: active product contract
 
 ## Summary
-- Feature / change: add bounded production observability baselines and complete operator/tool contract fields for Release-1 production workflows.
+- Contract: add bounded production observability baselines and complete operator/tool contract fields for production workflows.
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`
-- Status: `approved`
+- Status: active product contract
 
 ## Current Context
 - Release-1 specs already require production-baseline capabilities for:
@@ -45,7 +45,7 @@ Status: `approved`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/production-observability-and-operator-contract-baselines-design.md`
+  - `docs/product/spec/production-observability-and-operator-baselines-contract.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -115,7 +115,7 @@ Will implement / choose:
 - runtime dispatch / taskflow summaries that already project contract truth
 
 ### Bounded File Set
-- `docs/product/spec/production-observability-and-operator-contract-baselines-design.md`
+- `docs/product/spec/production-observability-and-operator-baselines-contract.md`
 - `docs/product/spec/README.md`
 - `crates/vida/src/release1_contracts.rs`
 - directly affected status / operator JSON surfaces
@@ -129,7 +129,7 @@ Will implement / choose:
 
 ### Phase 1
 - Identify the current production-baseline contract gaps across tracing, tool semantics, and incident/SLO artifacts.
-- First proof target: bounded design document with explicit file set and field requirements.
+- First proof target: bounded contract document with explicit file set and field requirements.
 
 ### Phase 2
 - Implement the missing runtime contract projections and tracing baseline wiring.
@@ -147,8 +147,8 @@ Will implement / choose:
 - Runtime checks:
   - inspect status/doctor/taskflow surfaces after the bounded change
 - Canonical checks:
-  - `vida docflow finalize-edit docs/product/spec/production-observability-and-operator-contract-baselines-design.md "record bounded production observability contract design"`
-  - `vida docflow check --root . docs/product/spec/production-observability-and-operator-contract-baselines-design.md`
+  - `vida docflow finalize-edit docs/product/spec/production-observability-and-operator-baselines-contract.md "record bounded production observability contract design"`
+  - `vida docflow check --root . docs/product/spec/production-observability-and-operator-baselines-contract.md`
 
 ## Observability
 - Trace/event linkage must be explicit at the runtime surface level.
@@ -171,13 +171,13 @@ Will implement / choose:
 - `crates/vida/src/release1_contracts.rs`
 
 -----
-artifact_path: product/spec/production-observability-and-operator-contract-baselines-design
+artifact_path: product/spec/production-observability-and-operator-baselines-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-20
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/production-observability-and-operator-contract-baselines-design.md
+source_path: docs/product/spec/production-observability-and-operator-baselines-contract.md
 created_at: 2026-04-20T12:18:00+03:00
 updated_at: 2026-04-20T09:22:06.51098212Z
-changelog_ref: production-observability-and-operator-contract-baselines-design.changelog.jsonl
+changelog_ref: production-observability-and-operator-baselines-contract.changelog.jsonl

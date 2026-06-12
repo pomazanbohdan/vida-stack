@@ -142,7 +142,7 @@ Will implement:
 - Future planner work can materialize packet proposals after TaskFlow owns an explicit packet-creation mutation mode.
 
 ## References
-- `docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md`
+- `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
 - `docs/process/codex-agent-configuration-guide.md`
 - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
 - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`

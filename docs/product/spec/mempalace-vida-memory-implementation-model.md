@@ -1,4 +1,6 @@
-# Mempalace Against Vida Specs Project Design Design
+# MemPalace VIDA Memory Implementation Model
+
+Status: active product model
 
 Purpose: define a bounded VIDA memory implementation path that uses VIDA specs as owner law, MemPalace as a product-pattern donor, and `memory-mcp-1file` as the strongest current technical donor for storage, search, validity, and supersession mechanics.
 
@@ -12,7 +14,7 @@ Current state:
 2. Release 1 still requires ordinary search first,
 3. governance and runtime-boundary law already belong to VIDA specs,
 4. donor repositories expose useful patterns but do not define VIDA law,
-5. the project still lacks one bounded design document that ties donor mechanics to VIDA-owned runtime constraints.
+5. the project still lacks one bounded model that ties donor mechanics to VIDA-owned runtime constraints.
 
 This design closes that gap.
 
@@ -292,7 +294,7 @@ Reason:
 Therefore sequencing remains:
 
 1. close the exception-path takeover surface,
-2. finalize this design document through canonical docflow path,
+2. finalize this model through the canonical docflow path,
 3. shape the implementation packet from the bounded file set and proof targets,
 4. only then implement the memory runtime track.
 
@@ -307,13 +309,13 @@ VIDA memory should proceed with a split-donor strategy:
 That gives VIDA a practical implementation path without importing donor architecture as root law.
 
 -----
-artifact_path: product/spec/mempalace-against-vida-specs-project-design-design
+artifact_path: product/spec/mempalace-vida-memory-implementation-model
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-08
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/mempalace-against-vida-specs-project-design-design.md
+source_path: docs/product/spec/mempalace-vida-memory-implementation-model.md
 created_at: 2026-04-08T20:55:39.055339209Z
 updated_at: 2026-04-09T05:41:17.943049337Z
-changelog_ref: mempalace-against-vida-specs-project-design-design.changelog.jsonl
+changelog_ref: mempalace-vida-memory-implementation-model.changelog.jsonl

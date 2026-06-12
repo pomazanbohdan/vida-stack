@@ -1,13 +1,13 @@
-# Codex App Agent Lifecycle Cleanup Design
+# Codex App Agent Lifecycle Cleanup Contract
 
-Status: implemented
+Status: active product contract
 
 ## Summary
 
-- Feature / change: make Codex App agent lanes orderly by proving the configured carrier/profile ladder, keeping `agent-init` smoke runnable in debug builds, and documenting the host-agent cleanup expectation.
+- Contract: make Codex App agent lanes orderly by proving the configured carrier/profile ladder, keeping `agent-init` smoke runnable in debug builds, and documenting the host-agent cleanup expectation.
 - Owner layer: mixed project/runtime
 - Runtime surface: launcher, TaskFlow, project activation, Codex App config projection
-- Status: implemented
+- Status: active product contract
 
 ## Current Context
 
@@ -48,7 +48,7 @@ Out of scope:
 
 ## Ownership And Canonical Surfaces
 
-- Project docs / specs affected: this design doc, current spec map.
+- Project docs / specs affected: this contract, current spec map.
 - Framework protocols affected: none.
 - Runtime families affected: launcher `vida`, TaskFlow bundle projection.
 - Config / receipts / runtime surfaces affected: `vida.config.yaml`, `.codex/config.toml`, `.codex/agents/*.toml`, `vida agent-init`, `vida taskflow consume agent-system`.
@@ -110,7 +110,7 @@ Will implement / choose:
 
 ### Bounded File Set
 
-- `docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md`
+- `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `crates/vida/src/main.rs`
 - `crates/vida/src/host_runtime_materialization.rs`
@@ -131,8 +131,8 @@ Will implement / choose:
 
 ### Phase 1
 
-- Add the bounded design doc and current spec map registration.
-- Proof target: `vida docflow check --root . docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md`.
+- Keep this contract and current spec map registration aligned.
+- Proof target: `vida docflow check --root . docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`.
 
 ### Phase 2
 
@@ -161,7 +161,7 @@ Will implement / choose:
   - `target/debug/vida.exe agent-init --role solution_architect --json`
   - `target/debug/vida.exe taskflow consume agent-system --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md`
+  - `vida docflow check --root . docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
 
 ## Observability
 
@@ -189,13 +189,13 @@ Will implement / choose:
 - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
 
 -----
-artifact_path: product/spec/codex-app-agent-lifecycle-cleanup-design
+artifact_path: product/spec/codex-app-agent-lifecycle-cleanup-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-05-04
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md
+source_path: docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md
 created_at: 2026-05-04T10:35:07.4486631Z
 updated_at: 2026-05-04T16:05:39.092982Z
-changelog_ref: codex-app-agent-lifecycle-cleanup-design.changelog.jsonl
+changelog_ref: codex-app-agent-lifecycle-cleanup-contract.changelog.jsonl

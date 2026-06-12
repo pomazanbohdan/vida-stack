@@ -1,12 +1,12 @@
-# Prompt Lifecycle Evaluation And Safety Baseline Design
+# Prompt Lifecycle Evaluation And Safety Baseline Contract
 
-Status: `approved`
+Status: active product contract
 
 ## Summary
-- Feature / change: add a bounded prompt lifecycle, evaluation loop, and safety baseline for Release-1 runtime workflows.
+- Contract: add a bounded prompt lifecycle, evaluation loop, and safety baseline for runtime workflows.
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`
-- Status: `approved`
+- Status: active product contract
 
 ## Current Context
 - Release-1 control law already requires:
@@ -51,7 +51,7 @@ Status: `approved`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-design.md`
+  - `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract.md`
   - `docs/product/spec/README.md`
 - Framework protocols affected:
   - none
@@ -138,7 +138,7 @@ Will implement / choose:
 - Release-1 control metrics and prompt rollout FSM specs
 
 ### Bounded File Set
-- `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-design.md`
+- `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract.md`
 - `docs/product/spec/README.md`
 - `crates/vida/src/release1_contracts.rs`
 - `crates/vida/src/agent_feedback_surface.rs`
@@ -153,9 +153,9 @@ Will implement / choose:
 ## Implementation Plan
 
 ### Phase 1
-- Finalize the bounded design and identify the smallest feedback/evaluation contract gap in code.
+- Keep this contract finalized and identify the smallest feedback/evaluation contract gap in code.
 - First proof target:
-  - canonical design document plus bounded file set
+  - canonical contract plus bounded file set
 
 ### Phase 2
 - Add typed `feedback_event` support and bounded prompt/evaluation/safety summary helpers.
@@ -175,8 +175,8 @@ Will implement / choose:
 - Runtime checks:
   - inspect `vida agent-feedback --json` and affected status-family JSON after the bounded change
 - Canonical checks:
-  - `vida docflow finalize-edit docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-design.md "record bounded prompt lifecycle, evaluation, and safety baseline design"`
-  - `vida docflow check --root . docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-design.md`
+  - `vida docflow finalize-edit docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract.md "record bounded prompt lifecycle, evaluation, and safety baseline design"`
+  - `vida docflow check --root . docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract.md`
 
 ## Observability
 - Feedback ingestion remains visible through `.vida/state/host-agent-observability.json`.
@@ -203,13 +203,13 @@ Will implement / choose:
 - `crates/vida/src/release1_contracts.rs`
 
 -----
-artifact_path: product/spec/prompt-lifecycle-evaluation-and-safety-baseline-design
+artifact_path: product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-20
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-design.md
+source_path: docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract.md
 created_at: 2026-04-20T13:05:00+03:00
 updated_at: 2026-04-20T10:01:28.4521634Z
-changelog_ref: prompt-lifecycle-evaluation-and-safety-baseline-design.changelog.jsonl
+changelog_ref: prompt-lifecycle-evaluation-and-safety-baseline-contract.changelog.jsonl

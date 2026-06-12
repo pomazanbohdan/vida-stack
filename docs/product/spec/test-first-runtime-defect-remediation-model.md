@@ -1,15 +1,15 @@
-# Test-First Runtime Defect Remediation Design
+# Test-First Runtime Defect Remediation Model
 
-Status: `proposed`
+Status: active product model
 
 Purpose: define the current defect-repair program where VIDA runtime defects are first captured as spec-backed failing tests, then fixed one bounded defect at a time.
 
 ## Summary
 
-- Feature / change: introduce a test-first remediation epic for runtime/operator defects discovered during Case 18 and later runtime self-testing.
+- Model: introduce a test-first remediation program for runtime/operator defects discovered during Case 18 and later runtime self-testing.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | status | lane | agent | route | release`
-- Status: `proposed`
+- Status: active product model
 
 ## Current Context
 
@@ -180,13 +180,13 @@ When this program becomes active, current runtime defect candidates that were be
 Pausing does not close or discard evidence. It records that the defect is now owned by the test-first remediation program and must not receive code changes until its failing test and bounded write scope are explicit.
 
 -----
-artifact_path: product/spec/test-first-runtime-defect-remediation-design
+artifact_path: product/spec/test-first-runtime-defect-remediation-model
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-05-21'
 schema_version: '1'
-status: proposed
-source_path: docs/product/spec/test-first-runtime-defect-remediation-design.md
+status: canonical
+source_path: docs/product/spec/test-first-runtime-defect-remediation-model.md
 created_at: '2026-05-21T20:30:00+03:00'
 updated_at: '2026-05-21T20:30:00+03:00'
-changelog_ref: test-first-runtime-defect-remediation-design.changelog.jsonl
+changelog_ref: test-first-runtime-defect-remediation-model.changelog.jsonl

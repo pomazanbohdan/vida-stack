@@ -1,15 +1,15 @@
-# Agent-Mode Test-First Delivery Flow Design
+# Agent-Mode Test-First Delivery Flow Model
 
-Status: `proposed`
+Status: active product model
 
 Purpose: define the project target where the root session acts as orchestrator and write-producing development is executed through configured VIDA agent roles, carriers, and model profiles.
 
 ## Summary
 
-- Feature / change: make agent-mode delivery the default operating model for runtime defect repair and ordinary bounded development.
+- Model: make agent-mode delivery the default operating model for runtime defect repair and ordinary bounded development.
 - Owner layer: `project process | runtime orchestration`
 - Runtime surface: `taskflow | agent-init | lane | dispatch | status`
-- Status: `proposed`
+- Status: active product model
 
 ## Context
 
@@ -134,17 +134,17 @@ Full functioning requires these bounded runtime/process slices:
 ## Proof Targets
 
 ```text
-vida docflow check --root . AGENTS.sidecar.md docs/process/team-development-and-orchestration-protocol.md docs/process/project-orchestrator-operating-protocol.md docs/product/spec/agent-mode-test-first-delivery-flow-design.md docs/product/spec/current-spec-map.md docs/product/spec/README.md
+vida docflow check --root . AGENTS.sidecar.md docs/process/team-development-and-orchestration-protocol.md docs/process/project-orchestrator-operating-protocol.md docs/product/spec/agent-mode-test-first-delivery-flow-model.md docs/product/spec/current-spec-map.md docs/product/spec/README.md
 ```
 
 -----
-artifact_path: product/spec/agent-mode-test-first-delivery-flow-design
+artifact_path: product/spec/agent-mode-test-first-delivery-flow-model
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-05-21'
 schema_version: '1'
-status: proposed
-source_path: docs/product/spec/agent-mode-test-first-delivery-flow-design.md
+status: canonical
+source_path: docs/product/spec/agent-mode-test-first-delivery-flow-model.md
 created_at: '2026-05-21T21:10:00+03:00'
 updated_at: '2026-05-21T21:10:00+03:00'
-changelog_ref: agent-mode-test-first-delivery-flow-design.changelog.jsonl
+changelog_ref: agent-mode-test-first-delivery-flow-model.changelog.jsonl

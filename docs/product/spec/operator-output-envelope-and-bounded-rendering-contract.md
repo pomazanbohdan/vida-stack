@@ -1,14 +1,14 @@
-# Operator Output Envelope And Bounded Rendering Design
+# Operator Output Envelope And Bounded Rendering Contract
 
-Status: proposed
+Status: active product contract
 
-Use this template for one bounded feature/change design before implementation.
+Use this contract as the bounded output envelope and rendering contract for operator-facing TaskFlow surfaces.
 
 ## Summary
-- Feature / change: introduce a centralized output policy/envelope seam and make `vida task list --json` bounded by default while preserving explicit full export through `--all --json`.
+- Contract: introduce a centralized output policy/envelope seam and make `vida task list --json` bounded by default while preserving explicit full export through `--all --json`.
 - Owner layer: `runtime-family`
 - Runtime surface: `taskflow`
-- Status: proposed
+- Status: active product contract
 
 ## Current Context
 - Existing system overview
@@ -62,7 +62,7 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/operator-output-envelope-and-bounded-rendering-design.md`
+  - `docs/product/spec/operator-output-envelope-and-bounded-rendering-contract.md`
   - future map/provenance registration follow-up if this design becomes canonical.
 - Framework protocols affected:
   - none
@@ -107,7 +107,7 @@ Will implement / choose:
 - Release-1 operator envelope remains unchanged.
 
 ### Bounded File Set
-- `docs/product/spec/operator-output-envelope-and-bounded-rendering-design.md`
+- `docs/product/spec/operator-output-envelope-and-bounded-rendering-contract.md`
 - `crates/vida/src/task_surface.rs`
 - `crates/vida/src/task_cli_render.rs`
 - Optional focused tests in the same module.
@@ -166,13 +166,13 @@ Will implement / choose:
 - `docs/framework/templates/feature-design-document.template.md`
 
 -----
-artifact_path: product/spec/operator-output-envelope-and-bounded-rendering-design
-artifact_type: document
+artifact_path: product/spec/operator-output-envelope-and-bounded-rendering-contract
+artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-05-20
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/operator-output-envelope-and-bounded-rendering-design.md
+source_path: docs/product/spec/operator-output-envelope-and-bounded-rendering-contract.md
 created_at: 2026-05-20T13:04:57.8354806Z
 updated_at: 2026-05-20T13:04:57.8354806Z
-changelog_ref: operator-output-envelope-and-bounded-rendering-design.changelog.jsonl
+changelog_ref: operator-output-envelope-and-bounded-rendering-contract.changelog.jsonl

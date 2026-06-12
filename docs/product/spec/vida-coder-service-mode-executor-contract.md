@@ -1,14 +1,14 @@
-# VIDA Coder Service Mode Executor Design
+# VIDA Coder Service Mode Executor Contract
 
-Status: `proposed`
+Status: active product contract
 
-Use this document as the bounded design/TZ for the TaskFlow epic `feature-vida-coder-service-mode-executor` before any Rig, provider, service, scheduler, session, MCP, adapter, or release code changes.
+Use this contract as the bounded service-mode executor contract for `vida coder`, provider-backed execution, service orchestration, guarded tools, session state, and receipt-backed TaskFlow execution.
 
 ## Summary
-- Feature / change: add `vida coder` as a first-class VIDA subcommand and service-capable bounded executor backed by Rig, VIDA runtime tools, provider auth/model selection, guarded file/MCP tools, session state, multi-project service orchestration, and receipt-backed TaskFlow execution.
+- Contract: add `vida coder` as a first-class VIDA subcommand and service-capable bounded executor backed by Rig, VIDA runtime tools, provider auth/model selection, guarded file/MCP tools, session state, multi-project service orchestration, and receipt-backed TaskFlow execution.
 - Owner layer: `mixed`
 - Runtime surface: `launcher | taskflow | agent-init | status | service | external/provider runtime | mcp`
-- Status: proposed
+- Status: active product contract
 
 ## Current Context
 - VIDA already separates runtime roles from execution carriers and resolves carrier/model/profile selection from `vida.config.yaml`, TaskFlow state, runtime assignment, readiness, score, cost, and task-class constraints.
@@ -86,7 +86,7 @@ Use this document as the bounded design/TZ for the TaskFlow epic `feature-vida-c
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/vida-coder-service-mode-executor-design.md`
+  - `docs/product/spec/vida-coder-service-mode-executor-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/process/external-cli-carrier-operator-procedure.md`
@@ -255,7 +255,7 @@ Will implement / choose:
 
 ### Bounded File Set
 - Expected design/spec/doc files:
-  - `docs/product/spec/vida-coder-service-mode-executor-design.md`
+  - `docs/product/spec/vida-coder-service-mode-executor-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/process/agent-system.md`
@@ -294,7 +294,7 @@ Will implement / choose:
 
 ### Phase 1
 - Create TaskFlow epic and spec-pack task.
-- Finalize this design document through DocFlow.
+- Keep this contract finalized through DocFlow.
 - Add `vida coder capabilities --json` and skeleton `vida coder run --json` surfaces with no provider calls.
 - Add runtime tests proving `vida coder run` rejects orchestrator-shaped/no-packet invocations.
 - First proof target:
@@ -416,13 +416,13 @@ Will implement / choose:
   - MCP authorization: `https://modelcontextprotocol.io/specification/draft/basic/authorization`
 
 -----
-artifact_path: product/spec/vida-coder-service-mode-executor-design
-artifact_type: feature_design
+artifact_path: product/spec/vida-coder-service-mode-executor-contract
+artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-06-03'
 schema_version: '1'
-status: proposed
-source_path: docs/product/spec/vida-coder-service-mode-executor-design.md
+status: canonical
+source_path: docs/product/spec/vida-coder-service-mode-executor-contract.md
 created_at: '2026-06-03T16:20:00+03:00'
 updated_at: '2026-06-03T16:20:00+03:00'
-changelog_ref: vida-coder-service-mode-executor-design.changelog.jsonl
+changelog_ref: vida-coder-service-mode-executor-contract.changelog.jsonl

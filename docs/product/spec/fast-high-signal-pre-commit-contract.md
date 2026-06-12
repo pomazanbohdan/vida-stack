@@ -1,4 +1,6 @@
-# Design Fast High Signal Pre Commit Design
+# Fast High Signal Pre Commit Contract
+
+Status: active product contract
 
 Purpose: define a fast, high-signal repository-local pre-commit gate for
 `vida-stack` that catches trivial quality defects before commit without
@@ -67,14 +69,14 @@ hooks. Default pre-commit must therefore stay fast and predictable.
    `scripts/vida-dev-gate.ps1`.
 4. The config excludes generated/runtime-heavy paths that should not be
    normalized by file-fixer hooks.
-5. The bounded design doc records the hook matrix and non-goals.
+5. This contract records the hook matrix and non-goals.
 
 ## Proof Targets
 
 1. `pre-commit validate-config`, when `pre-commit` is installed.
 2. YAML parse of `.pre-commit-config.yaml` when `pre-commit` is unavailable.
 3. `pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json`.
-4. `vida docflow check --root . docs/product/spec/design-fast-high-signal-pre-commit-design.md`.
+4. `vida docflow check --root . docs/product/spec/fast-high-signal-pre-commit-contract.md`.
 
 ## Operator Commands
 
@@ -98,13 +100,13 @@ pre-commit run vida-rust-quick --hook-stage manual
 ```
 
 -----
-artifact_path: product/spec/design-fast-high-signal-pre-commit-design
+artifact_path: product/spec/fast-high-signal-pre-commit-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-06-03
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/design-fast-high-signal-pre-commit-design.md
+source_path: docs/product/spec/fast-high-signal-pre-commit-contract.md
 created_at: 2026-06-03T12:33:24.3171285Z
 updated_at: 2026-06-03T12:47:25.4844746Z
-changelog_ref: design-fast-high-signal-pre-commit-design.changelog.jsonl
+changelog_ref: fast-high-signal-pre-commit-contract.changelog.jsonl
