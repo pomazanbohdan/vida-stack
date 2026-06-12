@@ -4273,6 +4273,139 @@ Next-task selection rule:
   `self-analysis-epic-pr-issue-closure-pass` before considering the next epic.
 
 -----
+
+## 2026-06-12 - Self-Analysis Epic Closure Pass
+
+TaskFlow:
+- Closed `self-analysis-release-install-asset-task` after current release
+  install proof resolved the upstream #364 asset materialization blocker.
+- Closed `worktree-pr327-browser-proof-note-cleanup-review` after archiving the
+  staged patch and removing the stale PR327 worktree.
+- Processed `self-analysis-epic-pr-issue-closure-pass` GitHub intake: open PRs
+  enumerated, commented, and left open with disposition; #364 closed; #114 left
+  open with updated runtime-projection evidence.
+- Final closure target: `post-epic-self-analysis-optimization-followups`.
+
+Proof:
+- `vida release install --json`: pass; release build completed, install assets
+  refreshed, installed `vida.exe` fingerprint
+  `a14cf68549ea374864e28505c49cae194ee7564cc239de94e1197574aa4b8c93`.
+- `vida --version`: `vida 0.9.7 (built 2026-06-12T10:37:44Z)`.
+- `git worktree list --porcelain`: only `C:/project/vida-stack` remains after
+  removing `C:/project/_worktrees/vida-stack-pr327-browser-proof-note`.
+- PR apply gate: #363, #365, #367, #368, #369, #370, #371, #372 pass
+  `git apply --check`; #366 fails at
+  `crates/vida/src/taskflow_consume_resume.rs:2529`.
+
+Agent classification:
+- No new delegated agent was launched. Root orchestrator performed TaskFlow,
+  GitHub, worktree, and documentation closure sequentially.
+- No completed agent handle remained open.
+
+Executor / validator:
+- Executor: root orchestrator, 8/10.
+- Validator: public runtime proof plus GitHub issue/PR state and worktree list,
+  8/10.
+- Telemetry: tokens=`not_exposed_by_host`; tool_calls=`approximate` from command
+  count in this segment; waits=`approximate` from release install and GitHub
+  mutations; agent_count=`exact: 0`; rework_count=`exact: 1` for the PR apply
+  check script null-output correction.
+
+Post-Task Self-Analysis:
+- Worked: release-install proof was refreshed before closing #364, preventing a
+  stale issue-close decision.
+- Waste: the first PR apply status script treated empty stderr as nullable and
+  emitted PowerShell method errors despite usable results.
+- Risk: `orchestrator-init` still reports an older `wave-0-runtime-tests`
+  projection mismatch outside this epic; #114 remains open with current
+  evidence.
+- Next change: close or transfer the remaining self-analysis process tasks,
+  validate the log, close the epic, then create the requested host-bridge
+  runtime dispatch epic.
+- Docs update: yes, this entry plus the operating protocol now define the
+  dynamic criteria registry and structured telemetry fields.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `post-epic-self-analysis-optimization-followups`.
+2. Wave/parent closure distance: pass, remaining blockers reduced to process
+   tasks and one final PR/issue pass.
+3. Scope and non-goals stable: pass, no Rust source edits in this closure pass.
+4. Dirty worktree handled: pass, main repo clean; PR327 worktree archived and
+   removed.
+5. Executor cheapest capable: pass, no new agent needed.
+6. Validator matched risk: pass, release install, GitHub state, worktree state.
+7. Prompt packet shape: not_applicable, no delegated prompt.
+8. Agent handles: pass, no active/completed handle to clean.
+9. Token/tool/step telemetry: pass, structured exact/approx/not_exposed fields
+   recorded above.
+10. Avoidable commands: partial, PR apply script should guard empty stderr.
+11. Proof strength: pass for release/install, PR/issue, and worktree cleanup.
+12. Public/release proof: pass, installed version and fingerprint recorded.
+13. Debug build: pass via release install build.
+14. TaskFlow state: pass for release defect and worktree cleanup.
+15. Staging by invariant: pass, doc-only patch planned.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass after checker/docflow validation.
+18. Parent/wave metrics: pass, closure-ready will be checked after remaining
+   process-task closure.
+19. New defects/follow-ups: pass, #114 updated for existing runtime projection
+   class; no duplicate issue created.
+20. Next routing rule: pass, finish self-analysis epic before requested
+   host-bridge dispatch epic.
+
+Implementation follow-up tasks:
+- `self-analysis-dynamic-criteria-registry`: implemented here through owner
+  protocol registry fields and this backfilled registry example.
+- `self-analysis-model-telemetry-template`: implemented here through structured
+  telemetry fields and this completed example.
+- `self-analysis-log-backfill-task-refs`: satisfied by reviewed recent entries
+  after the hardening point; each actionable latest finding now cites a TaskFlow
+  task, #114/#364, or `no_task_reason`.
+- `self-analysis-positive-read-helper-sweep`: existing tests already contain
+  `run_command_with_state_lock_retry`, `run_command_with_state_access_retry`,
+  and `open_state_db_with_retry`; no_task_reason for new code in this closure
+  pass because the remaining positive-read concern is already represented by the
+  test helper pattern and #114 wave-0 runtime projection class.
+
+PR / issue processing:
+- open_prs: processed,left_open_reason=#363 #365 #367 #368 #369 #370 #371 #372
+  apply cleanly and were left open for maintainer review; #366 was left open
+  with rebase/update reason after apply-check failure at
+  `taskflow_consume_resume.rs:2529`.
+- processed_issues: closed #364 as completed after release-install proof;
+  kept_open_reason=#114 remains open because current reproduction moved to
+  older `wave-0-runtime-tests` projection state.
+
+Final dynamic criteria STOP point:
+Evidence source: this closure needed to process GitHub state, worktree state,
+release install proof, and docs in one session after compaction.
+1. Multi-surface closure registry criterion: when an epic closure touches
+   TaskFlow, GitHub, worktrees, release install, and docs in one segment, create
+   a dynamic registry entry that names owner, evidence, task reference,
+   promotion decision, and duplicate relationship before closing the epic.
+
+Dynamic criteria registry:
+| criterion_id | owner | expected_evidence | task_ref | promotion_decision | duplicate_of |
+| --- | --- | --- | --- | --- | --- |
+| dynamic-2026-06-12-multi-surface-closure-registry | root-orchestrator | final scorecard with PR/issue state, worktree state, release proof, and TaskFlow closure-ready | `self-analysis-dynamic-criteria-registry` | promoted | none |
+| dynamic-2026-06-12-structured-telemetry | root-orchestrator | executor/validator telemetry fields marked exact, approximate, or not_exposed_by_host | `self-analysis-model-telemetry-template` | promoted | none |
+
+Meta-analysis remediation:
+- Documentation remediation: owner protocol now requires registry fields for
+  dynamic criteria and structured telemetry status.
+- Process remediation: PR/issue pass cannot close until the final scorecard
+  records both open PR disposition and processed issue closure/kept-open state.
+- Runtime remediation: #114 remains open with current wave-0 projection evidence;
+  no duplicate issue was created.
+
+Next-task selection rule:
+- Validate this scorecard, close the remaining self-analysis process tasks, then
+  close `post-epic-self-analysis-optimization-followups` and create the
+  requested host-bridge dispatch consistency epic as the next work item.
+
+-----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
 artifact_version: '1'
@@ -4281,5 +4414,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T12:37:32+03:00
+updated_at: 2026-06-12T13:05:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl

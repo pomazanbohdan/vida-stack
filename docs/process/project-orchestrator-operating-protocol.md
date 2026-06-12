@@ -424,10 +424,15 @@ Final dynamic criteria STOP point:
 5. Record which dynamic criteria become one-time checks for the next task and
    which should be promoted into the fixed checklist, prompt template, script,
    code, test, or project documentation.
-6. This is the last required checklist item for every task closure. The next
+6. Record each dynamic criterion in a lightweight registry line or table in the
+   scorecard. Each entry must include `criterion_id`, `owner`, `expected_evidence`,
+   `task_ref` or `no_task_reason`, `promotion_decision` (`one_time`, `promoted`,
+   `scripted`, `converted_to_task`, `duplicate`, or `retired`), and
+   `duplicate_of` when the criterion reuses an earlier rule.
+7. This is the last required checklist item for every task closure. The next
    task remains blocked until this step creates and records at least one new
    criterion for the current segment.
-7. Do not close the STOP gate by reusing only fixed criteria or previous dynamic
+8. Do not close the STOP gate by reusing only fixed criteria or previous dynamic
    criteria. If the session segment appears fully covered, create a narrower
    criterion from the strongest observed risk, delay, proof gap, or user
    correction in that segment and mark whether it stays one-time or is promoted.
@@ -471,9 +476,13 @@ After every task, the orchestrator must track:
 4. Scoped commit hash and push result.
 5. Documentation/evaluation scorecard commit hash and push result.
 6. Completed agent handles closed or cleanup blocker recorded.
-7. Executor model, reasoning effort, score, tokens, tool calls, and rework count.
-8. Validator model, reasoning effort, score, tokens, tool calls, and residual
-   risk.
+7. Executor model, reasoning effort, score, tokens, tool calls, wait cost, agent
+   count, and rework count. Each telemetry field must be marked `exact`,
+   `approximate`, or `not_exposed_by_host`; approximate fields must name the
+   observable basis.
+8. Validator model, reasoning effort, score, tokens, tool calls, wait cost, and
+   residual risk, using the same `exact` / `approximate` /
+   `not_exposed_by_host` telemetry shape.
 9. Post-Task Self-Analysis recorded with base fields, all 20 fixed criteria,
    dynamic criteria created from the latest session segment, and meta-analysis
    remediation outcomes.
