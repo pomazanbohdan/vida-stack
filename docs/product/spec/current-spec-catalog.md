@@ -1,7 +1,7 @@
 # VIDA Current Spec Catalog
 
 Status: active canonical companion
-Revision: 2026-06-12
+Revision: 2026-06-13
 
 Purpose: carry the detailed current product/spec artifact catalog that used to live inside current-spec-map.md, so the map can stay a short routing surface while preserving the full active canon list.
 
@@ -71,6 +71,8 @@ Companion rule:
    Config families: layered runtime capability progression across `vida/config/**`, TaskFlow runtime-family implementation surfaces, runtime ledgers, readiness gates, and future direct runtime consumption
 2. [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md)
    Config families: framework role law, project role/skill/profile/flow activation through `vida.config.yaml`, project-owned agent-extension registries, and runtime validation for the TaskFlow runtime family
+3. [multi-agent-stage-ensemble-contract.md](multi-agent-stage-ensemble-contract.md)
+   Config families: stage-level independent agent attempts, attempt artifacts, consolidation receipts, TaskFlow append-only update boundaries, and future runtime dispatch/status/collect/consolidate surfaces
 3. [development-flow-catalog-schema-contract.md](development-flow-catalog-schema-contract.md)
    Config families: `vida.config.yaml -> dev_team.default_flow_id`, `dev_team.work_item_flow_bindings`, `dev_team.flows.*.ordered_steps`, `docs/process/agent-extensions/flows.yaml`, `docs/product/spec/hook-templates.yaml`, host-agent adapter projection fields, and future approval-gate fields
    Registered path: `docs/product/spec/development-flow-catalog-schema-contract.md`
@@ -302,10 +304,10 @@ Companion rule:
 artifact_path: product/spec/current-spec-catalog
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-12
+artifact_revision: 2026-06-13
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-catalog.md
 created_at: 2026-06-12T00:00:00+03:00
-updated_at: 2026-06-12T00:00:00+03:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: current-spec-catalog.changelog.jsonl

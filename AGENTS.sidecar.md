@@ -78,13 +78,12 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `docs/process/project-skill-initialization-and-activation-protocol.md`
    - `docs/process/project-development-packet-template-protocol.md`
    - `docs/process/project-agent-prompt-stack-protocol.md`
-   - `docs/process/project-boot-readiness-validation-protocol.md`
+   - `docs/process/project-orchestrator-session-start-protocol.md`
 22. For long-running epic execution, model/cost optimization, per-task
     executor/validator scorecards, wave-first closure, post-task optimization,
     or task-completion checklists, continue early to:
    - `docs/process/project-orchestrator-operating-protocol.md`
    - `docs/process/team-development-and-orchestration-protocol.md`
-   - `docs/process/agent-model-evaluation-log.md`
 23. This path set is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
@@ -148,17 +147,17 @@ Project-routing rule:
 3. Every task uses the three-step loop: `Bind -> Delegate -> Close`.
 4. `Bind` must record the active task id, parent/wave, exact invariant, owned paths, non-goals, proof bundle, dirty-worktree boundaries, and whether the next move is sequential or parallel-safe.
 5. `Delegate` must prefer the cheapest capable executor and the smallest prompt that can satisfy the task. For the currently observed epic pattern, use the cheap mini/highest-reasoning carrier for hunk classification, read-only preflight, source-copy documentation, test-only patches, and one-file implementation packets; use the stronger medium validator for TaskFlow, host-bridge, receipt authority, path policy, public CLI, release, or wave-closure gates.
-6. `Close` must run the declared proof bundle, update TaskFlow, close the task when ready, commit only scoped files, push under the active repeatable publication instruction, update the agent evaluation documentation, commit that documentation, push it, and then check parent/wave closure readiness.
+6. `Close` must run the declared proof bundle, update TaskFlow, close the task when ready, commit only scoped files, push under the active repeatable publication instruction, record the optimization scorecard in TaskFlow closure evidence or the relevant process doc, and then check parent/wave closure readiness.
 7. A current explicit operator instruction to commit and push after each task is a repeatable publication authorization for the active epic until the operator pauses, revokes, or narrows it. This resolves lower-level "push only when authorized" rules for this active epic without creating global push authority for unrelated work.
 8. In dirty files, stage by invariant rather than by file. If an adjacent hunk looks useful but is outside the active bounded unit, leave it unstaged and create/update a follow-up TaskFlow item instead of bundling it into the commit.
-9. After every closed task, record a compact optimization scorecard in the agent evaluation log: executor, validator, reasoning effort, score, token visibility, tool-call count, proof quality, rework count, residual risks, and the next routing rule.
+9. After every closed task, record a compact optimization scorecard in the TaskFlow task note or closure evidence: executor, validator, reasoning effort, score, token visibility, tool-call count, proof quality, rework count, residual risks, and the next routing rule.
 10. After every closed task, run the canonical Post-Task Self-Analysis STOP gate from `docs/process/project-orchestrator-operating-protocol.md` before selecting unrelated work. The gate includes base fields, 20 fixed criteria, meta-analysis remediation that must update docs, scripts, code, tests, or TaskFlow defects when evidence requires it, TaskFlow implementation task ids or explicit `no_task_reason` for every actionable self-analysis or self-diagnostic finding, and a final dynamic-criteria checklist item that must create at least one new criterion from the session segment since the previous task closure every time.
-11. The post-task checklist is mandatory before selecting the next task: close/delete completed agent handles; run graph/closure-ready checks; check parent/wave readiness; update epic task/wave metrics; update evaluation docs; pass the Post-Task Self-Analysis STOP gate; commit/push scoped code and docs when authorized; classify any runtime or workflow friction as a TaskFlow optimization defect; create or update implementation tasks for actionable diagnostic findings and cite those task ids in the evaluation log.
+11. The post-task checklist is mandatory before selecting the next task: close/delete completed agent handles; run graph/closure-ready checks; check parent/wave readiness; update epic task/wave metrics; record scorecard evidence; pass the Post-Task Self-Analysis STOP gate; commit/push scoped code and docs when authorized; classify any runtime or workflow friction as a TaskFlow optimization defect; create or update implementation tasks for actionable diagnostic findings and cite those task ids in the closure evidence.
 12. Do not optimize for leaf percentage alone. The primary epic milestone metric is closed waves over total waves; task percent is secondary evidence.
-13. If a task closes an architectural/process slice or a wave, run the runtime self-diagnostic and release/install the system `vida` binary before treating the slice or wave as operationally closed. Any actionable residual from that diagnostic must become a TaskFlow implementation task, an update to an existing TaskFlow task, or an explicit `no_task_reason` cited in the evaluation log; a log-only diagnostic residual is not closure.
+13. If a task closes an architectural/process slice or a wave, run the runtime self-diagnostic and release/install the system `vida` binary before treating the slice or wave as operationally closed. Any actionable residual from that diagnostic must become a TaskFlow implementation task, an update to an existing TaskFlow task, or an explicit `no_task_reason` cited in the closure evidence; a prose-only diagnostic residual is not closure.
 14. Parallelism is allowed only for disjoint read-only scans, PR intake, proof-gap review, and dirty-hunk classification. Production edits in the same Rust file, TaskFlow mutation, DocFlow owner docs, release install, and GitHub mutations stay sequential unless TaskFlow conflict domains prove otherwise.
 15. User-facing progress after each task should be compact: closed task, proof, commits pushed, task percent, wave count, self-analysis outcome, next bounded unit or blocker.
-16. These optimization rules are top-level project overlay. Detailed prompt wording, lane responsibilities, and scorecard templates live in `docs/process/project-orchestrator-operating-protocol.md`, `docs/process/team-development-and-orchestration-protocol.md`, and `docs/process/agent-model-evaluation-log.md`.
+16. These optimization rules are top-level project overlay. Detailed prompt wording, lane responsibilities, and scorecard criteria live in `docs/process/project-orchestrator-operating-protocol.md` and `docs/process/team-development-and-orchestration-protocol.md`.
 
 ## Runtime DX And Architectural Rule Overlay
 
@@ -247,5 +246,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-06-12T00:00:00+03:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: AGENTS.sidecar.changelog.jsonl

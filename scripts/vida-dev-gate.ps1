@@ -282,7 +282,7 @@ try {
             "-Command",
             '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/check-agent-evaluation-log.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
         )
-        Invoke-Timed "agent-evaluation-log-lint" @(
+        Invoke-Timed "agent-evaluation-log-fixture-lint" @(
             "pwsh",
             "-NoLogo",
             "-NoProfile",
@@ -291,7 +291,7 @@ try {
             "-File",
             "scripts/check-agent-evaluation-log.ps1",
             "-Path",
-            "docs/process/agent-model-evaluation-log.md"
+            "tests/fixtures/agent-evaluation-log/pass.md"
         )
         [string[]]$changedBashScripts = @(Get-ChangedBashScripts)
         if ($changedBashScripts.Count -eq 0) {

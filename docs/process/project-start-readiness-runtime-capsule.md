@@ -1,60 +1,42 @@
 # Project Start Readiness Runtime Capsule
 
-Status: active project process doc
+Status: compatibility projection
 
-Purpose: provide a compact runtime-facing projection of project startup readiness, combining the high-frequency skill-activation and boot-readiness rules for routine orchestrator sessions.
+Purpose: keep the runtime-facing startup-readiness path stable while avoiding a second checklist beside the current orchestrator startup owner documents.
 
-## Use
+## Compatibility Boundary
 
-Use this capsule during routine startup and resume when the orchestrator needs the minimum readiness gate without rereading the full owner protocols.
+This file is retained because runtime and instruction indexes may still resolve this path directly. It is not a separate owner of startup, skill, boot-readiness, or dispatch law.
 
-Owner law remains in:
+Canonical owner surfaces:
 
-1. `docs/process/project-skill-initialization-and-activation-protocol.md`
-2. `docs/process/project-boot-readiness-validation-protocol.md`
-3. `docs/process/project-orchestrator-session-start-protocol.md`
+1. `docs/process/project-orchestrator-startup-bundle.md`
+   - routine compact startup read set
+2. `docs/process/project-orchestrator-session-start-protocol.md`
+   - full repeatable session-start and boot-readiness checklist
+3. `docs/process/project-skill-initialization-and-activation-protocol.md`
+   - skill-catalog inspection and activation rule
 
-Consult those owner documents when a startup edge case, validation conflict, or readiness audit is not settled by this capsule.
+## Runtime Projection
 
-## Minimum Startup Checks
+For routine startup, load the startup bundle first. Expand to the full session-start protocol only when the bundle does not settle active bounded unit, startup readiness, skill activation, proof target, or sequential-vs-parallel posture.
 
-Before the first write-producing dispatch:
+For skill-only uncertainty, load the skill-initialization protocol directly. Do not copy its rule text here.
 
-1. run `vida status --json`,
-2. run `vida status --json`,
-3. confirm the active read set is visible,
-4. inspect the visible skill catalog,
-5. activate the minimal relevant skill set or state `no_applicable_skill`,
-6. run `vida docflow protocol-coverage-check --profile active-canon`.
-
-## Boot-Ready Conditions
-
-A session is startup-ready only when all are true:
-
-1. TaskFlow resolves to this repository root,
-2. lifecycle truth is `.vida/state/taskflow-state.db`,
-3. no active path depends on installed shims or legacy task artifacts,
-4. the queue is launch-ready at lawful `delivery_task` depth,
-5. relevant skills are explicit or `no_applicable_skill` is explicit,
-6. the session can name request class, active bounded unit, next leaf, next route, and proof target.
-7. when continuation is requested, the session can also state `why_this_unit`, `primary_path`, and sequential-vs-parallel posture explicitly.
+For boot-readiness uncertainty, load the session-start protocol. Do not maintain a parallel boot-readiness checklist in this capsule.
 
 ## Fail-Closed Summary
 
-Do not dispatch when any of these is true:
+Dispatch is not ready when any required startup field is missing, ambiguous, or stale relative to current runtime evidence:
 
-1. runtime root/state is ambiguous,
-2. startup cannot name the active bounded unit,
-3. skill activation is still unknown,
-4. the queue is still epic/milestone shaped or over-split speculatively,
-5. protocol coverage fails.
-6. continued-development intent is active but `why_this_unit` or the sequential-vs-parallel posture is still implicit.
+1. active bounded unit,
+2. reason this unit is current,
+3. next lawful route,
+4. proof target,
+5. relevant skill posture,
+6. sequential-vs-parallel posture.
 
-## Routing
-
-1. for the full startup checklist, read `docs/process/project-orchestrator-session-start-protocol.md`,
-2. for full skill-activation law, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
-3. for full boot-readiness validation law, read `docs/process/project-boot-readiness-validation-protocol.md`.
+Resolve those fields through the owner surfaces above before write-producing work.
 
 -----
 artifact_path: process/project-start-readiness-runtime-capsule
@@ -62,8 +44,8 @@ artifact_type: process_doc
 artifact_version: '1'
 artifact_revision: '2026-03-13'
 schema_version: '1'
-status: canonical
+status: compatibility_projection
 source_path: docs/process/project-start-readiness-runtime-capsule.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: '2026-03-13T18:05:15+02:00'
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: project-start-readiness-runtime-capsule.changelog.jsonl

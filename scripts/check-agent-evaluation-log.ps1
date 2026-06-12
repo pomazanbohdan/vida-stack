@@ -1,5 +1,5 @@
 param(
-    [string]$Path = "docs/process/agent-model-evaluation-log.md",
+    [string]$Path = "tests/fixtures/agent-evaluation-log/pass.md",
     [switch]$All,
     [switch]$Json
 )

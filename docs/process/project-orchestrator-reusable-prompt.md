@@ -106,7 +106,7 @@ For detailed rules, defer to:
 2. for the full project start checklist, read `docs/process/project-orchestrator-session-start-protocol.md`,
 3. for full delegated-lane edge cases, read `docs/process/team-development-and-orchestration-protocol.md`,
 4. for full skill-activation law, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
-5. for full boot-readiness validation, read `docs/process/project-boot-readiness-validation-protocol.md`,
+5. for full boot-readiness validation, read `docs/process/project-orchestrator-session-start-protocol.md`,
 6. for full packet-template and prompt-stack law, read `docs/process/project-development-packet-template-protocol.md` and `docs/process/project-agent-prompt-stack-protocol.md`.
 
 -----

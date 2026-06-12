@@ -19,79 +19,72 @@ Canonical entrypoints:
    - project-owned documentation tooling and operator-command map
 3. `docs/process/vida1-development-conditions.md`
    - proven local development, build, install, and launcher conditions for active `VIDA 1`
-4. `docs/process/agent-system-guide.md`
-   - project-owned agent-system process surface
-5. `docs/process/agent-system.md`
+4. `docs/process/agent-system.md`
    - current canonical process surface for host-system selection, carrier ownership, and agent-first execution posture
-6. `docs/process/agent-extensions/README.md`
+5. `docs/process/agent-extensions/README.md`
    - project-owned role/skill/profile/flow extension map
-7. `docs/process/codex-agent-configuration-guide.md`
+6. `docs/process/codex-agent-configuration-guide.md`
    - project-owned guide for local OpenAI Codex multi-agent configuration and development-team mapping
-8. `docs/process/decisions.md`
+7. `docs/process/decisions.md`
    - activation-time project decisions including the currently selected host CLI execution posture
-9. `docs/process/team-development-and-orchestration-protocol.md`
+8. `docs/process/team-development-and-orchestration-protocol.md`
    - project-owned protocol for manager-led delivery-task decomposition, delegated lane packets, and development-team closure routing
-10. `docs/process/project-orchestrator-operating-protocol.md`
+9. `docs/process/project-orchestrator-operating-protocol.md`
    - project-owned top-level operating protocol for a cheaper but logical orchestrator, including default decomposition depth, delegation defaults, and escalation rules
-11. `docs/process/project-orchestrator-session-start-protocol.md`
+10. `docs/process/project-orchestrator-session-start-protocol.md`
    - project-owned repeatable start checklist for development orchestrator sessions
-12. `docs/process/project-orchestrator-reusable-prompt.md`
+11. `docs/process/project-orchestrator-reusable-prompt.md`
    - project-owned reusable root-session prompt for repeated orchestrator development sessions
-13. `docs/process/project-orchestrator-startup-bundle.md`
+12. `docs/process/project-orchestrator-startup-bundle.md`
    - compact project-side startup bundle that aggregates the routine orchestrator read set over the current project capsules
-14. `docs/process/project-packet-and-lane-runtime-capsule.md`
+13. `docs/process/project-packet-and-lane-runtime-capsule.md`
    - compact runtime-facing projection of project packet and delegated-lane law for routine orchestrator startup
-15. `docs/process/project-start-readiness-runtime-capsule.md`
-   - compact runtime-facing projection of project startup readiness, including skill activation and boot-readiness gates
-16. `docs/process/project-packet-rendering-runtime-capsule.md`
+14. `docs/process/project-start-readiness-runtime-capsule.md`
+   - compatibility projection that keeps the runtime-facing startup-readiness path stable while routing owner law to the startup bundle, session-start protocol, and skill-initialization protocol
+15. `docs/process/project-packet-rendering-runtime-capsule.md`
    - compact runtime-facing projection of project packet rendering and prompt-stack interpretation for routine startup and dispatch preparation
-17. `docs/process/project-skill-initialization-and-activation-protocol.md`
+16. `docs/process/project-skill-initialization-and-activation-protocol.md`
    - project-owned mandatory rule for inspecting the available skill catalog and activating relevant skills before bounded work begins
-18. `docs/process/project-development-packet-template-protocol.md`
+17. `docs/process/project-development-packet-template-protocol.md`
    - project-owned canonical packet-template family for session framing, delivery-task packets, execution-block refinement, and coach/verifier/escalation handoffs
-19. `docs/process/project-agent-prompt-stack-protocol.md`
+18. `docs/process/project-agent-prompt-stack-protocol.md`
    - project-owned prompt-stack model that fixes the precedence between framework bootstrap, project role prompts, dynamic packets, skill overlays, and runtime state
-20. `docs/process/project-boot-readiness-validation-protocol.md`
-   - project-owned bounded validation sequence that proves a development orchestration session is boot-ready before first dispatch
-21. `docs/process/project-operations.md`
+19. `docs/process/project-operations.md`
    - current canonical process surface for feature-delivery flow, delegated execution posture, and launcher-owned progression commands
-22. `docs/process/environments.md`
+20. `docs/process/environments.md`
    - current canonical process surface for local environment assumptions, long-lived state roots, and temp-state proof posture
-23. `instruction-contracts/meta.protocol-naming-grammar-protocol.md`
+21. `instruction-contracts/meta.protocol-naming-grammar-protocol.md`
    - canonical framework naming law and sequential rename-wave protocol for instruction artifacts
-24. `docs/process/release-formatting-protocol.md`
+22. `docs/process/release-formatting-protocol.md`
    - canonical project process for rendering clean public GitHub release pages from canonical release-note artifacts
-25. `docs/process/external-cli-carrier-operator-procedure.md`
+23. `docs/process/external-cli-carrier-operator-procedure.md`
    - canonical project operator procedure for external CLI carrier auth repair, model fixation, and smoke validation
-26. `docs/process/github-issues-triage-guide.md`
+24. `docs/process/github-issues-triage-guide.md`
    - project-owned process for GitHub Issues label taxonomy, triage, diagnostic publication, and issue-form alignment
-27. `docs/process/github-pr-processing-protocol.md`
+25. `docs/process/github-pr-processing-protocol.md`
    - project-owned process for validating, merging or closing PRs, manually integrating useful stale fixes, deleting branches, and returning to `main`
-28. `docs/process/command-timing-and-gate-optimization-protocol.md`
+26. `docs/process/command-timing-and-gate-optimization-protocol.md`
     - project-owned process for timing significant operations, diagnosing slow gates, and turning repeated command/script/CI latency into optimization work
-29. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
+27. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
      - project-owned process overlay for applying generic `Error Search / Bug Reasoning` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
-30. `docs/process/multi-agent-stage-ensemble-protocol.md`
-     - proposed project process architecture for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
-31. `docs/process/vida-runtime-development-environment.md`
+28. `docs/product/spec/multi-agent-stage-ensemble-contract.md`
+     - product/runtime capability contract for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
+29. `docs/process/vida-runtime-development-environment.md`
      - compact project-owned runbook for keeping runtime development skills, TaskFlow, DocFlow, GitHub issue processing, and operator-efficiency work aligned
-32. `docs/product/spec/feature-design-and-adr-model.md`
+30. `docs/product/spec/feature-design-and-adr-model.md`
     - product-law owner for the split between structured feature/change design documents and linked ADRs
-33. `docs/framework/templates/feature-design-document.template.md`
+31. `docs/framework/templates/feature-design-document.template.md`
     - framework-owned reusable feature/change design template with stable sections and bounded variable fields
-34. `docs/process/runtime-defect-function-option-matrix-protocol.md`
+32. `docs/process/runtime-defect-function-option-matrix-protocol.md`
      - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
-35. `docs/process/agent-model-evaluation-log.md`
-     - project-owned log for per-task agent model quality, routing, validation, token/tool telemetry, and next-task model-selection evidence
-
 -----
 artifact_path: process/readme
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-06-12
+artifact_revision: 2026-06-13
 schema_version: '1'
 status: canonical
 source_path: docs/process/README.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: 2026-06-12T00:00:00+03:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: README.changelog.jsonl

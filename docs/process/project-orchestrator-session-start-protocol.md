@@ -118,7 +118,7 @@ vida taskflow task list --all --json
 3. for reusable session wording, read `docs/process/project-orchestrator-reusable-prompt.md`,
 4. for full packet-template law, read `docs/process/project-development-packet-template-protocol.md`,
 5. for full skill-activation law, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
-6. for full boot-readiness validation, read `docs/process/project-boot-readiness-validation-protocol.md`,
+6. this protocol owns full boot-readiness validation,
 7. for full prompt-stack law, read `docs/process/project-agent-prompt-stack-protocol.md`,
 8. for full delegated-lane law and packet closure edge cases, read `docs/process/team-development-and-orchestration-protocol.md`.
 

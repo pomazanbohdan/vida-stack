@@ -2,6 +2,13 @@
 
 Project activation owns host CLI agent-template selection and runtime admission.
 
+## Boundary And Routing
+
+- this document is the project process surface for agent-system posture; it is not a bootstrap router, framework owner protocol, or product/runtime spec
+- stable runtime contracts belong in `docs/product/spec/**` and executable/config truth belongs in `vida.config.yaml` plus runtime-owned config artifacts
+- role, skill, profile, flow, carrier, and host-system values are config/runtime evidence, not hardcoded process law
+- process docs may route operators to the correct owner surface, but must not duplicate carrier admission, closure authority, or TaskFlow receipt rules
+
 - default framework agent templates become available only after the selected host CLI template is materialized
 - the current supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`
 - framework template inventory may include multiple built-in host systems, but the active host-system list is owned by `vida.config.yaml -> host_environment.systems`
@@ -53,5 +60,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/agent-system.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-06-03T15:45:00+03:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: agent-system.changelog.jsonl

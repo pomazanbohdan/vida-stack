@@ -1,10 +1,11 @@
-# Multi-Agent Stage Ensemble Protocol
+# Multi-Agent Stage Ensemble Contract
 
-Status: proposed follow-up project process architecture
+Status: canonical product/runtime capability contract
 
-Purpose: define the project-side architecture for running multiple independent
+Purpose: define the product/runtime contract for running multiple independent
 agent or model attempts for a single TaskFlow task stage, then consolidating the
-results through one authoritative validator before TaskFlow state is updated.
+results through one authoritative validator before canonical TaskFlow state is
+updated.
 
 ## Context
 
@@ -14,9 +15,9 @@ a task and broader than a single carrier: one task stage may need several
 independent attempts from different internal agents, external CLI carriers, or
 model profiles before the main orchestrator accepts a canonical result.
 
-This protocol records the follow-up architecture requested after the active
-codebase refactoring epic. It is project process guidance until promoted into
-the mapped generic runtime owner protocols.
+This contract records the promoted product/runtime capability boundary for
+stage-level attempts, artifact isolation, and consolidation receipts. Process
+runbooks may route to this document, but they do not redefine its contract.
 
 ## External Architecture Inputs
 
@@ -341,16 +342,6 @@ Example:
 stage=analysis attempts=2/2 produced=2 accepted=1 rejected=1 consolidation=accepted next=vida task stage advance <task-id>
 ```
 
-## Follow-Up Epic Boundary
-
-This protocol should become a new follow-up epic after the active architecture
-refactor quality epic. It should not block the current epic unless the current
-runtime cannot complete its required orchestration tasks without the attempt
-ledger.
-
-The first implementation slice should be append-only notes because every later
-attempt and consolidation workflow depends on safe task-note mutation.
-
 ## Proof Expectations
 
 1. Unit tests for attempt ledger state transitions.
@@ -361,13 +352,13 @@ attempt and consolidation workflow depends on safe task-note mutation.
    without touching the canonical worktree.
 
 -----
-artifact_path: process/multi-agent-stage-ensemble-protocol
-artifact_type: process_doc
+artifact_path: product/spec/multi-agent-stage-ensemble-contract
+artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-12
+artifact_revision: 2026-06-13
 schema_version: '1'
-status: proposed
-source_path: docs/process/multi-agent-stage-ensemble-protocol.md
+status: canonical
+source_path: docs/product/spec/multi-agent-stage-ensemble-contract.md
 created_at: 2026-06-03T14:40:00+03:00
-updated_at: 2026-06-12T00:00:00+03:00
-changelog_ref: multi-agent-stage-ensemble-protocol.changelog.jsonl
+updated_at: 2026-06-13T00:00:00+03:00
+changelog_ref: multi-agent-stage-ensemble-contract.changelog.jsonl

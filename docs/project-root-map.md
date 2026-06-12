@@ -40,8 +40,8 @@ This map does not cover extracted secondary bundles by default.
     - project-owned timing, slow-gate, script optimization, and operator-friction diagnostic protocol
 13. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
     - project-owned VIDA runtime application of generic `Error Search / Bug Reasoning`
-14. `docs/process/multi-agent-stage-ensemble-protocol.md`
-     - proposed follow-up architecture for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
+14. `docs/product/spec/multi-agent-stage-ensemble-contract.md`
+      - product/runtime capability contract for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
 15. `docs/process/vida-runtime-development-environment.md`
      - compact project-owned runbook for runtime development environment alignment, project-local skills, GitHub issue processing, and operator-efficiency follow-up
 16. `docs/process/runtime-defect-function-option-matrix-protocol.md`
@@ -87,7 +87,7 @@ Do not use this map as the default route for extracted bundles unless the task e
 12. Runtime defects / multi-defect pools / TaskFlow, DocFlow, run-graph, lane, dispatch, receipt, ownership, routing, or CI failure clusters:
     - continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`
 13. Multi-agent stage ensemble / independent attempt / consolidation questions:
-     - continue to `docs/process/multi-agent-stage-ensemble-protocol.md`
+     - continue to `docs/product/spec/multi-agent-stage-ensemble-contract.md`
 14. Runtime development environment / skill activation / GitHub issue processing / operator-efficiency follow-up:
      - continue to `docs/process/vida-runtime-development-environment.md`
 15. Runtime defect function/option matrix or command-surface proof matrix questions:
@@ -103,10 +103,10 @@ Do not use this map as the default route for extracted bundles unless the task e
 artifact_path: project/root-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-06-12'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: 2026-06-12T00:00:00+03:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: project-root-map.changelog.jsonl

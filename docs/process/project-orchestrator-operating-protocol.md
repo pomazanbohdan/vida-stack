@@ -54,7 +54,7 @@ Preferred startup helpers:
 4. `docs/process/project-start-readiness-runtime-capsule.md`
 5. `docs/process/project-packet-rendering-runtime-capsule.md`
 6. `docs/process/project-skill-initialization-and-activation-protocol.md`
-7. `docs/process/project-boot-readiness-validation-protocol.md`
+7. `docs/process/project-orchestrator-session-start-protocol.md`
 
 ## Top-Level Loop
 
@@ -195,7 +195,7 @@ Interpretation rule:
 
 1. packet fields must be rendered and checked through `docs/process/project-development-packet-template-protocol.md`,
 2. prompt-layer precedence must follow `docs/process/project-agent-prompt-stack-protocol.md`,
-3. startup must satisfy `docs/process/project-boot-readiness-validation-protocol.md` before the first write-producing dispatch,
+3. startup must satisfy `docs/process/project-orchestrator-session-start-protocol.md` before the first write-producing dispatch,
 4. runtime surfaces such as `vida taskflow consume final`, dispatch-packet persistence, resume, and `vida agent-init` must fail closed when the active packet template minimum is missing.
 5. for `tracked_flow_packet` handoffs, raw `create_command` is initial materialization evidence only; once the tracked task id already exists, continue through the runtime-provided ensure/reuse command instead of retrying duplicate creation.
 
@@ -334,9 +334,9 @@ Every task in a long-running refactor epic uses:
 4. close the TaskFlow item only when closure-ready passes,
 5. commit only scoped task files and push when the active publication pattern
    authorizes it,
-6. update `docs/process/agent-model-evaluation-log.md`,
+6. record the optimization scorecard in the TaskFlow closure evidence,
 7. run DocFlow/diff checks for documentation changes,
-8. commit and push the evaluation-doc update under the same publication pattern,
+8. commit and push scoped documentation updates under the same publication pattern,
 9. run Post-Task Self-Analysis and update instructions again when the analysis
    changes the operating rule,
 10. check parent/wave closure readiness,
@@ -400,7 +400,7 @@ Twenty fixed required criteria (baseline list, not the final dynamic step):
 14. TaskFlow graph, closure-ready, and close state were current.
 15. Commit staging was by invariant, not by whole dirty file.
 16. Push/publication matched the active authorization pattern.
-17. Documentation/evaluation scorecard was updated before unrelated work.
+17. TaskFlow closure scorecard or relevant process-doc scorecard was updated before unrelated work.
 18. Parent/wave closure-ready state and epic task/wave metrics were refreshed.
 19. New runtime/tooling/process defects discovered during the task were created,
     updated, or explicitly deferred with reason.
@@ -473,7 +473,7 @@ After every task, the orchestrator must track:
 2. Declared proof bundle result.
 3. Debug build result.
 4. Scoped commit hash and push result.
-5. Documentation/evaluation scorecard commit hash and push result.
+5. TaskFlow closure scorecard evidence and any relevant process-doc commit hash/push result.
 6. Completed agent handles closed or cleanup blocker recorded.
 7. Executor model, reasoning effort, score, tokens, tool calls, wait cost, agent
    count, and rework count. Each telemetry field must be marked `exact`,
@@ -496,7 +496,7 @@ After every task, the orchestrator must track:
 16. PR/open-source intake state recorded: open PRs processed or explicitly kept
     open with reason, and processed issues closed or explicitly kept open with
     reason.
-17. Next routing rule written in the agent evaluation log.
+17. Next routing rule written in the TaskFlow closure scorecard or relevant process-doc evidence.
 
 If any checklist item cannot be proven, keep the current task or a follow-up
 TaskFlow item open instead of silently moving to unrelated work.
@@ -533,7 +533,7 @@ If those answers are not visible from the minimum read set, do not continue into
 4. for mandatory skill activation, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
 5. for routine packet rendering and prompt-stack interpretation, read `docs/process/project-packet-rendering-runtime-capsule.md`,
 6. for full packet-template law, read `docs/process/project-development-packet-template-protocol.md`,
-7. for bounded boot validation, read `docs/process/project-boot-readiness-validation-protocol.md`,
+7. for bounded boot validation, read `docs/process/project-orchestrator-session-start-protocol.md`,
 8. for full prompt-stack law, read `docs/process/project-agent-prompt-stack-protocol.md`,
 9. for full delegated-lane law and closure edge cases, read `docs/process/team-development-and-orchestration-protocol.md`,
 10. for Codex role/runtime posture, read `docs/process/codex-agent-configuration-guide.md`,

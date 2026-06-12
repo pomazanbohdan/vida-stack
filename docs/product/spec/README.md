@@ -46,6 +46,7 @@ Active design docs:
 Current promoted runtime-control specs:
 
 - `docs/product/spec/agent-role-skill-profile-flow-model.md`
+- `docs/product/spec/multi-agent-stage-ensemble-contract.md`
 - `docs/product/spec/compiled-runtime-bundle-contract.md`
 - `docs/product/spec/autonomous-report-continuation-law.md`
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
@@ -72,10 +73,10 @@ Current promoted runtime-control specs:
 artifact_path: product/spec/readme
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-04-13
+artifact_revision: 2026-06-13
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-06-04T01:02:48.1588214Z
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: README.changelog.jsonl
