@@ -1717,6 +1717,83 @@ Final dynamic criteria STOP point:
    adjacent status test briefly fails, require a second broad snapshot or focused
    family proof before deciding the same class remains open.
 
+## 2026-06-12 - Agent-init view-only stale-run blocker alignment
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `40318a832 align agent init view-only smoke blocker`
+- Goal: align the agent-init view-only activation smoke assertion with the
+  current canonical fail-closed stale missing-task run graph blocker.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke agent_init_dispatch_packet_reports_view_only_activation_semantics -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke` after the slice: variable broad
+  snapshot, latest observed `249 passed`, `24 failed`, with status lock
+  contention resurfacing in unrelated callsites.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The exact failing assertion was stale and
+  the current runtime blocker text was already canonical and actionable.
+- Validator: exact public smoke test, 8/10. Broad proof was useful for residual
+  classification but too noisy to use as the only acceptance signal for this
+  narrow assertion update.
+
+Post-Task Self-Analysis:
+- Worked: exact reproduction showed the `agent-init` activation-view fields were
+  already correct and only the follow-up `consume continue --json` assertion was
+  stale.
+- Waste: broad rerun after the exact fix reintroduced unrelated lock-contention
+  failures and did not isolate this contract change.
+- Risk: using broad count alone would incorrectly reject a valid exact contract
+  update or send the next slice back into a previously improved lock class.
+- Meta-analysis remediation: treat exact contract proof as acceptance for this
+  slice, while recording broad variance as next-slice selection evidence.
+- Docs update: yes; this STOP record adds the exact-vs-broad acceptance
+  criterion below.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, exact red turned green; broad remains
+   red and variable.
+3. Scope and non-goals stable: pass, one assertion contract update.
+4. Dirty worktree handled: pass, unrelated dirty files stayed unstaged.
+5. Executor cheapest capable: pass, local assertion update from exact evidence.
+6. Validator matched risk: pass for exact test; broad used as residual evidence.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no new handles used.
+9. Telemetry: partial, token/cost unavailable; proof commands and broad count
+   recorded.
+10. Avoidable commands: partial, broad run was noisy but helped classify next
+    residual risk.
+11. Proof strength: pass for the exact stale assertion behavior.
+12. Public-surface proof: pass, `agent-init` plus `taskflow consume continue`
+    public smoke path covered.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: partial, classification task remains active.
+15. Staging by invariant: pass, only `boot_smoke.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, STOP gate recorded before next runtime slice.
+18. Parent/wave metrics: broad latest observed `249 passed`, `24 failed`;
+    previous best after lock retry was `251 passed`, `22 failed`.
+19. New defects/follow-ups: broad variance shows lock retry coverage is not
+    complete across all status callsites, but the next deterministic exact red
+    cluster is consume/run-graph recovery.
+20. Next routing rule: pass, prefer exact reproducible failing test updates over
+    chasing broad-only count noise unless the same broad failure identity becomes
+    deterministic.
+
+Final dynamic criteria STOP point:
+1. Exact-vs-broad acceptance criterion: if a narrow assertion update fixes the
+   exact failing test and broad moves for unrelated identities, accept the exact
+   slice only when the broad residual is recorded with concrete failure names.
+2. Variance guard criterion: do not use a single broad snapshot as closure
+   evidence for noisy boot_smoke clusters; require either two consistent broad
+   snapshots or a focused exact proof for the claimed behavior.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1726,5 +1803,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T06:19:00+03:00
+updated_at: 2026-06-12T06:33:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
