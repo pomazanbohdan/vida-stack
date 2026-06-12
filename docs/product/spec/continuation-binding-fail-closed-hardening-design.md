@@ -76,7 +76,7 @@ Use this template for one bounded feature/change design before implementation.
   - `docs/product/spec/autonomous-report-continuation-law.md`
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -147,7 +147,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `docs/product/spec/autonomous-report-continuation-law.md`
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 - `AGENTS.md`

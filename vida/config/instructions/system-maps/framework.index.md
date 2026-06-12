@@ -54,7 +54,7 @@ Split rule:
 1. `vida/config/instructions/**` and `docs/product/spec/**` carry the active promoted framework/product canon.
 2. `vida/config/**` is the executable law home.
 3. sidecar changelogs and Git history are evidence/history by default.
-4. deleted framework-formation plans/research lineage is preserved only in [framework-source-lineage-index.md](/home/unnamed/project/vida-stack/docs/process/framework-source-lineage-index.md).
+4. deleted framework-formation plans/research lineage is preserved only in Git history and active artifact sidecars.
 
 -----
 artifact_path: config/system-maps/framework.index

@@ -63,7 +63,7 @@ Use this template for one bounded feature/change design before implementation.
 - Project docs / specs affected:
   - `docs/product/spec/closure-admission-evidence-table-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
 - Runtime families affected:
   - `taskflow`
   - `status`
@@ -152,7 +152,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/closure-admission-evidence-table-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `docs/product/spec/release-1-closure-contract.md`
 - `docs/product/spec/release-1-canonical-artifact-schemas.md`
 - `docs/product/spec/release-1-conformance-matrix.md`
@@ -178,7 +178,7 @@ Will implement / choose:
 ### Phase 1
 - Land this design doc and register it in the active spec/provenance maps.
 - First proof target
-  - `vida docflow fastcheck --root . docs/product/spec/closure-admission-evidence-table-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `vida docflow fastcheck --root . docs/product/spec/closure-admission-evidence-table-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ### Phase 2
 - Update closure-facing runtime logic to consume or cite the table explicitly where blocker classification or evidence summaries currently rely on scattered checks.
@@ -198,7 +198,7 @@ Will implement / choose:
 - Integration tests
   - future `cargo test -p vida` coverage for status/doctor closure-admission blocker rendering
 - Runtime checks
-  - `vida docflow check --root . docs/product/spec/closure-admission-evidence-table-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `vida docflow check --root . docs/product/spec/closure-admission-evidence-table-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
   - `vida status --json`
   - `vida doctor --json`
 

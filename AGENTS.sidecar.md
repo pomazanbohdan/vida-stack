@@ -22,25 +22,23 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `docs/product/spec/current-spec-map.md`
 4. Product spec detailed catalog:
    - `docs/product/spec/current-spec-catalog.md`
-5. Product spec provenance companion:
-   - `docs/product/spec/current-spec-provenance-map.md`
-6. Project documentation system:
+5. Project documentation system:
    - `docs/product/spec/project-documentation-law.md`
-7. Documentation/product alignment matrix:
+6. Documentation/product alignment matrix:
    - `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-8. Canonical runtime readiness law used by the project:
+7. Canonical runtime readiness law used by the project:
    - `docs/product/spec/canonical-runtime-readiness-law.md`
-9. Canonical runtime layer matrix:
+8. Canonical runtime layer matrix:
    - `docs/product/spec/canonical-runtime-layer-matrix.md`
-10. Documentation tooling map:
+9. Documentation tooling map:
    - `docs/process/documentation-tooling-map.md`
-11. Project agent-extension map:
+10. Project agent-extension map:
    - `docs/process/agent-extensions/README.md`
-12. Command timing and gate optimization protocol:
+11. Command timing and gate optimization protocol:
    - `docs/process/command-timing-and-gate-optimization-protocol.md`
-13. Project Error Search runtime diagnostics protocol:
+12. Project Error Search runtime diagnostics protocol:
     - `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-14. Project-local TaskFlow runtime state and operator surfaces:
+13. Project-local TaskFlow runtime state and operator surfaces:
     - `.vida/data/state/`
     - `vida taskflow help`
 ## Bootstrap Read Path

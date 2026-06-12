@@ -59,7 +59,7 @@ Status: `approved`
 - Project docs / specs affected:
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/process/external-cli-carrier-operator-procedure.md`
   - `docs/process/agent-system.md`
   - `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
@@ -163,7 +163,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `docs/process/external-cli-carrier-operator-procedure.md`
 - `docs/process/agent-system.md`
 - `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
@@ -224,7 +224,7 @@ Will implement / choose:
   - `cargo run -p vida -- orchestrator-init --json`
 - Canonical checks:
   - `cargo run -p vida -- docflow check --root . docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-  - `cargo run -p vida -- docflow check --root . docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `cargo run -p vida -- docflow check --root . docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
 - Logging points

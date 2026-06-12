@@ -72,7 +72,7 @@ Use this template for one bounded feature/change design before implementation.
 - Project docs / specs affected:
   - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/product/spec/README.md`
 - Framework protocols affected:
   - none
@@ -165,7 +165,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
 - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.changelog.jsonl`
 - `crates/vida/src/main.rs`
@@ -216,7 +216,7 @@ Will implement / choose:
   - `vida status --json`
   - `vida orchestrator-init --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md docs/product/spec/README.md`
+  - `vida docflow check --root . docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
 
 ## Observability
 - New persisted rows make explicit binding and seeded dispatch context inspectable in the authoritative DB.

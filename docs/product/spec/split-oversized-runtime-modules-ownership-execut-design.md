@@ -43,7 +43,7 @@ Status: `execution-preparation`
 - Project docs / specs affected:
   - `docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`
   - `docs/product/spec/release-1-ownership-to-code-map.md`
-  - `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
+  - `current TaskFlow runtime owner specs`
   - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
   - `docs/product/spec/specification-lane-scope-hardening-design.md`
 - Framework protocols affected:
@@ -216,7 +216,7 @@ Execution order:
 
 ## References
 - `docs/product/spec/release-1-ownership-to-code-map.md`
-- `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
+- `current TaskFlow runtime owner specs`
 - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
 - `docs/product/spec/specification-lane-scope-hardening-design.md`
 - `.vida/data/state/runtime-consumption/dispatch-packets/architecture-refactor-oversized-module-split-2026-06-03T03-55-38.7902773Z.json`

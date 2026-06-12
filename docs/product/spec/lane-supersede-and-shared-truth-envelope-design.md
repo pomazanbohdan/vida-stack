@@ -93,7 +93,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
 - `crates/vida/src/lane_surface.rs`
 - `crates/vida/src/taskflow_layer4.rs`

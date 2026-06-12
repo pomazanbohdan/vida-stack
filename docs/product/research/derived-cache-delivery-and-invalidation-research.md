@@ -13,7 +13,7 @@ Product/spec inputs:
 1. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
 2. `docs/product/spec/compiled-runtime-bundle-contract.md`
 3. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-4. `docs/product/spec/release-1-plan.md`
+4. `remaining Release 1 owner specs`
 5. `docs/product/spec/project-activation-and-configurator-model.md`
 6. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 

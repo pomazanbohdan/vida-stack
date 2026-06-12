@@ -50,9 +50,9 @@ Use this document as the tracked spec-pack design packet for the Release-1 retri
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/release-1-plan.md`
+  - `remaining Release 1 owner specs`
   - `docs/product/spec/release-1-capability-matrix.md`
-  - `docs/product/spec/release-1-current-state.md`
+  - `remaining Release 1 status and closure specs`
   - `docs/product/spec/release-1-decision-tables.md`
   - `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
   - `docs/product/spec/release-1-canonical-artifact-schemas.md`
@@ -186,9 +186,9 @@ Will implement / choose:
 - Rich memory CRUD/operator tooling can follow after the bounded governance contract closes.
 
 ## References
-- `docs/product/spec/release-1-plan.md`
+- `remaining Release 1 owner specs`
 - `docs/product/spec/release-1-capability-matrix.md`
-- `docs/product/spec/release-1-current-state.md`
+- `remaining Release 1 status and closure specs`
 - `docs/product/spec/release-1-decision-tables.md`
 - `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
 - `docs/product/spec/release-1-canonical-artifact-schemas.md`

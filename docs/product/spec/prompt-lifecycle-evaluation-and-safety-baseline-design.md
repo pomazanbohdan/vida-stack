@@ -194,8 +194,8 @@ Will implement / choose:
 - Consolidate local scorecard history and canonical feedback artifacts if later waves need one storage truth.
 
 ## References
-- `docs/product/spec/release-1-plan.md`
-- `docs/product/spec/release-1-current-state.md`
+- `remaining Release 1 owner specs`
+- `remaining Release 1 status and closure specs`
 - `docs/product/spec/release-1-control-metrics-and-gates.md`
 - `docs/product/spec/release-1-state-machine-specs.md`
 - `docs/product/spec/host-agent-layer-status-matrix.md`

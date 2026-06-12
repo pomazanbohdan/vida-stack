@@ -25,7 +25,7 @@ This contract does not define:
 
 Release 1 closes only when all of the following are true:
 
-1. the active owner surface remains `release-1-plan.md`,
+1. the active owner surface remains `remaining Release 1 owner specs`,
 2. the `TaskFlow -> DocFlow -> Release 1 closure` seam is explicit and green enough,
 3. the supported workflow classes are explicitly named and bounded,
 4. mandatory P0 production-baseline tracks are green enough for each supported risky workflow class,
@@ -183,10 +183,10 @@ Release 1 must not close by:
 
 This contract binds directly to:
 
-1. `docs/product/spec/release-1-plan.md`
+1. `remaining Release 1 owner specs`
 2. `docs/product/spec/release-1-capability-matrix.md`
 3. `docs/product/spec/release-1-seam-map.md`
-4. `docs/product/spec/release-1-current-state.md`
+4. `remaining Release 1 status and closure specs`
 5. `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
 6. `docs/product/spec/release-1-control-metrics-and-gates.md`
 7. `docs/product/spec/release-1-canonical-artifact-schemas.md`
@@ -199,10 +199,10 @@ This contract binds directly to:
 ## 10. References
 
 1. Airtable `Vida` base, `Spec` table, refreshed `2026-03-16`
-2. `docs/product/spec/release-1-plan.md`
+2. `remaining Release 1 owner specs`
 3. `docs/product/spec/release-1-capability-matrix.md`
 4. `docs/product/spec/release-1-seam-map.md`
-5. `docs/product/spec/release-1-current-state.md`
+5. `remaining Release 1 status and closure specs`
 
 -----
 artifact_path: product/spec/release-1-closure-contract

@@ -52,7 +52,7 @@ Purpose: define the bounded implementation wave that turns TaskFlow's existing g
   - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
 - Framework protocols affected:
   - TaskFlow runtime-family command and packet protocols only if surfaced through registered runtime maps.
 - Runtime families affected:
@@ -147,7 +147,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/task-graph-adaptive-planner-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `crates/vida/src/taskflow_layer4.rs`
 - `crates/vida/src/taskflow_proxy.rs`
 - `crates/vida/src/task_surface.rs`
@@ -202,8 +202,8 @@ Will implement / choose:
   - `vida task validate-graph --json`
   - `vida taskflow graph-summary --json`
 - Canonical checks:
-  - `vida docflow finalize-edit docs/product/spec/task-graph-adaptive-planner-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md "record task graph adaptive planner design"`
-  - `vida docflow check --root . docs/product/spec/task-graph-adaptive-planner-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `vida docflow finalize-edit docs/product/spec/task-graph-adaptive-planner-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history "record task graph adaptive planner design"`
+  - `vida docflow check --root . docs/product/spec/task-graph-adaptive-planner-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
 - Plan generation emits draft id, source input summary, planned node count, planned edge count, and validation posture.

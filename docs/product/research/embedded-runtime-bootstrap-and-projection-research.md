@@ -15,7 +15,7 @@ Product/spec inputs:
 3. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 4. `docs/product/spec/release-build-packaging-law.md`
 5. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
-6. `docs/product/spec/release-1-plan.md`
+6. `remaining Release 1 owner specs`
 7. `docs/product/spec/project-activation-and-configurator-model.md`
 
 Research inputs:

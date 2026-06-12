@@ -40,7 +40,7 @@ Purpose: define the architectural hardening that keeps `specification` and other
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
   - `docs/product/spec/specification-lane-scope-hardening-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -105,7 +105,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/specification-lane-scope-hardening-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `crates/vida/src/runtime_dispatch_packets.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
 - `crates/vida/src/runtime_dispatch_downstream_packets.rs`
@@ -141,7 +141,7 @@ Will implement / choose:
 - Runtime checks:
   - inspect active dispatch packet JSON for spec lanes
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/specification-lane-scope-hardening-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `vida docflow check --root . docs/product/spec/specification-lane-scope-hardening-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
 - packet JSON keeps effective `owned_paths`

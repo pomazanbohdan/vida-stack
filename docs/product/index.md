@@ -15,15 +15,14 @@ Canonical split:
 3. `docs/product/research/` is the promoted product research lane.
 4. `docs/process/` is the project process lane.
 5. `docs/project-memory/` is the project-memory source lane.
-6. [framework-source-lineage-index.md](../process/framework-source-lineage-index.md) preserves the archived framework-formation source lineage after plan/research promotion cleanup.
+6. Historical framework-formation source lineage is retained in Git history and active artifact sidecars after plan/research promotion cleanup.
 
 Current entrypoints:
 
 1. [project-root-map.md](../project-root-map.md)
 2. [current-spec-map.md](spec/current-spec-map.md)
 3. [current-spec-catalog.md](spec/current-spec-catalog.md)
-4. [current-spec-provenance-map.md](spec/current-spec-provenance-map.md)
-5. [docs/product/spec/README.md](spec/README.md)
+4. [docs/product/spec/README.md](spec/README.md)
 6. [instruction-artifact-model.md](spec/instruction-artifact-model.md)
 7. [skill-management-and-activation-law.md](spec/skill-management-and-activation-law.md)
 8. [instruction-migration-map.md](spec/instruction-migration-map.md)
@@ -42,8 +41,7 @@ Current entrypoints:
 21. [agent-lane-selection-and-conversation-mode-model.md](spec/agent-lane-selection-and-conversation-mode-model.md)
 22. [compiled-autonomous-delivery-runtime-architecture.md](spec/compiled-autonomous-delivery-runtime-architecture.md)
 23. [emerging-architectural-patterns-model.md](spec/emerging-architectural-patterns-model.md)
-24. [release-1-plan.md](spec/release-1-plan.md)
-25. [release-1-closure-contract.md](spec/release-1-closure-contract.md)
+24. [release-1-closure-contract.md](spec/release-1-closure-contract.md)
 26. [release-1-workflow-classification-and-risk-matrix.md](spec/release-1-workflow-classification-and-risk-matrix.md)
 27. [release-1-control-metrics-and-gates.md](spec/release-1-control-metrics-and-gates.md)
 28. [release-1-canonical-artifact-schemas.md](spec/release-1-canonical-artifact-schemas.md)
@@ -90,11 +88,9 @@ Current entrypoints:
 
 Release-1 working entrypoints:
 
-1. [release-1-plan.md](spec/release-1-plan.md)
-2. [release-1-capability-matrix.md](spec/release-1-capability-matrix.md)
-3. [release-1-seam-map.md](spec/release-1-seam-map.md)
-4. [release-1-current-state.md](spec/release-1-current-state.md)
-5. [release-1-closure-contract.md](spec/release-1-closure-contract.md)
+1. [release-1-capability-matrix.md](spec/release-1-capability-matrix.md)
+2. [release-1-seam-map.md](spec/release-1-seam-map.md)
+3. [release-1-closure-contract.md](spec/release-1-closure-contract.md)
 6. [release-1-workflow-classification-and-risk-matrix.md](spec/release-1-workflow-classification-and-risk-matrix.md)
 7. [release-1-control-metrics-and-gates.md](spec/release-1-control-metrics-and-gates.md)
 8. [release-1-canonical-artifact-schemas.md](spec/release-1-canonical-artifact-schemas.md)
@@ -111,10 +107,8 @@ Release-1 working entrypoints:
 19. [release-1-fixture-and-golden-data-contract.md](spec/release-1-fixture-and-golden-data-contract.md)
 20. [release-1-risk-acceptance-register.md](spec/release-1-risk-acceptance-register.md)
 21. [compiled-autonomous-delivery-runtime-architecture.md](spec/compiled-autonomous-delivery-runtime-architecture.md)
-22. [taskflow-v1-runtime-modernization-plan.md](spec/taskflow-v1-runtime-modernization-plan.md)
-23. [docflow-v1-runtime-modernization-plan.md](spec/docflow-v1-runtime-modernization-plan.md)
-24. [vida1-development-conditions.md](../process/vida1-development-conditions.md)
-25. [checkpoint-commit-and-replay-model.md](spec/checkpoint-commit-and-replay-model.md)
+22. [vida1-development-conditions.md](../process/vida1-development-conditions.md)
+23. [checkpoint-commit-and-replay-model.md](spec/checkpoint-commit-and-replay-model.md)
 
 Repository project split:
 

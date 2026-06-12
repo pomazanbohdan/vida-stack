@@ -75,7 +75,7 @@ Structured-template rule:
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - [`docs/product/spec/release-1-plan.md`](/home/unnamed/project/vida-stack/docs/product/spec/release-1-plan.md)
+  - remaining Release 1 owner specs
   - [`docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md`](/home/unnamed/project/vida-stack/docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md)
 - Framework protocols affected:
   - command/help parity only; no protocol-law rewrite
@@ -252,7 +252,7 @@ Will implement / choose:
 
 ## References
 - Related specs:
-  - [`docs/product/spec/release-1-plan.md`](/home/unnamed/project/vida-stack/docs/product/spec/release-1-plan.md)
+  - remaining Release 1 owner specs
   - [`docs/product/spec/status-families-and-query-surface-model.md`](/home/unnamed/project/vida-stack/docs/product/spec/status-families-and-query-surface-model.md)
   - [`docs/product/spec/release-1-operator-surface-contract.md`](/home/unnamed/project/vida-stack/docs/product/spec/release-1-operator-surface-contract.md)
 - Related protocols:

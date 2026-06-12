@@ -43,7 +43,7 @@ Status: `implemented`
 - Project docs / specs affected:
   - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -117,7 +117,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `crates/vida/src/state_store_task_models.rs`
 - `crates/vida/src/state_store_task_store.rs`
 - `crates/vida/src/state_store_task_graph.rs`
@@ -172,7 +172,7 @@ Will implement / choose:
   - inspect `vida task show --json`
   - inspect `vida taskflow graph-summary --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `vida docflow check --root . docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
 - Scheduler projection emits:

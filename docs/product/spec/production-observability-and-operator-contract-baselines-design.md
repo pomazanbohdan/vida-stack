@@ -166,7 +166,7 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/release-1-canonical-artifact-schemas.md`
-- `docs/product/spec/release-1-plan.md`
+- `remaining Release 1 owner specs`
 - `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
 - `crates/vida/src/release1_contracts.rs`
 

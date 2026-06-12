@@ -89,7 +89,7 @@ Use this document as the bounded design/TZ for the TaskFlow epic `feature-vida-p
 - Project docs / specs affected:
   - `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - operator runbook/process docs added in the docs task
 - Framework protocols affected:
   - host CLI setup/materialization protocol surfaces
@@ -217,7 +217,7 @@ Will implement / choose:
 - Phase 1: specification/design
   - `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
 - Phase 2: config/template profiles
   - `vida.config.yaml`
   - `docs/framework/templates/vida.config.yaml.template`

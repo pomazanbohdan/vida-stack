@@ -80,8 +80,8 @@ Structured-template rule:
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - [`docs/product/spec/release-1-plan.md`](/home/unnamed/project/vida-stack/docs/product/spec/release-1-plan.md)
-  - [`docs/product/spec/release-1-current-state.md`](/home/unnamed/project/vida-stack/docs/product/spec/release-1-current-state.md)
+  - remaining Release 1 owner specs
+  - remaining Release 1 status and closure specs
   - [`docs/product/spec/release-1-conformance-matrix.md`](/home/unnamed/project/vida-stack/docs/product/spec/release-1-conformance-matrix.md)
   - [`docs/product/spec/compiled-runtime-bundle-contract.md`](/home/unnamed/project/vida-stack/docs/product/spec/compiled-runtime-bundle-contract.md)
   - [`docs/product/spec/bootstrap-carriers-and-project-activator-model.md`](/home/unnamed/project/vida-stack/docs/product/spec/bootstrap-carriers-and-project-activator-model.md)

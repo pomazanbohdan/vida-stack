@@ -9,8 +9,7 @@ Companion rule:
 
 1. Use this map first for product/spec routing.
 2. Use [current-spec-catalog.md](current-spec-catalog.md) for the detailed active artifact catalog and config-family notes.
-3. Use [current-spec-provenance-map.md](current-spec-provenance-map.md) for source lineage, absorption history, and historical promotion context.
-4. Do not expand this map back into a full catalog; register detailed entries in the catalog companion and keep the owning artifact docs authoritative.
+3. Do not expand this map back into a full catalog; register detailed entries in the catalog companion and keep the owning artifact docs authoritative.
 
 ## Canonical Entry Points
 
@@ -20,50 +19,42 @@ Companion rule:
    - spec-lane orientation and local product/spec home
 3. [current-spec-catalog.md](current-spec-catalog.md)
    - detailed active product/spec artifact catalog
-4. [current-spec-provenance-map.md](current-spec-provenance-map.md)
-   - provenance and absorbed-history companion for the active canon
-5. [project-documentation-law.md](project-documentation-law.md)
+4. [project-documentation-law.md](project-documentation-law.md)
    - project documentation ownership and canonical state law
-6. [project-document-naming-law.md](project-document-naming-law.md)
+5. [project-document-naming-law.md](project-document-naming-law.md)
    - project-owned docs naming grammar and owner-directory terminal role rules
-7. [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md)
+6. [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md)
    - documentation/product alignment matrix
-8. [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md)
+7. [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md)
    - runtime capability layering matrix
-9. [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md)
+8. [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md)
    - runtime readiness gate law used by the project
-10. [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md)
+9. [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md)
    - role, carrier, profile, and flow model
-11. [release-1-plan.md](release-1-plan.md)
-    - Release 1 planning entrypoint
-12. [release-1-current-state.md](release-1-current-state.md)
-    - current Release 1 state entrypoint
-13. [release-1-capability-matrix.md](release-1-capability-matrix.md)
+10. [release-1-capability-matrix.md](release-1-capability-matrix.md)
     - Release 1 capability matrix
-14. [release-1-closure-contract.md](release-1-closure-contract.md)
+11. [release-1-closure-contract.md](release-1-closure-contract.md)
     - Release 1 closure and completion contract
-15. [release-build-packaging-law.md](release-build-packaging-law.md)
+12. [release-build-packaging-law.md](release-build-packaging-law.md)
     - release build and packaging ownership law
-16. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
+13. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
     - TaskFlow/runtime binding model
-17. [compiled-autonomous-delivery-runtime-architecture.md](compiled-autonomous-delivery-runtime-architecture.md)
+14. [compiled-autonomous-delivery-runtime-architecture.md](compiled-autonomous-delivery-runtime-architecture.md)
     - compiled autonomous delivery runtime architecture
-18. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
+15. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
     - bootstrap carrier and project activator model
-19. [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md)
+16. [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md)
     - DocFlow and documentation operator-command map
 
 ## Detailed Catalog Companions
 
 1. [current-spec-catalog.md](current-spec-catalog.md)
    - active current canon list, grouped by product/spec area
-2. [current-spec-provenance-map.md](current-spec-provenance-map.md)
-   - historical source-lineage and promotion context
-3. [docs/product/index.md](../index.md)
+2. [docs/product/index.md](../index.md)
    - repository-wide product/process/research index
-4. [docs/project-root-map.md](../../project-root-map.md)
+3. [docs/project-root-map.md](../../project-root-map.md)
    - active project root map that routes into this spec map
-5. [AGENTS.sidecar.md](../../../AGENTS.sidecar.md)
+4. [AGENTS.sidecar.md](../../../AGENTS.sidecar.md)
    - bootstrap-visible project documentation map
 
 ## Routing Pointers
@@ -71,7 +62,7 @@ Companion rule:
 1. Documentation ownership, naming, and inventory questions route to [project-documentation-law.md](project-documentation-law.md), [project-document-naming-law.md](project-document-naming-law.md), [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md), and [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md).
 2. Runtime readiness, runtime layering, and operator-surface questions route to [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md), [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md), and the Release 1 contract family.
 3. Role, carrier, skill, profile, lane, and flow questions route to [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md) and [docs/process/agent-extensions/README.md](../../process/agent-extensions/README.md).
-4. Detailed artifact lookup routes to [current-spec-catalog.md](current-spec-catalog.md); provenance lookup routes to [current-spec-provenance-map.md](current-spec-provenance-map.md).
+4. Detailed artifact lookup routes to [current-spec-catalog.md](current-spec-catalog.md).
 
 ## Current Rule
 

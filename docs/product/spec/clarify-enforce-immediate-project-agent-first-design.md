@@ -265,7 +265,7 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/release-1-plan.md`
+  - `remaining Release 1 owner specs`
   - `docs/product/spec/release-1-capability-matrix.md`
 - Related protocols
   - `docs/process/project-orchestrator-operating-protocol.md`

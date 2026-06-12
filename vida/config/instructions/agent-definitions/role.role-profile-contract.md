@@ -84,7 +84,7 @@ Project extension rule:
 1. `agent-definitions/model.agent-definitions-contract`
 2. `docs/product/spec/instruction-artifact-model.md`
 3. `docs/product/spec/agent-role-skill-profile-flow-model.md`
-4. `docs/process/framework-source-lineage-index.md`
+4. `Git history and active artifact sidecars`
 
 -----
 artifact_path: config/instructions/agent-definitions/role.role-profile.contract

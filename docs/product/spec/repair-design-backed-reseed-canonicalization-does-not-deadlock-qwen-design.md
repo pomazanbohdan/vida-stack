@@ -69,7 +69,7 @@ Status: `approved`
 - Project docs / specs affected:
   - `docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
   - `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
 - Framework protocols affected:
@@ -176,7 +176,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `crates/vida/src/taskflow_run_graph.rs`
 - `crates/vida/src/taskflow_consume.rs`
 - `crates/vida/src/taskflow_routing.rs`
@@ -231,7 +231,7 @@ Will implement / choose:
   - `cargo run -p vida -- agent-init --dispatch-packet <fresh-packet> --execute-dispatch --json`
   - `cargo run -p vida -- orchestrator-init --json`
 - Canonical checks:
-  - `cargo run -p vida -- docflow check --root . docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `cargo run -p vida -- docflow check --root . docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
 - Logging points

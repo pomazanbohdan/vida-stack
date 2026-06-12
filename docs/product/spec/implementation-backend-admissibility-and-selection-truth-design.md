@@ -56,7 +56,7 @@ Will implement / choose:
 ## Bounded File Set
 - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
 - `crates/vida/src/runtime_dispatch_state.rs`
 - `crates/vida/src/state_store_run_graph_summary.rs`

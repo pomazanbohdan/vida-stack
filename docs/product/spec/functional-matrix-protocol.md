@@ -301,7 +301,7 @@ This protocol currently governs and should strengthen at least:
 Related authoring references:
 
 1. `docs/product/spec/canonical-layer-documentation-template.md`
-2. `docs/product/spec/release-1-plan.md`
+2. `remaining Release 1 owner specs`
 
 Interpretation rule:
 

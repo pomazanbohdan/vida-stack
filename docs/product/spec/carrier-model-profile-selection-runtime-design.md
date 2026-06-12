@@ -270,7 +270,7 @@ Will implement / choose:
   - `cargo test -p vida status_surface_host_agents`
   - `cargo test -p vida status_surface_external_cli`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/carrier-model-profile-selection-runtime-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `vida docflow check --root . docs/product/spec/carrier-model-profile-selection-runtime-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
   - `vida docflow proofcheck --profile active-canon docs/product/spec/carrier-model-profile-selection-runtime-design.md`
   - `vida docflow readiness-check --profile active-canon`
 

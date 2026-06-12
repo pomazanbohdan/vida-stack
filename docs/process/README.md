@@ -59,31 +59,29 @@ Canonical entrypoints:
    - current canonical process surface for local environment assumptions, long-lived state roots, and temp-state proof posture
 23. `instruction-contracts/meta.protocol-naming-grammar-protocol.md`
    - canonical framework naming law and sequential rename-wave protocol for instruction artifacts
-24. `docs/process/framework-source-lineage-index.md`
-   - project-owned provenance index for deleted framework-formation plans/research documents and their promoted canonical homes
-25. `docs/process/release-formatting-protocol.md`
+24. `docs/process/release-formatting-protocol.md`
    - canonical project process for rendering clean public GitHub release pages from canonical release-note artifacts
-26. `docs/process/external-cli-carrier-operator-procedure.md`
+25. `docs/process/external-cli-carrier-operator-procedure.md`
    - canonical project operator procedure for external CLI carrier auth repair, model fixation, and smoke validation
-27. `docs/process/github-issues-triage-guide.md`
+26. `docs/process/github-issues-triage-guide.md`
    - project-owned process for GitHub Issues label taxonomy, triage, diagnostic publication, and issue-form alignment
-28. `docs/process/github-pr-processing-protocol.md`
+27. `docs/process/github-pr-processing-protocol.md`
    - project-owned process for validating, merging or closing PRs, manually integrating useful stale fixes, deleting branches, and returning to `main`
-29. `docs/process/command-timing-and-gate-optimization-protocol.md`
+28. `docs/process/command-timing-and-gate-optimization-protocol.md`
     - project-owned process for timing significant operations, diagnosing slow gates, and turning repeated command/script/CI latency into optimization work
-30. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
+29. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
      - project-owned process overlay for applying generic `Error Search / Bug Reasoning` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
-31. `docs/process/multi-agent-stage-ensemble-protocol.md`
+30. `docs/process/multi-agent-stage-ensemble-protocol.md`
      - proposed project process architecture for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
-32. `docs/process/vida-runtime-development-environment.md`
+31. `docs/process/vida-runtime-development-environment.md`
      - compact project-owned runbook for keeping runtime development skills, TaskFlow, DocFlow, GitHub issue processing, and operator-efficiency work aligned
-33. `docs/product/spec/feature-design-and-adr-model.md`
+32. `docs/product/spec/feature-design-and-adr-model.md`
     - product-law owner for the split between structured feature/change design documents and linked ADRs
-34. `docs/framework/templates/feature-design-document.template.md`
+33. `docs/framework/templates/feature-design-document.template.md`
     - framework-owned reusable feature/change design template with stable sections and bounded variable fields
-35. `docs/process/runtime-defect-function-option-matrix-protocol.md`
+34. `docs/process/runtime-defect-function-option-matrix-protocol.md`
      - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
-36. `docs/process/agent-model-evaluation-log.md`
+35. `docs/process/agent-model-evaluation-log.md`
      - project-owned log for per-task agent model quality, routing, validation, token/tool telemetry, and next-task model-selection evidence
 
 -----

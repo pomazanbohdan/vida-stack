@@ -31,10 +31,10 @@ Matrix reading rule:
 
 | Release slice | Strongest current owner surfaces | Main current gap |
 |---|---|---|
-| Slice 1: Operational Spine | `release-1-plan.md`; `taskflow-v1-runtime-modernization-plan.md`; current Rust `vida` shell and `taskflow-*` crates | no blocking Release-1 gap; remaining work is post-release shell thinning and owner extraction |
+| Slice 1: Operational Spine | `remaining Release 1 owner specs`; `current TaskFlow runtime owner specs`; current Rust `vida` shell and `taskflow-*` crates | no blocking Release-1 gap; remaining work is post-release shell thinning and owner extraction |
 | Slice 2: Project Activation Surface | `project-activation-and-configurator-model.md`; `operational-state-and-synchronization-model.md`; current `.vida/**` direction | no blocking Release-1 gap; remaining work is post-release configurator/service extraction and projection cleanup |
 | Slice 3: Compiled Runtime Bundles | `compiled-runtime-bundle-contract.md`; `taskflow-protocol-runtime-binding-model.md`; `runtime-paths-and-derived-cache-model.md` | no blocking Release-1 gap; remaining work is post-release alias burn-down and launcher decoupling |
-| Slice 4: Planning, Execution, Artifact, And Approval Loop | `user-facing-runtime-flow-and-operating-loop-model.md`; `execution-preparation-and-developer-handoff-model.md`; `release-1-plan.md` | no blocking Release-1 gap; remaining work is post-release workflow/risk enrichment and additional top-level surface promotion |
+| Slice 4: Planning, Execution, Artifact, And Approval Loop | `user-facing-runtime-flow-and-operating-loop-model.md`; `execution-preparation-and-developer-handoff-model.md`; `remaining Release 1 owner specs` | no blocking Release-1 gap; remaining work is post-release workflow/risk enrichment and additional top-level surface promotion |
 | Slice 5: Release-1 Closure And Hardening | `compiled-autonomous-delivery-runtime-architecture.md`; `checkpoint-commit-and-replay-model.md`; `vida1-development-conditions.md` | closure is proven; only operational caveat is that local `.vida` datastore hygiene must be preserved because manual state cleanup can invalidate live probes until state is reinitialized |
 
 Interpretation rule:
@@ -126,7 +126,7 @@ Compact rule:
 
 Primary owner references:
 
-1. `docs/product/spec/release-1-plan.md`
+1. `remaining Release 1 owner specs`
 2. `docs/product/spec/release-1-closure-contract.md`
 3. `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
 4. `docs/product/spec/release-1-control-metrics-and-gates.md`
@@ -137,8 +137,8 @@ Primary owner references:
 9. `docs/product/spec/release-1-proof-scenario-catalog.md`
 10. `docs/product/spec/release-1-schema-versioning-and-compatibility-law.md`
 11. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-12. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
-13. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
+12. `current TaskFlow runtime owner specs`
+13. `current DocFlow/runtime owner specs`
 14. `docs/product/spec/canonical-runtime-layer-matrix.md`
 15. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
 16. `docs/product/spec/functional-matrix-protocol.md`
@@ -186,8 +186,8 @@ Provide the first usable Release-1 shell that can initialize, inspect, and gover
 
 ### 4.6 Owner Docs
 
-1. `docs/product/spec/release-1-plan.md`
-2. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
+1. `remaining Release 1 owner specs`
+2. `current TaskFlow runtime owner specs`
 3. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
 4. `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
 
@@ -250,7 +250,7 @@ Turn the operational shell into a project-aware runtime with DB-first activation
 
 ### 5.6 Owner Docs
 
-1. `docs/product/spec/release-1-plan.md`
+1. `remaining Release 1 owner specs`
 2. `docs/product/spec/project-activation-and-configurator-model.md`
 3. `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
 4. `docs/product/spec/operational-state-and-synchronization-model.md`
@@ -312,7 +312,7 @@ Compile the active framework/project posture into one strict control bundle with
 
 ### 6.6 Owner Docs
 
-1. `docs/product/spec/release-1-plan.md`
+1. `remaining Release 1 owner specs`
 2. `docs/product/spec/compiled-runtime-bundle-contract.md`
 3. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
 4. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
@@ -372,7 +372,7 @@ Close the first end-to-end Release-1 operator loop from intent and planning thro
 
 ### 7.6 Owner Docs
 
-1. `docs/product/spec/release-1-plan.md`
+1. `remaining Release 1 owner specs`
 2. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 3. `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
 
@@ -435,10 +435,10 @@ Close Release 1 as one coherent CLI-first runtime with restore/reconcile discipl
 
 ### 8.6 Owner Docs
 
-1. `docs/product/spec/release-1-plan.md`
+1. `remaining Release 1 owner specs`
 2. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-3. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
-4. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
+3. `current TaskFlow runtime owner specs`
+4. `current DocFlow/runtime owner specs`
 5. `docs/product/spec/projection-listener-checkpoint-model.md`
 6. `docs/product/spec/checkpoint-commit-and-replay-model.md`
 7. `docs/process/vida1-development-conditions.md`

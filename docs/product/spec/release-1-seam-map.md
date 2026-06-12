@@ -71,11 +71,11 @@ Primary owner references:
 8. `docs/product/spec/release-1-state-machine-specs.md`
 9. `docs/product/spec/release-1-error-and-exception-taxonomy.md`
 10. `docs/product/spec/release-1-proof-scenario-catalog.md`
-11. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
-12. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
+11. `current TaskFlow runtime owner specs`
+12. `current DocFlow/runtime owner specs`
 13. `docs/product/spec/canonical-runtime-layer-matrix.md`
 14. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-15. `docs/product/spec/release-1-plan.md`
+15. `remaining Release 1 owner specs`
 
 Owner rule:
 

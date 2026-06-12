@@ -437,7 +437,7 @@ Specification packet:
 
 1. `docs/product/spec/vida-service-tui-wizard-execution-spec.md`
 2. `docs/product/spec/current-spec-map.md`
-3. `docs/product/spec/current-spec-provenance-map.md`
+3. `active spec/catalog maps and Git history`
 
 First-wave implementation paths:
 

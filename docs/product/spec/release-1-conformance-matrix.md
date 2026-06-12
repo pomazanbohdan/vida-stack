@@ -50,7 +50,7 @@ This matrix maps:
 
 ## 4. References
 
-1. `docs/product/spec/release-1-plan.md`
+1. `remaining Release 1 owner specs`
 2. `docs/product/spec/release-1-ownership-to-code-map.md`
 3. `docs/product/spec/release-1-proof-scenario-catalog.md`
 4. `docs/product/spec/project-activation-and-configurator-model.md`

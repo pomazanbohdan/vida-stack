@@ -62,7 +62,7 @@ Status: `approved`
 - Project docs / specs affected:
   - `docs/product/spec/repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
   - `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
   - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
@@ -170,7 +170,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `crates/vida/src/taskflow_consume_resume.rs`
 - `crates/vida/src/taskflow_continuation.rs`
 - `crates/vida/src/init_surfaces.rs`
@@ -222,7 +222,7 @@ Will implement / choose:
   - `cargo run -p vida -- agent-init --json \"<bounded blocker request>\"`
 - Canonical checks:
   - `cargo run -p vida -- docflow check --root . docs/product/spec/repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md`
-  - `cargo run -p vida -- docflow check --root . docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `cargo run -p vida -- docflow check --root . docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ## Observability
 - Logging points

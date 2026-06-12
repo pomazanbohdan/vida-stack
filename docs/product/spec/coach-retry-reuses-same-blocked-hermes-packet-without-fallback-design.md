@@ -60,7 +60,7 @@ Status: `proposed`
 - Project docs / specs affected:
   - `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
 - Runtime families affected:
   - `taskflow`
   - `launcher`
@@ -119,7 +119,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `crates/vida/src/taskflow_consume_resume.rs`
 - `crates/vida/src/taskflow_routing.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
@@ -138,7 +138,7 @@ Will implement / choose:
 ### Phase 1
 - Register this blocker in the active spec maps and finalize the bounded design.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `vida docflow check --root . docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ### Phase 2
 - Tighten retry eligibility and packet rewrite semantics for blocked coach receipts.

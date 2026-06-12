@@ -64,7 +64,7 @@ Status: `proposed`
 - Project docs / specs affected:
   - `docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
 - Runtime families affected:
   - `taskflow`
   - `launcher`
@@ -120,7 +120,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `crates/vida/src/taskflow_run_graph.rs`
 - `crates/vida/src/runtime_dispatch_packets.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
@@ -138,7 +138,7 @@ Will implement / choose:
 ### Phase 1
 - Register and finalize this bounded design.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `vida docflow check --root . docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ### Phase 2
 - Repair explicit implementation seeding so design-backed context survives into dispatch-init.

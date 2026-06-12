@@ -7,7 +7,7 @@ This directory is the promoted research input home for current VIDA product work
 Rules:
 
 1. Current product law still lives in `docs/product/spec/**`.
-2. Historical framework-formation research lineage lives only in `docs/process/framework-source-lineage-index.md`.
+2. Historical framework-formation research lineage lives in Git history and active artifact sidecars.
 3. Product-facing promoted findings or future crosswalks may be placed here without turning raw research into active law.
 
 Current state:

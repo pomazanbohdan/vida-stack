@@ -103,14 +103,14 @@ If any item is missing:
 
 Historical runtime-lineage provenance is preserved in:
 
-1. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
 
 ## References
 
 1. `runtime-instructions/core.run-graph-protocol`
 2. `runtime-instructions/core.context-governance-protocol`
 3. `docs/product/spec/checkpoint-commit-and-replay-model.md`
-4. `docs/process/framework-source-lineage-index.md`
+4. `Git history and active artifact sidecars`
 
 -----
 artifact_path: config/runtime-instructions/checkpoint-replay-recovery.protocol

@@ -63,7 +63,7 @@ Status: `approved`
 - Project docs / specs affected:
   - `docs/product/spec/repair-task-close-closure-truth-exception-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
   - `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
 - Framework protocols affected:
@@ -168,7 +168,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/repair-task-close-closure-truth-exception-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `crates/vida/src/runtime_dispatch_state.rs`
 - `crates/vida/src/taskflow_consume_resume.rs`
 

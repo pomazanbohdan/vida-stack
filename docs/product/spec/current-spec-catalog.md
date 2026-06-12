@@ -9,8 +9,7 @@ Companion rule:
 
 1. Start from [current-spec-map.md](current-spec-map.md) for routing decisions.
 2. Use this catalog for detailed active artifact discovery and config-family notes.
-3. Use [current-spec-provenance-map.md](current-spec-provenance-map.md) for source-lineage and absorbed-history context.
-4. This catalog does not replace the owning artifact docs; it only lists and routes them.
+3. This catalog does not replace the owning artifact docs; it only lists and routes them.
 
 ## Detailed Current Canon
 
@@ -84,9 +83,6 @@ Companion rule:
    Config families: `docs/process/agent-extensions/**`, `vida.config.yaml`, `.vida/logs/problem-party/**`, single-agent or multi-agent Party Chat execution plans, and runtime consumption by the TaskFlow runtime family
 5. [autonomous-report-continuation-law.md](autonomous-report-continuation-law.md)
    Config families: `vida.config.yaml`, `vida/config/instructions/**`, TaskFlow routing and autonomous execution behavior
-6. [taskflow-v1-runtime-modernization-plan.md](taskflow-v1-runtime-modernization-plan.md)
-   Config families: TaskFlow runtime-family implementation surfaces, `vida/config/instructions/**`, runtime feature registration, shared runtime kernel, provider registry, modular config validation, and the active TaskFlow modernization backlog
-   Registered path: `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
 8. [codex-host-agent-boundary-and-cli-bridge-design.md](codex-host-agent-boundary-and-cli-bridge-design.md)
    Config families: `vida.config.yaml -> host_environment.systems.codex`, `agent_system.subagents.internal_subagents`, `agent_system.subagents.codex_cli_exec`, TaskFlow host-bridge dispatch requests
    Registered path: `docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md`
@@ -99,8 +95,6 @@ Companion rule:
 9. [hybrid-host-executor-semantics-host-environment-design.md](hybrid-host-executor-semantics-host-environment-design.md)
    Config families: `vida.config.yaml -> host_environment`, `agent_system.subagents`, policy-selected internal/external executor semantics, and host posture versus executor backend separation
    Registered path: `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
-10. [docflow-v1-runtime-modernization-plan.md](docflow-v1-runtime-modernization-plan.md)
-   Config families: DocFlow runtime-family implementation surfaces, canonical `vida/config/docflow-*.current.jsonl` artifacts, `vida/config/instructions/**`, documentation tooling operator surfaces, runtime-family migration, and explicit final `taskflow -> docflow` consumption seams
 9. [compiled-autonomous-delivery-runtime-architecture.md](compiled-autonomous-delivery-runtime-architecture.md)
    Config families: `vida/config/instructions/**`, `.vida/config/**`, `.vida/project/**`, `.vida/cache/**`, transitional source-mode bridge surfaces such as root `vida.config.yaml` and `docs/process/agent-extensions/**`, TaskFlow runtime-family implementation surfaces, DocFlow runtime-family implementation surfaces, and future compiled orchestration bundle surfaces
 10. [emerging-architectural-patterns-model.md](emerging-architectural-patterns-model.md)
@@ -178,40 +172,34 @@ Companion rule:
 
 ### Release 1
 
-1. [release-1-plan.md](release-1-plan.md)
-   Config families: Release-1 execution ownership, mandatory capability closure, V1 target architecture, crate/file decomposition, stateful agent-lane governance, phase ordering, and platform-shape preservation
-   Registered path: `docs/product/spec/release-1-plan.md`
-2. [release-1-event-state-and-projection-topology-design.md](release-1-event-state-and-projection-topology-design.md)
+1. [release-1-event-state-and-projection-topology-design.md](release-1-event-state-and-projection-topology-design.md)
    Config families: bounded event-state topology, projection-checkpoint contracts, replay/resumability alignment, optional feature-gated event backend posture, and SurrealDB-first projection authority for Release 1
    Registered path: `docs/product/spec/release-1-event-state-and-projection-topology-design.md`
-3. [release-1-capability-matrix.md](release-1-capability-matrix.md)
+2. [release-1-capability-matrix.md](release-1-capability-matrix.md)
    Config families: Release-1 capability ladder, cross-track closure, slice mapping, proof surfaces, and fail-closed seam ownership
    Registered path: `docs/product/spec/release-1-capability-matrix.md`
-4. [release-1-seam-map.md](release-1-seam-map.md)
+3. [release-1-seam-map.md](release-1-seam-map.md)
    Config families: Release-1 closure seam, TaskFlow-to-DocFlow activation/proof return, blocker classes, and final hardening admission
    Registered path: `docs/product/spec/release-1-seam-map.md`
-5. [release-1-current-state.md](release-1-current-state.md)
-   Config families: Release-1 readiness by slice/layer/seam, keep-versus-refactor posture, launcher concentration risk, and current state inputs
-   Registered path: `docs/product/spec/release-1-current-state.md`
-6. [release-1-closure-contract.md](release-1-closure-contract.md)
+4. [release-1-closure-contract.md](release-1-closure-contract.md)
    Config families: Release-1 definition of done, non-waivable blockers, risk-acceptance law, and closure evidence bundle
    Registered path: `docs/product/spec/release-1-closure-contract.md`
-7. [release-1-workflow-classification-and-risk-matrix.md](release-1-workflow-classification-and-risk-matrix.md)
+5. [release-1-workflow-classification-and-risk-matrix.md](release-1-workflow-classification-and-risk-matrix.md)
    Config families: Release-1 workflow classes, risk tiers, approval posture, lifecycle variants, and supported workflow surface
    Registered path: `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
-8. [release-1-control-metrics-and-gates.md](release-1-control-metrics-and-gates.md)
+6. [release-1-control-metrics-and-gates.md](release-1-control-metrics-and-gates.md)
    Config families: Release-1 control metrics, gate thresholds, release-candidate evidence windows, and workflow-tier gate binding
    Registered path: `docs/product/spec/release-1-control-metrics-and-gates.md`
-9. [release-1-canonical-artifact-schemas.md](release-1-canonical-artifact-schemas.md)
+7. [release-1-canonical-artifact-schemas.md](release-1-canonical-artifact-schemas.md)
    Config families: Release-1 minimum machine-readable contracts for traces, approvals, tool contracts, evaluation runs, incidents, memory records, and closure admission
    Registered path: `docs/product/spec/release-1-canonical-artifact-schemas.md`
-10. [release-1-decision-tables.md](release-1-decision-tables.md)
+8. [release-1-decision-tables.md](release-1-decision-tables.md)
    Config families: Release-1 executable control rules for approval, delegation, tool use, retrieval trust, memory writes, and rollback gates
    Registered path: `docs/product/spec/release-1-decision-tables.md`
-11. [release-1-state-machine-specs.md](release-1-state-machine-specs.md)
+9. [release-1-state-machine-specs.md](release-1-state-machine-specs.md)
    Config families: Release-1 canonical FSMs for lanes, approvals, tools, incidents, and prompt rollout
    Registered path: `docs/product/spec/release-1-state-machine-specs.md`
-12. [release-1-error-and-exception-taxonomy.md](release-1-error-and-exception-taxonomy.md)
+10. [release-1-error-and-exception-taxonomy.md](release-1-error-and-exception-taxonomy.md)
    Config families: Release-1 blocker codes, failure vocabulary, and exception-path taxonomy
    Registered path: `docs/product/spec/release-1-error-and-exception-taxonomy.md`
 13. [release-1-ownership-to-code-map.md](release-1-ownership-to-code-map.md)
@@ -368,17 +356,10 @@ Companion rule:
     Config families: current-repo scoped web proof restart command, explicit edge-proxy restart opt-in, stale listener ownership checks, compact JSON restart receipts, and TaskFlow proof consumption for `vida runtime web restart`
     Registered path: `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
 
-### Support
-
-1. [current-spec-provenance-map.md](current-spec-provenance-map.md)
-   Config families: detailed source lineage, absorbed historical inputs, and provenance routing for the active product-spec canon
-   Registered path: `docs/product/spec/current-spec-provenance-map.md`
-
 ## Routing Rule
 
 1. Add newly promoted current product/spec artifacts here only when they are active project canon.
-2. Keep provenance-heavy explanations in [current-spec-provenance-map.md](current-spec-provenance-map.md).
-3. Keep [current-spec-map.md](current-spec-map.md) short; it should route to this catalog instead of duplicating the detailed list.
+2. Keep [current-spec-map.md](current-spec-map.md) short; it should route to this catalog instead of duplicating the detailed list.
 
 -----
 artifact_path: product/spec/current-spec-catalog

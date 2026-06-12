@@ -67,7 +67,7 @@ Use this template for one bounded feature/change design before implementation.
 - Project docs / specs affected:
   - `docs/product/spec/authoritative-state-lock-recovery-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/product/spec/README.md`
 - Framework protocols affected:
   - none
@@ -163,7 +163,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/authoritative-state-lock-recovery-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
 - `crates/vida/src/state_store.rs`
 - `crates/vida/src/state_store_open.rs`
@@ -213,7 +213,7 @@ Will implement / choose:
   - `vida doctor --json`
   - `vida taskflow consume continue --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/authoritative-state-lock-recovery-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md docs/product/spec/README.md`
+  - `vida docflow check --root . docs/product/spec/authoritative-state-lock-recovery-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
 
 ## Observability
 - Logging points

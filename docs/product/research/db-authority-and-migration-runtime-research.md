@@ -11,7 +11,7 @@ How should VIDA turn embedded framework artifacts, project activation state, pro
 Product/spec inputs:
 
 1. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-2. `docs/product/spec/release-1-plan.md`
+2. `remaining Release 1 owner specs`
 3. `docs/product/spec/embedded-runtime-and-editable-projection-model.md`
 4. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
 5. `docs/product/spec/project-activation-and-configurator-model.md`

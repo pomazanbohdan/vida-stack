@@ -84,7 +84,7 @@ Use this design to finish the post-`carrier + model_profile` wave so runtime can
 - Project docs / specs affected:
   - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/product/spec/README.md`
   - `docs/product/spec/agent-role-skill-profile-flow-model.md`
   - `docs/product/spec/external-cli-carrier-hardening-design.md`
@@ -249,7 +249,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
 - `vida.config.yaml`
 - `crates/vida/src/carrier_runtime_projection.rs`

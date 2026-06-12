@@ -724,7 +724,7 @@ After bootstrap, development agents must know immediately:
 10. for project role/skill/profile/flow registries, read `docs/process/agent-extensions/README.md`,
 11. for canonical spec-to-task decomposition law, read `command-instructions/planning.form-task-protocol.md`,
 12. for delegated packet invariants, read `instruction-contracts/lane.worker-dispatch-protocol.md`,
-13. for Release-1 execution-program ownership, read `docs/product/spec/release-1-plan.md`.
+13. for Release-1 execution-program ownership, read `remaining Release 1 owner specs`.
 
 -----
 artifact_path: process/team-development-and-orchestration-protocol

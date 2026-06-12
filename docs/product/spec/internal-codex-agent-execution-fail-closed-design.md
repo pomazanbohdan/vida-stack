@@ -247,7 +247,7 @@ Will implement / choose:
 ## References
 - Related specs
   - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
-  - `docs/product/spec/release-1-plan.md`
+  - `remaining Release 1 owner specs`
 - Related protocols
   - `docs/process/project-orchestrator-operating-protocol.md`
   - `docs/process/team-development-and-orchestration-protocol.md`

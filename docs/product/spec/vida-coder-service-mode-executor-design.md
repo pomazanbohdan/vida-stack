@@ -88,7 +88,7 @@ Use this document as the bounded design/TZ for the TaskFlow epic `feature-vida-c
 - Project docs / specs affected:
   - `docs/product/spec/vida-coder-service-mode-executor-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/process/external-cli-carrier-operator-procedure.md`
   - `docs/process/agent-system.md`
 - Framework protocols affected:
@@ -257,7 +257,7 @@ Will implement / choose:
 - Expected design/spec/doc files:
   - `docs/product/spec/vida-coder-service-mode-executor-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/process/agent-system.md`
   - `docs/process/external-cli-carrier-operator-procedure.md`
 - Expected runtime/config files:

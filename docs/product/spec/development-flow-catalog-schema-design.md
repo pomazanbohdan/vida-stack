@@ -187,7 +187,7 @@ cargo test -p vida lifecycle_hook_contract -- --nocapture --test-threads=1
 cargo test -p vida dev_team_sequence_uses_configured_flow_ordered_step_overrides -- --nocapture --test-threads=1
 cargo test -p vida project_routing_shape_defines_configurable_pr_and_specialized_flow_presets -- --nocapture --test-threads=1
 vida taskflow consume agent-system --json
-vida docflow check --root . docs/product/spec/development-flow-catalog-schema-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md
+vida docflow check --root . docs/product/spec/development-flow-catalog-schema-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history
 ```
 
 ## External Reference Notes

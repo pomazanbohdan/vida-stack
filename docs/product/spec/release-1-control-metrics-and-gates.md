@@ -115,7 +115,7 @@ Release 1 must expose at least these operator-facing grouped views:
 ## 8. References
 
 1. Airtable `Vida` base, `Spec` table records `810-814`, refreshed `2026-03-16`
-2. `docs/product/spec/release-1-plan.md`
+2. `remaining Release 1 owner specs`
 3. `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
 4. `docs/product/spec/release-1-closure-contract.md`
 

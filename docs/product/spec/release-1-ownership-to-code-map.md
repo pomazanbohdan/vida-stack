@@ -17,7 +17,7 @@ This map defines:
 
 | Owner doc | Primary code domain | Must live in shell | Must move below shell |
 |---|---|---|---|
-| `release-1-plan.md` | overall orchestration routing and migration sequencing | CLI composition only | lane law, closure law, state transitions |
+| `remaining Release 1 owner specs` | overall orchestration routing and migration sequencing | CLI composition only | lane law, closure law, state transitions |
 | `release-1-closure-contract.md` | closure admission and risk acceptance contracts | none | TaskFlow-owned closure and admission enforcement |
 | `release-1-workflow-classification-and-risk-matrix.md` | workflow classification and risk application | none | shared runtime contract module plus TaskFlow enforcement |
 | `release-1-control-metrics-and-gates.md` | evaluation and release-gate computation | summary rendering only | evaluation/runtime metric services |
@@ -63,7 +63,7 @@ They may be rendered or routed by the shell, but not owned by it.
 
 ## 5. References
 
-1. `docs/product/spec/release-1-plan.md`
+1. `remaining Release 1 owner specs`
 2. `docs/product/spec/release-1-canonical-artifact-schemas.md`
 3. `docs/product/spec/release-1-state-machine-specs.md`
 

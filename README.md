@@ -380,7 +380,7 @@ These standards are designed so each layer is independently coherent and future 
 ### Spec navigation
 
 - 📑 [Current Spec Map](docs/product/spec/current-spec-map.md)
-- 🧭 [Release 1](docs/product/spec/release-1-plan.md)
+- 🧭 [Release 1](docs/product/spec/release-1-closure-contract.md)
 - 🎯 [Compiled Autonomous Delivery Runtime Architecture](docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md)
 - 🧱 [Runtime Surface Model](docs/product/spec/root-map-and-runtime-surface-model.md)
 - 👥 [Role / Skill / Profile / Flow Model](docs/product/spec/agent-role-skill-profile-flow-model.md)

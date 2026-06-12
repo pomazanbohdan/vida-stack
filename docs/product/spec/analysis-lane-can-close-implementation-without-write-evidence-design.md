@@ -66,7 +66,7 @@ Status: `proposed`
 - Project docs / specs affected:
   - `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
 - Runtime families affected:
   - `taskflow`
   - `launcher`
@@ -126,7 +126,7 @@ Will implement / choose:
 ### Bounded File Set
 - `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
 - `docs/product/spec/current-spec-map.md`
-- `docs/product/spec/current-spec-provenance-map.md`
+- `active spec/catalog maps and Git history`
 - `crates/vida/src/state_store_run_graph_summary.rs`
 - `crates/vida/src/taskflow_run_graph.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
@@ -146,7 +146,7 @@ Will implement / choose:
 ### Phase 1
 - Register this blocker in spec maps and finalize the bounded design.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md docs/product/spec/current-spec-map.md docs/product/spec/current-spec-provenance-map.md`
+  - `vida docflow check --root . docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ### Phase 2
 - Narrow reconciliation/closure-candidate logic so diagnostic-lane execution cannot over-close implementation runs.

@@ -101,9 +101,9 @@ Structured-template rule:
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
   - `docs/product/spec/release-1-event-state-and-projection-topology-design.md`
-  - `docs/product/spec/release-1-plan.md`
+  - `remaining Release 1 owner specs`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/product/spec/release-1-canonical-artifact-schemas.md`
   - `docs/product/spec/project-activation-and-configurator-model.md`
   - `docs/product/spec/operational-state-and-synchronization-model.md`
@@ -160,7 +160,7 @@ Will implement / choose:
   - resumability capsule loading
 - keep Sierra-specific behavior behind a future dedicated adapter crate.
 - Why:
-  - `taskflow-v1-runtime-modernization-plan.md` already requires storage behind adapters,
+  - `current TaskFlow runtime owner specs` already requires storage behind adapters,
   - it avoids hard-coding backend law into launcher or kernel code.
 - Trade-offs:
   - first implementation wave is more contract-heavy,
@@ -239,9 +239,9 @@ Will implement / choose:
 - Keep this list explicit and bounded
 - Docs:
   - `docs/product/spec/release-1-event-state-and-projection-topology-design.md`
-  - `docs/product/spec/release-1-plan.md`
+  - `remaining Release 1 owner specs`
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/current-spec-provenance-map.md`
+  - `active spec/catalog maps and Git history`
   - `docs/product/spec/release-1-canonical-artifact-schemas.md`
   - `docs/product/spec/project-activation-and-configurator-model.md`
   - `docs/product/spec/operational-state-and-synchronization-model.md`
@@ -358,7 +358,7 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/release-1-plan.md`
+  - `remaining Release 1 owner specs`
   - `docs/product/spec/release-1-capability-matrix.md`
   - `docs/product/spec/release-1-conformance-matrix.md`
   - `docs/product/spec/project-activation-and-configurator-model.md`
