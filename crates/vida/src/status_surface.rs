@@ -1676,8 +1676,6 @@ fn refresh_cached_project_activation_projection(
         remove_string_from_json_array(current, "activation_pending");
     }
 
-    let mut stale_next_actions = activation_truth.next_steps.clone();
-    stale_next_actions.push(crate::status_surface_signals::project_activation_next_action());
     for path in [
         &["next_actions"][..],
         &["shared_fields", "next_actions"][..],
@@ -1687,13 +1685,10 @@ fn refresh_cached_project_activation_projection(
         let Some(current) = payload.pointer_mut(&pointer) else {
             continue;
         };
-        if let Some(rows) = current.as_array_mut() {
-            rows.retain(|entry| {
-                entry
-                    .as_str()
-                    .is_none_or(|text| !stale_next_actions.iter().any(|action| action == text))
-            });
-        }
+        remove_activation_pending_next_actions_from_json_array(
+            current,
+            &activation_truth.next_steps,
+        );
     }
 
     refresh_cached_projection_status_from_blockers(payload)?;
@@ -1716,6 +1711,40 @@ fn refresh_cached_projection_status_from_blockers(payload: &mut serde_json::Valu
         serde_json::Value::String(if blockers_empty { "pass" } else { "blocked" }.into()),
     );
     Some(())
+}
+
+fn remove_activation_pending_next_actions_from_json_array(
+    value: &mut serde_json::Value,
+    current_activation_next_steps: &[String],
+) {
+    let generic_activation_action = crate::status_surface_signals::project_activation_next_action();
+    if let Some(rows) = value.as_array_mut() {
+        rows.retain(|entry| {
+            entry.as_str().is_none_or(|text| {
+                text != generic_activation_action
+                    && !current_activation_next_steps
+                        .iter()
+                        .any(|action| action == text)
+                    && !is_activation_pending_repair_next_action(text)
+            })
+        });
+    }
+}
+
+fn is_activation_pending_repair_next_action(text: &str) -> bool {
+    [
+        "vida init",
+        "vida project-activator",
+        "bootstrap carriers",
+        "host CLI",
+        "AGENTS.sidecar.md",
+        "project-doc roots",
+        "agent-extension",
+        "agent configuration becomes visible to the runtime environment",
+        "activation override",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
 }
 
 async fn refresh_cached_status_projection_runtime_fields(
@@ -3165,23 +3194,33 @@ mod tests {
             status: "ready_enough_for_normal_work".to_string(),
             activation_pending: false,
             next_steps: vec![
-                "run `vida init` in the project root to materialize bootstrap carriers".to_string(),
+                "activation looks ready enough for normal orchestrator and worker initialization"
+                    .to_string(),
             ],
         };
         let mut payload = serde_json::json!({
             "surface": "vida status",
             "status": "blocked",
             "blocker_codes": ["activation_pending"],
-            "next_actions": ["run `vida init` in the project root to materialize bootstrap carriers"],
+            "next_actions": [
+                "run `vida init` in the project root to materialize bootstrap carriers",
+                "continue `vida taskflow consume continue --run-id run-live`"
+            ],
             "shared_fields": {
                 "status": "blocked",
                 "blocker_codes": ["activation_pending"],
-                "next_actions": ["run `vida init` in the project root to materialize bootstrap carriers"]
+                "next_actions": [
+                    "run `vida init` in the project root to materialize bootstrap carriers",
+                    "continue `vida taskflow consume continue --run-id run-live`"
+                ]
             },
             "operator_contracts": {
                 "status": "blocked",
                 "blocker_codes": ["activation_pending"],
-                "next_actions": ["run `vida init` in the project root to materialize bootstrap carriers"]
+                "next_actions": [
+                    "run `vida init` in the project root to materialize bootstrap carriers",
+                    "continue `vida taskflow consume continue --run-id run-live`"
+                ]
             },
             "project_activation": {
                 "status": "pending",
@@ -3208,7 +3247,18 @@ mod tests {
                 .len(),
             0
         );
-        assert_eq!(payload["next_actions"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            payload["next_actions"],
+            serde_json::json!(["continue `vida taskflow consume continue --run-id run-live`"])
+        );
+        assert_eq!(
+            payload["shared_fields"]["next_actions"],
+            serde_json::json!(["continue `vida taskflow consume continue --run-id run-live`"])
+        );
+        assert_eq!(
+            payload["operator_contracts"]["next_actions"],
+            serde_json::json!(["continue `vida taskflow consume continue --run-id run-live`"])
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
