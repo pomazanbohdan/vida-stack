@@ -2473,6 +2473,100 @@ Dynamic criteria created from this session segment:
    must be treated as no proof, corrected immediately, and recorded as waste in
    the STOP entry.
 
+## 2026-06-12 - Configured dispatch lane identity
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `0bc963c4b preserve configured dispatch lane identity`
+- Goal: fix `taskflow_dispatch_init_uses_configured_dev_team_slice_for_owned_task`
+  by preventing stack overflow in configured dev-team dispatch-init drift
+  checks and preserving direct configured lane identity before policy fallback.
+- Files:
+  - `crates/vida/src/runtime_dispatch_state.rs`
+  - `crates/vida/src/taskflow_run_graph.rs`
+- Proof:
+  - `cargo +1.95.0 fmt --all -- --check`
+  - `git diff --check -- crates/vida/src/runtime_dispatch_state.rs crates/vida/src/taskflow_run_graph.rs`
+  - `cargo +1.95.0 test -p vida --test boot_smoke taskflow_dispatch_init_uses_configured_dev_team_slice_for_owned_task -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test boot_smoke taskflow_factual_sandbox_h6_h8_runtime_packet_runner -- --nocapture --exact`
+- Non-proof:
+  - `cargo +1.95.0 test -p vida runtime_packet_handoff_task_class_for_plan -- --nocapture`
+    returned `0 tests`; it was not counted as proof.
+
+Observed model results:
+- Executor: local orchestrator, 7/10. Stage tracing localized stack overflow to
+  configured dispatch-init drift/route lookup; the fix replaced unbounded
+  recursive route scanning with bounded direct-target-first lookup and injected
+  configured dev-team lane identity into the execution plan.
+- Validator: two exact boot_smoke cases plus fmt/diff hygiene, 8/10. The helper
+  filter mistake was caught and excluded from proof.
+
+Post-Task Self-Analysis:
+- Worked: stage trace narrowed the overflow to drift/route lookup, captured
+  dispatch packets showed direct `test_author` lane data, and successive
+  assertions exposed the policy-first fallback sequence.
+- Waste: one iterative scanner patch was only a partial hardening; the core bug
+  was direct configured lane identity being overridden by policy fallback.
+- Risk: configured dispatch targets can be valid lane ids that should not be
+  canonicalized through policy/admissibility before direct lookup.
+- Next change: for dispatch target defects, inspect captured packet
+  `role_selection_full.execution_plan` before changing broad routing helpers.
+- Docs update: yes; this STOP record adds direct-target precedence and packet
+  inspection criteria below.
+- workflow_score_10: 7/10. The end state is verified, but the route required
+  several hypothesis patches before the captured packet made the precedence bug
+  obvious.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, one stack-overflow exact now passes.
+3. Scope and non-goals stable: pass, configured dispatch-init lane identity only.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged.
+5. Executor cheapest capable: pass, local orchestrator was appropriate for a
+   tightly scoped runtime/test repair.
+6. Validator matched risk: pass, exact configured dispatch and H8 regression.
+7. Prompt packet shape: not applicable, no delegated packet used.
+8. Agent handles: pass, no new handles used.
+9. Token/tool/step telemetry: partial, exact host token/tool counts are
+   `not_exposed_by_host`.
+10. Avoidable commands: partial, one `0 tests` helper filter and several
+    hypothesis patches added waste.
+11. Proof strength: pass for configured dispatch lane identity and H8 regression.
+12. Public-surface proof: pass, dispatch-init JSON and packet contents were
+    exercised through boot_smoke.
+13. Debug build: pass through cargo test rebuilds.
+14. TaskFlow graph: partial, active classification task remains in progress.
+15. Staging by invariant: pass, only the two runtime files were staged.
+16. Publication authorization: pass, pushed as active epic continuation.
+17. Evaluation docs: pass, this STOP entry is written before next work.
+18. Parent/wave metrics: exact count improved; broad boot_smoke count not
+    refreshed in this slice.
+19. New defects/follow-ups: none created; remaining broad failures still need
+    deterministic classification.
+20. Next routing rule: pass, prefer captured packet/role-selection evidence
+    before changing policy fallback helpers.
+
+Meta-analysis remediation:
+- Preserved direct dispatch target precedence in activation fields, route lookup,
+  runtime assignment lookup, and handoff task-class lookup.
+- Injected configured dev-team route identity into execution plans before
+  dispatch packet rendering.
+- Bounded disabled-backend reference scanning to avoid recursive traversal stack
+  overflow on deep configured execution plans.
+
+Dynamic criteria created from this session segment:
+1. Direct-target precedence criterion: when a configured dispatch target is a
+   concrete lane id, assert direct lane lookup before policy/admissibility
+   fallback in activation, runtime assignment, and packet handoff helpers.
+2. Captured-packet-first criterion: after a dispatch-init assertion reaches JSON
+   but fails on role/task-class fields, inspect `role_selection_full.execution_plan`
+   and the rendered dispatch packet before patching route selection globally.
+3. Stage-trace retention criterion: if a stack overflow hides child-process
+   backtrace, add or use stage traces until the last successful substage is
+   known, then keep only low-noise trace hooks that are gated by an explicit env
+   variable.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
