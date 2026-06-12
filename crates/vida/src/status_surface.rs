@@ -1,6 +1,8 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
+use fs2::FileExt;
+
 use crate::{state_store, state_store::StateStore, StatusArgs};
 
 use crate::status_surface_json_report::{build_status_json_report, StatusJsonReportInputs};
@@ -10,7 +12,7 @@ use crate::status_surface_operator_contracts::{
 use crate::status_surface_text_report::{emit_status_text_report, StatusTextReportInputs};
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
-const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 const STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 
@@ -201,6 +203,51 @@ pub(crate) fn emit_degraded_read_lock_surface(
     ExitCode::from(1)
 }
 
+pub(crate) fn state_store_lock_present(state_dir: &std::path::Path) -> bool {
+    [
+        state_dir.join(".vida-authoritative-open.guard"),
+        state_dir.join("LOCK"),
+        state_dir
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join(".vida-authoritative-open.guard"),
+        state_dir
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("LOCK"),
+    ]
+    .into_iter()
+    .any(|path| {
+        let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+        else {
+            return false;
+        };
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                let _ = file.unlock();
+                false
+            }
+            Err(error) => {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) || error.raw_os_error().is_some_and(|code| {
+                    code == libc::EWOULDBLOCK
+                        || code == libc::EAGAIN
+                        || (cfg!(windows) && matches!(code, 5 | 32 | 33))
+                })
+            }
+        }
+    })
+}
+
 pub(crate) fn degraded_read_lock_toon_text(surface: &str, payload: &serde_json::Value) -> String {
     crate::operator_toon_report::render(
         surface,
@@ -234,6 +281,15 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let summary_only = args.summary || matches!(view, "compact" | "summary");
     let field_selection = args.fields.as_deref();
     let selected_output = field_selection.is_some();
+    if state_store_lock_present(&state_dir) {
+        return emit_degraded_read_lock_surface(
+            "vida status",
+            &state_dir,
+            render,
+            as_json,
+            "another VIDA process still holds the authoritative datastore lock",
+        );
+    }
 
     if as_json && !selected_output {
         if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
@@ -338,7 +394,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         }
     }
 
-    match StateStore::open_existing_read_only_with_timeout(
+    match StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.clone(),
         STATUS_SURFACE_LOCK_TIMEOUT,
     )
@@ -1187,11 +1243,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         field_selection,
                     );
                     if as_json {
-                        println!(
-                            "{}",
+                        let rendered = if summary_only {
+                            serde_json::to_string(&rendered_json)
+                        } else {
                             serde_json::to_string_pretty(&rendered_json)
-                                .expect("status summary should render as json")
-                        );
+                        }
+                        .expect("status summary should render as json");
+                        println!("{rendered}");
                     } else {
                         println!(
                             "{}",
@@ -1412,7 +1470,7 @@ fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str
     };
     normalize_status_projection_json_shape(&mut payload);
     if summary_only {
-        return serde_json::to_string_pretty(&payload).unwrap_or_else(|_| cached.to_string());
+        return serde_json::to_string(&payload).unwrap_or_else(|_| cached.to_string());
     };
     compact_status_projection_for_fast_operator_render(&mut payload);
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| cached.to_string())
@@ -1448,9 +1506,9 @@ async fn cached_status_projection_current_runtime_admissible(
         return true;
     }
 
-    let Ok(store) = StateStore::open_existing_read_only_with_timeout(
+    let Ok(store) = StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.to_path_buf(),
-        std::time::Duration::from_secs(2),
+        std::time::Duration::from_millis(250),
     )
     .await
     else {
@@ -1594,7 +1652,7 @@ async fn refresh_cached_status_projection_runtime_fields(
     cached: &str,
 ) -> Option<String> {
     let mut payload = serde_json::from_str::<serde_json::Value>(cached).ok()?;
-    let store = StateStore::open_existing_read_only_with_timeout(
+    let store = StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.to_path_buf(),
         Duration::from_secs(2),
     )
@@ -2007,6 +2065,12 @@ fn cached_status_projection_has_required_shape(
     payload: &serde_json::Value,
 ) -> bool {
     if summary_only {
+        return true;
+    }
+    if payload
+        .get("current_session")
+        .is_some_and(serde_json::Value::is_object)
+    {
         return true;
     }
     payload

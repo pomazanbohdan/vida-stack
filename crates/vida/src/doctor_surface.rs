@@ -20,7 +20,7 @@ const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
 const CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_BLOCKER: &str =
     "closed_task_active_run_projection_mismatch";
-const DOCTOR_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const DOCTOR_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 fn governance_projection_blocker_codes(
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
     memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
@@ -552,8 +552,17 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let render = args.render;
     let as_json = args.json;
     let summary_only = args.summary;
+    if crate::status_surface::state_store_lock_present(&state_dir) {
+        return crate::status_surface::emit_degraded_read_lock_surface(
+            "vida doctor",
+            &state_dir,
+            render,
+            as_json,
+            "another VIDA process still holds the authoritative datastore lock",
+        );
+    }
 
-    match super::StateStore::open_existing_read_only_with_timeout(
+    match super::StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.clone(),
         DOCTOR_SURFACE_LOCK_TIMEOUT,
     )
