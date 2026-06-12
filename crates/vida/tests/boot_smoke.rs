@@ -8160,7 +8160,7 @@ fn taskflow_consume_advance_default_output_is_compact_toon_when_blocked() {
     assert!(!stdout.trim_start().starts_with('{'));
     assert!(!stdout.contains("--json"));
     assert!(stdout.contains("next_actions["));
-    assert!(stdout.contains("Inspect continuation evidence with `vida status`"));
+    assert!(stdout.contains("inspect continuation evidence with `vida status`"));
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
