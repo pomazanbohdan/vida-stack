@@ -2136,6 +2136,92 @@ Final dynamic criteria STOP point:
    codes, do not key downstream behavior only from the selected primary blocker;
    inspect the underlying gate readiness that owns the behavior.
 
+## 2026-06-12 - Run-graph flow-state smoke fixture alignment
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `ea63f6418 align run graph flow state smoke fixtures`
+- Goal: update run-graph flow-state smokes so they create the TaskFlow task
+  authority required by the current stale-missing-task guard and assert the
+  current open delegated cycle recovery contract.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_and_doctor_text_surfaces_report_non_empty_latest_flow_state -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke non_empty_latest_flow -- --nocapture`: `2 passed`, `0 failed`; the direct-run exact is not covered by that substring and was run separately.
+
+Observed model results:
+- Executor: local orchestrator, 7/10. The final fix was small, but the first
+  fixture insertion hit the wrong adjacent test twice because the surrounding
+  setup blocks were highly similar.
+- Validator: three exact public smoke tests plus a focused substring filter,
+  8/10. It caught both stale missing-task fixture shape and blocked open-cycle
+  expectation drift.
+
+Post-Task Self-Analysis:
+- Worked: manual replay showed the distinction between missing TaskFlow task and
+  open delegated cycle, so the final test assertions preserve the current
+  fail-closed recovery contract.
+- Waste: the first attempted residual (`status_init_and_graph_summary...`) was a
+  timeout/output-size cluster and should have been classified separately before
+  switching to a different exact.
+- Waste: two patch attempts inserted the fixture into adjacent similar tests
+  rather than the intended direct-run test.
+- Risk: fixing only the first failing flow-state exact would have left adjacent
+  JSON/text flow-state surfaces with inconsistent fixture authority.
+- Next change: when multiple tests share nearly identical setup, patch by
+  function-name context and verify the inserted line location with `rg` before
+  running proof.
+- Docs update: yes; this STOP record adds dynamic criteria for function-context
+  patching and timeout-cluster deferral.
+- workflow_score_10: 7/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, three flow-state exacts improved; one
+   run-graph dispatch-init timeout cluster remains open.
+3. Scope and non-goals stable: partial, final scope became a three-test fixture
+   batch after accidental adjacent insertions exposed the shared invariant.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged.
+5. Executor cheapest capable: pass, local test fixture update.
+6. Validator matched risk: pass, exacts across direct, latest JSON, and text
+   status/doctor surfaces.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no new handles used.
+9. Telemetry: partial, token/cost unavailable; proof commands recorded.
+10. Avoidable commands: partial, one timeout exact and two misplaced patches.
+11. Proof strength: pass for the flow-state fixture contract.
+12. Public-surface proof: pass, run-graph, recovery, status, and doctor public
+    surfaces covered through smoke tests.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: partial, classification task remains active.
+15. Staging by invariant: pass, only `boot_smoke.rs` staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP record is being written before next work.
+18. Parent/wave metrics: flow-state batch exacts are green; broad count not
+    refreshed because the long broad command lacks a capture plan.
+19. New defects/follow-ups: `status_init_and_graph_summary...` is a separate
+    dispatch-init timeout/output-size cluster and should not be mixed with the
+    flow-state fixture batch.
+20. Next routing rule: pass, choose the next exact by deterministic fast failure
+    unless deliberately entering the dispatch-init performance/output cluster.
+
+Final dynamic criteria STOP point:
+1. Function-context-patch criterion: when adjacent tests share identical setup
+   blocks, patch using the function name plus local context and immediately
+   verify insertion location with `rg` before running tests.
+2. Timeout-cluster-deferral criterion: if an exact failure is a command timeout
+   with large JSON output, classify it as a performance/output slice unless the
+   active task is explicitly that cluster; do not blend it into a fast fixture
+   assertion slice.
+3. Open-delegated-cycle-exit criterion: recovery surfaces may return nonzero
+   while still carrying valid bridged state. Tests whose purpose is state
+   projection should assert both the blocking code and the projected state.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -2145,5 +2231,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T07:42:00+03:00
+updated_at: 2026-06-12T08:01:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
