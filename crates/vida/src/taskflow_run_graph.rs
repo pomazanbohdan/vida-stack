@@ -1540,6 +1540,9 @@ fn next_lawful_operator_action_for_projection(
     terminal_consume_continue_run_id: Option<&str>,
     task_missing: bool,
 ) -> Option<String> {
+    if task_missing && terminal_run_graph_status_resolved(status) {
+        return None;
+    }
     if task_missing {
         return Some(format!(
             "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"",

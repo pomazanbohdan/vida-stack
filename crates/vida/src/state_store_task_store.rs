@@ -908,28 +908,17 @@ impl StateStore {
 
         let terminal_completion_evidence = matches!(plan.status.as_str(), "completed")
             || (route.lifecycle_stage == "closure_complete" && plan.active_node == "closure");
-        let non_blocked_active_execution_cursor = !matches!(
-            route.lifecycle_stage.as_str(),
-            "analysis_blocked"
-                | "implementation_blocked"
-                | "verification_blocked"
-                | "closure_blocked"
-        ) && governance.handoff_state == "none"
-            && resume.resume_target == "none";
-
-        Ok(
-            (terminal_completion_evidence || non_blocked_active_execution_cursor)
-                && plan.next_node.is_none()
-                && !matches!(
-                    route.lifecycle_stage.as_str(),
-                    "analysis_blocked"
-                        | "implementation_blocked"
-                        | "verification_blocked"
-                        | "closure_blocked"
-                )
-                && governance.handoff_state == "none"
-                && resume.resume_target == "none",
-        )
+        Ok(terminal_completion_evidence
+            && plan.next_node.is_none()
+            && !matches!(
+                route.lifecycle_stage.as_str(),
+                "analysis_blocked"
+                    | "implementation_blocked"
+                    | "verification_blocked"
+                    | "closure_blocked"
+            )
+            && governance.handoff_state == "none"
+            && resume.resume_target == "none")
     }
 
     async fn run_graph_dispatch_has_receipt_backed_closure_truth(

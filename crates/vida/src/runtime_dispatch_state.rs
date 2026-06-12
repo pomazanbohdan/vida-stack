@@ -96,9 +96,20 @@ async fn reopen_authoritative_state_store_for_dispatch_phase(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     phase: &str,
 ) -> Result<StateStore, String> {
+    let state_root = state_root.to_path_buf();
     tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
-        StateStore::open_existing(state_root.to_path_buf()),
+        async move {
+            loop {
+                match StateStore::open_existing(state_root.clone()).await {
+                    Ok(store) => return Ok(store),
+                    Err(error) if dispatch_state_reopen_error_is_retryable(&error) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        },
     )
     .await
     .map_err(|_| {
@@ -110,6 +121,13 @@ async fn reopen_authoritative_state_store_for_dispatch_phase(
         )
     })?
     .map_err(|error| dispatch_state_reopen_failure_message(receipt, phase, error))
+}
+
+fn dispatch_state_reopen_error_is_retryable(error: &crate::state_store::StateStoreError) -> bool {
+    let error = error.to_string();
+    error.contains("Session not found")
+        || error.contains("timed out while waiting for authoritative datastore lock")
+        || error.contains("another VIDA process still holds the authoritative datastore lock")
 }
 
 fn configured_internal_host_handoff_timeout_seconds(project_root: &Path) -> Option<u64> {

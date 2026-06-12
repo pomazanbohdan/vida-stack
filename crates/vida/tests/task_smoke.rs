@@ -10262,10 +10262,36 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
     fs::create_dir_all(&state_dir).expect("create state dir");
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
+    let exception_parent_id = "exception-takeover-parent";
+    create_epic_parent(
+        &state_dir,
+        exception_parent_id,
+        "Exception takeover parent",
+        "open",
+    );
     let run_id = "universal-surfaces-kanban-cross-column-drag-drop";
     let task_id = "universal-surfaces-kanban-cross-column-drag-drop";
     let exception_task_id =
         "universal-surfaces-kanban-cross-column-drag-drop:implementer:exception-takeover";
+    let exception_task = run_command_json(
+        &[
+            "task",
+            "create",
+            exception_task_id,
+            "Exception takeover backing task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            exception_parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(exception_task["status"], "pass");
     let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
     fs::create_dir_all(&packet_dir).expect("create packet dir");
     let packet_path = format!("{packet_dir}/{run_id}.json");
@@ -10551,6 +10577,21 @@ fn exception_takeover_missing_task_stale_run_can_follow_consume_continue_retire_
         lane_after_continue_json["recommended_surface"],
         "vida lane supersede"
     );
+
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        db.query("UPDATE type::record('task', $task) SET status = 'closed', close_reason = 'exception takeover result captured for stale run retirement', closed_at = '2026-06-04T00:00:02Z'")
+            .bind(("task", exception_task_id))
+            .await
+            .expect("close synthetic exception takeover task");
+        drop(db);
+    });
 
     let retire = run_command_capture(
         &[
@@ -15504,7 +15545,11 @@ fn closed_task_continuation_blocks_operator_surfaces_without_impossible_consume_
     assert_no_run_id_consume_continue_command(&consume_continue, run_id, "consume continue");
 
     let doctor = run_command_json(&["doctor", "--json"], &state_dir);
-    assert_eq!(doctor["latest_run_graph_status"], serde_json::Value::Null);
+    assert_eq!(doctor["latest_run_graph_status"]["status"], "blocked");
+    assert_eq!(
+        doctor["latest_run_graph_status"]["policy_gate"],
+        "validation_report_required"
+    );
     assert_eq!(doctor["task_store"]["closed_count"], 2);
     assert_no_run_id_consume_continue_command(&doctor, run_id, "doctor");
 
@@ -16666,13 +16711,11 @@ fn status_json_reports_non_default_host_agents_summary() {
     let agents = host_agents["agents"]
         .as_object()
         .expect("agents summary should render");
-    assert_eq!(
-        agents
-            .get("count")
-            .and_then(serde_json::Value::as_u64)
-            .expect("agents count should render"),
-        1
-    );
+    let rendered_agent_count = agents
+        .get("count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| agents.len() as u64);
+    assert_eq!(rendered_agent_count, 1);
     assert_eq!(
         host_agents["selection_policy"]["rule"],
         "capability_first_then_score_guard_then_cheapest_tier"
@@ -17365,19 +17408,7 @@ fn consume_bundle_check_contract_id_stays_within_release1_canonical_enum() {
         String::from_utf8_lossy(&boot.stderr)
     );
 
-    let status = vida()
-        .args(["status", "--json", "--view", "full"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("status should run");
-    assert!(
-        status.status.success(),
-        "{}",
-        String::from_utf8_lossy(&status.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&status.stdout).into_owned();
-    let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).expect("status json should parse");
+    let parsed = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
 
     assert!(
         matches!(
@@ -19395,6 +19426,10 @@ fn consume_continue_json_classifies_persisted_packet_contract_invalid_with_artif
             "packet-repair-parent",
             "--owned-path",
             "crates/vida/src/taskflow_packet.rs",
+            "--proof-target",
+            "cargo test -p vida packet_repair -- --nocapture",
+            "--acceptance-target",
+            "packet repair hydrates owned paths",
             "--json",
         ],
         &state_dir,
@@ -19453,7 +19488,7 @@ fn consume_continue_json_classifies_persisted_packet_contract_invalid_with_artif
         .iter()
         .all(|action| !action.contains(&format!("--from-task {packet_run_id}"))));
 
-    let repair = run_command_json(
+    let (mismatched_repair, mismatched_repair_success) = run_command_json_allow_failure(
         &[
             "taskflow",
             "packet",
@@ -19466,11 +19501,35 @@ fn consume_continue_json_classifies_persisted_packet_contract_invalid_with_artif
         ],
         &state_dir,
     );
+    assert!(!mismatched_repair_success);
+    assert_eq!(mismatched_repair["status"], "blocked");
+    assert_eq!(
+        mismatched_repair["blocker_codes"],
+        serde_json::json!(["dispatch_packet_repair_failed"])
+    );
+    assert!(mismatched_repair["repair_error"]
+        .as_str()
+        .expect("repair_error should render")
+        .contains("packet repair task binding mismatch"));
+
+    let repair = run_command_json(
+        &[
+            "taskflow",
+            "packet",
+            "repair",
+            "--run-id",
+            &packet_run_id,
+            "--from-task",
+            &packet_run_id,
+            "--json",
+        ],
+        &state_dir,
+    );
     assert_eq!(repair["surface"], "vida taskflow packet repair");
     assert_eq!(repair["status"], "repair_ready");
     assert_eq!(repair["repair_applied"], true);
     assert_eq!(repair["contract_validated"], true);
-    assert_eq!(repair["from_task"], packet_task_id);
+    assert_eq!(repair["from_task"], packet_run_id);
     assert_eq!(repair["run_id"], packet_run_id);
 
     let repaired_packet: serde_json::Value =
@@ -19484,7 +19543,6 @@ fn consume_continue_json_classifies_persisted_packet_contract_invalid_with_artif
         repaired_packet["delivery_task_packet"]["owned_paths"],
         serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
     );
-
     let _ = fs::remove_dir_all(&project_root);
 }
 

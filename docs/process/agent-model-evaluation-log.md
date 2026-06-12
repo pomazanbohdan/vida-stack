@@ -2772,6 +2772,126 @@ Dynamic criteria created from this session segment:
    contention, keep negative tests on non-retrying helpers so fail-fast and
    degraded fallback contracts remain observable.
 
+## 2026-06-12 - architecture-refactor-final-runtime-state-matrix-sweep
+
+Scope:
+- Task: `architecture-refactor-final-runtime-state-matrix-sweep`
+- Parent/epic: `architecture-refactor-quality-epic`
+- Commits: pending
+- Files: `AGENTS.sidecar.md`,
+  `docs/process/project-orchestrator-operating-protocol.md`,
+  `crates/vida/src/runtime_dispatch_state.rs`,
+  `crates/vida/src/state_store_task_store.rs`,
+  `crates/vida/src/taskflow_run_graph.rs`,
+  `crates/vida/tests/boot_smoke.rs`,
+  `crates/vida/tests/doctor_surface_contract_smoke.rs`,
+  `crates/vida/tests/task_smoke.rs`
+- Proof:
+  - `cargo +1.95.0 fmt --all -- --check`
+  - `git diff --check -- AGENTS.sidecar.md docs/process/project-orchestrator-operating-protocol.md crates/vida/src/state_store_task_store.rs crates/vida/src/taskflow_run_graph.rs crates/vida/tests/doctor_surface_contract_smoke.rs crates/vida/tests/task_smoke.rs`
+  - `cargo +1.95.0 test -p vida --test boot_smoke -- --nocapture` - 273 passed
+  - `cargo +1.95.0 test -p vida --test doctor_surface_contract_smoke -- --nocapture` - 37 passed, 2 ignored helpers
+  - `cargo +1.95.0 test -p vida --test task_smoke -- --nocapture` - 190 passed
+  - `vida task progress architecture-refactor-quality-epic --json`
+  - `vida task validate-graph --json`
+  - `vida task close architecture-refactor-final-runtime-state-matrix-sweep --json`
+  - Runtime self-diagnostic: epic progress 709/709 closed and graph valid; status
+    and doctor still report `run_graph_latest_snapshot_inconsistent` after
+    reconcile. Added reproduction comment to GitHub issue #114:
+    https://github.com/pomazanbohdan/vida-stack/issues/114#issuecomment-4688073637
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The work was already in a dirty final
+  sweep with exact failure evidence, so local implementation was cheaper than
+  launching new agents. Host token counts are not exposed.
+- Validator: local focused exact tests plus full public smoke suites, 9/10.
+  The validator rejected serial-only proof when the declared command was
+  parallel full-suite proof and forced retry-aware fixes until the declared
+  commands were green.
+- Orchestrator correction: tightened the dynamic self-analysis rule before
+  continuing, closed stale proof gaps, and preserved unrelated dirty files.
+
+Post-Task Self-Analysis:
+- Worked: exact failure isolation prevented broad guessing; full-suite reruns
+  exposed remaining helper gaps that exact tests hid.
+- Waste: several full `boot_smoke` runs were required because sibling positive
+  read helpers were discovered incrementally instead of swept in one pass.
+- Risk: command-level retry after dispatch execution would have hidden a
+  non-idempotent partial mutation; production reopen retry was the safer fix.
+- Next change: after the first parallel contention failure, search all positive
+  read helpers in the same suite before the next full run.
+- Docs update: yes; the self-analysis owner protocol and sidecar now state that
+  the final dynamic-criteria checklist item must create a new criterion every
+  task closure.
+- workflow_score_10: 8/10. Closure proof is strong, but helper-gap discovery
+  cost more full-suite time than necessary.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `architecture-refactor-final-runtime-state-matrix-sweep`.
+2. Wave/parent closure distance: pass, closed the last open descendant and the
+   epic reached 709/709 closed.
+3. Scope and non-goals stable: pass, only final sweep proof and self-analysis
+   instruction hardening were included.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged.
+5. Executor cheapest capable: pass, local exact repair was cheaper than a new
+   agent ring for already-isolated failures.
+6. Validator matched risk: pass, full public smoke suites were required and run.
+7. Prompt packet shape: not applicable, no delegated prompt used.
+8. Agent handles: pass, no active agent handles were launched in this segment.
+9. Token/tool/step telemetry: partial, host does not expose token counts.
+10. Avoidable commands: partial, repeated full boot runs revealed a need for a
+    same-suite helper sweep before rerun.
+11. Proof strength: pass, all declared proof targets passed.
+12. Public/release proof: pass, public CLI smoke suites covered default output,
+    JSON, recovery, run-graph, status, doctor, and task surfaces.
+13. Debug build: pass via compiling full smoke suites.
+14. TaskFlow state: pass, TODOs closed, final sweep closed, epic auto-closed.
+15. Staging by invariant: pending, must stage only scoped final-sweep files and
+    preserve unrelated dirty files before commit.
+16. Publication authorization: pending commit/push under active epic pattern.
+17. Evaluation docs: pass, this scorecard records the STOP gate.
+18. Parent/wave metrics: pass, epic is 100% closed after final sweep closure.
+19. New defects/follow-ups: none yet; lock/reopen fixes were handled inside the
+    active final sweep. Runtime self-diagnostic residual latest-snapshot
+    mismatch was recorded on upstream issue #114 instead of opening a duplicate.
+20. Next routing rule: pass, next work is blocked until commit/push, runtime
+    self-diagnostic, and epic closeout checks finish.
+
+Final dynamic criteria STOP point:
+1. Final-item enforcement criterion: after every task, the dynamic criteria
+   section must be written after the fixed criteria and must explicitly state at
+   least one newly created criterion from the latest session segment.
+   Evidence source: `docs/process/agent-model-evaluation-log.md` section order.
+2. Non-idempotent retry criterion: when a command fails after reporting that it
+   already executed a mutation, do not add test-level command retry first.
+   Repair the production post-mutation reopen/refresh path or prove the command
+   is idempotent before retrying. Evidence source: failure error text and owner
+   helper location.
+3. Same-suite helper sweep criterion: after one parallel full-suite failure is
+   fixed by moving a positive read to a retry-aware helper, search the same test
+   file for sibling raw positive reads before another full-suite run. Evidence
+   source: `rg` over helper names and positive status assertions.
+4. Declared-command parity criterion: serial proof may explain a parallel flake,
+   but it does not close a task whose proof target names the parallel command.
+   The declared command must pass or the task metadata must be updated before
+   closure.
+
+Meta-analysis remediation:
+- Waste remediation: promoted same-suite helper sweep into the dynamic criteria
+  and applied it to boot/status read helpers.
+- Risk remediation: fixed dispatch-state reopen resilience in production rather
+  than retrying a non-idempotent consume command.
+- Documentation remediation: hardened the dynamic STOP rule in the owner
+  protocol and sidecar.
+- Script/code remediation: no separate script added; repeated recurrence should
+  become a test helper lint or TaskFlow optimization defect.
+
+Next-task selection rule:
+- After epic closure, run runtime self-diagnostic and repo hygiene before any
+  new task. If another broad suite fails from a transient read helper, sweep
+  sibling helpers first and only then spend another full-suite run.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -2781,5 +2901,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T08:36:00+03:00
+updated_at: 2026-06-12T09:24:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl

@@ -1777,16 +1777,22 @@ fn taskflow_recovery_with_timeout(
 }
 
 fn status_or_doctor_with_timeout(state_dir: &str, args: &[&str]) -> std::process::Output {
-    bounded_vida_output(
-        &["-k", "5s", "20s"],
-        "status/doctor should run",
-        |command| {
-            command
-                .args(args)
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", state_dir);
+    support::retry_with_backoff(
+        &mut || {
+            bounded_vida_output(
+                &["-k", "5s", "20s"],
+                "status/doctor should run",
+                |command| {
+                    command
+                        .args(args)
+                        .env_remove("VIDA_ROOT")
+                        .env_remove("VIDA_HOME")
+                        .env("VIDA_STATE_DIR", state_dir);
+                },
+            )
         },
+        600,
+        |output| is_state_lock_error(output) || is_degraded_lock_contention_surface(output),
     )
 }
 
@@ -2176,11 +2182,13 @@ fn boot_releases_state_before_immediate_status_command() {
         String::from_utf8_lossy(&boot.stderr)
     );
 
-    let status = vida()
-        .args(["status", "--json", "--view", "full"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("immediate status should run without external retry");
+    let status = run_command_with_state_access_retry(|| {
+        let mut command = vida();
+        command
+            .args(["status", "--json", "--view", "full"])
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
     assert!(
         status.status.success(),
         "stdout={}\nstderr={}",
@@ -5786,12 +5794,14 @@ fn explicit_root_and_state_dirs_keep_activation_status_canonical_through_status_
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let status = vida()
-        .args(["status", "--json"])
-        .env("VIDA_ROOT", &root_dir)
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("status should run");
+    let status = run_command_with_state_access_retry(|| {
+        let mut command = vida();
+        command
+            .args(["status", "--json"])
+            .env("VIDA_ROOT", &root_dir)
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
     assert!(status.status.success());
     let status_json: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status json should parse");

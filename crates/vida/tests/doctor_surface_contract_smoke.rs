@@ -947,11 +947,11 @@ fn status_and_doctor_default_human_output_is_compact_toon_with_explicit_json_par
         "status default should start with TOON section title: {status_stdout}"
     );
     assert!(
-        status_stdout.contains("  state_dir:"),
+        status_stdout.contains("state dir:"),
         "status default should expose compact TOON field names: {status_stdout}"
     );
     assert!(
-        status_stdout.contains("  runtime_consumption:"),
+        status_stdout.contains("runtime consumption:"),
         "status default should expose compact runtime evidence: {status_stdout}"
     );
     assert!(
@@ -995,11 +995,11 @@ fn status_and_doctor_default_human_output_is_compact_toon_with_explicit_json_par
         "doctor default should start with TOON section title: {doctor_stdout}"
     );
     assert!(
-        doctor_stdout.contains("  storage_metadata:"),
+        doctor_stdout.contains("storage metadata:"),
         "doctor default should expose compact TOON field names: {doctor_stdout}"
     );
     assert!(
-        doctor_stdout.contains("  runtime_consumption:"),
+        doctor_stdout.contains("runtime consumption:"),
         "doctor default should expose compact runtime evidence: {doctor_stdout}"
     );
     assert_not_json_output("vida doctor", &doctor_stdout);
