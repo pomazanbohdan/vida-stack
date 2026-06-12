@@ -25,8 +25,11 @@ Required fields:
 6. Post-Task Self-Analysis: cite the canonical STOP gate in
    `docs/process/project-orchestrator-operating-protocol.md`, record the base
    fields, all 20 fixed criteria outcomes, meta-analysis remediation outcomes,
-   the mandatory final dynamic criteria STOP point created from the latest
-   session segment, and `workflow_score_10`,
+   and then run the mandatory final dynamic criteria STOP point as the last
+   checklist item. That final point must analyze the session segment from the
+   previous task closure to the current task closure and create additional
+   criteria for the next task; it is separate from, and cannot be replaced by,
+   the fixed 20 criteria. Record `workflow_score_10`,
 7. next-task selection rule that changes future routing, prompt shape, proof
    bundle, or model choice.
 
@@ -1874,6 +1877,98 @@ Final dynamic criteria STOP point:
    `cargo test` command. Use one exact filter per command or a shared substring
    family filter.
 
+## 2026-06-12 - Consume-final conversational activation fields
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `52dea6363 restore consume final conversational activation fields`
+- Goal: keep `taskflow consume final` conversational dispatch receipts from
+  dropping activation fields when the selected route stores them under
+  `runtime_assignment` instead of `default_route`.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/src/taskflow_consume.rs crates/vida/tests/boot_smoke.rs`
+- `cargo +1.95.0 test -p vida conversational_dispatch_receipt_uses_runtime_assignment_activation_fallback -- --nocapture`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_final_selects_scope_discussion_role_for_spec_queries -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_final_selects_pbi_discussion_role_for_backlog_queries -- --nocapture --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke taskflow_consume_final_selects_ -- --nocapture`
+- Broad evidence after the runtime fallback and before the sibling assertion
+  update: `252 passed`, `21 failed`; the target exact passed and the remaining
+  failures stayed in adjacent consume-final, run-graph/status, stack-overflow,
+  and projection clusters.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. The failing JSON surface pointed directly
+  at a missing `dispatch_receipt.activation_agent_type`; the correct fix was a
+  small production fallback plus focused smoke assertions.
+- Validator: local unit plus two exact public smokes and a two-test family
+  filter, 9/10. No separate model validator was needed for this bounded receipt
+  invariant.
+
+Post-Task Self-Analysis:
+- Worked: the dynamic criterion from the previous task caught the sibling PBI
+  exact before commit, so the activation fallback invariant was fixed across
+  both conversational modes in the same slice.
+- Waste: the first unit proof needed formatting correction, and the broad run
+  was used only as residual classification rather than acceptance.
+- Risk: a pre-commit hook temporarily stashed unrelated dirty files; staging by
+  explicit paths kept those hunks out of the commit, but this should remain a
+  named post-commit check.
+- Next change: after any fallback that populates previously-null receipt fields,
+  run a family filter for adjacent assertions that intentionally expected null.
+- Docs update: yes; the scorecard template now states that the dynamic criteria
+  step is the final checklist item and must create session-derived criteria.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `wave-0-runtime-tests-boot-smoke-failure-classification`.
+2. Wave/parent closure distance: partial, two consume-final exacts improved; the
+   parent broad boot-smoke task remains red.
+3. Scope and non-goals stable: pass, only conversational receipt activation
+   fields and directly affected smoke assertions changed.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged through
+   the pre-commit stash/restore cycle.
+5. Executor cheapest capable: pass, local orchestrator was sufficient for the
+   small shared fallback.
+6. Validator matched risk: pass, unit plus public smoke exacts and family filter.
+7. Agent prompts: not applicable, no delegated executor prompt.
+8. Agent handles: pass, no new handles used.
+9. Telemetry: partial, token/cost unavailable; command proof recorded.
+10. Avoidable commands: partial, broad run was noisy but useful for detecting the
+    sibling stale null assertion.
+11. Proof strength: pass, production unit and both public conversational modes
+    covered the claimed behavior.
+12. Public-surface proof: pass, `taskflow consume final` JSON public smoke paths
+    covered.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: partial, classification task remains active.
+15. Staging by invariant: pass, only `taskflow_consume.rs` and the relevant
+    `boot_smoke.rs` assertions were staged.
+16. Publication authorization: pass, pushed to `main`.
+17. Evaluation docs: pass, this STOP record is being written before the next
+    runtime slice.
+18. Parent/wave metrics: latest broad evidence after the fallback was
+    `252 passed`, `21 failed`; wave remains open.
+19. New defects/follow-ups: remaining deterministic adjacent failures include
+    mixed feature delivery routing, plain bootstrap spec delegation text,
+    run-graph/status recovery projection, and stack overflow.
+20. Next routing rule: pass, route the next consume-final work by adjacent
+    invariant family rather than by the first broad failure line only.
+
+Final dynamic criteria STOP point:
+1. Sibling-null-expectation criterion: when production starts populating a
+   receipt field that was previously null, search or family-filter sibling tests
+   for `.is_null()` expectations on that field before committing.
+2. Pre-commit-stash criterion: after any commit hook reports unstaged-file
+   stashing, immediately run `git status --short` and verify no unrelated hunk
+   was staged, dropped, or accidentally normalized.
+3. Final-dynamic-step criterion: the last STOP checklist item must create new
+   criteria from the session segment since the previous task; do not treat
+   already-written fixed criteria or prior dynamic criteria as satisfying this
+   task's dynamic creation step.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -1883,5 +1978,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-12T06:52:00+03:00
+updated_at: 2026-06-12T07:08:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
