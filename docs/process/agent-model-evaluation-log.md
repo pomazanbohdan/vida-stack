@@ -943,6 +943,96 @@ Dynamic criteria final step:
    name whether the task owns plain human text, default compact output, explicit
    JSON, or all three; run at least one proof per owned mode.
 
+## 2026-06-12 - wave-0 status/doctor read-lock fail-fast
+
+Task / slice:
+- `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Commit: `d968a8cf1 fix status doctor read lock fail fast`
+- Goal: make status/doctor read-only operator surfaces fail closed quickly under
+  read-lock contention and avoid Windows bounded-command timeouts on default
+  summary JSON.
+
+Proof:
+- `cargo +1.95.0 fmt --all -- --check`
+- `git diff --check -- crates/vida/src/status_surface.rs crates/vida/src/doctor_surface.rs`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_and_doctor_fail_closed_with_lock_remediation_hint -- --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_and_doctor_text_surfaces_fail_closed_with_lock_remediation_hint -- --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke diagnostics_status_and_doctor_share_closed_run_projection_blocker -- --exact`
+- `cargo +1.95.0 test -p vida --test boot_smoke status_json_exposes_host_agent_summary -- --exact`
+- `cargo +1.95.0 test -p vida status_surface_json_report -- --nocapture`
+
+Residual blockers observed:
+- `cargo +1.95.0 test -p vida --test boot_smoke status_and_doctor -- --nocapture`
+  now fails only on
+  `taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_and_doctor`
+  with `source_run_id: Null`, which belongs to consume/resume run-id repair.
+- `cargo +1.95.0 test -p vida --bin vida status_surface::tests::runtime_continuation_overlay_does_not_keep_stale_root_session_write_guard -- --nocapture --exact`
+  still fails on projection-cache fixture readability; this is a separate cache
+  test defect and was not widened into this lock/read-surface slice.
+
+Observed model results:
+- Executor: local orchestrator, 8/10. A delegated reader would have helped with
+  first-pass failure classification, but the fix needed tight local code/test
+  iteration and no write-producing agent was active.
+- Validator: focused boot_smoke exact tests plus status JSON report unit filter,
+  8/10. Broad `status_and_doctor` is still blocked by an unrelated golden-route
+  run-id assertion.
+
+Post-Task Self-Analysis:
+- Worked: exact lock tests separated stale `LOCK` file presence from real OS lock
+  contention, preventing false degraded status on normal state directories.
+- Worked: compact summary JSON removed a Windows stdout pipe risk without changing
+  parsed JSON keys required by host-agent status proof.
+- Waste: initial preflight only checked `LOCK`; the real serialization guard was
+  `.vida-authoritative-open.guard`.
+- Risk: lowering read-surface timeout to 2s could be too aggressive for very slow
+  disks, but read-only operator surfaces should degrade instead of hanging.
+- Next change: repair golden-route consume/resume `source_run_id` separately.
+- Docs update: dynamic parallel/pipe-budget criterion added below.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, status/doctor read-lock fail-fast inside
+   boot_smoke failure classification.
+2. Wave/parent closure distance: pass, removed diagnostics/status timeout from
+   the status/doctor cluster; parent still blocked by golden-route and broader
+   boot_smoke failures.
+3. Scope and non-goals stable: pass, did not widen into consume/resume run-id or
+   projection-cache unit repair.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged.
+5. Executor cheapest capable: pass, local orchestrator was cheaper than a new
+   write agent for a two-file runtime surface patch.
+6. Validator matched risk: pass, exact lock, diagnostics, JSON host-agent, and
+   status JSON report tests ran.
+7. Agent prompts: not applicable, no new agent was launched for this slice.
+8. Agent handles: pass, no active agent remained from this slice.
+9. Telemetry: partial, command durations observed; host token/cost unavailable.
+10. Avoidable commands: partial, one broad status filter was useful but exposed an
+    unrelated failure; future runs should pair exact proof with one scoped broad
+    smoke only after residuals are classified.
+11. Proof strength: pass for lock/read-surface behavior.
+12. Public-surface proof: pass, status and doctor JSON/text lock-remediation
+    surfaces covered.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: partial, classification task remains active because this was
+    a sub-cluster, not full parent closure.
+15. Staging by invariant: pass, only `status_surface.rs` and `doctor_surface.rs`
+    staged for the code commit.
+16. Publication authorization: pass, commit pushed to `main`.
+17. Evaluation docs: pass, this scorecard.
+18. Parent/wave metrics: unchanged until `wave-0-runtime-tests` can close.
+19. New defects/follow-ups: consume/resume `source_run_id` and projection-cache
+    fixture readability remain separate blockers.
+20. Dynamic criteria generation: pass, session segment from previous task closure
+    to this commit produced the new criterion below.
+
+Dynamic criteria final step:
+1. Parallel-suite and pipe-budget criterion: after an exact-green command-surface
+   repair, run at least one default-parallel scoped filter or otherwise explain
+   why it is unsafe; for Windows tests that spawn bounded child commands with
+   piped stdout, verify default JSON output stays compact enough not to block on
+   the pipe buffer before process exit.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
@@ -952,5 +1042,5 @@ schema_version: '1'
 status: active
 source_path: docs/process/agent-model-evaluation-log.md
 created_at: 2026-06-11T00:00:00+03:00
-updated_at: 2026-06-11T22:31:00+03:00
+updated_at: 2026-06-12T04:05:00+03:00
 changelog_ref: agent-model-evaluation-log.changelog.jsonl
