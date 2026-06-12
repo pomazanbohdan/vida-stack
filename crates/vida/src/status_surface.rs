@@ -1647,6 +1647,77 @@ fn refresh_cached_protocol_binding_projection(
     Some(())
 }
 
+fn refresh_cached_project_activation_projection(
+    payload: &mut serde_json::Value,
+    activation_truth: &crate::project_activator_surface::ProjectActivationStatusTruth,
+) -> Option<()> {
+    let object = payload.as_object_mut()?;
+    object.insert(
+        "project_activation".to_string(),
+        serde_json::json!({
+            "status": activation_truth.status,
+            "activation_pending": activation_truth.activation_pending,
+            "next_steps": activation_truth.next_steps,
+        }),
+    );
+    if activation_truth.activation_pending {
+        return Some(());
+    }
+
+    for path in [
+        &["blocker_codes"][..],
+        &["shared_fields", "blocker_codes"][..],
+        &["operator_contracts", "blocker_codes"][..],
+    ] {
+        let pointer = format!("/{}", path.join("/"));
+        let Some(current) = payload.pointer_mut(&pointer) else {
+            continue;
+        };
+        remove_string_from_json_array(current, "activation_pending");
+    }
+
+    let mut stale_next_actions = activation_truth.next_steps.clone();
+    stale_next_actions.push(crate::status_surface_signals::project_activation_next_action());
+    for path in [
+        &["next_actions"][..],
+        &["shared_fields", "next_actions"][..],
+        &["operator_contracts", "next_actions"][..],
+    ] {
+        let pointer = format!("/{}", path.join("/"));
+        let Some(current) = payload.pointer_mut(&pointer) else {
+            continue;
+        };
+        if let Some(rows) = current.as_array_mut() {
+            rows.retain(|entry| {
+                entry
+                    .as_str()
+                    .is_none_or(|text| !stale_next_actions.iter().any(|action| action == text))
+            });
+        }
+    }
+
+    refresh_cached_projection_status_from_blockers(payload)?;
+    for path in [&["shared_fields"][..], &["operator_contracts"][..]] {
+        let pointer = format!("/{}", path.join("/"));
+        let target = payload.pointer_mut(&pointer)?;
+        refresh_cached_projection_status_from_blockers(target)?;
+    }
+
+    Some(())
+}
+
+fn refresh_cached_projection_status_from_blockers(payload: &mut serde_json::Value) -> Option<()> {
+    let blockers_empty = payload
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(|blockers| blockers.is_empty());
+    payload.as_object_mut()?.insert(
+        "status".to_string(),
+        serde_json::Value::String(if blockers_empty { "pass" } else { "blocked" }.into()),
+    );
+    Some(())
+}
+
 async fn refresh_cached_status_projection_runtime_fields(
     state_dir: &std::path::Path,
     cached: &str,
@@ -1900,6 +1971,9 @@ async fn refresh_cached_status_projection_runtime_fields(
         crate::taskflow_task_bridge::infer_project_root_from_state_root(store.root())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let activation_truth =
+        crate::project_activator_surface::canonical_project_activation_status_truth(&project_root);
+    refresh_cached_project_activation_projection(&mut payload, &activation_truth)?;
     let latest_run_graph_surface_truth =
         latest_run_graph_dispatch_receipt
             .as_ref()
@@ -3083,6 +3157,58 @@ mod tests {
 
         let _ = fs::remove_dir_all(root);
         restore_vida_session_id(saved_session_id);
+    }
+
+    #[test]
+    fn status_cached_projection_refresh_removes_stale_activation_pending_blocker() {
+        let activation_truth = crate::project_activator_surface::ProjectActivationStatusTruth {
+            status: "ready_enough_for_normal_work".to_string(),
+            activation_pending: false,
+            next_steps: vec![
+                "run `vida init` in the project root to materialize bootstrap carriers".to_string(),
+            ],
+        };
+        let mut payload = serde_json::json!({
+            "surface": "vida status",
+            "status": "blocked",
+            "blocker_codes": ["activation_pending"],
+            "next_actions": ["run `vida init` in the project root to materialize bootstrap carriers"],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["activation_pending"],
+                "next_actions": ["run `vida init` in the project root to materialize bootstrap carriers"]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["activation_pending"],
+                "next_actions": ["run `vida init` in the project root to materialize bootstrap carriers"]
+            },
+            "project_activation": {
+                "status": "pending",
+                "activation_pending": true,
+                "next_steps": ["run `vida init` in the project root to materialize bootstrap carriers"]
+            }
+        });
+
+        super::refresh_cached_project_activation_projection(&mut payload, &activation_truth)
+            .expect("cached project activation should refresh");
+
+        assert_eq!(
+            payload["project_activation"]["status"],
+            "ready_enough_for_normal_work"
+        );
+        assert_eq!(payload["project_activation"]["activation_pending"], false);
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            payload["operator_contracts"]["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(payload["next_actions"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test(flavor = "current_thread")]

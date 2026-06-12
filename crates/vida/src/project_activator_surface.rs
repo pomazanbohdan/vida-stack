@@ -161,20 +161,12 @@ changelog_ref: AGENTS.sidecar.changelog.jsonl\n"
 }
 
 fn detect_project_shape(project_root: &Path) -> &'static str {
-    let bootstrap_markers = [
+    let mut bootstrap_markers = vec![
         project_root.join("AGENTS.md"),
         project_root.join("AGENTS.sidecar.md"),
         project_root.join("vida.config.yaml"),
-        project_root.join(".vida/config"),
-        project_root.join(".vida/db"),
-        project_root.join(".vida/cache"),
-        project_root.join(".vida/framework"),
-        project_root.join(".vida/project"),
-        project_root.join(".vida/project/agent-extensions"),
-        project_root.join(".vida/receipts"),
-        project_root.join(".vida/runtime"),
-        project_root.join(".vida/scratchpad"),
     ];
+    bootstrap_markers.extend(required_runtime_home_dirs(project_root));
     if bootstrap_markers.iter().all(|path| path.exists()) {
         return "bootstrapped";
     }
@@ -192,6 +184,19 @@ fn detect_project_shape(project_root: &Path) -> &'static str {
     } else {
         "empty"
     }
+}
+
+fn required_runtime_home_dirs(project_root: &Path) -> Vec<PathBuf> {
+    vec![
+        project_root.join(".vida/config"),
+        project_root.join(".vida/db"),
+        project_root.join(".vida/cache"),
+        project_root.join(".vida/framework"),
+        project_root.join(".vida/project"),
+        project_root.join(".vida/project/agent-extensions"),
+        project_root.join(".vida/receipts"),
+        project_root.join(".vida/runtime"),
+    ]
 }
 
 pub(crate) fn normalize_host_cli_system(value: &str) -> Option<String> {
@@ -819,18 +824,9 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let sidecar_has_placeholders =
         agents_sidecar.is_file() && file_contains_placeholder(&agents_sidecar);
     let config_has_placeholders = vida_config.is_file() && file_contains_placeholder(&vida_config);
-    let runtime_home_missing = [
-        &vida_config_dir,
-        &vida_db_dir,
-        &vida_cache_dir,
-        &vida_framework_dir,
-        &vida_project_dir,
-        &vida_receipts_dir,
-        &vida_runtime_dir,
-        &vida_scratchpad_dir,
-    ]
-    .iter()
-    .any(|path| !path.is_dir());
+    let runtime_home_missing = required_runtime_home_dirs(project_root)
+        .iter()
+        .any(|path| !path.is_dir());
     let bootstrap_missing = !agents_md.is_file() || !vida_config.is_file() || runtime_home_missing;
     let docs_missing = !project_root_map.is_file()
         || !product_index.is_file()
@@ -3105,8 +3101,6 @@ host_environment:
             .expect(".vida/project agent extensions dir should exist");
         fs::create_dir_all(root.join(".vida/receipts")).expect(".vida/receipts dir should exist");
         fs::create_dir_all(root.join(".vida/runtime")).expect(".vida/runtime dir should exist");
-        fs::create_dir_all(root.join(".vida/scratchpad"))
-            .expect(".vida/scratchpad dir should exist");
         fs::create_dir_all(root.join("docs/product")).expect("product docs dir should exist");
         fs::create_dir_all(root.join("docs/process")).expect("process docs dir should exist");
         fs::write(root.join("AGENTS.md"), "# framework\n").expect("agents should exist");
@@ -3245,6 +3239,7 @@ host_environment:
         assert_eq!(view["status"], "ready_enough_for_normal_work");
         assert_eq!(view["project_shape"], "bootstrapped");
         assert_eq!(view["activation_pending"], false);
+        assert_eq!(view["bootstrap_surfaces"]["vida_scratchpad_dir"], false);
         assert_eq!(view["host_environment"]["selected_cli_system"], "codex");
         assert_eq!(view["host_environment"]["template_materialized"], true);
         assert_eq!(

@@ -3682,6 +3682,151 @@ Next-task selection rule:
   `runtime-active-exception-takeover-predicate-consolidation`, and the remaining
   parity residual.
 
+## 2026-06-12 - Status Activation Parity Closure
+
+Task:
+- closed `runtime-status-activation-pending-doctor-parity`.
+- implementation TODO: `todo-status-activation-pending-parity-fix`, closed.
+- scorecard TODO: `todo-status-activation-scorecard-log`, in progress for this
+  log update.
+
+What changed:
+- `project_activator_surface` now uses one `required_runtime_home_dirs` helper
+  for activation readiness and project-shape detection.
+- `.vida/scratchpad` remains reported in `bootstrap_surfaces`, but it is no
+  longer a normal-work activation blocker.
+- `status_surface` cached-projection refresh now recomputes current
+  project-activation truth and removes stale `activation_pending` blockers and
+  next actions when activation is ready.
+
+Proof:
+- `cargo +1.95.0 test -p vida --bin vida
+  status_cached_projection_refresh_removes_stale_activation_pending_blocker
+  -- --nocapture`: pass, 1 real test.
+- `cargo +1.95.0 test -p vida --bin vida
+  project_activator_reports_ready_when_bootstrap_and_docs_exist
+  -- --nocapture`: pass, 1 real test.
+- `cargo +1.95.0 test -p vida status_surface -- --nocapture`: pass, 106 unit
+  tests and 7 status smoke tests.
+- `vida release install --json`: pass; installed `vida.exe` fingerprint
+  `ceea0b50c821628259a42310f08fc9b0f540f8acf2438045b430e30be875f6e1`.
+- `vida project-activator --json`: pass for this repo with
+  `status=ready_enough_for_normal_work`, `activation_pending=false`,
+  `project_shape=bootstrapped`, and `vida_scratchpad_dir=false`.
+- `vida status --json`: no longer reports `activation_pending`; it reports
+  `project_activation.status=ready_enough_for_normal_work` and
+  `activation_pending=false`.
+- `vida task validate-graph --json`: pass.
+- rationale: cargo test harness zero-test preambles are not proof claims; the
+  named focused proofs above each reported real passing tests or live CLI pass
+  status.
+
+Agent classification:
+- Pascal (`019ebb38-d327-7911-8164-4f4e1499778e`) classified as accepted
+  read-only evidence and closed.
+- Accepted evidence: direct producer was
+  `status_surface_operator_contracts`; activation truth came from
+  `project_activator_surface`; stale cache overlay was missing
+  activation/operator-blocker refresh.
+
+Executor / validator:
+- Executor: root orchestrator under current bounded runtime defect, 8/10.
+- Validator: one explorer, focused unit tests, status family tests, release
+  install, live CLI probes, 9/10.
+- Tokens/tool calls: `not_exposed_by_host`; high observable cost came from
+  release install and cargo lock contention during parallel tests.
+
+Post-Task Self-Analysis:
+- Worked: live activation blocker was removed without running `vida init` or
+  manually creating `.vida/scratchpad`; the missing scratchpad remains visible
+  as non-blocking evidence.
+- Worked: stale cached status projections can no longer keep
+  `activation_pending` after current activation truth is ready.
+- Waste: one TaskFlow create command failed because PowerShell interpreted
+  semicolons/backticks inside `--notes`; retry used simpler text.
+- Risk: post-install live proof exposed a separate non-activation mismatch:
+  `status` reports `continuation_binding_ambiguous`, `doctor` reports
+  `run_graph_latest_snapshot_inconsistent`, and `orchestrator-init` reports no
+  active bounded unit.
+- Next change: process
+  `runtime-status-doctor-continuation-blocker-parity` or another explicit
+  parent child selected by current TaskFlow evidence.
+- Docs update: yes, this scorecard records the STOP gate.
+- workflow_score_10: 8/10. The activation defect is closed with live proof, but
+  the follow-up blocker prevents parent closure.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `runtime-status-activation-pending-doctor-parity` under
+   `self-analysis-runtime-snapshot-parity-task`.
+2. Wave/parent closure distance: pass, one priority-2 child closed; parent still
+   has residual children.
+3. Scope and non-goals stable: pass, no `vida init`, no manual state bypass.
+4. Dirty worktree handled: pass, scoped to `project_activator_surface`,
+   `status_surface`, and this log.
+5. Executor cheapest capable: pass, root handled compact two-file fix; explorer
+   was read-only.
+6. Validator matched risk: pass, public CLI plus cache/unit and status family
+   coverage.
+7. Prompt packet shape: pass, explorer prompt had concrete producer/helper/test
+   questions.
+8. Agent handles: pass, Pascal closed after classification.
+9. Token/tool/step telemetry: partial, host token counts unavailable.
+10. Avoidable commands: partial, PowerShell quoting retry and lock contention
+    were observed.
+11. Proof strength: pass, live activation posture changed in installed binary.
+12. Public/release proof: pass, release install and live `project-activator` /
+    `status` probes.
+13. Debug build: pass, focused cargo tests compiled changed paths.
+14. TaskFlow state: pass, TODO and activation defect closed; new residual task
+    created.
+15. Staging by invariant: not_yet_done, commit not yet created for this slice.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass after this entry validates.
+18. Parent/wave metrics: pass, parent closure remains blocked by residual
+    children.
+19. New defects/follow-ups: pass,
+    `runtime-status-doctor-continuation-blocker-parity` created for the
+    post-install non-activation mismatch.
+20. Next routing rule: pass, do not infer the next unit from stale active-run
+    evidence; use explicit child/follow-up evidence after this commit.
+
+Implementation follow-up tasks:
+- `runtime-status-doctor-continuation-blocker-parity`
+- `runtime-active-exception-takeover-predicate-consolidation`
+- `runtime-latest-run-graph-missing-task-parity-repair`
+- `runtime-host-bridge-persisted-result-schema-reconciliation` remains in the
+  next epic created from the external `vida_mobile` report.
+
+PR / issue processing:
+- open_prs: left_open_reason=`self-analysis-epic-pr-issue-closure-pass` owns the
+  epic-level PR pass.
+- processed_issues: no_processed_issues in this slice.
+
+Final dynamic criteria STOP point:
+1. Shell metacharacter criterion: when TaskFlow mutation notes include
+   semicolons, backticks, pipes, or inline command names, use a simple
+   metacharacter-free note or an argument-array wrapper; do not retry with the
+   same shell-shaped text. Evidence source: the first follow-up task create
+   failed because PowerShell split `--notes` content into commands.
+
+Meta-analysis remediation:
+- Code remediation: `required_runtime_home_dirs` removes duplicate activation
+  readiness/project-shape marker lists.
+- Code remediation: cached status projection refresh now updates activation
+  truth and stale activation blockers.
+- TaskFlow remediation: created
+  `runtime-status-doctor-continuation-blocker-parity` for the newly exposed
+  status/doctor/orchestrator continuation mismatch.
+- Documentation remediation: this scorecard records the self-analysis STOP gate
+  and dynamic criterion.
+
+Next-task selection rule:
+- Commit and push this activation-parity slice. Then bind the next explicit
+  parent child from current TaskFlow evidence, with
+  `runtime-status-doctor-continuation-blocker-parity` currently carrying the
+  newest live blocker evidence.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
