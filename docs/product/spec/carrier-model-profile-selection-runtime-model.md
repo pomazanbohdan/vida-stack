@@ -77,7 +77,7 @@ Use this model to define the carrier/model-profile contract for runtime selectio
 - Project docs / specs affected:
   - `docs/product/spec/agent-role-skill-profile-flow-model.md`
   - `docs/product/spec/compiled-runtime-bundle-contract.md`
-  - `docs/product/spec/external-cli-carrier-hardening-design.md`
+  - `docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `docs/process/codex-agent-configuration-guide.md`
 - Framework protocols affected:
   - none beyond existing runtime/operator contracts
@@ -219,7 +219,7 @@ Will implement / choose:
 - `docs/process/codex-agent-configuration-guide.md`
 - `docs/product/spec/agent-role-skill-profile-flow-model.md`
 - `docs/product/spec/compiled-runtime-bundle-contract.md`
-- `docs/product/spec/external-cli-carrier-hardening-design.md`
+- `docs/product/spec/external-cli-carrier-hardening-contract.md`
 
 ## Fail-Closed Constraints
 - Forbidden fallback paths
@@ -311,7 +311,7 @@ Will implement / choose:
   - `docs/product/spec/agent-role-skill-profile-flow-model.md`
   - `docs/product/spec/compiled-runtime-bundle-contract.md`
   - `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
-  - `docs/product/spec/external-cli-carrier-hardening-design.md`
+  - `docs/product/spec/external-cli-carrier-hardening-contract.md`
 - Related protocols
   - `docs/process/codex-agent-configuration-guide.md`
 - Related ADRs

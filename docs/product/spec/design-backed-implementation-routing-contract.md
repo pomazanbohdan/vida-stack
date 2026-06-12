@@ -1,16 +1,14 @@
-# Existing design-backed implementation routing blocker fix design
+# Design Backed Implementation Routing Contract
 
 Purpose: Bound the current-release fix for tasks that already have a finalized design but are rerouted back into specification/spec-pack and blocked on non-executing internal dispatch.
 
-Status: `proposed`
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: stop design-backed implementation tasks from re-entering `specification/spec-pack`, and restore lawful implementer routing plus admissible delegated execution once a bounded design is already finalized.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher`
-- Status: `proposed`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -63,7 +61,7 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
+  - `docs/product/spec/design-backed-implementation-routing-contract.md`
   - `docs/product/spec/current-spec-map.md`
 - Framework protocols affected:
   - none
@@ -143,7 +141,7 @@ Will implement / choose:
   - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 
 ### Bounded File Set
-- `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
+- `docs/product/spec/design-backed-implementation-routing-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `crates/vida/src/development_flow_orchestration.rs`
 - `crates/vida/src/runtime_dispatch_status.rs`
@@ -162,7 +160,7 @@ Will implement / choose:
 ### Phase 1
 - Register the design and pin the exact failure shape against current runtime surfaces.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/existing-design-implementation-routing-blocked-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/design-backed-implementation-routing-contract.md docs/product/spec/current-spec-map.md`
 
 ### Phase 2
 - Implement evidence-aware design-gate suppression for already-designed implementation tasks.
@@ -187,7 +185,7 @@ Will implement / choose:
   - `vida taskflow packet render feature-serialize-authoritative-state-access-lock-mitigation --json`
   - `vida taskflow consume continue --run-id feature-serialize-authoritative-state-access-lock-mitigation --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/existing-design-implementation-routing-blocked-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/design-backed-implementation-routing-contract.md docs/product/spec/current-spec-map.md`
 
 ## Observability
 - Logging points
@@ -221,13 +219,13 @@ Will implement / choose:
 - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 
 -----
-artifact_path: product/spec/existing-design-implementation-routing-blocked-design
+artifact_path: product/spec/design-backed-implementation-routing-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-21
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/existing-design-implementation-routing-blocked-design.md
+source_path: docs/product/spec/design-backed-implementation-routing-contract.md
 created_at: 2026-04-21T11:57:56.52638996Z
 updated_at: 2026-04-21T11:59:44.716158253Z
-changelog_ref: existing-design-implementation-routing-blocked-design.changelog.jsonl
+changelog_ref: design-backed-implementation-routing-contract.changelog.jsonl

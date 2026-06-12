@@ -1,14 +1,14 @@
-# Explicit Implementation Seed Drops Design Backed Owned Paths Design
+# Design Backed Implementation Seeding Scope Contract
 
 Purpose: Bound the audit blocker where a task with an already-registered bounded design document seeds directly into `implementation` via `auto_explicit_implementation_request`, but the seeded execution plan drops the tracked design-doc context and `dispatch-init` then fails closed because the implementer `delivery_task_packet` has no derived `owned_paths`.
 
-Status: `proposed`
+Status: canonical
 
 ## Summary
 - Feature / change: preserve design-backed bounded file scope when explicit implementation seeding bypasses the old scope-discussion/work-pool override path.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher`
-- Status: `proposed`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -16,7 +16,7 @@ Status: `proposed`
   - `try_existing_design_backed_implementation_override(...)` only injects `tracked_flow_bootstrap.design_doc_path` when the pre-override selection is still `scope_discussion/spec-pack` or `pbi_discussion/work-pool-pack`.
   - `runtime_delivery_task_packet_with_scope_context(...)` in `runtime_dispatch_packets.rs` derives implementer `owned_paths` from explicit request file terms first, then from the tracked design doc bounded file set.
 - Key components and relationships
-  - For `feature-fix-bug-analysis-lane-can-close-implementation-without-write-evidence`, the registered design doc already exists at `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md` and includes a bounded file set.
+  - For `feature-fix-bug-analysis-lane-can-close-implementation-without-write-evidence`, the registered design doc already exists at `docs/product/spec/implementation-closure-write-evidence-contract.md` and includes a bounded file set.
   - Seeding that task used `reason=auto_explicit_implementation_request_override`, `tracked_flow_entry=null`, and a generic synthetic `tracked_flow_bootstrap` instead of the registered design doc.
   - `cargo run -p vida -- taskflow run-graph dispatch-init feature-fix-bug-analysis-lane-can-close-implementation-without-write-evidence --json` then failed with:
     - `Runtime dispatch packet 'delivery_task_packet' is missing required packet fields: owned_paths`
@@ -62,7 +62,7 @@ Status: `proposed`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md`
+  - `docs/product/spec/design-backed-implementation-seeding-scope-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
 - Runtime families affected:
@@ -118,7 +118,7 @@ Will implement / choose:
   - derive implementer `owned_paths` from the bounded file set during dispatch-init
 
 ### Bounded File Set
-- `docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md`
+- `docs/product/spec/design-backed-implementation-seeding-scope-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `crates/vida/src/taskflow_run_graph.rs`
@@ -138,7 +138,7 @@ Will implement / choose:
 ### Phase 1
 - Register and finalize this bounded design.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
+  - `vida docflow check --root . docs/product/spec/design-backed-implementation-seeding-scope-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ### Phase 2
 - Repair explicit implementation seeding so design-backed context survives into dispatch-init.
@@ -160,19 +160,19 @@ Will implement / choose:
   - implementer dispatch-init succeeds past packet validation for the active blocker run
 
 ## References
-- `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
+- `docs/product/spec/implementation-closure-write-evidence-contract.md`
 - `docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md`
 - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
 - `docs/product/spec/continuation-binding-fail-closed-contract.md`
 
 -----
-artifact_path: product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design
+artifact_path: product/spec/design-backed-implementation-seeding-scope-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-21
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md
+source_path: docs/product/spec/design-backed-implementation-seeding-scope-contract.md
 created_at: 2026-04-21T20:10:37.59987108Z
 updated_at: 2026-04-21T20:12:59.871136281Z
-changelog_ref: explicit-implementation-seed-drops-design-backed-owned-paths-design.changelog.jsonl
+changelog_ref: design-backed-implementation-seeding-scope-contract.changelog.jsonl

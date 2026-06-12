@@ -1,14 +1,12 @@
-# Export Canonical Operator Command Map Through Design
+# Canonical Operator Command Map Export Contract
 
-Status: `proposed`
-
-Use this document for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: export the canonical operator command map through `vida orchestrator-init` and `vida agent-init` so both surfaces expose the current command families in machine-readable JSON and aligned human-readable help/report output.
 - Owner layer: `mixed`
 - Runtime surface: `launcher`
-- Status: `proposed`
+- Status: canonical
 
 ## Current Context
 - Existing system overview:
@@ -70,7 +68,7 @@ Use this document for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/export-canonical-operator-command-map-through-design.md`
+  - `docs/product/spec/canonical-operator-command-map-export-contract.md`
   - `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
   - `docs/product/spec/compiled-runtime-bundle-contract.md`
   - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
@@ -230,7 +228,7 @@ Agent-surface rule:
 
 ### Bounded File Set
 - Spec/design file for this packet:
-  - `docs/product/spec/export-canonical-operator-command-map-through-design.md`
+  - `docs/product/spec/canonical-operator-command-map-export-contract.md`
 - Expected owner/runtime files for later implementation:
   - `crates/vida/src/surface_render.rs`
   - `crates/vida/src/taskflow_runtime_bundle.rs`
@@ -290,7 +288,7 @@ Agent-surface rule:
   - `cargo test -p vida boot_smoke agent_init_dispatch_packet_reports_view_only_activation_semantics`
   - `cargo test -p vida taskflow_query_answer -- --nocapture`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/export-canonical-operator-command-map-through-design.md`
+  - `vida docflow check --root . docs/product/spec/canonical-operator-command-map-export-contract.md`
   - `vida docflow doctor --root . --layer 3`
 
 ## Observability
@@ -337,13 +335,13 @@ Agent-surface rule:
   - `crates/vida/tests/boot_smoke.rs`
 
 -----
-artifact_path: product/spec/export-canonical-operator-command-map-through-design
+artifact_path: product/spec/canonical-operator-command-map-export-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-15
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/export-canonical-operator-command-map-through-design.md
+source_path: docs/product/spec/canonical-operator-command-map-export-contract.md
 created_at: 2026-04-14T07:40:56.253573048Z
 updated_at: 2026-04-17T09:20:04.289039599Z
-changelog_ref: export-canonical-operator-command-map-through-design.changelog.jsonl
+changelog_ref: canonical-operator-command-map-export-contract.changelog.jsonl

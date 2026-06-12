@@ -260,7 +260,7 @@ Will implement / choose:
   - current runtime contract profile
   - current runtime contract profile
   - current runtime contract profile
-  - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
+  - `docs/product/spec/release-admission-evidence-detection-contract.md`
 - Related protocols
   - none beyond current project ops/process canon
 - Related ADRs

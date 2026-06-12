@@ -87,7 +87,7 @@ Use this design to finish the post-`carrier + model_profile` wave so runtime can
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/README.md`
   - `docs/product/spec/agent-role-skill-profile-flow-model.md`
-  - `docs/product/spec/external-cli-carrier-hardening-design.md`
+  - `docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 - Framework protocols affected:
   - none beyond existing routing/operator/runtime contracts
@@ -241,7 +241,7 @@ Will implement / choose:
   - dispatch packets and receipts -> operator status/recovery/continue summaries
 - Cross-document / cross-protocol dependencies
   - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
-  - `docs/product/spec/external-cli-carrier-hardening-design.md`
+  - `docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
   - current runtime contract profile
@@ -362,7 +362,7 @@ Will implement / choose:
 ## References
 - Related specs
   - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
-  - `docs/product/spec/external-cli-carrier-hardening-design.md`
+  - `docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
 - Related protocols

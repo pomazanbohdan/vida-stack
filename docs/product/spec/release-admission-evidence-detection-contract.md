@@ -1,14 +1,12 @@
-# Fix Release Admission Evidence Detection Artifac Design
+# Release Admission Evidence Detection Contract
 
-Status: implemented
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: Fix release-admission evidence detection so status/doctor/continuation surfaces accept the newest admissible `final-*` runtime-consumption snapshot and do not re-open blockers because of stale, incomplete, or helper-only snapshot selection.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | status | doctor`
-- Status: implemented
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -63,7 +61,7 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
+  - `docs/product/spec/release-admission-evidence-detection-contract.md`
   - `docs/product/spec/current-spec-map.md`
 - Runtime families affected:
   - `taskflow`
@@ -138,7 +136,7 @@ Will implement / choose:
   - Release-1 operator contract parity must remain intact across `artifact_refs`, `shared_fields`, and `operator_contracts`.
 
 ### Bounded File Set
-- `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
+- `docs/product/spec/release-admission-evidence-detection-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `crates/vida/src/runtime_consumption_state.rs`
 - `crates/vida/src/status_surface.rs`
@@ -163,7 +161,7 @@ Will implement / choose:
 ### Phase 1
 - Complete this design doc and pin the bounded file set plus proof targets.
 - First proof target
-  - `vida docflow fastcheck --root . docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
+  - `vida docflow fastcheck --root . docs/product/spec/release-admission-evidence-detection-contract.md`
 
 ### Phase 2
 - Tighten shared admissible-final selection and wire `status` / `doctor` to the same authority path.
@@ -227,23 +225,23 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/fix-release-admission-evidence-detection-artifac-design
+artifact_path: product/spec/release-admission-evidence-detection-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-06
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md
+source_path: docs/product/spec/release-admission-evidence-detection-contract.md
 created_at: 2026-04-06T07:13:27.76466372Z
 updated_at: 2026-04-07T18:20:14.753585291Z
-changelog_ref: fix-release-admission-evidence-detection-artifac-design.changelog.jsonl
-artifact_path: product/spec/fix-release-admission-evidence-detection-artifac-design
+changelog_ref: release-admission-evidence-detection-contract.changelog.jsonl
+artifact_path: product/spec/release-admission-evidence-detection-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-07
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md
+source_path: docs/product/spec/release-admission-evidence-detection-contract.md
 created_at: 2026-04-06T07:13:27.76466372Z
 updated_at: 2026-04-07T18:17:00+03:00
-changelog_ref: fix-release-admission-evidence-detection-artifac-design.changelog.jsonl
+changelog_ref: release-admission-evidence-detection-contract.changelog.jsonl

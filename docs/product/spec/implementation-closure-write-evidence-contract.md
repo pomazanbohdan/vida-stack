@@ -1,14 +1,14 @@
-# Analysis Lane Can Close Implementation Without Write Evidence Design
+# Implementation Closure Write Evidence Contract
 
 Purpose: Bound the audit blocker where a write-producing implementation task dispatches only a read-only `analysis` lane, records execution evidence for that diagnostic handoff, and then reconciles the run graph to `implementation_complete` with a downstream `closure` packet ready even though no lawful write-capable implementer evidence exists.
 
-Status: `proposed`
+Status: canonical
 
 ## Summary
 - Feature / change: repair implementation-completion and closure-candidate truth so non-writer diagnostic lanes cannot satisfy completion for write-class work.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher | state_store`
-- Status: `proposed`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -64,7 +64,7 @@ Status: `proposed`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
+  - `docs/product/spec/implementation-closure-write-evidence-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
 - Runtime families affected:
@@ -124,7 +124,7 @@ Will implement / choose:
   - keep summary/recovery/operator truth aligned with lawful write-evidence gates
 
 ### Bounded File Set
-- `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
+- `docs/product/spec/implementation-closure-write-evidence-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `crates/vida/src/state_store_run_graph_summary.rs`
@@ -146,7 +146,7 @@ Will implement / choose:
 ### Phase 1
 - Register this blocker in spec maps and finalize the bounded design.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
+  - `vida docflow check --root . docs/product/spec/implementation-closure-write-evidence-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history`
 
 ### Phase 2
 - Narrow reconciliation/closure-candidate logic so diagnostic-lane execution cannot over-close implementation runs.
@@ -174,13 +174,13 @@ Will implement / choose:
 - `docs/product/spec/continuation-binding-fail-closed-contract.md`
 
 -----
-artifact_path: product/spec/analysis-lane-can-close-implementation-without-write-evidence-design
+artifact_path: product/spec/implementation-closure-write-evidence-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-21
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md
+source_path: docs/product/spec/implementation-closure-write-evidence-contract.md
 created_at: 2026-04-21T20:04:41.784245431Z
 updated_at: 2026-04-21T20:06:36.289385795Z
-changelog_ref: analysis-lane-can-close-implementation-without-write-evidence-design.changelog.jsonl
+changelog_ref: implementation-closure-write-evidence-contract.changelog.jsonl

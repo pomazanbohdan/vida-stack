@@ -25,11 +25,11 @@ Suggested homes:
 Active design docs:
 
 - `docs/product/spec/project-agent-first-delegation-contract.md`
-- `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
+- `docs/product/spec/release-admission-evidence-detection-contract.md`
 - `docs/product/spec/continuation-binding-fail-closed-contract.md`
 - `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
 - `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
-- `docs/product/spec/authoritative-state-lock-recovery-design.md`
+- `docs/product/spec/authoritative-state-lock-recovery-contract.md`
 - `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
 - `docs/product/spec/specification-lane-scope-hardening-design.md`
 - `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`

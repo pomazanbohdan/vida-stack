@@ -1,14 +1,12 @@
-# External CLI Carrier Hardening Design
+# External CLI Carrier Hardening Contract
 
-Status: draft
-
-Use this design to record the bounded runtime hardening slice for external CLI carriers before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: harden external CLI carrier dispatch so VIDA can execution-enforce model/provider intent, report truthful carrier readiness, and keep project config aligned with the actually working external carriers.
 - Owner layer: `mixed`
 - Runtime surface: `launcher | taskflow | status`
-- Status: draft
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -66,7 +64,7 @@ Use this design to record the bounded runtime hardening slice for external CLI c
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/external-cli-carrier-hardening-design.md`
+  - `docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `docs/process/agent-system.md`
 - Framework protocols affected:
   - none
@@ -175,7 +173,7 @@ Will implement / choose:
   - `docs/product/spec/hybrid-host-executor-semantics-model.md`
 
 ### Bounded File Set
-- `docs/product/spec/external-cli-carrier-hardening-design.md`
+- `docs/product/spec/external-cli-carrier-hardening-contract.md`
 - `vida.config.yaml`
 - `crates/vida/src/runtime_dispatch_state.rs`
 - `crates/vida/src/status_surface_external_cli.rs`
@@ -228,7 +226,7 @@ Will implement / choose:
   - `vida taskflow consume agent-system --json`
   - `vida task ready --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/external-cli-carrier-hardening-design.md`
+  - `vida docflow check --root . docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `cargo test -p vida`
 
 ## Observability
@@ -272,13 +270,13 @@ Will implement / choose:
   - CLI help/output and local carrier config/state inspection recorded during the bounded external-carrier research cycle on 2026-04-10
 
 -----
-artifact_path: product/spec/external-cli-carrier-hardening-design
+artifact_path: product/spec/external-cli-carrier-hardening-contract
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: 2026-04-10
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/external-cli-carrier-hardening-design.md
+source_path: docs/product/spec/external-cli-carrier-hardening-contract.md
 created_at: '2026-04-10T08:05:00+03:00'
 updated_at: 2026-04-22T15:33:07.061051557Z
-changelog_ref: external-cli-carrier-hardening-design.changelog.jsonl
+changelog_ref: external-cli-carrier-hardening-contract.changelog.jsonl

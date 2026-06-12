@@ -14,7 +14,7 @@ Use this contract as the canonical closure-admission evidence crosswalk for runt
 - Existing system overview
   - current runtime contract profile already requires explicit, receipt-backed closure admission.
   - current runtime contract profile already defines the minimal `closure_admission_record` schema.
-  - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md` already narrows how admissible final snapshots are selected for operator surfaces.
+  - `docs/product/spec/release-admission-evidence-detection-contract.md` already narrows how admissible final snapshots are selected for operator surfaces.
 - Key components and relationships
   - current runtime contract profile defines what Release-1 closure must prove.
   - current runtime contract profile defines the machine-readable record shapes.
@@ -117,7 +117,7 @@ Will implement / choose:
 - Main components
   - current runtime contract profile
   - current runtime contract profile
-  - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
+  - `docs/product/spec/release-admission-evidence-detection-contract.md`
   - `crates/vida/src/{runtime_consumption_state,status_surface,doctor_surface,release1_contracts}.rs`
 - Key interfaces
   - release-admission evidence selection helpers
@@ -147,7 +147,7 @@ Will implement / choose:
   - current runtime contract profile
   - current runtime contract profile
   - current runtime contract profile
-  - `fix-release-admission-evidence-detection-artifac-design.md`
+  - `release-admission-evidence-detection-contract.md`
 
 ### Bounded File Set
 - `docs/product/spec/closure-admission-evidence-table-contract.md`
@@ -227,7 +227,7 @@ Will implement / choose:
   - current runtime contract profile
   - current runtime contract profile
   - current runtime contract profile
-  - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
+  - `docs/product/spec/release-admission-evidence-detection-contract.md`
 - Related protocols
   - none beyond the active Release-1 closure canon
 - Related ADRs

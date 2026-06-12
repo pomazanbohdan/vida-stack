@@ -197,39 +197,39 @@ Companion rule:
 3. [project-agent-first-delegation-contract.md](project-agent-first-delegation-contract.md)
    Config families: bounded clarification and enforcement for project agent-first delegated execution, anti-pause continuation law, valid release-admission snapshot selection, and packet-minimum fail-closed runtime behavior
    Registered path: `docs/product/spec/project-agent-first-delegation-contract.md`
-26. [fix-release-admission-evidence-detection-artifac-design.md](fix-release-admission-evidence-detection-artifac-design.md)
+26. [release-admission-evidence-detection-contract.md](release-admission-evidence-detection-contract.md)
    Config families: bounded release-admission evidence detection, admissible final-snapshot precedence, operator artifact-ref parity, and effective-bundle receipt citation stability
-   Registered path: `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
+   Registered path: `docs/product/spec/release-admission-evidence-detection-contract.md`
 28. [ops-state-runtime-evidence-hygiene-contract.md](ops-state-runtime-evidence-hygiene-contract.md)
    Config families: bounded post-release ops policy for authoritative state roots, runtime-consumption evidence hygiene, temp-state proof workflows, and generated-state working-tree posture
    Registered path: `docs/product/spec/ops-state-runtime-evidence-hygiene-contract.md`
-29. [authoritative-state-lock-recovery-design.md](authoritative-state-lock-recovery-design.md)
+29. [authoritative-state-lock-recovery-contract.md](authoritative-state-lock-recovery-contract.md)
    Config families: bounded authoritative state-store lock-lifetime reduction during agent-lane dispatch, lock-specific remediation hints, and fail-closed long-lived-state recovery posture without silent lock cleanup
-   Registered path: `docs/product/spec/authoritative-state-lock-recovery-design.md`
+   Registered path: `docs/product/spec/authoritative-state-lock-recovery-contract.md`
 30. [serialize-authoritative-state-access-lock-mitigation-design.md](serialize-authoritative-state-access-lock-mitigation-design.md)
    Config families: bounded authoritative state-access serialization, snapshot-first read-surface mitigation for lock contention, and explicit degraded-read truth for operator/task inspection surfaces
    Registered path: `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
-31. [existing-design-implementation-routing-blocked-design.md](existing-design-implementation-routing-blocked-design.md)
+31. [design-backed-implementation-routing-contract.md](design-backed-implementation-routing-contract.md)
    Config families: bounded design-gate suppression for implementation-ready tasks, tracked-flow routing repair away from stale spec-pack re-entry, and implementation-oriented dispatch truth for already finalized design-backed work
-   Registered path: `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
+   Registered path: `docs/product/spec/design-backed-implementation-routing-contract.md`
 33. [split-oversized-runtime-modules-ownership-execut-design.md](split-oversized-runtime-modules-ownership-execut-design.md)
    Config families: bounded ownership-based split plan for oversized TaskFlow runtime modules, compatibility-preserving facade seams, execution-preparation requirements, module-map proof targets, and guarded rollout across `crates/vida/src/runtime_dispatch_state.rs`, `taskflow_consume_resume.rs`, `taskflow_run_graph.rs`, `taskflow_proxy.rs`, `task_surface.rs`, and `init_surfaces.rs`
    Registered path: `docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`
 33. [internal-codex-agent-execution-fail-closed-contract.md](internal-codex-agent-execution-fail-closed-contract.md)
    Config families: bounded internal-host activation-view fail-closed semantics, truthful agent-lane execution state, root-session anti-bypass guidance, and runtime dispatch bridge hardening for Codex/internal execution
    Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
-34. [internal-dispatch-timeout-does-not-return-design.md](internal-dispatch-timeout-does-not-return-design.md)
+34. [internal-dispatch-timeout-handoff-contract.md](internal-dispatch-timeout-handoff-contract.md)
    Config families: bounded internal-host delegated handoff timeout return semantics, prompt blocked receipt/result truth for stranded implementer handoffs, and runtime dispatch wrapper hardening beyond in-flight `executing` artifacts
-   Registered path: `docs/product/spec/internal-dispatch-timeout-does-not-return-design.md`
+   Registered path: `docs/product/spec/internal-dispatch-timeout-handoff-contract.md`
 35. [internal-codex-activation-view-timeout-holder-release-design.md](internal-codex-activation-view-timeout-holder-release-design.md)
    Config families: bounded stale in-flight reconciliation, canonical dispatch timeout reuse for internal-host handoff truth, legacy fallback compatibility, and truthful continue/recovery status for still-executing delegated work
    Registered path: `docs/product/spec/internal-codex-activation-view-timeout-holder-release-design.md`
 37. [taskflow-execution-semantics-scheduler-contract.md](taskflow-execution-semantics-scheduler-contract.md)
    Config families: bounded TaskFlow task execution semantics schema, graph-plus-semantics scheduler projection, operator-visible parallel-admission truth, and fail-closed compatibility defaults for legacy tasks
    Registered path: `docs/product/spec/taskflow-execution-semantics-scheduler-contract.md`
-38. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
+38. [external-cli-carrier-hardening-contract.md](external-cli-carrier-hardening-contract.md)
    Config families: bounded external CLI carrier dispatch pinning, carrier readiness/status classification, normalized opencode/kilo/vibe project profiles, and operator-visible smoke-proof routing for sandbox/auth/model activation
-   Registered path: `docs/product/spec/external-cli-carrier-hardening-design.md`
+   Registered path: `docs/product/spec/external-cli-carrier-hardening-contract.md`
 39. [orchestrator-runtime-contract-hardening-contract.md](orchestrator-runtime-contract-hardening-contract.md)
    Config families: bounded orchestrator/agent/lane/status runtime contract hardening, path-scoped exception takeover truth, preview planner output, carrier selection API, lock-resilient init reads, and Codex App agent cleanup release rollout
    Registered path: `docs/product/spec/orchestrator-runtime-contract-hardening-contract.md`
@@ -242,15 +242,15 @@ Companion rule:
 38. [lawful-closure-continuation-rebinding-contract.md](lawful-closure-continuation-rebinding-contract.md)
    Config families: bounded explicit post-closure continuation rebinding, backlog-task continuation artifacts, completed-run summary admissibility, and fail-closed rejection of stale in-flight bindings
    Registered path: `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
-39. [export-canonical-operator-command-map-through-design.md](export-canonical-operator-command-map-through-design.md)
+39. [canonical-operator-command-map-export-contract.md](canonical-operator-command-map-export-contract.md)
    Config families: bounded operator command-family export through orchestrator-init and agent-init, help/discoverability alignment across root/task/taskflow surfaces, and canonical command-map parity between init views and primary help entrypoints
-   Registered path: `docs/product/spec/export-canonical-operator-command-map-through-design.md`
-40. [reconciled-runtime-projection-output-design.md](reconciled-runtime-projection-output-design.md)
+   Registered path: `docs/product/spec/canonical-operator-command-map-export-contract.md`
+40. [reconciled-runtime-projection-output-contract.md](reconciled-runtime-projection-output-contract.md)
    Config families: bounded reconciled runtime projection truth output, effective projection source/reason reporting, downstream target/blocker parity, stale-state suspicion, and next-lawful-operator-action surfaces across init/status/recovery/continue
-   Registered path: `docs/product/spec/reconciled-runtime-projection-output-design.md`
-41. [repair-task-close-closure-truth-exception-design.md](repair-task-close-closure-truth-exception-design.md)
+   Registered path: `docs/product/spec/reconciled-runtime-projection-output-contract.md`
+41. [task-close-closure-truth-exception-contract.md](task-close-closure-truth-exception-contract.md)
    Config families: bounded downstream closure/task-close receipt sanitation for exception-path lineage, authoritative closure truth after lawful exception-backed task close, and resume/run-graph parity without stale implementer rebinding
-   Registered path: `docs/product/spec/repair-task-close-closure-truth-exception-design.md`
+   Registered path: `docs/product/spec/task-close-closure-truth-exception-contract.md`
 42. [reconcile-qwen-cli-carrier-drift-design.md](reconcile-qwen-cli-carrier-drift-design.md)
    Config families: bounded reconciliation of stale `qwen_cli` assumptions across active docs/specs and Rust test fixtures, template-only retention policy for qwen references, and runtime/operator parity with the current config-driven external carrier catalog
    Registered path: `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
@@ -266,12 +266,12 @@ Companion rule:
 46. [codex-app-agent-lifecycle-cleanup-contract.md](codex-app-agent-lifecycle-cleanup-contract.md)
    Config families: bounded Codex App agent lifecycle cleanup discipline, debug-safe `agent-init` startup rendering, configured reasoning-profile projection proof, and `.codex/**` materialization parity with `vida.config.yaml`
    Registered path: `docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md`
-46. [analysis-lane-can-close-implementation-without-write-evidence-design.md](analysis-lane-can-close-implementation-without-write-evidence-design.md)
+46. [implementation-closure-write-evidence-contract.md](implementation-closure-write-evidence-contract.md)
    Config families: implementation completion truth, closure-candidate reconciliation gates, diagnostic-lane versus write-evidence law, and fail-closed prevention of closure-ready projection from read-only analysis execution
-   Registered path: `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
-47. [explicit-implementation-seed-drops-design-backed-owned-paths-design.md](explicit-implementation-seed-drops-design-backed-owned-paths-design.md)
+   Registered path: `docs/product/spec/implementation-closure-write-evidence-contract.md`
+47. [design-backed-implementation-seeding-scope-contract.md](design-backed-implementation-seeding-scope-contract.md)
    Config families: design-backed explicit implementation seeding, tracked design-doc injection into run-graph seed, implementer packet owned-path derivation from bounded file sets, and fail-closed dispatch-init without generic placeholder scope
-   Registered path: `docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md`
+   Registered path: `docs/product/spec/design-backed-implementation-seeding-scope-contract.md`
 48. [carrier-model-profile-selection-runtime-model.md](carrier-model-profile-selection-runtime-model.md)
    Config families: bounded carrier plus model-profile contract normalization across Codex/internal/external execution surfaces, profile-aware runtime assignment truth, dispatch/status profile projection, and parity-safe materialization from legacy and new-style config
    Registered path: `docs/product/spec/carrier-model-profile-selection-runtime-model.md`

@@ -1,16 +1,14 @@
-# Authoritative State Lock Recovery Design
+# Authoritative State Lock Recovery Contract
 
 Purpose: Define bounded stale-lock and hung-holder recovery for long-lived authoritative state roots.
 
-Status: proposed
-
-Use this template for one bounded feature/change design before implementation.
+Status: canonical
 
 ## Summary
 - Feature / change: shorten authoritative state-store lock lifetime around long-running TaskFlow dispatch execution, surface lock-specific remediation hints, and keep long-lived-state recovery explicit rather than heuristic.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | status | doctor`
-- Status: proposed
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -65,7 +63,7 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/authoritative-state-lock-recovery-design.md`
+  - `docs/product/spec/authoritative-state-lock-recovery-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/README.md`
@@ -161,7 +159,7 @@ Will implement / choose:
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 
 ### Bounded File Set
-- `docs/product/spec/authoritative-state-lock-recovery-design.md`
+- `docs/product/spec/authoritative-state-lock-recovery-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `docs/product/spec/README.md`
@@ -188,7 +186,7 @@ Will implement / choose:
 ### Phase 1
 - Register this design and validate the document surfaces.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/authoritative-state-lock-recovery-design.md`
+  - `vida docflow check --root . docs/product/spec/authoritative-state-lock-recovery-contract.md`
 
 ### Phase 2
 - Refactor agent-lane dispatch execution so the authoritative store is not held open across subprocess waits.
@@ -213,7 +211,7 @@ Will implement / choose:
   - `vida doctor --json`
   - `vida taskflow consume continue --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/authoritative-state-lock-recovery-design.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
+  - `vida docflow check --root . docs/product/spec/authoritative-state-lock-recovery-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
 
 ## Observability
 - Logging points
@@ -248,13 +246,13 @@ Will implement / choose:
 - `docs/process/environments.md`
 
 -----
-artifact_path: product/spec/authoritative-state-lock-recovery-design
+artifact_path: product/spec/authoritative-state-lock-recovery-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-13
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/authoritative-state-lock-recovery-design.md
+source_path: docs/product/spec/authoritative-state-lock-recovery-contract.md
 created_at: 2026-04-13T16:08:31.740873424Z
 updated_at: 2026-04-13T16:12:52.793908871Z
-changelog_ref: authoritative-state-lock-recovery-design.changelog.jsonl
+changelog_ref: authoritative-state-lock-recovery-contract.changelog.jsonl

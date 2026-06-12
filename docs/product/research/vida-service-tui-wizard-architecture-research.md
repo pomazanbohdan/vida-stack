@@ -48,7 +48,7 @@ Project specs and process docs:
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 - `docs/product/spec/status-families-and-query-surface-model.md`
 - `docs/product/spec/multi-orchestrator-session-ownership-claims-contract.md`
-- `docs/product/spec/authoritative-state-lock-recovery-design.md`
+- `docs/product/spec/authoritative-state-lock-recovery-contract.md`
 - `docs/process/agent-system.md`
 - `docs/process/external-cli-carrier-operator-procedure.md`
 - `docs/process/agent-extensions/README.md`

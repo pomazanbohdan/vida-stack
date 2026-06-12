@@ -1,12 +1,12 @@
-# Reconciled Runtime Projection Output Design
+# Reconciled Runtime Projection Output Contract
 
-Status: `approved`
+Status: canonical
 
 ## Summary
 - Feature / change: add additive operator/runtime output surfaces that expose reconciled projection truth after runtime handoff reconciliation, especially when runtime truth has advanced past a live delegated lane into post-design or post-spec-close state.
 - Owner layer: `runtime-family`
 - Runtime surfaces: `vida orchestrator-init`, `vida taskflow run-graph status`, `vida taskflow recovery latest|status`, `vida taskflow consume continue`
-- Status: `approved for bounded implementation`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -64,7 +64,7 @@ Status: `approved`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/reconciled-runtime-projection-output-design.md`
+  - `docs/product/spec/reconciled-runtime-projection-output-contract.md`
   - `docs/product/spec/current-spec-map.md`
 - Runtime families affected:
   - `taskflow`
@@ -137,7 +137,7 @@ Will implement / choose:
 - `vida taskflow consume continue [--run-id <run-id>] [--json]`
 
 ### Bounded File Set
-- `docs/product/spec/reconciled-runtime-projection-output-design.md`
+- `docs/product/spec/reconciled-runtime-projection-output-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `crates/vida/src/continuation_binding_summary.rs`
 - `crates/vida/src/state_store_run_graph_summary.rs`
@@ -159,7 +159,7 @@ Will implement / choose:
 ### Phase 1
 - Register and validate this bounded design.
 - Proof target:
-  - `vida docflow check --root . docs/product/spec/reconciled-runtime-projection-output-design.md`
+  - `vida docflow check --root . docs/product/spec/reconciled-runtime-projection-output-contract.md`
 
 ### Phase 2
 - Implement the shared reconciled projection helper and per-run dispatch receipt summary path.
@@ -183,7 +183,7 @@ Will implement / choose:
   - `vida taskflow recovery status <run-id> --json`
   - `vida taskflow consume continue --run-id <run-id> --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/reconciled-runtime-projection-output-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/reconciled-runtime-projection-output-contract.md docs/product/spec/current-spec-map.md`
 
 ## Observability
 - New output block clearly states which evidence source currently governs operator interpretation.
@@ -205,13 +205,13 @@ Will implement / choose:
 - `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 
 -----
-artifact_path: product/spec/reconciled-runtime-projection-output-design
+artifact_path: product/spec/reconciled-runtime-projection-output-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-17
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/reconciled-runtime-projection-output-design.md
+source_path: docs/product/spec/reconciled-runtime-projection-output-contract.md
 created_at: 2026-04-17T15:30:00+03:00
 updated_at: 2026-04-17T15:30:00+03:00
-changelog_ref: reconciled-runtime-projection-output-design.changelog.jsonl
+changelog_ref: reconciled-runtime-projection-output-contract.changelog.jsonl

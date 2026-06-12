@@ -1,14 +1,14 @@
-# Internal delegated dispatch timeout handoff blocker design
+# Internal Dispatch Timeout Handoff Contract
 
 Purpose: Bound the audit-wave fix for internal delegated implementer handoff that reaches a lawful `agent-init` implementer packet but still outlives the bounded timeout window instead of settling promptly into receipt-backed execution or canonical blocked timeout truth.
 
-Status: `approved`
+Status: canonical
 
 ## Summary
 - Feature / change: restore bounded fail-closed return semantics when internal delegated dispatch starts an implementer handoff but no receipt-backed completion evidence arrives before the configured timeout window.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher`
-- Status: `approved`
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -61,7 +61,7 @@ Status: `approved`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/internal-dispatch-timeout-does-not-return-design.md`
+  - `docs/product/spec/internal-dispatch-timeout-handoff-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
 - Framework protocols affected:
@@ -141,10 +141,10 @@ Will implement / choose:
 - Cross-document / cross-protocol dependencies
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
   - `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
-  - `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
+  - `docs/product/spec/design-backed-implementation-routing-contract.md`
 
 ### Bounded File Set
-- `docs/product/spec/internal-dispatch-timeout-does-not-return-design.md`
+- `docs/product/spec/internal-dispatch-timeout-handoff-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `crates/vida/src/runtime_dispatch_execution.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
@@ -166,7 +166,7 @@ Will implement / choose:
 ### Phase 1
 - Record the bounded defect and pin the live failure shape against the wrapper/dispatch code.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/internal-dispatch-timeout-does-not-return-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/internal-dispatch-timeout-handoff-contract.md docs/product/spec/current-spec-map.md`
 
 ### Phase 2
 - Fix the internal command-wrapper / dispatch-return path so bounded timeout always returns control with blocked truth.
@@ -193,7 +193,7 @@ Will implement / choose:
   - `cargo run -p vida -- agent-init --dispatch-packet <fresh-implementer-packet> --execute-dispatch --json`
   - `cargo run -p vida -- taskflow recovery status feature-repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/internal-dispatch-timeout-does-not-return-design.md docs/product/spec/current-spec-map.md`
+  - `vida docflow check --root . docs/product/spec/internal-dispatch-timeout-handoff-contract.md docs/product/spec/current-spec-map.md`
 
 ## Observability
 - Logging points
@@ -226,7 +226,7 @@ Will implement / choose:
 - Related specs
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-contract.md`
   - `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
-  - `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
+  - `docs/product/spec/design-backed-implementation-routing-contract.md`
 - Related protocols
   - `docs/process/project-orchestrator-operating-protocol.md`
 - Related ADRs
@@ -235,13 +235,13 @@ Will implement / choose:
   - none
 
 -----
-artifact_path: product/spec/internal-dispatch-timeout-does-not-return-design
+artifact_path: product/spec/internal-dispatch-timeout-handoff-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-21
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/internal-dispatch-timeout-does-not-return-design.md
+source_path: docs/product/spec/internal-dispatch-timeout-handoff-contract.md
 created_at: 2026-04-21T12:18:33.729195679Z
 updated_at: 2026-04-21T19:04:07.801125127Z
-changelog_ref: internal-dispatch-timeout-does-not-return-design.changelog.jsonl
+changelog_ref: internal-dispatch-timeout-handoff-contract.changelog.jsonl

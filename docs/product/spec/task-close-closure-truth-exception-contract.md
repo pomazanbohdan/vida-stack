@@ -1,12 +1,12 @@
-# Repair Task Close Closure Truth Exception Design
+# Task Close Closure Truth Exception Contract
 
-Status: `approved`
+Status: canonical
 
 ## Summary
 - Feature / change: prevent downstream closure/task-close reconciliation from inheriting upstream exception-path or supersession evidence, so lawful exception-backed implementation closure yields authoritative closure truth instead of resurrecting stale implementer lineage.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher`
-- Status: approved
+- Status: canonical
 
 ## Current Context
 - Existing system overview
@@ -61,7 +61,7 @@ Status: `approved`
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `docs/product/spec/repair-task-close-closure-truth-exception-design.md`
+  - `docs/product/spec/task-close-closure-truth-exception-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
@@ -166,7 +166,7 @@ Will implement / choose:
   - tracked-flow task-close reconciliation
 
 ### Bounded File Set
-- `docs/product/spec/repair-task-close-closure-truth-exception-design.md`
+- `docs/product/spec/task-close-closure-truth-exception-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
 - `crates/vida/src/runtime_dispatch_state.rs`
@@ -190,7 +190,7 @@ Will implement / choose:
 - Finalize this bounded design and register it in the current spec canon.
 - Confirm the minimal code fix surfaces and proof targets.
 - First proof target
-  - `vida docflow check --root . docs/product/spec/repair-task-close-closure-truth-exception-design.md`
+  - `vida docflow check --root . docs/product/spec/task-close-closure-truth-exception-contract.md`
 
 ### Phase 2
 - Repair downstream receipt construction/hydration so closure/task-close paths stop inheriting upstream exception/supersession evidence.
@@ -215,7 +215,7 @@ Will implement / choose:
   - `vida taskflow run-graph status feature-repair-task-close-exception-reconcile-closure-truth --json`
   - `vida taskflow consume continue --run-id feature-repair-task-close-exception-reconcile-closure-truth --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/repair-task-close-closure-truth-exception-design.md`
+  - `vida docflow check --root . docs/product/spec/task-close-closure-truth-exception-contract.md`
   - `vida docflow check --profile active-canon`
 
 ## Observability
@@ -252,13 +252,13 @@ Will implement / choose:
 - `crates/vida/src/taskflow_consume_resume.rs`
 
 -----
-artifact_path: product/spec/repair-task-close-closure-truth-exception-design
+artifact_path: product/spec/task-close-closure-truth-exception-contract
 artifact_type: product_spec
 artifact_version: 1
 artifact_revision: 2026-04-21
 schema_version: 1
 status: canonical
-source_path: docs/product/spec/repair-task-close-closure-truth-exception-design.md
+source_path: docs/product/spec/task-close-closure-truth-exception-contract.md
 created_at: 2026-04-21T17:48:37.672562947Z
 updated_at: 2026-04-21T17:52:53.720240748Z
-changelog_ref: repair-task-close-closure-truth-exception-design.changelog.jsonl
+changelog_ref: task-close-closure-truth-exception-contract.changelog.jsonl

@@ -137,9 +137,9 @@ Will implement / choose:
   - launcher/status/task surfaces may read from snapshot-first paths
   - mutation surfaces still open the authoritative store under guard
 - Cross-document / cross-protocol dependencies
-  - `docs/product/spec/authoritative-state-lock-recovery-design.md`
+  - `docs/product/spec/authoritative-state-lock-recovery-contract.md`
   - `docs/product/spec/taskflow-task-command-parity-proxy-contract.md`
-  - `docs/product/spec/reconciled-runtime-projection-output-design.md`
+  - `docs/product/spec/reconciled-runtime-projection-output-contract.md`
 
 ### Bounded File Set
 - `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
@@ -221,9 +221,9 @@ Will implement / choose:
   - full remote/server-backed state topology remains a separate architectural track
 
 ## References
-- `docs/product/spec/authoritative-state-lock-recovery-design.md`
+- `docs/product/spec/authoritative-state-lock-recovery-contract.md`
 - `docs/product/spec/taskflow-task-command-parity-proxy-contract.md`
-- `docs/product/spec/reconciled-runtime-projection-output-design.md`
+- `docs/product/spec/reconciled-runtime-projection-output-contract.md`
 - SurrealDB embedded guidance: use embedded/file-backed mode for single-application local storage and remote/server mode when multiple applications need shared access
 
 -----

@@ -71,7 +71,7 @@ Status: `approved`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-  - `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
+  - `docs/product/spec/design-backed-implementation-routing-contract.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
