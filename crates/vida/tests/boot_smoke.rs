@@ -14272,13 +14272,14 @@ fn taskflow_testing_h17_h20_projection_consistency_after_child_mutation() {
         assert_eq!(listed["status"], shown["status"]);
     }
     let child_listed_before = list_task("h17-h20-child");
-    assert!(child_listed_before["dependencies"]
-        .as_array()
-        .is_some_and(|deps| {
-            deps.iter().any(|dep| {
-                dep["edge_type"] == "parent-child" && dep["depends_on_id"] == "h17-h20-parent"
-            })
-        }));
+    assert_eq!(
+        child_listed_before["parent_edge"]["edge_type"],
+        "parent-child"
+    );
+    assert_eq!(
+        child_listed_before["parent_edge"]["parent_id"],
+        "h17-h20-parent"
+    );
 
     let close_child = task(&[
         "task",
