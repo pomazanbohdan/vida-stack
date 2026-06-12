@@ -279,7 +279,7 @@ Will implement / choose:
   - `docs/product/spec/status-families-and-query-surface-model.md`
   - `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
   - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
-  - `docs/product/spec/release-1-operator-surface-contract.md`
+  - current runtime contract profile
 
 ### Operator Command Contract
 - Command family

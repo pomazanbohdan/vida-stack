@@ -194,10 +194,10 @@ Will implement / choose:
 - Consolidate local scorecard history and canonical feedback artifacts if later waves need one storage truth.
 
 ## References
-- `remaining Release 1 owner specs`
-- `remaining Release 1 status and closure specs`
-- `docs/product/spec/release-1-control-metrics-and-gates.md`
-- `docs/product/spec/release-1-state-machine-specs.md`
+- `active runtime contract/profile specs`
+- `active runtime status and closure specs`
+- current runtime contract profile
+- current runtime contract profile
 - `docs/product/spec/host-agent-layer-status-matrix.md`
 - `crates/vida/src/agent_feedback_surface.rs`
 - `crates/vida/src/release1_contracts.rs`

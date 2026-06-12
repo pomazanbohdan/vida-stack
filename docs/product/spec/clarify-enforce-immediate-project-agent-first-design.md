@@ -265,8 +265,8 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `remaining Release 1 owner specs`
-  - `docs/product/spec/release-1-capability-matrix.md`
+  - `active runtime contract/profile specs`
+  - current runtime contract profile
 - Related protocols
   - `docs/process/project-orchestrator-operating-protocol.md`
   - `docs/process/project-packet-and-lane-runtime-capsule.md`

@@ -113,9 +113,9 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
-- `docs/product/spec/release-1-operator-surface-contract.md`
-- `docs/product/spec/release-1-error-and-exception-taxonomy.md`
-- `docs/product/spec/release-1-runtime-enum-and-code-contracts.md`
+- current runtime contract profile
+- current runtime contract profile
+- current runtime contract profile
 
 -----
 artifact_path: product/spec/lane-supersede-and-shared-truth-envelope-design

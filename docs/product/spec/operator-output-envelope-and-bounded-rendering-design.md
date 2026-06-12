@@ -161,7 +161,7 @@ Will implement / choose:
 - Add `--limit` to task list for bounded custom windows.
 
 ## References
-- `docs/product/spec/release-1-operator-surface-contract.md`
+- current runtime contract profile
 - `docs/process/documentation-tooling-map.md`
 - `docs/framework/templates/feature-design-document.template.md`
 

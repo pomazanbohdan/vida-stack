@@ -31,19 +31,15 @@ Companion rule:
    - runtime readiness gate law used by the project
 9. [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md)
    - role, carrier, profile, and flow model
-10. [release-1-capability-matrix.md](release-1-capability-matrix.md)
-    - Release 1 capability matrix
-11. [release-1-closure-contract.md](release-1-closure-contract.md)
-    - Release 1 closure and completion contract
-12. [release-build-packaging-law.md](release-build-packaging-law.md)
+10. [release-build-packaging-law.md](release-build-packaging-law.md)
     - release build and packaging ownership law
-13. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
+11. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
     - TaskFlow/runtime binding model
-14. [compiled-autonomous-delivery-runtime-architecture.md](compiled-autonomous-delivery-runtime-architecture.md)
+12. [compiled-autonomous-delivery-runtime-architecture.md](compiled-autonomous-delivery-runtime-architecture.md)
     - compiled autonomous delivery runtime architecture
-15. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
+13. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
     - bootstrap carrier and project activator model
-16. [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md)
+14. [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md)
     - DocFlow and documentation operator-command map
 
 ## Detailed Catalog Companions
@@ -60,7 +56,7 @@ Companion rule:
 ## Routing Pointers
 
 1. Documentation ownership, naming, and inventory questions route to [project-documentation-law.md](project-documentation-law.md), [project-document-naming-law.md](project-document-naming-law.md), [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md), and [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md).
-2. Runtime readiness, runtime layering, and operator-surface questions route to [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md), [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md), and the Release 1 contract family.
+2. Runtime readiness, runtime layering, and operator-surface questions route to [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md), [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md), and the active runtime contract/profile specs.
 3. Role, carrier, skill, profile, lane, and flow questions route to [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md) and [docs/process/agent-extensions/README.md](../../process/agent-extensions/README.md).
 4. Detailed artifact lookup routes to [current-spec-catalog.md](current-spec-catalog.md).
 

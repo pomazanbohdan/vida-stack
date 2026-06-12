@@ -12,12 +12,12 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Current Context
 - Existing system overview
-  - `docs/product/spec/release-1-closure-contract.md` already requires explicit, receipt-backed closure admission.
-  - `docs/product/spec/release-1-canonical-artifact-schemas.md` already defines the minimal `closure_admission_record` schema.
+  - current runtime contract profile already requires explicit, receipt-backed closure admission.
+  - current runtime contract profile already defines the minimal `closure_admission_record` schema.
   - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md` already narrows how admissible final snapshots are selected for operator surfaces.
 - Key components and relationships
-  - `release-1-closure-contract.md` defines what Release-1 closure must prove.
-  - `release-1-canonical-artifact-schemas.md` defines the machine-readable record shapes.
+  - current runtime contract profile defines what Release-1 closure must prove.
+  - current runtime contract profile defines the machine-readable record shapes.
   - `runtime_consumption_state.rs`, `status_surface.rs`, `doctor_surface.rs`, and `release1_contracts.rs` are the current runtime owner surfaces that interpret closure-admission evidence.
 - Current pain point or gap
   - The canon names the required evidence families, but it does not yet provide one compact table that binds evidence class, canonical source artifact, minimum acceptable signal, and fail-closed blocker semantics in one place.
@@ -46,7 +46,7 @@ Use this template for one bounded feature/change design before implementation.
 - Must identify the canonical artifact or receipt family for each required evidence class.
 - Must state the minimum acceptable signal for each evidence class.
 - Must state the fail-closed blocker when an evidence class is absent, stale, or contradictory.
-- Must keep `release-1-closure-contract.md`, `release-1-canonical-artifact-schemas.md`, and runtime-consumption/operator evidence semantics aligned.
+- Must keep current runtime contract profile, current runtime contract profile, and runtime-consumption/operator evidence semantics aligned.
 - Must provide a bounded specification target that future runtime packets can cite directly.
 
 ### Non-Functional Requirements
@@ -105,18 +105,18 @@ Will implement / choose:
 
 | Evidence class | Canonical source artifact | Minimum acceptable signal | Main consuming surfaces | Fail-closed blocker when absent or contradictory |
 | --- | --- | --- | --- | --- |
-| Closure decision record | `closure_admission_record` from `release-1-canonical-artifact-schemas.md` | `closure_decision=closed`, named `decision_owner`, `decision_at`, and non-empty `evidence_bundle_refs` | `release1_contracts.rs`, final closure checks, future closure summaries | no explicit closure admission verdict or verdict not backed by bundle refs |
+| Closure decision record | `closure_admission_record` from current runtime contract profile | `closure_decision=closed`, named `decision_owner`, `decision_at`, and non-empty `evidence_bundle_refs` | `release1_contracts.rs`, final closure checks, future closure summaries | no explicit closure admission verdict or verdict not backed by bundle refs |
 | Runtime-consumption final snapshot | canonical admissible `final-*` runtime-consumption snapshot | supported closure or release admission payload present and selected as the newest admissible final snapshot | `runtime_consumption_state.rs`, `status_surface.rs`, `doctor_surface.rs` | operator surfaces report incomplete or stale release-admission evidence |
-| DocFlow readiness and proof receipts | readiness/proof receipts required by `release-1-closure-contract.md` | explicit green-enough readiness/proof receipts for the claimed closure scope | `taskflow consume final`, closure gating, seam proof review | seam proof relies only on protocol binding or prose without DocFlow receipts |
+| DocFlow readiness and proof receipts | readiness/proof receipts required by current runtime contract profile | explicit green-enough readiness/proof receipts for the claimed closure scope | `taskflow consume final`, closure gating, seam proof review | seam proof relies only on protocol binding or prose without DocFlow receipts |
 | Lane execution and handoff receipts | `lane_execution_receipt` plus bounded delegated execution receipts | every closure-relevant lane has receipt-backed execution evidence; activation view alone is insufficient | run-graph reconciliation, closure gating, delegated audit chain | closure path depends on activation-only or non-executing delegated artifacts |
 | Replay/checkpoint lineage artifacts | replay/checkpoint lineage artifacts required by the closure contract | recovery or rollback claims point to explicit lineage artifacts, not latest summaries only | recovery validation, closure admission, doctor/status blocker projection | recovery closure claimed without replay/checkpoint lineage |
-| Risk acceptance artifacts | bounded risk-acceptance artifact matching `release-1-closure-contract.md` | any open non-terminal gap is explicitly bounded, owned, and still lawful for supported scope | closure readiness review, operator blockers, release decision | open gap exists but no valid bounded risk acceptance artifact explains it |
+| Risk acceptance artifacts | bounded risk-acceptance artifact matching current runtime contract profile | any open non-terminal gap is explicitly bounded, owned, and still lawful for supported scope | closure readiness review, operator blockers, release decision | open gap exists but no valid bounded risk acceptance artifact explains it |
 | Evidence bundle linkage | closure bundle refs across plan, seam, capability, proof, control, and artifact-schema surfaces | referenced artifacts resolve to the active canonical docs/artifacts for the same release scope | final closure review, conformance review, future self-diagnostic summaries | closure claim cannot be reconstructed from canonical artifacts alone |
 
 ### Core Components
 - Main components
-  - `docs/product/spec/release-1-closure-contract.md`
-  - `docs/product/spec/release-1-canonical-artifact-schemas.md`
+  - current runtime contract profile
+  - current runtime contract profile
   - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
   - `crates/vida/src/{runtime_consumption_state,status_surface,doctor_surface,release1_contracts}.rs`
 - Key interfaces
@@ -144,18 +144,18 @@ Will implement / choose:
   - `taskflow` produces and reconciles the closure-facing evidence families.
   - `status` and `doctor` surface blockers when required rows are missing or contradictory.
 - Cross-document / cross-protocol dependencies
-  - `release-1-closure-contract.md`
-  - `release-1-canonical-artifact-schemas.md`
-  - `release-1-conformance-matrix.md`
+  - current runtime contract profile
+  - current runtime contract profile
+  - current runtime contract profile
   - `fix-release-admission-evidence-detection-artifac-design.md`
 
 ### Bounded File Set
 - `docs/product/spec/closure-admission-evidence-table-design.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
-- `docs/product/spec/release-1-closure-contract.md`
-- `docs/product/spec/release-1-canonical-artifact-schemas.md`
-- `docs/product/spec/release-1-conformance-matrix.md`
+- current runtime contract profile
+- current runtime contract profile
+- current runtime contract profile
 - `crates/vida/src/runtime_consumption_state.rs`
 - `crates/vida/src/status_surface.rs`
 - `crates/vida/src/doctor_surface.rs`
@@ -229,9 +229,9 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/release-1-closure-contract.md`
-  - `docs/product/spec/release-1-canonical-artifact-schemas.md`
-  - `docs/product/spec/release-1-conformance-matrix.md`
+  - current runtime contract profile
+  - current runtime contract profile
+  - current runtime contract profile
   - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
 - Related protocols
   - none beyond the active Release-1 closure canon

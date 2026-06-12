@@ -147,7 +147,7 @@ Will implement / choose:
 - Cross-document / cross-protocol dependencies
   - `AGENTS.sidecar.md` project working rules
   - `docs/product/spec/current-spec-map.md`
-  - `docs/product/spec/release-1-proof-scenario-catalog.md`
+  - current runtime contract profile
   - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
 
 ### Bounded File Set
@@ -239,7 +239,7 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/release-1-proof-scenario-catalog.md`
+  - current runtime contract profile
   - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
   - `docs/product/spec/current-spec-map.md`
 - Related protocols

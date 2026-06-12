@@ -50,12 +50,12 @@ Use this document as the tracked spec-pack design packet for the Release-1 retri
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
-  - `remaining Release 1 owner specs`
-  - `docs/product/spec/release-1-capability-matrix.md`
-  - `remaining Release 1 status and closure specs`
-  - `docs/product/spec/release-1-decision-tables.md`
-  - `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
-  - `docs/product/spec/release-1-canonical-artifact-schemas.md`
+  - `active runtime contract/profile specs`
+  - current runtime contract profile
+  - `active runtime status and closure specs`
+  - current runtime contract profile
+  - current runtime contract profile
+  - current runtime contract profile
 - Runtime families affected:
   - `taskflow`
 - Config / receipts / runtime surfaces affected:
@@ -186,12 +186,12 @@ Will implement / choose:
 - Rich memory CRUD/operator tooling can follow after the bounded governance contract closes.
 
 ## References
-- `remaining Release 1 owner specs`
-- `docs/product/spec/release-1-capability-matrix.md`
-- `remaining Release 1 status and closure specs`
-- `docs/product/spec/release-1-decision-tables.md`
-- `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
-- `docs/product/spec/release-1-canonical-artifact-schemas.md`
+- `active runtime contract/profile specs`
+- current runtime contract profile
+- `active runtime status and closure specs`
+- current runtime contract profile
+- current runtime contract profile
+- current runtime contract profile
 
 -----
 artifact_path: product/spec/bounded-release-retrieval-identity-memory-govern-design

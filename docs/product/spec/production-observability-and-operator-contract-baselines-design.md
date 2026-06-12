@@ -165,9 +165,9 @@ Will implement / choose:
 - Add stronger SLO registries and incident analytics in later runtime-completion waves.
 
 ## References
-- `docs/product/spec/release-1-canonical-artifact-schemas.md`
-- `remaining Release 1 owner specs`
-- `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
+- current runtime contract profile
+- `active runtime contract/profile specs`
+- current runtime contract profile
 - `crates/vida/src/release1_contracts.rs`
 
 -----

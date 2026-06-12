@@ -24,8 +24,8 @@ Run this checklist in order:
    - `vida/root-map.md`
 4. read `docs/process/project-orchestrator-startup-bundle.md`
 5. read active product control maps needed by the current work line:
-   - `remaining Release 1 owner specs` when Release 1 is active
-   - `docs/product/spec/release-1-seam-map.md` when closure, handoff, or hardening is active
+   - `active runtime contract/profile specs` when Release 1 is active
+   - current runtime contract profile when closure, handoff, or hardening is active
 
 ## Runtime Preconditions
 

@@ -244,7 +244,7 @@ Will implement / choose:
   - `docs/product/spec/external-cli-carrier-hardening-design.md`
   - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
   - `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-  - `docs/product/spec/release-1-operator-surface-contract.md`
+  - current runtime contract profile
 
 ### Bounded File Set
 - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`

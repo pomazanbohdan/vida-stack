@@ -259,9 +259,9 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/release-1-capability-matrix.md`
-  - `docs/product/spec/release-1-conformance-matrix.md`
-  - `docs/product/spec/release-1-seam-map.md`
+  - current runtime contract profile
+  - current runtime contract profile
+  - current runtime contract profile
   - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
 - Related protocols
   - none beyond current project ops/process canon

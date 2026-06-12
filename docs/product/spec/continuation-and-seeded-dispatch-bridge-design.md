@@ -234,7 +234,7 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-- `docs/product/spec/release-1-operator-surface-contract.md`
+- current runtime contract profile
 - `AGENTS.md`
 
 -----

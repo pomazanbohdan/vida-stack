@@ -70,8 +70,8 @@ Release-1 rule:
 
 Boundary note:
 
-1. the practical Release-1 working entrypoint and detailed execution program are owned by `remaining Release 1 owner specs`,
-2. the active seam and closure hardening surface is `docs/product/spec/release-1-seam-map.md`,
+1. the practical Release-1 working entrypoint and detailed execution program are owned by `active runtime contract/profile specs`,
+2. the active seam and closure hardening surface is current runtime contract profile,
 3. the version ladder remains owned by `VERSION-PLAN.md`.
 
 ### Release 2: Host-Project Integration
@@ -96,7 +96,7 @@ Boundary rule:
 The detailed operator-surface inventory and end-to-end operating journey are owned by:
 
 1. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
-2. `remaining Release 1 owner specs`
+2. `active runtime contract/profile specs`
 
 Anchor rule:
 
@@ -446,13 +446,13 @@ This architecture aligns with:
 
 1. `docs/product/spec/external-architecture-baseline.md`
 2. `docs/product/spec/current-spec-map.md`
-3. the active Release-1 program surfaces mapped in `remaining Release 1 owner specs`
+3. the active Release-1 program surfaces mapped in `active runtime contract/profile specs`
 
 Interpretation rule:
 
 1. external baselines inform this architecture but do not replace VIDA-owned product law,
 2. the current spec map remains the full registry,
-3. `remaining Release 1 owner specs` remains the bounded Release-1 working entrypoint for the current release line.
+3. `active runtime contract/profile specs` remains the bounded Release-1 working entrypoint for the current release line.
 
 ## 14. Current Rule
 

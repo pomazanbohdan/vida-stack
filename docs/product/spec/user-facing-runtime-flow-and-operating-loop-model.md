@@ -342,7 +342,7 @@ This model refines and connects:
 
 1. `compiled-autonomous-delivery-runtime-architecture.md`
    - top-level runtime/product direction
-2. `remaining Release 1 owner specs`
+2. `active runtime contract/profile specs`
    - active Release-1 execution sequencing
 3. `embedded-runtime-and-editable-projection-model.md`
    - embedded-versus-projection runtime split

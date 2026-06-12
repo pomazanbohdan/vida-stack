@@ -42,7 +42,7 @@ Status: `execution-preparation`
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
   - `docs/product/spec/split-oversized-runtime-modules-ownership-execut-design.md`
-  - `docs/product/spec/release-1-ownership-to-code-map.md`
+  - current runtime contract profile
   - `current TaskFlow runtime owner specs`
   - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
   - `docs/product/spec/specification-lane-scope-hardening-design.md`
@@ -215,7 +215,7 @@ Execution order:
 - Consider adding automated module-size and owner-boundary diagnostics after the manual split is proven.
 
 ## References
-- `docs/product/spec/release-1-ownership-to-code-map.md`
+- current runtime contract profile
 - `current TaskFlow runtime owner specs`
 - `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
 - `docs/product/spec/specification-lane-scope-hardening-design.md`

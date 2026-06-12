@@ -15,7 +15,7 @@ Product/spec inputs:
 3. `docs/product/spec/project-activation-and-configurator-model.md`
 4. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 5. `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
-6. `remaining Release 1 owner specs`
+6. `active runtime contract/profile specs`
 7. `docs/product/spec/compiled-runtime-bundle-contract.md`
 8. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
 

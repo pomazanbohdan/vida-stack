@@ -217,8 +217,8 @@ Will implement / choose:
 
 ## References
 - Related specs
-  - `docs/product/spec/release-1-operator-surface-contract.md`
-  - `docs/product/spec/release-1-conformance-matrix.md`
+  - current runtime contract profile
+  - current runtime contract profile
 - Related protocols
   - none beyond release-1 operator contract canon
 - Related ADRs

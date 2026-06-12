@@ -70,8 +70,8 @@ Will implement / choose:
 
 ## References
 - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
-- `docs/product/spec/release-1-operator-surface-contract.md`
-- `docs/product/spec/release-1-runtime-enum-and-code-contracts.md`
+- current runtime contract profile
+- current runtime contract profile
 
 -----
 artifact_path: product/spec/implementation-backend-admissibility-and-selection-truth-design
