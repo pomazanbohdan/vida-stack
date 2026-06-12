@@ -1941,10 +1941,30 @@ fn recovery_surface_contract_with_owned_scope(
                     && matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
                     && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
             });
+    let downstream_ready_handoff_resolves_open_cycle = summary.delegation_gate.delegated_cycle_open
+        && summary.delegation_gate.blocker_code.as_deref() == Some("open_delegated_cycle")
+        && summary.recovery_ready
+        && summary.resume_status == "ready"
+        && summary.resume_target.starts_with("dispatch.")
+        && projection_truth
+            .dispatch_receipt
+            .as_ref()
+            .is_some_and(|receipt| {
+                receipt
+                    .downstream_dispatch_target
+                    .as_deref()
+                    .is_some_and(|target| target == summary.active_node)
+                    && receipt
+                        .downstream_dispatch_status
+                        .as_deref()
+                        .is_some_and(|status| status == "packet_ready")
+                    && receipt.downstream_dispatch_blockers.is_empty()
+            });
     let mut blocker_codes = if projection_resolves_open_cycle
         || active_exception_takeover_resolves_open_cycle
         || ready_handoff_resolves_open_cycle
         || projection_ready_handoff_resolves_open_cycle
+        || downstream_ready_handoff_resolves_open_cycle
     {
         Vec::new()
     } else {
@@ -1956,7 +1976,9 @@ fn recovery_surface_contract_with_owned_scope(
             .map(|value| vec![value.to_string()])
             .unwrap_or_default()
     };
-    if !active_exception_takeover_resolves_open_cycle {
+    if !active_exception_takeover_resolves_open_cycle
+        && !downstream_ready_handoff_resolves_open_cycle
+    {
         blocker_codes.extend(projection_truth_blocker_codes_for_ready_handoff(
             &summary.active_node,
             &summary.resume_status,

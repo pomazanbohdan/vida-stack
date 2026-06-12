@@ -278,13 +278,75 @@ fn emit_consume_continue_state_access_blocker(
 }
 
 pub(crate) fn emit_consume_continue_resume_error(error: &str, surface_name: &str, as_json: bool) {
-    let payload =
+    let mut payload =
         crate::taskflow_operator_diagnostics::consume_resume_error_payload(error, surface_name);
+    let source_run_id = payload
+        .get("run_id")
+        .cloned()
+        .or_else(|| payload.pointer("/artifact_refs/run_id").cloned())
+        .unwrap_or(serde_json::Value::Null);
+    let source_dispatch_packet_path = payload
+        .pointer("/artifact_refs/dispatch_packet_path")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    if let Some(object) = payload.as_object_mut() {
+        object
+            .entry("source_run_id")
+            .or_insert_with(|| source_run_id.clone());
+        object
+            .entry("source_dispatch_packet_path")
+            .or_insert(source_dispatch_packet_path);
+        if !object.contains_key("dispatch_receipt") {
+            if let Some(dispatch_receipt) = diagnostic_dispatch_receipt_from_packet_path(
+                object
+                    .get("source_dispatch_packet_path")
+                    .and_then(serde_json::Value::as_str),
+            ) {
+                object.insert("dispatch_receipt".to_string(), dispatch_receipt);
+            }
+        }
+    }
     if as_json {
         crate::print_json_pretty(&payload);
     } else {
         crate::taskflow_consume_resume_output::print_toon(surface_name, &payload);
     }
+}
+
+fn diagnostic_dispatch_receipt_from_packet_path(
+    packet_path: Option<&str>,
+) -> Option<serde_json::Value> {
+    let packet_path = packet_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let packet_path = canonical_runtime_packet_identity(packet_path).ok()?;
+    let packet_body = std::fs::read_to_string(packet_path).ok()?;
+    let packet = serde_json::from_str::<serde_json::Value>(&packet_body).ok()?;
+    let dispatch_target = packet
+        .get("downstream_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            packet
+                .get("dispatch_target")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let dispatch_status = packet
+        .get("downstream_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            packet
+                .get("dispatch_status")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("blocked");
+    Some(serde_json::json!({
+        "dispatch_target": dispatch_target,
+        "dispatch_status": dispatch_status,
+    }))
 }
 
 fn consume_advance_success_payload(
@@ -614,7 +676,12 @@ fn stale_missing_task_run_graph_resume_error(
     dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceipt>,
 ) -> String {
     let dispatch_packet_evidence = dispatch_receipt
-        .and_then(|receipt| receipt.dispatch_packet_path.as_deref())
+        .and_then(|receipt| {
+            receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .or(receipt.dispatch_packet_path.as_deref())
+        })
         .filter(|path| !path.trim().is_empty())
         .map(|path| format!("; dispatch packet `{path}`"))
         .unwrap_or_default();
@@ -626,6 +693,87 @@ fn stale_missing_task_run_graph_resume_error(
         crate::shell_quote(&status.run_id),
         crate::shell_quote(&status.run_id)
     )
+}
+
+async fn sync_stale_missing_ready_downstream_status(
+    store: &super::StateStore,
+    status: &crate::state_store::RunGraphStatus,
+    dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceipt>,
+) -> Result<(), String> {
+    let Some(packet_path) = dispatch_receipt
+        .and_then(|receipt| receipt.downstream_dispatch_packet_path.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let packet_path = canonical_runtime_packet_identity(packet_path)?;
+    let packet_body = std::fs::read_to_string(&packet_path)
+        .map_err(|error| format!("Failed to read ready downstream dispatch packet: {error}"))?;
+    let packet = serde_json::from_str::<serde_json::Value>(&packet_body)
+        .map_err(|error| format!("Failed to parse ready downstream dispatch packet: {error}"))?;
+    let packet_path_string = packet_path.to_string_lossy();
+    if dispatch_receipt.is_some_and(|receipt| {
+        !downstream_packet_candidate_has_receipt_backed_ready_evidence(
+            &packet,
+            packet_path_string.as_ref(),
+            &receipt.run_id,
+        )
+    }) {
+        return Ok(());
+    }
+    if packet
+        .get("downstream_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| canonical_resume_dispatch_status(Some(value)))
+        != Some("packet_ready")
+    {
+        return Ok(());
+    }
+    let Some(target) = packet
+        .get("downstream_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let target_node = target.to_string();
+    let target_resume = target_node.replace('-', "_");
+    let ready_status = crate::state_store::RunGraphStatus {
+        run_id: status.run_id.clone(),
+        task_id: status.task_id.clone(),
+        task_class: status.task_class.clone(),
+        active_node: target_node,
+        next_node: Some(target_resume.clone()),
+        status: "ready".to_string(),
+        route_task_class: status.route_task_class.clone(),
+        selected_backend: status.selected_backend.clone(),
+        lane_id: format!("{target_resume}_lane"),
+        lifecycle_stage: format!("{target_resume}_active"),
+        policy_gate: status.policy_gate.clone(),
+        handoff_state: format!("awaiting_{target_resume}"),
+        context_state: "sealed".to_string(),
+        checkpoint_kind: status.checkpoint_kind.clone(),
+        resume_target: format!("dispatch.{target_resume}_lane"),
+        recovery_ready: true,
+    };
+    store
+        .record_run_graph_status(&ready_status)
+        .await
+        .map_err(|error| {
+            format!("Failed to record ready downstream stale-missing run-graph status: {error}")
+        })?;
+    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+        store,
+        &ready_status,
+        "stale_missing_ready_downstream_packet",
+    )
+    .await
+    .map_err(|error| {
+        format!("Failed to synchronize ready downstream stale-missing binding: {error}")
+    })?;
+    Ok(())
 }
 
 fn materialization_only_blocked_resume_error(
@@ -655,11 +803,26 @@ async fn latest_stale_run_graph_task_authority_error(
             format!("Failed to read latest run-graph status before consume continue: {error}")
         })?
     };
-    let Some(status) = current_session_status.or(global_status) else {
-        return Ok(None);
-    };
-    let verdict =
-        crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(store, &status)
+    let terminal_task_active_status = store
+        .latest_terminal_task_active_run_graph_status()
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read latest terminal task-active run-graph status before consume continue: {error}"
+            )
+        })?;
+    for status in [
+        current_session_status,
+        global_status,
+        terminal_task_active_status,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let verdict =
+            crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                store, &status,
+            )
             .await
             .map_err(|error| {
                 format!(
@@ -667,31 +830,37 @@ async fn latest_stale_run_graph_task_authority_error(
                     status.run_id
                 )
             })?;
-    if !verdict.task_missing() {
-        return Ok(None);
+        if !verdict.task_missing() {
+            continue;
+        }
+        if resume_from_persisted_final_snapshot(store, &status.run_id)? {
+            continue;
+        }
+        let dispatch_receipt = store
+            .run_graph_dispatch_receipt(&status.run_id)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to read latest run-graph dispatch receipt for stale missing-task run `{}`: {error}",
+                    status.run_id
+                )
+            })?;
+        if dispatch_receipt
+            .as_ref()
+            .is_some_and(receipt_or_packet_has_ready_downstream_packet)
+        {
+            sync_stale_missing_ready_downstream_status(store, &status, dispatch_receipt.as_ref())
+                .await?;
+            continue;
+        }
+        sync_stale_missing_ready_downstream_status(store, &status, dispatch_receipt.as_ref())
+            .await?;
+        return Ok(Some(stale_missing_task_run_graph_resume_error(
+            &status,
+            dispatch_receipt.as_ref(),
+        )));
     }
-    if resume_from_persisted_final_snapshot(store, &status.run_id)? {
-        return Ok(None);
-    }
-    let dispatch_receipt = store
-        .run_graph_dispatch_receipt(&status.run_id)
-        .await
-        .map_err(|error| {
-            format!(
-                "Failed to read latest run-graph dispatch receipt for stale missing-task run `{}`: {error}",
-                status.run_id
-            )
-        })?;
-    if dispatch_receipt
-        .as_ref()
-        .is_some_and(receipt_or_packet_has_ready_downstream_packet)
-    {
-        return Ok(None);
-    }
-    Ok(Some(stale_missing_task_run_graph_resume_error(
-        &status,
-        dispatch_receipt.as_ref(),
-    )))
+    Ok(None)
 }
 
 async fn receipt_backed_terminal_closure_resume(
@@ -4317,7 +4486,16 @@ async fn default_resume_has_authoritative_ready_downstream_packet(
     else {
         return Ok(false);
     };
-    Ok(receipt_has_ready_downstream_packet(&receipt))
+    let has_ready_downstream_packet = receipt_has_ready_downstream_packet(&receipt);
+    if has_ready_downstream_packet {
+        let status = store.run_graph_status(&run_id).await.map_err(|error| {
+            format!(
+                "Failed to read run-graph status for ready downstream packet `{run_id}`: {error}"
+            )
+        })?;
+        sync_stale_missing_ready_downstream_status(store, &status, Some(&receipt)).await?;
+    }
+    Ok(has_ready_downstream_packet)
 }
 
 fn downstream_result_packet_path(result: &serde_json::Value) -> Option<String> {
@@ -6761,6 +6939,16 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     }
                 }
                 if dispatch_receipt.dispatch_status == "executed" {
+                    if let Err(error) = sync_run_graph_after_resumed_execution(
+                        &store,
+                        &run_graph_bootstrap,
+                        &dispatch_receipt,
+                    )
+                    .await
+                    {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
                     return match emit_runtime_consumption_resume_json(
                         &store,
                         surface_name,

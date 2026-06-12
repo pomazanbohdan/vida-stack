@@ -4532,6 +4532,141 @@ Next-task selection rule:
   binding `wave-0-runtime-tests` or `wave-0-baseline-proof` according to current
   TaskFlow evidence.
 
+## 2026-06-12 - Wave 0 boot-smoke residual projection cluster
+
+Closed task:
+- `todo-fix-wave0-boot-smoke-residual-20260612`.
+- Parent/wave: `wave-0-runtime-tests`.
+- Invariant: stale terminal task-active run graph evidence, missing-task
+  authority, downstream ready dispatch packets, approval latest, status,
+  doctor, consume-resume, and recovery surfaces must converge instead of
+  hiding the actionable run behind filtered latest-status projections.
+
+Proof bundle:
+- `cargo +1.95.0 fmt --package vida`: pass.
+- Four exact serial boot-smoke residual tests: pass.
+- Exact doctor projection regressions
+  `status_and_doctor_quarantine_missing_task_orphan_run_graph`,
+  `projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge`, and
+  `doctor_json_blocks_on_unsupported_architecture_reserved_boundary_contract`:
+  pass.
+- `cargo +1.95.0 test -p vida --test doctor_surface_contract_smoke --
+  --nocapture --test-threads=1`: pass.
+- `cargo +1.95.0 test -p vida --test task_smoke -- --nocapture
+  --test-threads=1`: pass.
+- `cargo +1.95.0 fmt --all -- --check`: pass.
+- `git diff --check`: pass.
+- `vida task validate-graph --json`: pass.
+- `vida doctor --json`: readable after lock contention cleared; still reports
+  existing `run_graph_latest_snapshot_inconsistent`, which is runtime state
+  evidence outside this code patch and not the tested residual invariant.
+
+Agent classification:
+- Read-only verifier agent `019ebd26-eb39-72d0-beb8-ea38b49ed30e`: accepted.
+  It found current-scope blockers in doctor terminal missing-task parity and
+  cached status terminal-closure parity; both were fixed before closure.
+- Read-only duplicate-search agent `019ebd27-7110-7f31-ba20-a164dac239cf`:
+  accepted as follow-up evidence. Broader surfaces are tracked in
+  `todo-audit-terminal-task-active-projection-parity-surfaces-20260612`.
+- Completed handle cleanup: pass, both agent handles were closed after
+  classification.
+
+Executor / validator:
+- Executor: root orchestrator under active exception takeover, 8/10.
+- Validator: exact public smoke tests plus serial doctor/task suites and
+  independent verifier sweep, 9/10.
+- Telemetry: tokens=`not_exposed_by_host`; tool_calls=`approximate`;
+  agent_count=`exact: 2`; rework_count=`exact: 2` for verifier-discovered
+  parity gaps and a compile-time path type mismatch.
+
+Post-Task Self-Analysis:
+- Worked: focused exact tests isolated the residual cluster, then the verifier
+  sweep prevented premature closure on partial surface parity.
+- Waste: first full `task_smoke` was run without `--test-threads=1`, producing
+  three false-red state/env leakage failures; future suite runs for this file
+  must default to serial unless the test itself proves parallel safety.
+- Risk: broader terminal task-active parity may still be duplicated in
+  run-graph latest, graph summary, task next-lawful, agent status, closeout,
+  runtime bundle, and post-commit diagnostics; follow-up task created.
+- Next change: commit and push the scoped residual fix and scorecard, then
+  continue Wave 0 rather than selecting an unrelated epic.
+- Docs update: yes, this scorecard records the closure and dynamic criterion.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass,
+   `todo-fix-wave0-boot-smoke-residual-20260612`.
+2. Wave/parent closure distance: pass, Wave 0 runtime-test residual closed;
+   broader parity follow-up remains open.
+3. Scope and non-goals stable: pass, code confined to approval/status/doctor,
+   consume-resume, and recovery run-graph surfaces.
+4. Dirty worktree handled: pass, staged scope remains bounded to runtime source
+   files plus this evaluation log.
+5. Executor cheapest capable: partial, root was needed because current runtime
+   projection was the defect surface; verifier agents were read-only.
+6. Validator matched risk: pass, public smoke and serial contract suites ran.
+7. Prompt packet shape: pass for read-only agents; both prompts named scope,
+   non-mutation, evidence, and expected output.
+8. Agent handles: pass, both completed agents closed.
+9. Token/tool/step telemetry: pass, approximate telemetry recorded above.
+10. Avoidable commands: partial, non-serial `task_smoke` was avoidable.
+11. Proof strength: pass for the closed residual cluster.
+12. Public/release proof: partial, release install is deferred until wave/slice
+   close; debug/integration proof is current.
+13. Debug build: pass, exact and serial cargo tests compiled and passed.
+14. TaskFlow state: pass, task close succeeded and graph validation passed.
+15. Staging by invariant: pass, no unrelated hunk intentionally included.
+16. Publication authorization: active, user requested commit/push continuation.
+17. Evaluation docs: pass after this entry.
+18. Parent/wave metrics: pass, epic progress after close is 104/231 closed
+   under `meta-refactor-runtime-boundaries`.
+19. New defects/follow-ups: pass,
+   `todo-audit-terminal-task-active-projection-parity-surfaces-20260612`.
+20. Next routing rule: pass, continue Wave 0; do not jump to the user-requested
+   host-bridge completion epic until this active epic reaches its closure gate.
+
+Implementation follow-up tasks:
+- `todo-audit-terminal-task-active-projection-parity-surfaces-20260612`:
+  created from duplicate-search evidence for out-of-scope terminal task-active
+  parity surfaces.
+- `no_task_reason`: `run_graph_latest_snapshot_inconsistent` observed by live
+  `vida doctor --json` is pre-existing runtime state evidence for current Wave
+  0 recovery/closure work, not a new source-code defect from this patch.
+
+Final dynamic criteria STOP point:
+Evidence source: full `task_smoke` without serial execution produced
+environment/state leakage failures that exact serial reruns proved false.
+1. Serial-suite criterion: when a Rust integration test file has known global
+   env/state assumptions, broad proof must use `--test-threads=1`; a parallel
+   false-red must be classified as suite isolation evidence before patching
+   production code.
+
+Dynamic criteria registry:
+| criterion_id | owner | expected_evidence | task_ref | promotion_decision | duplicate_of |
+| --- | --- | --- | --- | --- | --- |
+| dynamic-2026-06-12-serial-suite-proof-for-stateful-task-smoke | root-orchestrator | exact serial reruns plus broad serial suite pass | `todo-fix-wave0-boot-smoke-residual-20260612` | local-runtime-rule | none |
+
+Meta-analysis remediation:
+- Code remediation: doctor and cached status now include terminal task-active
+  parity for the same stale/missing evidence class; ready downstream sync now
+  requires receipt-backed packet parity before synthesizing a ready status.
+- Test remediation: exact residual tests, exact doctor projection tests, and
+  serial public suites were rerun after the verifier-discovered gaps.
+- TaskFlow remediation: broader duplicate surfaces were not hidden in the log;
+  they were converted into
+  `todo-audit-terminal-task-active-projection-parity-surfaces-20260612`.
+
+PR / issue processing:
+- open_prs: deferred until epic closure; left_open_reason=active user
+  instruction says to process PRs at the end of the epic, not during this
+  bounded task.
+- processed_issues: not_applicable for this bounded task; broader runtime
+  parity residuals are tracked in TaskFlow first.
+
+Next-task selection rule:
+- Commit and push this scoped residual fix and scorecard, then re-run
+  orchestrator binding to choose between remaining Wave 0 children.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc

@@ -77,6 +77,13 @@ fn is_unsupported_architecture_reserved_workflow_boundary(value: &str) -> bool {
     )
 }
 
+fn run_graph_status_has_unsupported_architecture_reserved_workflow_boundary(
+    status: &crate::state_store::RunGraphStatus,
+) -> bool {
+    is_unsupported_architecture_reserved_workflow_boundary(&status.policy_gate)
+        || is_unsupported_architecture_reserved_workflow_boundary(&status.context_state)
+}
+
 fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> bool {
     let payload = match std::fs::read_to_string(snapshot_path) {
         Ok(payload) => payload,
@@ -266,6 +273,7 @@ fn doctor_operator_blocker_codes(
     root_session_write_guard: &serde_json::Value,
     latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     latest_run_graph_gate: Option<&crate::state_store::RunGraphGateSummary>,
+    latest_terminal_task_active_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_run_graph_snapshot_inconsistent: bool,
     latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
@@ -363,16 +371,24 @@ fn doctor_operator_blocker_codes(
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string());
     }
-    if latest_run_graph_gate.as_ref().is_some_and(|summary| {
-        is_unsupported_architecture_reserved_workflow_boundary(&summary.policy_gate)
-            || is_unsupported_architecture_reserved_workflow_boundary(&summary.context_state)
-    }) {
+    let unsupported_architecture_reserved_workflow_boundary =
+        latest_run_graph_gate.as_ref().is_some_and(|summary| {
+            is_unsupported_architecture_reserved_workflow_boundary(&summary.policy_gate)
+                || is_unsupported_architecture_reserved_workflow_boundary(&summary.context_state)
+        }) || latest_terminal_task_active_run_graph_status
+            .as_ref()
+            .is_some_and(|status| {
+                run_graph_status_has_unsupported_architecture_reserved_workflow_boundary(status)
+            });
+    if unsupported_architecture_reserved_workflow_boundary {
         operator_blocker_codes.push(
             blocker_code_str(BlockerCode::UnsupportedArchitectureReservedWorkflowBoundary)
                 .to_string(),
         );
     }
-    if latest_run_graph_gate.is_some() && latest_run_graph_dispatch_receipt.is_none() {
+    if (latest_run_graph_gate.is_some() || unsupported_architecture_reserved_workflow_boundary)
+        && latest_run_graph_dispatch_receipt.is_none()
+    {
         operator_blocker_codes
             .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string());
     }
@@ -896,8 +912,8 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             .map(|receipt| receipt.run_id.as_str()),
                     );
             let (
-                latest_run_graph_task_missing,
-                latest_run_graph_task_closed,
+                mut latest_run_graph_task_missing,
+                mut latest_run_graph_task_closed,
                 latest_run_graph_task_stale,
             ) = match latest_run_graph_status.as_ref() {
                 Some(status) => match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
@@ -913,6 +929,32 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 },
                 None => (false, false, false),
             };
+            let terminal_task_active_run_graph_task_stale =
+                match latest_terminal_task_active_run_graph_status.as_ref() {
+                    Some(terminal)
+                        if latest_run_graph_status
+                            .as_ref()
+                            .map(|status| status.run_id == terminal.run_id)
+                            .unwrap_or(true) =>
+                    {
+                        match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, terminal).await {
+                            Ok(verdict) => {
+                                latest_run_graph_task_missing |= verdict.task_missing();
+                                latest_run_graph_task_closed |= verdict.task_closed_stale_run();
+                                verdict.task_missing() || verdict.task_closed_stale_run()
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "latest terminal task-active run graph task authority: failed ({error})"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                    _ => false,
+                };
+            let latest_run_graph_task_stale =
+                latest_run_graph_task_stale || terminal_task_active_run_graph_task_stale;
             let latest_run_graph_approval_receipt = match latest_run_graph_status.as_ref() {
                 Some(status) => match store
                     .run_graph_approval_delegation_receipt(&status.run_id)
@@ -1123,6 +1165,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     &root_session_write_guard,
                     latest_run_graph_recovery.as_ref(),
                     latest_run_graph_gate.as_ref(),
+                    latest_terminal_task_active_run_graph_status.as_ref(),
                     latest_run_graph_dispatch_receipt.as_ref(),
                     latest_run_graph_snapshot_inconsistent,
                     current_session_run_graph_dispatch_receipt_checkpoint_leakage,
@@ -2077,6 +2120,7 @@ mod tests {
             &runtime_consumption,
             None,
             &root_session_write_guard,
+            None,
             None,
             None,
             None,
