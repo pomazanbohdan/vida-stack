@@ -61,6 +61,9 @@ scan_ignored:
     glob: "docs/process/new.md"
     reason: tracked DocFlow boot-smoke artifact is not an active process documentation entrypoint
   - scope: relative_path
+    glob: "tests/fixtures/agent-evaluation-log/**"
+    reason: agent evaluation log linter fixtures intentionally include missing footer and changelog cases
+  - scope: relative_path
     glob: "LEAN-CTX.md"
     reason: generated lean-ctx instruction mirror is owned by the local context tool, not DocFlow footer metadata
   - scope: relative_path
