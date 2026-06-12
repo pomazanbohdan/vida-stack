@@ -883,6 +883,66 @@ Dynamic criteria final step:
    remediation are recorded, always add at least one session-derived dynamic
    criterion or explicitly justify why none was created.
 
+## 2026-06-12 - wave-0-runtime-status-doctor-output-parity
+
+Scope:
+- Task: `wave-0-runtime-tests-boot-smoke-failure-classification`
+- Parent: `wave-0-runtime-tests`
+- Commit: `82cdbd53d`
+- Files: `crates/vida/src/status_surface.rs`,
+  `crates/vida/src/status_surface_text_report.rs`,
+  `crates/vida/src/status_surface_json_report.rs`,
+  `crates/vida/src/doctor_surface.rs`
+- Proof:
+  - `cargo +1.95.0 fmt --all -- --check`
+  - `cargo +1.95.0 test -p vida --test boot_smoke status_surface -- --nocapture`
+  - `cargo +1.95.0 test -p vida --test boot_smoke status_json_exposes_host_agent_summary -- --nocapture --exact`
+  - `cargo +1.95.0 test -p vida --test boot_smoke status_and_doctor_text_surfaces_report_non_empty_latest_flow_state -- --nocapture --exact`
+
+Observed model results:
+- Executor: local orchestrator, 8/10. No worker was needed because the failing
+  output shape mapped directly to existing human renderers in status and doctor.
+- Validator: focused status/doctor smoke tests, 8/10. The next lock-remediation
+  test still fails separately and is not included in this slice.
+
+Post-Task Self-Analysis:
+- Worked: manual reproduction exposed quoted TOON strings in default plain text.
+- Waste: first status fix did not include doctor, requiring a second exact test.
+- Risk: compact JSON and plain output were coupled in the status path.
+- Next change: when output mode changes, test one plain text case and one explicit
+  JSON case before commit.
+- Docs update: no owner-doc rule change; this is covered by the dynamic
+  plain-vs-json output criterion below.
+- workflow_score_10: 8/10.
+
+Twenty criteria outcome:
+1. Active bounded unit explicit: pass, status/doctor output parity slice.
+2. Wave/parent closure distance: pass, multiple boot_smoke failures removed.
+3. Scope and non-goals stable: pass, output rendering only.
+4. Dirty worktree handled: pass, unrelated dirty files remained unstaged.
+5. Executor cheapest capable: pass, local exact edit.
+6. Validator matched risk: pass, focused smoke tests.
+7. Agent prompts: not applicable.
+8. Agent handles: pass, no active agent remained.
+9. Telemetry: partial, host token counts unavailable.
+10. Avoidable commands: pass, manual reproduction was useful and bounded.
+11. Proof strength: pass for status/doctor output parity.
+12. Public-surface proof: pass, plain and JSON status surfaces covered.
+13. Debug build: pass, cargo tests rebuilt `vida`.
+14. TaskFlow state: pass, classification task remains active with notes.
+15. Staging by invariant: pass, four output files staged.
+16. Publication authorization: pass, commit pushed to `main`.
+17. Evaluation docs: pass, this scorecard.
+18. Parent/wave metrics: unchanged until the classification/repair task closes.
+19. New defects/follow-ups: lock-remediation fail-fast remains next cluster.
+20. Next routing rule: output changes must separate plain human, compact default,
+    and explicit JSON contracts.
+
+Dynamic criteria final step:
+1. Plain-vs-json output criterion: for every command-output repair, explicitly
+   name whether the task owns plain human text, default compact output, explicit
+   JSON, or all three; run at least one proof per owned mode.
+
 -----
 artifact_path: process/agent-model-evaluation-log
 artifact_type: process_doc
