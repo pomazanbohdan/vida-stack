@@ -88,6 +88,9 @@ Companion rule:
 7. [meta-refactor-runtime-boundary-execution-plan.md](meta-refactor-runtime-boundary-execution-plan.md)
    Config families: staged VIDA runtime boundary refactor tracking, Wave 0 proof status, delegated agent scorecards, release-install wave closure gates, and TaskFlow/PR processing evidence for the active META epic
    Registered path: `docs/product/spec/meta-refactor-runtime-boundary-execution-plan.md`
+7a. [meta-refactor-runtime-boundary-source-plan.md](meta-refactor-runtime-boundary-source-plan.md)
+   Config families: full META runtime boundary refactor source plan, wave definitions, function move register, acceptance checklist, and suggested commit sequence mirrored into TaskFlow
+   Registered path: `docs/product/spec/meta-refactor-runtime-boundary-source-plan.md`
 8. [codex-host-agent-boundary-and-cli-bridge-design.md](codex-host-agent-boundary-and-cli-bridge-design.md)
    Config families: `vida.config.yaml -> host_environment.systems.codex`, `agent_system.subagents.internal_subagents`, `agent_system.subagents.codex_cli_exec`, TaskFlow host-bridge dispatch requests
    Registered path: `docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md`

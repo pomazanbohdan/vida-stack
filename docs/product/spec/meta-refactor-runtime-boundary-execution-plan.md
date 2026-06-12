@@ -7,14 +7,14 @@ Status: `IO-001, DOC-001, HB-001 through HB-005, ROUTE-001, and ROUTE-002 harden
 This document tracks the Wave 0 baseline for the META runtime boundary refactor in `vida-stack`.
 It is the working companion to the source plan:
 
-- `vida_meta_refactor_execution_plan.md`
+- [`meta-refactor-runtime-boundary-source-plan.md`](meta-refactor-runtime-boundary-source-plan.md)
 
 Source-of-truth scope for this tracker:
 
 - Wave 0 section `## 4. Wave 0 — Baseline freeze and defect fixtures`
 - the broader execution plan context needed to keep the baseline artifact implementation-ready
 
-This file is intentionally a tracker, not a rewrite of the plan. The wave definitions below are copied from the source plan where practical so developers can execute against the same wording and proof targets.
+This file is intentionally a tracker, not a rewrite of the plan. The full source plan is tracked beside this file so developers can execute against the same wording and proof targets without relying on root-level scratch artifacts.
 
 ## Current Baseline State
 
