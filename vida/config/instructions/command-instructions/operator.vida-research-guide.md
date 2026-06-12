@@ -133,7 +133,7 @@ Coverage rule:
 
 ## Mandatory Artifacts
 
-1. Topic research file: `docs/research/<topic>.md` (single living document per topic).
+1. Topic research file: `docs/product/research/<topic>-survey.md` (single living document per topic).
 2. Feature list: `docs/feature-checklist.md`.
 3. Decisions list: `docs/decisions.md` (only approved business-level decisions).
 4. When the topic spans multiple related questions, a thematic consolidated artifact must exist or be created in the lawful research home.
@@ -145,7 +145,7 @@ Before collecting new data:
 1. Search existing research files for the topic.
 2. If matching topic exists: continue same file, do not duplicate.
 3. If adjacent topics exist: reuse references and state deltas.
-4. If nothing exists: create `docs/research/<topic>.md`.
+4. If nothing exists: create `docs/product/research/<topic>-survey.md`.
 
 Continuation rule:
 
@@ -208,7 +208,7 @@ When approved actionable items are added to feature checklist, preserve existing
 
 ## Output Template (Research File)
 
-Each `docs/research/<topic>.md` iteration should contain:
+Each `docs/product/research/<topic>-survey.md` iteration should contain:
 
 1. `Iteration` (date, scope, objective).
 2. `Sources`.

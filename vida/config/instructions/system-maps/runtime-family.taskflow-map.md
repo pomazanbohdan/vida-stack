@@ -20,7 +20,6 @@ Purpose: define the bounded `taskflow` runtime family surface used for tracked e
 4. governing framework protocols:
    - `runtime-instructions/work.taskflow-protocol`
    - `system-maps/migration.runtime-transition-map`
-   - `system-maps/migration.script-runtime-architecture-map`
    - `runtime-instructions/lane.agent-handoff-context-protocol`
    - `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`
    - `runtime-instructions/work.verification-lane-protocol`
@@ -45,31 +44,29 @@ Read this map when:
 
 1. Transitional runtime behavior and execution law:
    - continue to `runtime-instructions/work.taskflow-protocol`
-2. Runtime transition from legacy helpers:
+2. Runtime transition from legacy helpers and script/runtime boundary:
    - continue to `system-maps/migration.runtime-transition-map`
-3. Script/runtime architecture boundary:
-   - continue to `system-maps/migration.script-runtime-architecture-map`
-4. Concrete runtime commands and workspace details:
+3. Concrete runtime commands and workspace details:
    - continue to `vida taskflow help`
    - default human-facing output is `TOON`; use `--json` only for explicit machine/debug output
    - concrete `run-graph`, `registry`, and `context` command syntax lives there rather than in peer `core` owner protocols
-5. Handoff/context shaping:
+4. Handoff/context shaping:
    - continue to `runtime-instructions/lane.agent-handoff-context-protocol`
-6. Checkpoint, replay, or recovery:
+5. Checkpoint, replay, or recovery:
    - continue to `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`
-7. Verification/proving lane behavior:
+6. Verification/proving lane behavior:
    - continue to `runtime-instructions/work.verification-lane-protocol`
-8. Runtime kernel bundle composition:
+7. Runtime kernel bundle composition:
    - continue to `runtime-instructions/runtime.runtime-kernel-bundle-protocol`
-9. Verification merge/admissibility:
+8. Verification merge/admissibility:
    - continue to `runtime-instructions/work.verification-merge-protocol`
-10. Runtime observability, traces, and proving:
+9. Runtime observability, traces, and proving:
    - continue to `system-maps/observability.map`
-11. Final runtime-consumption activation and closure handoff:
+10. Final runtime-consumption activation and closure handoff:
    - continue to `runtime-instructions/runtime.direct-runtime-consumption-protocol`
    - continue to `system-maps/runtime-family.docflow-map`
    - taskflow remains the runtime-consumption owner, but it must activate the bounded `DocFlow` surface to resolve canonical inventory, readiness, bundle, and documentation-consumption evidence before final trust/closure is considered satisfied.
-12. Project role/skill/profile/flow extension activation:
+11. Project role/skill/profile/flow extension activation:
    - continue to `runtime-instructions/work.project-agent-extension-protocol`
 
 ## Boundary Rule

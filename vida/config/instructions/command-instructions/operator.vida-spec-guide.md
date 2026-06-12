@@ -39,7 +39,7 @@ Handoff boundary:
 ## Mandatory Inputs (Read Before Any Spec Output)
 
 1. `docs/feature-checklist.md`
-2. `docs/research/*` relevant files
+2. `docs/product/research/*` relevant files
 3. `docs/specs/README.md` + related `docs/specs/**`
 4. `docs/decisions.md`
 5. `spec-contract-protocol.md`

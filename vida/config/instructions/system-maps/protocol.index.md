@@ -24,8 +24,7 @@ Registry boundary:
 | Orchestrator runtime boot capsule (compact projection) | `system-maps/bootstrap.orchestrator-runtime-capsule` | `AGENTS.md`, `agent-definitions/entry.orchestrator-entry`, `system-maps/bootstrap.orchestrator-boot-flow` |
 | Template discovery map | `system-maps/template.map` | `docs/framework/templates/vida.config.yaml.template`, `prompt-templates/worker.packet-templates`, `prompt-templates/cheap-worker.prompt-pack-reference`, `agent-definitions/model.agent-definitions-contract` |
 | Command layer matrix | `command-instructions/routing.command-layer-protocol` | `command-instructions/operator.command-catalog-index`, `command-instructions/execution.implement-execution-protocol`, `command-instructions/execution.bug-fix-protocol`, `command-instructions/routing.use-case-packs-protocol`, `runtime-instructions/work.taskflow-protocol`, `instruction-contracts/lane.worker-dispatch-protocol`, `system-maps/tooling.search-guide` |
-| Runtime script architecture | `system-maps/migration.script-runtime-architecture-map` | `system-maps/framework.map`, `system-maps/runtime-family.taskflow-map` |
-| Runtime transition map | `system-maps/migration.runtime-transition-map` | `system-maps/migration.script-runtime-architecture-map`, `system-maps/runtime-family.taskflow-map`, `runtime-instructions/work.taskflow-protocol` |
+| Runtime transition and script/runtime boundary map | `system-maps/migration.runtime-transition-map` | `system-maps/runtime-family.taskflow-map`, `runtime-instructions/work.taskflow-protocol` |
 | Tooling and search guide | `system-maps/tooling.search-guide` | `command-instructions/operator.runtime-pipeline-guide`, `AGENTS.md` |
 | Framework history evidence | `sidecar changelog plus Git history` | `system-maps/protocol.index` |
 | Instruction activation and decomposition | `instruction-contracts/bridge.instruction-activation-protocol` | `AGENTS.md`, `agent-definitions/entry.orchestrator-entry`, `system-maps/protocol.index` |

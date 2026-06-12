@@ -20,7 +20,7 @@ Default rule:
 Suggested homes:
 
 - `docs/product/spec/<feature>-design.md` for committed feature/change designs
-- `docs/research/<topic>.md` for exploratory research before design closure
+- `docs/product/research/<topic>-survey.md` for exploratory research before design closure
 
 Active design docs:
 
