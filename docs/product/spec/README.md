@@ -24,11 +24,6 @@ Suggested homes:
 
 Active design docs:
 
-- `docs/product/spec/clarify-spec-scope-design.md`
-- `docs/product/spec/feature-specification-design.md`
-- `docs/product/spec/flappy-bird-design.md`
-- `docs/product/spec/api-constraints-specification-make-bounded-patch-design.md`
-- `docs/product/spec/flappy-bird-flappy-bird-every-mechanism-design.md`
 - `docs/product/spec/spec-proof-auto-flow-design.md`
 - `docs/product/spec/release-1-shared-operator-envelope-closure-design.md`
 - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
@@ -63,16 +58,12 @@ Active design docs:
 - `docs/product/spec/add-runtime-web-restart-current-repo-design.md`
 - `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
 - `docs/product/spec/continue-post-main-carveout-ready-view-design.md`
-- `docs/product/spec/exactly-one-bounded-producing-change-bug-design.md`
-- `docs/product/spec/exactly-one-bounded-small-patch-bug-design.md`
 - `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
 - `docs/product/spec/fix-continuation-reconciliation-resumed-executed-design.md`
 - `docs/product/spec/github-114-design-document-deterministic-post-design.md`
 - `docs/product/spec/mempalace-against-vida-specs-project-design-design.md`
 - `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
 - `docs/product/spec/specify-config-driven-host-system-inventory-design.md`
-- `docs/product/spec/update-agents-sidecar-only-add-project-design.md`
-- `docs/product/spec/update-only-agents-sidecar-add-project-design.md`
 - `docs/product/spec/find-remove-proven-dead-rust-run-design.md`
 - `docs/product/spec/design-fast-high-signal-pre-commit-design.md`
 
