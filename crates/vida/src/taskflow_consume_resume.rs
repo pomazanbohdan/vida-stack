@@ -2130,7 +2130,19 @@ fn resume_inputs_from_latest_final_snapshot(
     .map_err(|error| {
         format!("Failed to decode dispatch_receipt from latest final runtime-consumption snapshot: {error}")
     })?;
+    if dispatch_receipt.run_id != run_id {
+        return Err(format!(
+            "Latest final runtime-consumption snapshot source_run_id `{run_id}` does not match dispatch receipt run_id `{}`",
+            dispatch_receipt.run_id
+        ));
+    }
     let packet = read_dispatch_packet(packet_path)?;
+    validate_receipt_packet_pair(
+        &dispatch_receipt,
+        &packet,
+        packet_path,
+        "latest final runtime-consumption snapshot source packet",
+    )?;
     let role_selection = match serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(
         payload_json
             .get("role_selection")
@@ -7344,8 +7356,8 @@ mod tests {
         recover_missing_first_dispatch_receipt, resolve_default_resume_run_id,
         resolve_runtime_consumption_resume_inputs,
         resolve_runtime_consumption_resume_inputs_for_run_id, resume_from_persisted_final_snapshot,
-        resume_packet_ready_blocker_parity_error, retry_backend_for_dispatch_receipt,
-        runtime_consumption_resume_blocker_code,
+        resume_inputs_from_latest_final_snapshot, resume_packet_ready_blocker_parity_error,
+        retry_backend_for_dispatch_receipt, runtime_consumption_resume_blocker_code,
         runtime_consumption_snapshot_has_failure_control_evidence,
         same_packet_internal_timeout_retry_ready, should_refresh_resumed_downstream_preview,
         sync_run_graph_after_retry_artifact, validate_receipt_packet_pair,
@@ -12413,6 +12425,124 @@ agent_system:
         assert!(
             !resume_from_persisted_final_snapshot(&store, "run-final-snapshot")
                 .expect("runtime consumption summary")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resume_inputs_from_latest_final_snapshot_rejects_spoofed_receipt_run_id() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-final-snapshot-spoofed-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = tokio::runtime::Runtime::new()
+            .expect("create runtime")
+            .block_on(StateStore::open(root.clone()))
+            .expect("open store");
+
+        let snapshot_dir = store.root().join("runtime-consumption");
+        fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
+        let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-02Z.json");
+        let forged_packet_path = snapshot_dir
+            .join("dispatch-packets")
+            .join("forged-packet.json");
+        let operator_contracts = crate::build_operator_contracts_envelope(
+            "pass",
+            Vec::new(),
+            Vec::new(),
+            serde_json::json!({
+                "runtime_consumption_latest_snapshot_path": snapshot_path.display().to_string(),
+                "latest_run_graph_dispatch_receipt_id": "requested-stale-run",
+                "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+                "consume_final_surface": "vida taskflow consume final",
+            }),
+        );
+        let failure_control_evidence = build_failure_control_evidence(
+            "requested-stale-run",
+            &snapshot_path.display().to_string(),
+        );
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": operator_contracts["status"].clone(),
+                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                "next_actions": operator_contracts["next_actions"].clone(),
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "source_run_id": "requested-stale-run",
+                "source_dispatch_packet_path": forged_packet_path.display().to_string(),
+                "release_admission": {},
+                "operator_contracts": operator_contracts,
+                "payload": {
+                    "dispatch_receipt": {
+                        "run_id": "forged-receipt-run",
+                        "dispatch_target": "implementation",
+                        "dispatch_status": "routed",
+                        "lane_status": "lane_ready",
+                        "supersedes_receipt_id": null,
+                        "exception_path_receipt_id": null,
+                        "dispatch_kind": "agent_lane",
+                        "dispatch_surface": "vida agent-init",
+                        "dispatch_command": null,
+                        "dispatch_packet_path": forged_packet_path.display().to_string(),
+                        "dispatch_result_path": null,
+                        "blocker_code": null,
+                        "downstream_dispatch_target": null,
+                        "downstream_dispatch_command": null,
+                        "downstream_dispatch_note": null,
+                        "downstream_dispatch_ready": false,
+                        "downstream_dispatch_blockers": [],
+                        "downstream_dispatch_packet_path": null,
+                        "downstream_dispatch_status": null,
+                        "downstream_dispatch_result_path": null,
+                        "downstream_dispatch_trace_path": null,
+                        "downstream_dispatch_executed_count": 0,
+                        "downstream_dispatch_active_target": null,
+                        "downstream_dispatch_last_target": null,
+                        "activation_agent_type": "middle",
+                        "activation_runtime_role": "worker",
+                        "selected_backend": "middle",
+                        "recorded_at": "2026-03-18T00:00:02Z"
+                    },
+                    "role_selection": {
+                        "selection_mode": "fixed",
+                        "fallback_role": "worker",
+                        "request": "forged resume",
+                        "selected_role": "attacker_selected_role",
+                        "conversational_mode": null,
+                        "single_task_only": false,
+                        "tracked_flow_entry": null,
+                        "allow_freeform_chat": false,
+                        "confidence": "high",
+                        "matched_terms": [],
+                        "compiled_bundle": null,
+                        "execution_plan": {},
+                        "reason": "test forged role selection"
+                    },
+                    "release_admission": {},
+                    "failure_control_evidence": failure_control_evidence.clone()
+                },
+                "failure_control_evidence": failure_control_evidence
+            })
+            .to_string(),
+        )
+        .expect("write final snapshot");
+
+        let error = resume_inputs_from_latest_final_snapshot(&store, "requested-stale-run")
+            .expect_err("spoofed final snapshot receipt must fail closed");
+        assert!(
+            error.contains("source_run_id `requested-stale-run` does not match dispatch receipt run_id `forged-receipt-run`"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !forged_packet_path.exists(),
+            "spoofed receipt should be rejected before reading attacker-controlled packet"
         );
 
         let _ = fs::remove_dir_all(&root);
