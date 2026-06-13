@@ -10,7 +10,10 @@ use runtime_path_policy::{
 use serde::Serialize;
 use taskflow_host_bridge::{
     host_bridge_artifact_has_retryable_completion_blocker,
+    host_bridge_completion_authorized_request_artifacts,
+    host_bridge_completion_requires_implementation_artifacts,
     host_bridge_completion_retryable_blocker, host_bridge_completion_verdict,
+    host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_status_after_completion,
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
@@ -3060,7 +3063,7 @@ fn host_bridge_implementation_artifacts(
                 return HostBridgeImplementationArtifacts {
                     artifacts: host_bridge_completion_authorized_request_artifacts(
                         request_artifacts,
-                        authority,
+                        &authority.task_updated_at,
                         completion_receipt_id,
                     ),
                     source: "host_bridge_completion_receipt",
@@ -3088,59 +3091,6 @@ fn host_bridge_implementation_artifacts(
         artifact_refs: Vec::new(),
         blocker_codes: Vec::new(),
     }
-}
-
-fn host_bridge_request_artifacts_are_bare_completion_candidates(
-    request_artifacts: &serde_json::Value,
-) -> bool {
-    let Some(rows) = request_artifacts.as_array() else {
-        return false;
-    };
-    !rows.is_empty()
-        && rows.iter().all(|artifact| {
-            let Some(object) = artifact.as_object() else {
-                return false;
-            };
-            let receipt_backed = object
-                .get("receipt_backed")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            let freshness = object
-                .get("freshness")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            let consolidation_receipt_id = object
-                .get("consolidation_receipt_id")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            !receipt_backed && freshness.is_none() && consolidation_receipt_id.is_none()
-        })
-}
-
-fn host_bridge_completion_authorized_request_artifacts(
-    request_artifacts: &serde_json::Value,
-    authority: &HostBridgeImplementationAuthority,
-    completion_receipt_id: &str,
-) -> serde_json::Value {
-    let mut artifacts = request_artifacts.clone();
-    if let Some(rows) = artifacts.as_array_mut() {
-        for artifact in rows.iter_mut() {
-            if let Some(object) = artifact.as_object_mut() {
-                object.insert(
-                    "freshness".to_string(),
-                    serde_json::json!(authority.task_updated_at),
-                );
-                object.insert("receipt_backed".to_string(), serde_json::json!(true));
-                object.insert(
-                    "consolidation_receipt_id".to_string(),
-                    serde_json::json!(completion_receipt_id),
-                );
-            }
-        }
-    }
-    artifacts
 }
 
 fn host_bridge_request_artifacts_are_taskflow_authorized(
@@ -3248,10 +3198,6 @@ fn host_bridge_scope_validation_blocker_codes(validation: &serde_json::Value) ->
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .collect::<Vec<_>>()
-}
-
-fn host_bridge_completion_requires_implementation_artifacts(dispatch_target: &str) -> bool {
-    matches!(dispatch_target.trim(), "implementer" | "implementation")
 }
 
 fn host_bridge_completion_summary_blocker_code(

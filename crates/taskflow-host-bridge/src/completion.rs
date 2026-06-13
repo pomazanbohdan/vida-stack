@@ -179,6 +179,63 @@ pub fn host_bridge_request_status_after_completion(blocker_codes: &[String]) -> 
     }
 }
 
+#[must_use]
+pub fn host_bridge_completion_requires_implementation_artifacts(dispatch_target: &str) -> bool {
+    matches!(dispatch_target.trim(), "implementer" | "implementation")
+}
+
+#[must_use]
+pub fn host_bridge_request_artifacts_are_bare_completion_candidates(
+    request_artifacts: &Value,
+) -> bool {
+    let Some(rows) = request_artifacts.as_array() else {
+        return false;
+    };
+    !rows.is_empty()
+        && rows.iter().all(|artifact| {
+            let Some(object) = artifact.as_object() else {
+                return false;
+            };
+            let receipt_backed = object
+                .get("receipt_backed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let freshness = object
+                .get("freshness")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let consolidation_receipt_id = object
+                .get("consolidation_receipt_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            !receipt_backed && freshness.is_none() && consolidation_receipt_id.is_none()
+        })
+}
+
+#[must_use]
+pub fn host_bridge_completion_authorized_request_artifacts(
+    request_artifacts: &Value,
+    task_updated_at: &str,
+    completion_receipt_id: &str,
+) -> Value {
+    let mut artifacts = request_artifacts.clone();
+    if let Some(rows) = artifacts.as_array_mut() {
+        for artifact in rows.iter_mut() {
+            if let Some(object) = artifact.as_object_mut() {
+                object.insert("freshness".to_string(), serde_json::json!(task_updated_at));
+                object.insert("receipt_backed".to_string(), serde_json::json!(true));
+                object.insert(
+                    "consolidation_receipt_id".to_string(),
+                    serde_json::json!(completion_receipt_id),
+                );
+            }
+        }
+    }
+    artifacts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +337,74 @@ mod tests {
         assert!(host_bridge_completed_result_execution_state_is_admissible(
             "executed"
         ));
+    }
+
+    #[test]
+    fn implementation_artifacts_are_required_only_for_implementation_targets() {
+        assert!(host_bridge_completion_requires_implementation_artifacts(
+            "implementer"
+        ));
+        assert!(host_bridge_completion_requires_implementation_artifacts(
+            " implementation "
+        ));
+        assert!(!host_bridge_completion_requires_implementation_artifacts(
+            "verification"
+        ));
+    }
+
+    #[test]
+    fn bare_request_artifacts_are_completion_authorizable() {
+        let request_artifacts = serde_json::json!([
+            {
+                "artifact_path": ".vida/data/state/artifacts/impl.json",
+                "changed_files": ["crates/vida/src/lane_surface.rs"]
+            }
+        ]);
+
+        assert!(host_bridge_request_artifacts_are_bare_completion_candidates(&request_artifacts));
+
+        let authorized = host_bridge_completion_authorized_request_artifacts(
+            &request_artifacts,
+            "2026-06-13T19:00:00Z",
+            "receipt-123",
+        );
+        let row = authorized
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(Value::as_object)
+            .expect("authorized artifact row");
+
+        assert_eq!(
+            row.get("freshness").and_then(Value::as_str),
+            Some("2026-06-13T19:00:00Z")
+        );
+        assert_eq!(
+            row.get("consolidation_receipt_id").and_then(Value::as_str),
+            Some("receipt-123")
+        );
+        assert_eq!(
+            row.get("receipt_backed").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn stamped_request_artifacts_are_not_bare_completion_candidates() {
+        let request_artifacts = serde_json::json!([
+            {
+                "artifact_path": ".vida/data/state/artifacts/impl.json",
+                "receipt_backed": true
+            }
+        ]);
+
+        assert!(!host_bridge_request_artifacts_are_bare_completion_candidates(&request_artifacts));
+        assert!(
+            !host_bridge_request_artifacts_are_bare_completion_candidates(&serde_json::json!([]))
+        );
+        assert!(
+            !host_bridge_request_artifacts_are_bare_completion_candidates(
+                &serde_json::json!({"artifact_path": "impl.json"})
+            )
+        );
     }
 }

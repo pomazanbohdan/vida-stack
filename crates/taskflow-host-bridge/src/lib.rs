@@ -24,8 +24,12 @@ pub use completion::{
     host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
+    host_bridge_completion_authorized_request_artifacts,
+    host_bridge_completion_requires_implementation_artifacts,
     host_bridge_completion_retryable_blocker, host_bridge_completion_verdict,
-    host_bridge_existing_request_status_is_admissible, host_bridge_request_status_after_completion,
+    host_bridge_existing_request_status_is_admissible,
+    host_bridge_request_artifacts_are_bare_completion_candidates,
+    host_bridge_request_status_after_completion,
     host_bridge_request_status_allows_parent_completion,
     materialize_host_bridge_completion_evidence, normalize_host_bridge_provenance_for_completion,
 };
