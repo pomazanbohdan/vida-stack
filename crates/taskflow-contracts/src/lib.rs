@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use taskflow_core::{IssueType, TaskId, TaskStatus, Timestamp};
 
+pub mod artifact_kind;
+
+pub use artifact_kind::{ArtifactKind, UnknownArtifactKind};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {
     pub id: TaskId,
