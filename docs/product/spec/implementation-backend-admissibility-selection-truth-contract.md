@@ -57,7 +57,7 @@ Will implement / choose:
 - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 - `crates/vida/src/runtime_dispatch_state.rs`
 - `crates/vida/src/state_store_run_graph_summary.rs`
 

@@ -58,7 +58,7 @@ Status: canonical
 - Project docs / specs affected:
   - `docs/product/spec/taskflow-happy-path-test-catalog-contract.md`
   - `docs/product/spec/taskflow-happy-path-test-catalog-contract.changelog.jsonl`
-  - `docs/product/spec/README.md`
+  - `docs/product/spec/index.md`
   - `docs/product/spec/current-spec-map.md`
 - Framework protocols affected:
   - none directly in this packet
@@ -152,7 +152,7 @@ Will implement / choose:
 - This specification packet:
   - `docs/product/spec/taskflow-happy-path-test-catalog-contract.md`
   - `docs/product/spec/taskflow-happy-path-test-catalog-contract.changelog.jsonl`
-  - `docs/product/spec/README.md`
+  - `docs/product/spec/index.md`
   - `docs/product/spec/current-spec-map.md`
 - Future implementation packets may touch:
   - `crates/vida/tests/task_smoke.rs`

@@ -7,7 +7,7 @@ Purpose: provide the project-owned bridge/export map for custom roles, custom sk
 ## Boundary Rule
 
 1. framework role law remains owned by `vida/config/instructions/**`,
-2. this directory is a source/export/import bridge surface named by `vida.config.yaml`,
+2. this directory is a source/export bridge surface named by `vida.config.yaml`,
 3. `.vida/project/agent-extensions/**` is a runtime projection/materialization family when present, not a competing active authority,
 4. project extensions must be activated through `vida.config.yaml`,
 5. project extensions must pass framework validation before `taskflow` may use them.
@@ -27,7 +27,7 @@ Purpose: provide the project-owned bridge/export map for custom roles, custom sk
 
 ## Active Runtime Projection Family
 
-1. `.vida/project/agent-extensions/README.md`
+1. `.vida/project/agent-extensions/index.md`
 2. `.vida/project/agent-extensions/roles.yaml`
 3. `.vida/project/agent-extensions/skills.yaml`
 4. `.vida/project/agent-extensions/profiles.yaml`
@@ -81,13 +81,13 @@ Project-local Codex skill note:
 5. do not hardcode vendor CLI behavior in flow records; use adapter projection fields and explicit process carriers instead.
 
 -----
-artifact_path: process/agent-extensions/readme
+artifact_path: process/agent-extensions/index
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
-source_path: docs/process/agent-extensions/README.md
-created_at: '2026-03-10T15:45:00+02:00'
-updated_at: 2026-06-04T03:53:58.4918667Z
-changelog_ref: README.changelog.jsonl
+source_path: docs/process/agent-extensions/index.md
+created_at: '2026-06-13T00:00:00+03:00'
+updated_at: 2026-06-13T00:00:00+03:00
+changelog_ref: index.changelog.jsonl

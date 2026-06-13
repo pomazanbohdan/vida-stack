@@ -134,7 +134,7 @@ Full functioning requires these bounded runtime/process slices:
 ## Proof Targets
 
 ```text
-vida docflow check --root . AGENTS.sidecar.md docs/process/team-development-and-orchestration-protocol.md docs/process/project-orchestrator-operating-protocol.md docs/product/spec/agent-mode-test-first-delivery-flow-model.md docs/product/spec/current-spec-map.md docs/product/spec/README.md
+vida docflow check --root . AGENTS.sidecar.md docs/process/team-development-and-orchestration-protocol.md docs/process/project-orchestrator-operating-protocol.md docs/product/spec/agent-mode-test-first-delivery-flow-model.md docs/product/spec/current-spec-map.md docs/product/spec/index.md
 ```
 
 -----

@@ -66,7 +66,7 @@ Status: canonical
   - `docs/product/spec/authoritative-state-lock-recovery-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
-  - `docs/product/spec/README.md`
+  - `docs/product/spec/index.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -162,7 +162,7 @@ Will implement / choose:
 - `docs/product/spec/authoritative-state-lock-recovery-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 - `crates/vida/src/state_store.rs`
 - `crates/vida/src/state_store_open.rs`
 - `crates/vida/src/runtime_dispatch_state.rs`
@@ -211,7 +211,7 @@ Will implement / choose:
   - `vida doctor --json`
   - `vida taskflow consume continue --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/authoritative-state-lock-recovery-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
+  - `vida docflow check --root . docs/product/spec/authoritative-state-lock-recovery-contract.md docs/product/spec/current-spec-map.md docs/product/spec/index.md active spec/catalog maps and Git history`
 
 ## Observability
 - Logging points

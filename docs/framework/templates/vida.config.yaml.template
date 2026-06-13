@@ -365,7 +365,7 @@ protocol_activation:
 
 agent_extensions:
   enabled: false
-  map_doc: .vida/project/agent-extensions/README.md
+  map_doc: .vida/project/agent-extensions/index.md
   registries:
     roles: .vida/project/agent-extensions/roles.yaml
     skills: .vida/project/agent-extensions/skills.yaml

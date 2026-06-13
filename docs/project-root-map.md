@@ -18,33 +18,35 @@ This map does not cover extracted secondary bundles by default.
    - current product/documentation index for the active project
 2. `docs/product/spec/current-spec-map.md`
    - short routing map for the current product spec canon
-3. `docs/product/spec/current-spec-catalog.md`
+3. `docs/product/spec/index.md`
+   - local product/spec entrypoint without duplicated catalog listings
+4. `docs/product/spec/current-spec-catalog.md`
    - detailed active product/spec artifact catalog
-4. `docs/process/README.md`
+5. `docs/process/index.md`
    - project process lane
-5. `docs/project-memory/README.md`
+6. `docs/project-memory/index.md`
    - project-memory lane
-6. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
+7. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
    - documentation/product alignment matrix
-7. `docs/product/spec/canonical-runtime-layer-matrix.md`
+8. `docs/product/spec/canonical-runtime-layer-matrix.md`
    - runtime capability layering matrix for the active project canon
-8. `docs/product/spec/repository-two-project-surface-model.md`
+9. `docs/product/spec/repository-two-project-surface-model.md`
    - active-project vs extracted-bundle boundary law
-9. `docs/process/documentation-tooling-map.md`
+10. `docs/process/documentation-tooling-map.md`
    - project-owned documentation tooling map
-10. `docs/process/agent-extensions/README.md`
+11. `docs/process/agent-extensions/index.md`
    - project-owned agent role/skill/profile/flow extension map
-11. `docs/process/github-issues-triage-guide.md`
+12. `docs/process/github-issues-triage-guide.md`
    - project-owned GitHub Issues triage, label taxonomy, and diagnostic publication guide
-12. `docs/process/command-timing-and-gate-optimization-protocol.md`
+13. `docs/process/command-timing-and-gate-optimization-protocol.md`
     - project-owned timing, slow-gate, script optimization, and operator-friction diagnostic protocol
-13. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
+14. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
     - project-owned VIDA runtime application of generic `Error Search / Bug Reasoning`
-14. `docs/product/spec/multi-agent-stage-ensemble-contract.md`
+15. `docs/product/spec/multi-agent-stage-ensemble-contract.md`
       - product/runtime capability contract for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
-15. `docs/process/vida-runtime-development-environment.md`
+16. `docs/process/vida-runtime-development-environment.md`
      - compact project-owned runbook for runtime development environment alignment, project-local skills, GitHub issue processing, and operator-efficiency follow-up
-16. `docs/process/runtime-defect-function-option-matrix-protocol.md`
+17. `docs/process/runtime-defect-function-option-matrix-protocol.md`
      - project-owned runtime defect matrix schema for command surfaces, CLI options, owning functions, output contracts, fixtures, and proof tests
 
 ## Activation Triggers
@@ -62,6 +64,7 @@ Do not use this map as the default route for extracted bundles unless the task e
 
 1. Product/spec questions:
    - continue to `docs/product/index.md`
+   - then to `docs/product/spec/index.md`
    - then to `docs/product/spec/current-spec-map.md`
 2. Product/spec detailed catalog lookup questions:
    - continue to `docs/product/spec/current-spec-catalog.md`
@@ -70,16 +73,16 @@ Do not use this map as the default route for extracted bundles unless the task e
 4. Runtime layering / runtime architecture / runtime readiness questions:
    - continue to `docs/product/spec/canonical-runtime-layer-matrix.md`
 5. Process/runbook questions for the active project:
-   - continue to `docs/process/README.md`
+   - continue to `docs/process/index.md`
 6. Project-memory questions:
-   - continue to `docs/project-memory/README.md`
+   - continue to `docs/project-memory/index.md`
 7. Extracted secondary bundle questions:
    - do not continue through active project docs by default
    - enter the named bundle directly under `projects/<name>/**`
 8. Documentation tooling / operator-command questions:
    - continue to `docs/process/documentation-tooling-map.md`
 9. Project agent-system extension questions:
-   - continue to `docs/process/agent-extensions/README.md`
+   - continue to `docs/process/agent-extensions/index.md`
 10. GitHub Issues triage / label / issue workflow questions:
    - continue to `docs/process/github-issues-triage-guide.md`
 11. Command timing / slow gate / script optimization questions:

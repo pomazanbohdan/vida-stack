@@ -121,7 +121,7 @@ Will implement / choose:
 
 ### Bounded File Set
 - `docs/product/spec/retrieval-identity-memory-governance-contract.md`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 - `crates/vida/src/release1_contracts.rs`
 - `crates/vida/src/runtime_consumption_state.rs`
 - `crates/vida/src/taskflow_runtime_bundle.rs`

@@ -84,7 +84,7 @@ Status: active product contract
   - `docs/product/spec/model-provider-price-catalog-lifecycle-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
-  - `docs/product/spec/README.md`
+  - `docs/product/spec/index.md`
   - `docs/product/spec/project-activation-and-configurator-model.md`
   - `docs/product/spec/status-families-and-query-surface-model.md`
   - `docs/product/spec/carrier-model-profile-selection-runtime-model.md`
@@ -407,7 +407,7 @@ Will implement / choose:
 - `docs/product/spec/model-provider-price-catalog-lifecycle-contract.changelog.jsonl`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 
 ## Fail-Closed Constraints
 - Forbidden fallback paths
@@ -454,8 +454,8 @@ Will implement / choose:
   - current evidence anchor: `vida agent-init --json --role business_analyst "<request>"`
   - future runtime check: price catalog status/query surface over active snapshot truth
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/model-provider-price-catalog-lifecycle-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
-  - `vida docflow finalize-edit docs/product/spec/model-provider-price-catalog-lifecycle-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md "record model/provider price catalog lifecycle design"`
+  - `vida docflow check --root . docs/product/spec/model-provider-price-catalog-lifecycle-contract.md docs/product/spec/current-spec-map.md docs/product/spec/index.md active spec/catalog maps and Git history`
+  - `vida docflow finalize-edit docs/product/spec/model-provider-price-catalog-lifecycle-contract.md docs/product/spec/current-spec-map.md docs/product/spec/index.md active spec/catalog maps and Git history "record model/provider price catalog lifecycle design"`
 
 ## Observability
 - Logging points

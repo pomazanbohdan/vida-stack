@@ -10,10 +10,11 @@ Rules:
 2. It must not redefine framework law owned by `vida/config/instructions/**`, `docs/product/spec/**`, or executable law under `vida/config/**`.
 3. If a process rule becomes stable product law, promote it into `docs/product/spec/**`.
 4. If a process rule needs executable enforcement, project it into runtime/config artifacts instead of leaving it as prose only.
+5. `README.md` is reserved for the repository root; process lane orientation lives in this `index.md`.
 
 Canonical entrypoints:
 
-1. `docs/process/README.md`
+1. `docs/process/index.md`
    - process lane root
 2. `docs/process/documentation-tooling-map.md`
    - project-owned documentation tooling and operator-command map
@@ -21,7 +22,7 @@ Canonical entrypoints:
    - proven local development, build, install, and launcher conditions for active `VIDA 1`
 4. `docs/process/agent-system.md`
    - current canonical process surface for host-system selection, carrier ownership, and agent-first execution posture
-5. `docs/process/agent-extensions/README.md`
+5. `docs/process/agent-extensions/index.md`
    - project-owned role/skill/profile/flow extension map
 6. `docs/process/codex-agent-configuration-guide.md`
    - project-owned guide for local OpenAI Codex multi-agent configuration and development-team mapping
@@ -64,27 +65,28 @@ Canonical entrypoints:
 25. `docs/process/github-pr-processing-protocol.md`
    - project-owned process for validating, merging or closing PRs, manually integrating useful stale fixes, deleting branches, and returning to `main`
 26. `docs/process/command-timing-and-gate-optimization-protocol.md`
-    - project-owned process for timing significant operations, diagnosing slow gates, and turning repeated command/script/CI latency into optimization work
+   - project-owned process for timing significant operations, diagnosing slow gates, and turning repeated command/script/CI latency into optimization work
 27. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-     - project-owned process overlay for applying generic `Error Search / Bug Reasoning` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
+   - project-owned process overlay for applying generic `Error Search / Bug Reasoning` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
 28. `docs/product/spec/multi-agent-stage-ensemble-contract.md`
-     - product/runtime capability contract for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
+   - product/runtime capability contract for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
 29. `docs/process/vida-runtime-development-environment.md`
-     - compact project-owned runbook for keeping runtime development skills, TaskFlow, DocFlow, GitHub issue processing, and operator-efficiency work aligned
+   - compact project-owned runbook for keeping runtime development skills, TaskFlow, DocFlow, GitHub issue processing, and operator-efficiency work aligned
 30. `docs/product/spec/feature-design-and-adr-model.md`
-    - product-law owner for the split between structured feature/change design documents and linked ADRs
+   - product-law owner for the split between structured feature/change design documents and linked ADRs
 31. `docs/framework/templates/feature-design-document.template.md`
-    - framework-owned reusable feature/change design template with stable sections and bounded variable fields
+   - framework-owned reusable feature/change design template with stable sections and bounded variable fields
 32. `docs/process/runtime-defect-function-option-matrix-protocol.md`
-     - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
+   - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
+
 -----
-artifact_path: process/readme
+artifact_path: process/index
 artifact_type: process_doc
 artifact_version: '1'
 artifact_revision: 2026-06-13
 schema_version: '1'
 status: canonical
-source_path: docs/process/README.md
-created_at: '2026-03-10T00:00:00+02:00'
+source_path: docs/process/index.md
+created_at: '2026-06-13T00:00:00+03:00'
 updated_at: 2026-06-13T00:00:00+03:00
-changelog_ref: README.changelog.jsonl
+changelog_ref: index.changelog.jsonl

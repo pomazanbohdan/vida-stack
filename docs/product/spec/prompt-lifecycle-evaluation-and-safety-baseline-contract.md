@@ -52,7 +52,7 @@ Status: active product contract
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
   - `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract.md`
-  - `docs/product/spec/README.md`
+  - `docs/product/spec/index.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -139,7 +139,7 @@ Will implement / choose:
 
 ### Bounded File Set
 - `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-contract.md`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 - `crates/vida/src/release1_contracts.rs`
 - `crates/vida/src/agent_feedback_surface.rs`
 - directly affected status / operator summary files

@@ -116,7 +116,7 @@ Will implement / choose:
 
 ### Bounded File Set
 - `docs/product/spec/production-observability-and-operator-baselines-contract.md`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 - `crates/vida/src/release1_contracts.rs`
 - directly affected status / operator JSON surfaces
 

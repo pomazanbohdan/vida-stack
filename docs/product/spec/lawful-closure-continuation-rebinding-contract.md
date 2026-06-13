@@ -61,7 +61,7 @@ Purpose: define the bounded architectural change that allows runtime to bind the
   - `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
-  - `docs/product/spec/README.md`
+  - `docs/product/spec/index.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -130,7 +130,7 @@ Will implement / choose:
 - `docs/product/spec/lawful-closure-continuation-rebinding-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 - `crates/vida/src/taskflow_continuation.rs`
 - `crates/vida/src/continuation_binding_summary.rs`
 - `crates/vida/src/taskflow_layer4.rs`
@@ -169,7 +169,7 @@ Will implement / choose:
   - `vida status --json`
   - `vida orchestrator-init --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/lawful-closure-continuation-rebinding-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
+  - `vida docflow check --root . docs/product/spec/lawful-closure-continuation-rebinding-contract.md docs/product/spec/current-spec-map.md docs/product/spec/index.md active spec/catalog maps and Git history`
 
 ## Observability
 - Explicit backlog-task continuation binding is written to the existing authoritative binding row.

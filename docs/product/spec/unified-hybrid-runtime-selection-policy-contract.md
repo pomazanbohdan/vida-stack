@@ -85,7 +85,7 @@ This contract defines effective carrier/backend/profile selection truth across i
   - `docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
-  - `docs/product/spec/README.md`
+  - `docs/product/spec/index.md`
   - `docs/product/spec/agent-role-skill-profile-flow-model.md`
   - `docs/product/spec/external-cli-carrier-hardening-contract.md`
   - `docs/product/spec/implementation-backend-admissibility-selection-truth-contract.md`
@@ -250,7 +250,7 @@ Will implement / choose:
 - `docs/product/spec/unified-hybrid-runtime-selection-policy-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 - `vida.config.yaml`
 - `crates/vida/src/carrier_runtime_projection.rs`
 - `crates/vida/src/runtime_assignment_builder.rs`

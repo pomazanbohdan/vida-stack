@@ -51,7 +51,7 @@ Project specs and process docs:
 - `docs/product/spec/authoritative-state-lock-recovery-contract.md`
 - `docs/process/agent-system.md`
 - `docs/process/external-cli-carrier-operator-procedure.md`
-- `docs/process/agent-extensions/README.md`
+- `docs/process/agent-extensions/index.md`
 
 External TUI/service references:
 
@@ -6415,7 +6415,7 @@ Reference surfaces:
 - `docs/product/spec/project-activation-and-configurator-model.md`
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 - `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
-- `docs/process/agent-extensions/README.md`
+- `docs/process/agent-extensions/index.md`
 - `docs/product/research/vida-service-tui-wizard-architecture-research.md`
 
 ### Finding 131: Wizard Must Be A Persisted Domain State Machine

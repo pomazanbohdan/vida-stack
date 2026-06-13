@@ -71,7 +71,7 @@ Status: canonical
   - `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
   - `docs/product/spec/current-spec-map.md`
   - `active spec/catalog maps and Git history`
-  - `docs/product/spec/README.md`
+  - `docs/product/spec/index.md`
 - Framework protocols affected:
   - none
 - Runtime families affected:
@@ -164,7 +164,7 @@ Will implement / choose:
 - `docs/product/spec/continuation-seeded-dispatch-bridge-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 - `docs/product/spec/continuation-seeded-dispatch-bridge-contract.changelog.jsonl`
 - `crates/vida/src/main.rs`
 - `crates/vida/src/state_store.rs`
@@ -214,7 +214,7 @@ Will implement / choose:
   - `vida status --json`
   - `vida orchestrator-init --json`
 - Canonical checks:
-  - `vida docflow check --root . docs/product/spec/continuation-seeded-dispatch-bridge-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history docs/product/spec/README.md`
+  - `vida docflow check --root . docs/product/spec/continuation-seeded-dispatch-bridge-contract.md docs/product/spec/current-spec-map.md docs/product/spec/index.md active spec/catalog maps and Git history`
 
 ## Observability
 - New persisted rows make explicit binding and seeded dispatch context inspectable in the authoritative DB.

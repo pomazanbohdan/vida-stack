@@ -65,11 +65,11 @@ Current bridge/source project-owned registry family:
 2. `docs/process/agent-extensions/skills.yaml`
 3. `docs/process/agent-extensions/profiles.yaml`
 4. `docs/process/agent-extensions/flows.yaml`
-5. `docs/process/agent-extensions/README.md`
+5. `docs/process/agent-extensions/index.md`
 
 Active runtime-owned projection family:
 
-1. `.vida/project/agent-extensions/README.md`
+1. `.vida/project/agent-extensions/index.md`
 2. `.vida/project/agent-extensions/roles.yaml`
 3. `.vida/project/agent-extensions/skills.yaml`
 4. `.vida/project/agent-extensions/profiles.yaml`
@@ -161,7 +161,7 @@ Current bounded proof surfaces:
 3. `agent-definitions/model.agent-definitions-contract`
 4. `agent-definitions/role.role-profile-contract`
 5. `docs/product/spec/agent-role-skill-profile-flow-model.md`
-6. `docs/process/agent-extensions/README.md`
+6. `docs/process/agent-extensions/index.md`
 7. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
 8. `docs/product/spec/embedded-runtime-and-editable-projection-model.md`
 

@@ -20,25 +20,27 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `docs/product/index.md`
 3. Product spec map:
    - `docs/product/spec/current-spec-map.md`
-4. Product spec detailed catalog:
+4. Product spec index:
+   - `docs/product/spec/index.md`
+5. Product spec detailed catalog:
    - `docs/product/spec/current-spec-catalog.md`
-5. Project documentation system:
+6. Project documentation system:
    - `docs/product/spec/project-documentation-law.md`
-6. Documentation/product alignment matrix:
+7. Documentation/product alignment matrix:
    - `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-7. Canonical runtime readiness law used by the project:
+8. Canonical runtime readiness law used by the project:
    - `docs/product/spec/canonical-runtime-readiness-law.md`
-8. Canonical runtime layer matrix:
+9. Canonical runtime layer matrix:
    - `docs/product/spec/canonical-runtime-layer-matrix.md`
-9. Documentation tooling map:
+10. Documentation tooling map:
    - `docs/process/documentation-tooling-map.md`
-10. Project agent-extension map:
-   - `docs/process/agent-extensions/README.md`
-11. Command timing and gate optimization protocol:
+11. Project agent-extension map:
+   - `docs/process/agent-extensions/index.md`
+12. Command timing and gate optimization protocol:
    - `docs/process/command-timing-and-gate-optimization-protocol.md`
-12. Project Error Search runtime diagnostics protocol:
+13. Project Error Search runtime diagnostics protocol:
     - `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-13. Project-local TaskFlow runtime state and operator surfaces:
+14. Project-local TaskFlow runtime state and operator surfaces:
     - `.vida/data/state/`
     - `vida taskflow help`
 ## Bootstrap Read Path
@@ -58,7 +60,7 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 8. For documentation/product alignment questions, continue to `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`.
 9. For documentation tooling or operator-command questions, continue to `docs/process/documentation-tooling-map.md`.
 10. For runtime-layering, runtime-readiness, or runtime-architecture questions, continue to `docs/product/spec/canonical-runtime-layer-matrix.md`.
-11. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/README.md`.
+11. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/index.md`.
 12. For command timing, slow gates, script optimization, CI/local proof latency, or operator-friction diagnostics, continue to `docs/process/command-timing-and-gate-optimization-protocol.md`.
 13. For runtime defects, multi-defect pools, TaskFlow/DocFlow contradictions, run-graph/recovery/lane/dispatch/receipt blockers, session/worktree ownership conflicts, provider/model/carrier routing blockers, or CI failure clusters, continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
 14. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.

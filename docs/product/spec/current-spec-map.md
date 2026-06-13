@@ -1,21 +1,22 @@
 # VIDA Current Spec Map
 
 Status: active canonical map
-Revision: 2026-06-12
+Revision: 2026-06-13
 
 Purpose: provide the short routing map for the active current product/spec canon after the detailed catalog was split into a companion document.
 
 Companion rule:
 
 1. Use this map first for product/spec routing.
-2. Use [current-spec-catalog.md](current-spec-catalog.md) for the detailed active artifact catalog and config-family notes.
-3. Do not expand this map back into a full catalog; register detailed entries in the catalog companion and keep the owning artifact docs authoritative.
+2. Use [index.md](index.md) for local product/spec orientation.
+3. Use [current-spec-catalog.md](current-spec-catalog.md) for the detailed active artifact catalog and config-family notes.
+4. Do not expand this map back into a full catalog; register detailed entries in the catalog companion and keep the owning artifact docs authoritative.
 
 ## Canonical Entry Points
 
 1. [docs/product/index.md](../index.md)
    - top-level product canon index for the active repository
-2. [docs/product/spec/README.md](README.md)
+2. [docs/product/spec/index.md](index.md)
    - spec-lane orientation and local product/spec home
 3. [current-spec-catalog.md](current-spec-catalog.md)
    - detailed active product/spec artifact catalog
@@ -57,7 +58,7 @@ Companion rule:
 
 1. Documentation ownership, naming, and inventory questions route to [project-documentation-law.md](project-documentation-law.md), [project-document-naming-law.md](project-document-naming-law.md), [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md), and [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md).
 2. Runtime readiness, runtime layering, and operator-surface questions route to [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md), [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md), and the active runtime contract/profile specs.
-3. Role, carrier, skill, profile, lane, and flow questions route to [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md) and [docs/process/agent-extensions/README.md](../../process/agent-extensions/README.md).
+3. Role, carrier, skill, profile, lane, and flow questions route to [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md) and [docs/process/agent-extensions/index.md](../../process/agent-extensions/index.md).
 4. Detailed artifact lookup routes to [current-spec-catalog.md](current-spec-catalog.md).
 
 ## Current Rule
@@ -83,10 +84,10 @@ Companion rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-12
+artifact_revision: 2026-06-13
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-10T10:20:00+02:00'
-updated_at: 2026-06-12T00:00:00+03:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: current-spec-map.changelog.jsonl

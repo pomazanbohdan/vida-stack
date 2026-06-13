@@ -94,7 +94,7 @@ Will implement / choose:
 - `docs/product/spec/lane-supersede-shared-truth-envelope-contract.md`
 - `docs/product/spec/current-spec-map.md`
 - `active spec/catalog maps and Git history`
-- `docs/product/spec/README.md`
+- `docs/product/spec/index.md`
 - `crates/vida/src/lane_surface.rs`
 - `crates/vida/src/taskflow_layer4.rs`
 

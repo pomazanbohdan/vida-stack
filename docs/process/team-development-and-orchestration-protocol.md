@@ -722,7 +722,7 @@ After bootstrap, development agents must know immediately:
 7. for bounded boot validation, read `docs/process/project-orchestrator-session-start-protocol.md`,
 8. for project Codex configuration, read `docs/process/codex-agent-configuration-guide.md`,
 9. for project agent-system posture, read `docs/process/agent-system.md`,
-10. for project role/skill/profile/flow registries, read `docs/process/agent-extensions/README.md`,
+10. for project role/skill/profile/flow registries, read `docs/process/agent-extensions/index.md`,
 11. for canonical spec-to-task decomposition law, read `command-instructions/planning.form-task-protocol.md`,
 12. for delegated packet invariants, read `instruction-contracts/lane.worker-dispatch-protocol.md`,
 13. for Release-1 execution-program ownership, read `active runtime contract/profile specs`.
