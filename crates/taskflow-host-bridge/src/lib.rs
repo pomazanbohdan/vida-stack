@@ -6,8 +6,14 @@ pub mod receipt_binding;
 pub mod request;
 
 pub use artifact_scope::{
-    HostBridgeImplementationArtifact, ImplementationArtifactScopeDecision,
-    attach_host_bridge_implementation_artifact, validate_implementation_artifact_scope,
+    HostBridgeImplementationArtifact, HostBridgeNormalizedImplementationArtifact,
+    ImplementationArtifactScopeDecision, attach_host_bridge_implementation_artifact,
+    build_host_bridge_normalized_implementation_artifact, host_bridge_artifact_file,
+    host_bridge_changed_files_from_artifact, host_bridge_normalized_implementation_artifact_path,
+    host_bridge_record_component, host_bridge_request_implementation_artifacts,
+    normalized_host_bridge_attempt_id, normalized_host_bridge_consolidation_receipt_id,
+    push_unique_host_bridge_implementation_artifact, validate_implementation_artifact_scope,
+    write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
 };
 pub use completion::{
     HostBridgeCompletionEvidence, HostBridgeCompletionInput, HostBridgeCompletionVerdict,

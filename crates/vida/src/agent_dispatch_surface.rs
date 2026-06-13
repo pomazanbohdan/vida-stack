@@ -14,20 +14,24 @@ use crate::{
     state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
     AgentHostBridgeArgs, AgentSelectArgs, AgentStatusArgs,
 };
-use runtime_path_policy::atomic_write::write_json_replace;
-use runtime_path_policy::bounded_json::read_json_value_file;
 use runtime_path_policy::{
     existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
     ArtifactPathKind, PathPolicyError, StateRoot,
 };
 use taskflow_host_bridge::{
-    host_bridge_artifact_has_retryable_completion_blocker,
-    host_bridge_completion_retryable_blocker, host_bridge_provenance_public_blocker_code,
+    build_host_bridge_normalized_implementation_artifact, host_bridge_artifact_file,
+    host_bridge_artifact_has_retryable_completion_blocker, host_bridge_changed_files_from_artifact,
+    host_bridge_completion_retryable_blocker, host_bridge_normalized_implementation_artifact_path,
+    host_bridge_provenance_public_blocker_code, host_bridge_request_implementation_artifacts,
     host_bridge_request_status_allows_parent_completion,
-    normalize_host_bridge_provenance_for_completion,
+    normalize_host_bridge_provenance_for_completion, normalized_host_bridge_attempt_id,
+    normalized_host_bridge_consolidation_receipt_id,
+    push_unique_host_bridge_implementation_artifact,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
-    validate_host_bridge_request_provenance, DispatchReceiptBindingInput,
-    HostBridgeProvenanceInput, HostBridgeRequest, HostBridgeRequestPath,
+    validate_host_bridge_request_provenance, validate_implementation_artifact_scope,
+    write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
+    DispatchReceiptBindingInput, HostBridgeProvenanceInput, HostBridgeRequest,
+    HostBridgeRequestPath,
 };
 
 const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
@@ -139,230 +143,44 @@ fn read_host_bridge_request(
     read_canonical_host_bridge_json_artifact(path, "host bridge request")
 }
 
-fn write_host_bridge_request(
-    state_root: &Path,
-    path: &Path,
-    request: &serde_json::Value,
-) -> Result<(), String> {
-    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
-    let request_file =
-        existing_regular_file_under_root(&state_root, path, ArtifactPathKind::HostBridgeRequest)
-            .map_err(|error| host_bridge_policy_error(error, "host bridge request"))?;
-    let output = new_output_path_under_root(
-        &state_root,
-        request_file.path(),
-        ArtifactPathKind::HostBridgeRequest,
-        true,
-    )
-    .map_err(|error| host_bridge_policy_error(error, "host bridge request"))?;
-    write_json_replace(&output, request)
-        .map_err(|error| host_bridge_policy_error(error, "host bridge request"))
-}
-
-fn host_bridge_artifact_file(
-    state_root: &Path,
-    path: &Path,
-) -> Result<Option<serde_json::Value>, String> {
-    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
-    let artifact =
-        existing_regular_file_under_root(&state_root, path, ArtifactPathKind::TaskAttemptArtifact)
-            .map_err(|error| host_bridge_policy_error(error, "implementation artifact"))?;
-    match read_json_value_file(&artifact, MAX_HOST_BRIDGE_ARTIFACT_BYTES) {
-        Ok(value) => Ok(Some(value)),
-        Err(PathPolicyError::Json { .. }) => Ok(None),
-        Err(error) => Err(host_bridge_policy_error(error, "implementation artifact")),
-    }
-}
-
-fn host_bridge_policy_error(error: PathPolicyError, label: &str) -> String {
-    match error {
-        PathPolicyError::DotSegment { path, .. } => {
-            format!("{label} path `{}` contains a dot segment", path.display())
-        }
-        PathPolicyError::Metadata { path, source, .. } => {
-            format!("Failed to inspect {label} `{}`: {source}", path.display())
-        }
-        PathPolicyError::Symlink { path, .. } => {
-            format!(
-                "{label} `{}` is a symlink; refusing to follow it.",
-                path.display()
-            )
-        }
-        PathPolicyError::NotRegularFile { path, .. } => {
-            format!("{label} `{}` is not a regular file.", path.display())
-        }
-        PathPolicyError::Canonicalize { path, source, .. } => {
-            format!(
-                "Failed to canonicalize {label} `{}`: {source}",
-                path.display()
-            )
-        }
-        PathPolicyError::OutsideStateRoot { path, root, .. } => format!(
-            "{label} `{}` is outside VIDA state root `{}`.",
-            path.display(),
-            root.display()
-        ),
-        PathPolicyError::TooLarge {
-            path, max_bytes, ..
-        } => format!("{label} `{}` exceeds {max_bytes} bytes.", path.display()),
-        PathPolicyError::Json { path, source, .. } => {
-            format!(
-                "Failed to encode {label} `{}` as JSON: {source}",
-                path.display()
-            )
-        }
-        PathPolicyError::Read { path, source, .. } => {
-            format!("Failed to read {label} `{}`: {source}", path.display())
-        }
-        PathPolicyError::Write { path, source, .. } => {
-            format!("Failed to write {label} `{}`: {source}", path.display())
-        }
-        other => other.to_string(),
-    }
-}
-
-fn normalized_host_bridge_attempt_id(run_id: &str, value: Option<&str>) -> String {
+fn host_bridge_path_array(value: &serde_json::Value, field: &str) -> Vec<PathBuf> {
     value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            format!(
-                "{}--implementation--host-bridge-artifact",
-                host_bridge_record_component(run_id)
-            )
-        })
-}
-
-fn normalized_host_bridge_consolidation_receipt_id(
-    attempt_id: &str,
-    value: Option<&str>,
-) -> String {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{attempt_id}--receipt"))
-}
-
-fn host_bridge_record_component(value: &str) -> String {
-    let normalized = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    let normalized = normalized.trim_matches('-');
-    if normalized.is_empty() {
-        "host-bridge".to_string()
-    } else {
-        normalized.to_string()
-    }
-}
-
-fn host_bridge_changed_files_from_artifact(
-    artifact_json: Option<&serde_json::Value>,
-    explicit_changed_files: &[String],
-) -> Vec<String> {
-    let mut changed_files = explicit_changed_files
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if changed_files.is_empty() {
-        if let Some(files) = artifact_json
-            .and_then(|artifact| artifact.get("changed_files"))
-            .and_then(serde_json::Value::as_array)
-        {
-            changed_files.extend(
-                files
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string),
-            );
-        }
-    }
-    changed_files.sort();
-    changed_files.dedup();
-    changed_files
-}
-
-fn host_bridge_request_implementation_artifacts(
-    request: &serde_json::Value,
-) -> Vec<serde_json::Value> {
-    request
-        .get("implementation_artifacts")
+        .get(field)
         .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
-fn push_unique_host_bridge_implementation_artifact(
-    artifacts: &mut Vec<serde_json::Value>,
-    artifact: serde_json::Value,
-) {
-    let source_ref = artifact
-        .get("source_artifact_ref")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    let attempt_id = artifact
-        .get("attempt_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    if artifacts.iter().any(|existing| {
-        existing
-            .get("source_artifact_ref")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            == source_ref
-            && existing
-                .get("attempt_id")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                == attempt_id
-    }) {
-        return;
+fn host_bridge_request_owned_paths(request: &serde_json::Value) -> Vec<PathBuf> {
+    let mut owned_paths = host_bridge_path_array(request, "owned_paths");
+    if owned_paths.is_empty() {
+        if let Some(implementation_isolation) = request.get("implementation_isolation") {
+            owned_paths = host_bridge_path_array(implementation_isolation, "owned_paths");
+        }
     }
-    artifacts.push(artifact);
+    owned_paths
 }
 
-fn host_bridge_normalized_implementation_artifact_path(
-    state_root: &Path,
-    attempt_id: &str,
-    index: usize,
-    artifact_kind: &str,
-) -> PathBuf {
-    state_root
-        .join("host-tool-bridge/implementation-artifacts")
-        .join(format!(
-            "{}-{}-{}.json",
-            host_bridge_record_component(attempt_id),
-            index,
-            host_bridge_record_component(artifact_kind)
-        ))
-}
-
-fn write_host_bridge_normalized_implementation_artifact(
-    state_root: &Path,
-    path: &Path,
-    artifact: &serde_json::Value,
-) -> Result<(), String> {
-    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
-    let output_path = new_output_path_under_root(
-        &state_root,
-        path,
-        ArtifactPathKind::TaskAttemptArtifact,
-        true,
-    )
-    .map_err(|error| error.to_string())?;
-    write_json_replace(&output_path, artifact).map_err(|error| error.to_string())
+fn host_bridge_task_or_request_owned_paths(
+    task: &crate::state_store::TaskRecord,
+    request: &serde_json::Value,
+) -> Vec<PathBuf> {
+    let task_owned_paths = task
+        .planner_metadata
+        .owned_paths
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if task_owned_paths.is_empty() {
+        host_bridge_request_owned_paths(request)
+    } else {
+        task_owned_paths
+    }
 }
 
 const MAX_HOST_BRIDGE_ARTIFACT_BYTES: u64 = 1024 * 1024;
@@ -1344,6 +1162,7 @@ async fn attach_host_bridge_implementation_artifacts(
         }
     };
     let mut normalized_artifacts = host_bridge_request_implementation_artifacts(&request);
+    let owned_paths = host_bridge_task_or_request_owned_paths(&task, &request);
     let attempt_id = normalized_host_bridge_attempt_id(&run_id, command.attempt_id.as_deref());
     let consolidation_receipt_id = normalized_host_bridge_consolidation_receipt_id(
         &attempt_id,
@@ -1384,37 +1203,44 @@ async fn attach_host_bridge_implementation_artifacts(
                 }),
             );
         }
-        let artifact_ref = artifact_path.display().to_string();
-        source_artifact_refs.push(artifact_ref.clone());
-        let normalized_artifact = serde_json::json!({
-            "artifact_kind": command.artifact_kind,
-            "schema_version": "host-bridge-implementation-artifact-v1",
-            "attempt_id": attempt_id,
-            "task_id": run_id,
-            "stage_id": "implementation",
-            "freshness": task.updated_at,
-            "consolidation_receipt_id": consolidation_receipt_id,
-            "changed_files": changed_files,
-            "source_artifact_ref": artifact_ref,
-            "source_artifact_kind": artifact_json
-                .as_ref()
-                .and_then(|artifact| artifact.get("artifact_kind"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(command.artifact_kind.as_str()),
-            "receipt_backed": true
-        });
-        let normalized_artifact_path = host_bridge_normalized_implementation_artifact_path(
-            &state_dir,
-            &attempt_id,
-            index,
+        let changed_file_paths = changed_files.iter().map(PathBuf::from).collect::<Vec<_>>();
+        let scope_decision =
+            validate_implementation_artifact_scope(&changed_file_paths, &owned_paths);
+        if !scope_decision.accepted {
+            return emit_host_bridge_attach_blocked(
+                &command.request,
+                command.json,
+                scope_decision.blocker_codes,
+                vec![
+                    "attach implementation artifacts only when changed files stay within the host bridge owned paths"
+                        .to_string(),
+                ],
+                serde_json::json!({
+                    "request_path": command.request.display().to_string(),
+                    "artifact_path": artifact_path.display().to_string(),
+                    "owned_paths": owned_paths,
+                    "out_of_scope_paths": scope_decision.out_of_scope_paths,
+                }),
+            );
+        }
+        let normalized_artifact = build_host_bridge_normalized_implementation_artifact(
             &command.artifact_kind,
+            &attempt_id,
+            &run_id,
+            &task.updated_at,
+            &consolidation_receipt_id,
+            artifact_path,
+            artifact_json.as_ref(),
+            changed_files,
+            &state_dir,
+            index,
         );
+        source_artifact_refs.push(normalized_artifact.source_artifact_ref.clone());
+        let normalized_artifact_path = PathBuf::from(&normalized_artifact.artifact_ref);
         if let Err(error) = write_host_bridge_normalized_implementation_artifact(
             &state_dir,
             &normalized_artifact_path,
-            &normalized_artifact,
+            &normalized_artifact.artifact,
         ) {
             return emit_host_bridge_attach_blocked(
                 &command.request,
@@ -1430,7 +1256,7 @@ async fn attach_host_bridge_implementation_artifacts(
         artifact_refs.push(normalized_artifact_path.display().to_string());
         push_unique_host_bridge_implementation_artifact(
             &mut normalized_artifacts,
-            normalized_artifact,
+            normalized_artifact.artifact,
         );
     }
     if let Err(error) = store
@@ -6401,6 +6227,126 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&request_path).expect("read request"))
                 .expect("request should remain json");
         assert!(unchanged.get("implementation_artifacts").is_none());
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("reopen store");
+        let attempts = store
+            .task_stage_attempts(run_id, "implementation")
+            .await
+            .expect("read implementation attempts");
+        assert!(attempts.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_attach_artifact_blocks_changed_files_outside_owned_paths() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-attach-out-of-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-attach-out-of-scope";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge attach out of scope",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/taskflow-host-bridge".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let packet_path = root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        let artifact_path = root.join("attempt-artifacts/patch-proposal.json");
+        for path in [
+            &request_path,
+            &packet_path,
+            &result_path,
+            &receipt_path,
+            &artifact_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(&packet_path, "{}").expect("write packet");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": ["crates/vida/src/agent_dispatch_surface.rs"]
+            })
+            .to_string(),
+        )
+        .expect("write artifact");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-attach-out-of-scope",
+            "run_id": run_id,
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string(),
+            "implementation_isolation": {
+                "owned_paths": ["crates/taskflow-host-bridge"]
+            }
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("write request");
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: vec![artifact_path],
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: Some("attach-attempt-1".to_string()),
+            consolidation_receipt_id: Some("attach-receipt-1".to_string()),
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::from(1));
+        let unchanged: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&request_path).expect("read request"))
+                .expect("request should remain json");
+        assert!(unchanged.get("implementation_artifacts").is_none());
+        assert!(unchanged.get("implementation_artifact_refs").is_none());
         let store = state_store::StateStore::open(root.clone())
             .await
             .expect("reopen store");
