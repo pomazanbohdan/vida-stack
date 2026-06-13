@@ -14,6 +14,11 @@ use crate::{
     state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
     AgentHostBridgeArgs, AgentSelectArgs, AgentStatusArgs,
 };
+use runtime_path_policy::atomic_write::write_json_replace;
+use runtime_path_policy::{
+    existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
+    ArtifactPathKind, StateRoot,
+};
 
 const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
@@ -323,80 +328,15 @@ fn write_host_bridge_normalized_implementation_artifact(
     path: &Path,
     artifact: &serde_json::Value,
 ) -> Result<(), String> {
-    let canonical_state_root = std::fs::canonicalize(state_root).map_err(|error| {
-        format!(
-            "Failed to canonicalize VIDA state root `{}`: {error}",
-            state_root.display()
-        )
-    })?;
-    let parent = path.parent().ok_or_else(|| {
-        format!(
-            "Implementation artifact path `{}` has no parent directory.",
-            path.display()
-        )
-    })?;
-    if std::fs::symlink_metadata(parent).is_err() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "Failed to create implementation artifact directory `{}`: {error}",
-                parent.display()
-            )
-        })?;
-    }
-    let metadata = std::fs::symlink_metadata(parent).map_err(|error| {
-        format!(
-            "Failed to inspect implementation artifact directory `{}`: {error}",
-            parent.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "Implementation artifact directory `{}` is a symlink; refusing to write through it.",
-            parent.display()
-        ));
-    }
-    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
-        format!(
-            "Failed to canonicalize implementation artifact directory `{}`: {error}",
-            parent.display()
-        )
-    })?;
-    if !canonical_parent.starts_with(&canonical_state_root) {
-        return Err(format!(
-            "Implementation artifact directory `{}` escapes VIDA state root `{}`.",
-            canonical_parent.display(),
-            canonical_state_root.display()
-        ));
-    }
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "Implementation artifact `{}` is a symlink; refusing to write through it.",
-                path.display()
-            ));
-        }
-    }
-    let encoded = serde_json::to_string_pretty(artifact).map_err(|error| {
-        format!(
-            "Failed to encode normalized implementation artifact `{}`: {error}",
-            path.display()
-        )
-    })?;
-    std::fs::write(path, encoded).map_err(|error| {
-        format!(
-            "Failed to write normalized implementation artifact `{}`: {error}",
-            path.display()
-        )
-    })
-}
-
-fn path_contains_dot_segment(path: &Path) -> bool {
-    path.components().any(|component| {
-        matches!(
-            component,
-            std::path::Component::CurDir | std::path::Component::ParentDir
-        )
-    })
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    let output_path = new_output_path_under_root(
+        &state_root,
+        path,
+        ArtifactPathKind::TaskAttemptArtifact,
+        true,
+    )
+    .map_err(|error| error.to_string())?;
+    write_json_replace(&output_path, artifact).map_err(|error| error.to_string())
 }
 
 const MAX_HOST_BRIDGE_ARTIFACT_BYTES: u64 = 1024 * 1024;
@@ -460,38 +400,19 @@ fn canonical_state_artifact_path(
         )
     })?;
     if require_existing_file {
-        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
-            format!(
-                "Failed to inspect host bridge artifact `{}`: {error}",
-                path.display()
-            )
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "Host bridge artifact `{}` is a symlink; refusing to follow it.",
-                path.display()
-            ));
-        }
-        if !metadata.is_file() {
-            return Err(format!(
-                "Host bridge artifact `{}` is not a regular file.",
-                path.display()
-            ));
-        }
-        let canonical_path = std::fs::canonicalize(&path).map_err(|error| {
-            format!(
-                "Failed to canonicalize host bridge artifact `{}`: {error}",
-                path.display()
-            )
-        })?;
-        if !canonical_path.starts_with(&canonical_state_root) {
-            return Err(format!(
-                "Host bridge artifact `{}` escapes VIDA state root `{}`.",
-                canonical_path.display(),
-                canonical_state_root.display()
-            ));
-        }
-        Ok(canonical_path)
+        let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+        existing_regular_file_under_root(&state_root, &path, ArtifactPathKind::HostBridgeRequest)
+            .map(|file| file.path().to_path_buf())
+            .map_err(|error| match error {
+                runtime_path_policy::PathPolicyError::OutsideStateRoot { path, root, .. } => {
+                    format!(
+                        "Host bridge artifact `{}` escapes VIDA state root `{}`.",
+                        path.display(),
+                        root.display()
+                    )
+                }
+                other => other.to_string(),
+            })
     } else {
         let parent = path.parent().ok_or_else(|| {
             format!(
@@ -3324,17 +3245,8 @@ fn validate_materialized_agent_dispatch_packet(
     if dispatch_packet_path.trim().is_empty() {
         return Err("dispatch packet path is empty".to_string());
     }
-    if !packet_path.exists() {
-        return Err(format!(
-            "dispatch packet path does not exist: {dispatch_packet_path}"
-        ));
-    }
-    let raw = std::fs::read_to_string(packet_path).map_err(|error| {
-        format!("Failed to read materialized dispatch packet `{dispatch_packet_path}`: {error}")
-    })?;
-    let packet = serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
-        format!("Failed to parse materialized dispatch packet `{dispatch_packet_path}`: {error}")
-    })?;
+    let packet =
+        read_canonical_host_bridge_json_artifact(packet_path, "materialized dispatch packet")?;
     if packet["run_id"].as_str() != Some(lane.task_id.as_str()) {
         return Err(format!(
             "materialized packet run_id mismatch: expected `{}`, got `{}`",
