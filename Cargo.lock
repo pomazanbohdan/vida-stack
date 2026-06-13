@@ -4589,6 +4589,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime-path-policy"
+version = "0.9.7"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "rust-stemmers"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6426,6 +6435,7 @@ dependencies = [
  "interprocess",
  "libc",
  "ratatui 0.30.0",
+ "runtime-path-policy",
  "serde",
  "serde_json",
  "serde_yaml",
