@@ -4229,7 +4229,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         .map(str::to_string);
                     if let Some(packet_template_kind) = packet_template_kind {
                         if let Some(active_packet) = packet.get_mut(&packet_template_kind) {
-                            if crate::runtime_dispatch_state::apply_owned_paths_if_missing(
+                            if crate::runtime_dispatch_state::apply_owned_paths(
                                 active_packet,
                                 &metadata.owned_write_scope,
                             ) {
@@ -8069,14 +8069,14 @@ mod tests {
                 "dispatch_target": "implementer",
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
-                "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                "owned_paths": ["src/lib.rs"],
                 "read_only_paths": [".vida/data/state/runtime-consumption"],
                 "delivery_task_packet": {
                     "goal": "Complete implementer lane evidence.",
                     "scope_in": ["dispatch_target:implementer"],
                     "handoff_task_class": "implementation",
                     "handoff_runtime_role": "worker",
-                    "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                    "owned_paths": ["src/lib.rs"],
                     "read_only_paths": [".vida/data/state/runtime-consumption"],
                     "definition_of_done": ["lane completion is receipt-backed"],
                     "verification_command": "cargo test -p vida lane_complete",
@@ -12035,6 +12035,14 @@ mod tests {
         let packet = std::fs::read_to_string(&packet_path).expect("read updated packet");
         let packet_json: serde_json::Value =
             serde_json::from_str(&packet).expect("updated packet should be json");
+        assert_eq!(
+            packet_json["owned_paths"],
+            serde_json::json!(["crates/vida/src/lane_surface.rs"])
+        );
+        assert_eq!(
+            packet_json["delivery_task_packet"]["owned_paths"],
+            serde_json::json!(["crates/vida/src/lane_surface.rs"])
+        );
         assert_eq!(packet_json["downstream_dispatch_ready"], true);
         assert_eq!(packet_json["downstream_dispatch_status"], "packet_ready");
         assert_eq!(packet_json["downstream_lane_status"], "packet_ready");

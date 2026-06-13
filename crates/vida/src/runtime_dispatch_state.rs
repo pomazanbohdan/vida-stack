@@ -7529,14 +7529,18 @@ pub(crate) fn apply_owned_paths_if_missing(
     packet: &mut serde_json::Value,
     owned_paths: &[String],
 ) -> bool {
-    let mut concrete_owned_paths = Vec::new();
-    append_unique_explicit_owned_scope_paths(&mut concrete_owned_paths, owned_paths, None);
-    if concrete_owned_paths.is_empty() {
-        return false;
-    }
     if packet_nonempty_string_array(packet, "owned_paths")
         && !packet_string_array_is_runtime_consumption_fallback(packet, "owned_paths")
     {
+        return false;
+    }
+    apply_owned_paths(packet, owned_paths)
+}
+
+pub(crate) fn apply_owned_paths(packet: &mut serde_json::Value, owned_paths: &[String]) -> bool {
+    let mut concrete_owned_paths = Vec::new();
+    append_unique_explicit_owned_scope_paths(&mut concrete_owned_paths, owned_paths, None);
+    if concrete_owned_paths.is_empty() {
         return false;
     }
     let Some(object) = packet.as_object_mut() else {
