@@ -2680,7 +2680,9 @@ fn trusted_host_bridge_completion_request_context(
                     .to_string(),
             );
             }
-        } else if retryable_completion_context {
+        } else if retryable_completion_context
+            && receipt.dispatch_status != "bridge_request_pending"
+        {
             return Err(
                 "Retryable host bridge request is missing persisted dispatch packet evidence."
                     .to_string(),
@@ -10101,6 +10103,87 @@ mod tests {
         assert!(error.contains(
             "Host bridge request packet path does not match persisted dispatch receipt evidence"
         ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pending_host_bridge_completion_allows_original_receipt_packet_without_downstream_packet() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-pending-original-packet-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let packet_path =
+            root.join("runtime-consumption/dispatch-packets/pending-original-packet.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-host-bridge-pending-original-packet",
+                "dispatch_target": "implementer",
+                "downstream_dispatch_active_target": "implementer",
+                "downstream_dispatch_status": "blocked"
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        let request_path = root.join("host-tool-bridge/requests/pending-original.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "bridge_request_pending",
+                "request_id": "pending-original",
+                "run_id": "run-host-bridge-pending-original-packet",
+                "task_id": "run-host-bridge-pending-original-packet",
+                "dispatch_target": "implementer",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge"
+            })
+            .to_string(),
+        )
+        .expect("write request");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-host-bridge-pending-original-packet",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "implementer".to_string();
+        status.status = "blocked".to_string();
+
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-host-bridge-pending-original-packet".to_string();
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_packet_path = None;
+
+        let context = trusted_host_bridge_completion_request_context(
+            &root,
+            "run-host-bridge-pending-original-packet",
+            &request_path.display().to_string(),
+            Some(&status),
+            &receipt,
+        )
+        .expect("pending bridge receipt should not require downstream packet evidence")
+        .expect("pending bridge request should return completion context");
+
+        assert_eq!(context.dispatch_target, "implementer");
+        assert_eq!(
+            context.packet_path,
+            canonicalize_existing_regular_state_path(&root, &packet_path, "packet")
+                .expect("canonical packet")
+                .display()
+                .to_string()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
