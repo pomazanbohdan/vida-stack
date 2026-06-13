@@ -92,17 +92,10 @@ pub(crate) fn ready_handoff_status_supersedes_blocked_dispatch_receipt(
         return false;
     }
 
-    dispatch_receipt.lane_status == "lane_exception_takeover"
-        && dispatch_receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        && dispatch_receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+    crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_exception_takeover_continuation_evidence(
+        dispatch_receipt,
+        Some(&status.run_id),
+    )
 }
 
 pub(crate) fn next_actions(

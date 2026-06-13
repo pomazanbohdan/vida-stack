@@ -257,6 +257,8 @@ pub(crate) async fn build_taskflow_closeout_summary(
     let all_tasks = store.all_tasks().await?;
     let task_store = store.task_store_summary().await?;
     let latest_status = store.latest_run_graph_status().await?;
+    let latest_terminal_task_active_status =
+        store.latest_terminal_task_active_run_graph_status().await?;
     let latest_receipt = store.latest_run_graph_dispatch_receipt_summary().await?;
     let latest_recovery = store.latest_run_graph_recovery_summary().await?;
     let explicit_binding = match store
@@ -271,20 +273,45 @@ pub(crate) async fn build_taskflow_closeout_summary(
         }
     };
 
-    let (latest_run_graph_task_closed, latest_run_graph_task_missing) = match latest_status.as_ref()
-    {
-        Some(status) => {
-            let verdict =
-                crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
-                    store, status,
+    let (mut latest_run_graph_task_closed, mut latest_run_graph_task_missing) =
+        match latest_status.as_ref() {
+            Some(status) => {
+                let verdict =
+                    crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                        store, status,
+                    )
+                    .await?;
+                (
+                    verdict.stale_for_active_projection(),
+                    verdict.task_missing(),
                 )
-                .await?;
-            (
-                verdict.stale_for_active_projection(),
-                verdict.task_missing(),
-            )
+            }
+            None => (false, false),
+        };
+    let terminal_task_active_status_is_current = latest_terminal_task_active_status
+        .as_ref()
+        .is_some_and(|terminal| {
+            latest_status
+                .as_ref()
+                .map(|status| status.run_id == terminal.run_id)
+                .unwrap_or(true)
+        });
+    let terminal_task_active_run_graph_task_missing = if terminal_task_active_status_is_current {
+        match latest_terminal_task_active_status.as_ref() {
+            Some(terminal) => {
+                let verdict =
+                    crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                        store, terminal,
+                    )
+                    .await?;
+                latest_run_graph_task_closed |= verdict.stale_for_active_projection();
+                latest_run_graph_task_missing |= verdict.task_missing();
+                verdict.task_missing()
+            }
+            None => false,
         }
-        None => (false, false),
+    } else {
+        false
     };
 
     let continuation_binding =
@@ -304,6 +331,19 @@ pub(crate) async fn build_taskflow_closeout_summary(
             latest_run_graph_task_closed,
             latest_run_graph_task_missing,
         );
+    let continuation_binding = if terminal_task_active_run_graph_task_missing {
+        match latest_terminal_task_active_status.as_ref() {
+            Some(status) => {
+                crate::continuation_binding_summary::add_stale_missing_task_run_graph_status(
+                    continuation_binding,
+                    status,
+                )
+            }
+            None => continuation_binding,
+        }
+    } else {
+        continuation_binding
+    };
     let taskflow_active_candidates =
         crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
             &all_tasks

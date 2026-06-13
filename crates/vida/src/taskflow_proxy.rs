@@ -3505,7 +3505,10 @@ fn build_taskflow_next_decision(
     let latest_run_graph_task_no_longer_active =
         latest_run_graph_task_closed || latest_run_graph_task_missing;
     let latest_run_graph_task_missing_stale =
-        latest_run_graph_task_missing && latest_run_graph_status.is_some();
+        crate::taskflow_run_graph::missing_task_run_graph_requires_stale_cleanup(
+            latest_run_graph_status,
+            latest_run_graph_task_missing,
+        );
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
         .is_some_and(|(status, run_id)| status.run_id == run_id)
@@ -12439,6 +12442,117 @@ agent_system:
                 .as_ref()
                 .map(|value| value.category.as_str()),
             Some("completed_without_explicit_next_bounded_unit")
+        );
+    }
+
+    #[test]
+    fn taskflow_next_decision_does_not_retire_terminal_missing_task_run() {
+        let mut status = crate::state_store::RunGraphStatus {
+            run_id: "terminal-missing-run".to_string(),
+            task_id: "missing-task".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "closure".to_string(),
+            next_node: None,
+            status: "completed".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "test_author_lane".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "terminal-missing-run".to_string(),
+            dispatch_target: "test_author".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            blocker_code: None,
+            dispatch_surface: Some("vida lane complete".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_command: Some("vida lane complete".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            exception_path_receipt_id: None,
+            supersedes_receipt_id: None,
+            recorded_at: "2026-06-12T00:00:00Z".to_string(),
+            activation_runtime_role: Some("worker".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_evidence: serde_json::Value::Null,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/result.json".to_string()),
+            downstream_dispatch_packet_path: Some("/tmp/downstream-packet.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_last_target: None,
+            downstream_dispatch_note: Some(
+                "terminal missing task should not be retired again".to_string(),
+            ),
+            downstream_dispatch_blockers: Vec::new(),
+        };
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-task")),
+            false,
+            true,
+            None,
+            Some("epic-1"),
+            Some(&dispatch),
+            Some(&status),
+            false,
+            true,
+            false,
+            None,
+            None,
+            "test-session",
+            &[],
+        );
+
+        assert_eq!(decision.status, "blocked");
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "completed_without_explicit_next_bounded_unit"
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "stale_missing_task_run_graph"));
+        assert!(!decision
+            .next_actions
+            .iter()
+            .any(|action| action.contains("vida lane retire")));
+
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-task")),
+            false,
+            true,
+            None,
+            Some("epic-1"),
+            Some(&dispatch),
+            Some(&status),
+            false,
+            true,
+            false,
+            None,
+            None,
+            "test-session",
+            &[],
+        );
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "stale_missing_task_run_graph"
         );
     }
 

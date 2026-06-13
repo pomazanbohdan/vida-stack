@@ -32,8 +32,8 @@ It does not redefine runtime law. It explains how an operator should activate an
    - `pi --version`
    - `vida-pi-agent --help`
 5. Inspect the bounded design/proof surfaces:
-   - `docs/product/spec/external-cli-carrier-hardening-design.md`
-   - `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+   - `docs/product/spec/external-cli-carrier-hardening-contract.md`
+   - `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
 
 ## Readiness States
 
@@ -153,9 +153,9 @@ Pi-specific smoke modes:
 ## References
 
 1. `docs/process/agent-system.md`
-2. `docs/product/spec/external-cli-carrier-hardening-design.md`
+2. `docs/product/spec/external-cli-carrier-hardening-contract.md`
 3. `vida.config.yaml`
-4. `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+4. `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
 
 -----
 artifact_path: process/external-cli-carrier-operator-procedure

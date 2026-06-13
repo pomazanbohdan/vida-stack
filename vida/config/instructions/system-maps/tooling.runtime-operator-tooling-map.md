@@ -21,9 +21,7 @@ Read this map when:
    - continue to `runtime-instructions/work.taskflow-protocol`
 4. task-state workflow wrapper law:
    - continue to `runtime-instructions/runtime.task-state-telemetry-protocol`
-5. script/runtime implementation boundary:
-   - continue to `system-maps/migration.script-runtime-architecture-map`
-6. migration-only wrapper catalog:
+5. script/runtime implementation boundary and migration-only wrapper catalog:
    - continue to `command-instructions/migration.pack-wrapper-note`
    - continue to `system-maps/migration.runtime-transition-map`
 

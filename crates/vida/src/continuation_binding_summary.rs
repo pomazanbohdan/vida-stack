@@ -96,22 +96,10 @@ fn active_exception_takeover_evidence_matches_status(
     if terminal_continue_run_id == Some(status.run_id.as_str()) && !supersedes_distinct_exception {
         return false;
     }
-    let exception_takeover_state = crate::release1_contracts::exception_takeover_state(
-        dispatch.exception_path_receipt_id.as_deref(),
-        dispatch.supersedes_receipt_id.as_deref(),
-        None,
-    );
-    dispatch.run_id == status.run_id
-        && (dispatch.lane_status == "lane_exception_takeover"
-            || exception_takeover_state.is_active())
-        && dispatch
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && dispatch
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+    crate::runtime_dispatch_receipt_helpers::dispatch_summary_has_exception_takeover_continuation_evidence(
+        dispatch,
+        Some(&status.run_id),
+    )
 }
 
 fn active_exception_takeover_binding_matches_status(
@@ -1212,6 +1200,25 @@ pub(crate) fn add_taskflow_active_work_truth(
     }
 
     summary
+}
+
+pub(crate) fn add_stale_missing_task_run_graph_status(
+    mut continuation_binding: serde_json::Value,
+    status: &crate::state_store::RunGraphStatus,
+) -> serde_json::Value {
+    if let Some(object) = continuation_binding.as_object_mut() {
+        object.insert(
+            "stale_missing_task_run_graph_status".to_string(),
+            serde_json::json!({
+                "task_id": status.task_id,
+                "run_id": status.run_id,
+                "active_node": status.active_node,
+                "status": status.status,
+                "lifecycle_stage": status.lifecycle_stage,
+            }),
+        );
+    }
+    continuation_binding
 }
 
 pub(crate) fn apply_closed_task_active_run_projection_mismatch_gate(

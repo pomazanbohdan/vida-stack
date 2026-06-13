@@ -12,6 +12,7 @@ Owner law remains in:
 
 1. `docs/process/team-development-and-orchestration-protocol.md`
 2. `docs/process/project-packet-rendering-runtime-capsule.md`
+3. `docs/process/project-development-packet-template-protocol.md`
 
 Consult those owner documents when an edge case, conflict, or packet-shaping question is not settled by this capsule.
 
@@ -38,14 +39,7 @@ Session-scoped shorthand:
 
 Before dispatch, the active packet must satisfy the template-specific minimum from `docs/process/project-development-packet-template-protocol.md`.
 
-Runtime shorthand:
-
-1. `delivery_task_packet` and `execution_block_packet` must name `goal`, `scope_in`, `owned_paths` or `read_only_paths`, `definition_of_done`, `verification_command`, `proof_target`, `stop_rules`, and one `blocking_question`,
-2. `coach_review_packet` must name `review_goal`, `owned_paths` or `read_only_paths`, `definition_of_done`, `proof_target`, and one `blocking_question`,
-3. `verifier_proof_packet` must name `proof_goal`, `verification_command`, `proof_target`, `owned_paths` or `read_only_paths`, and one `blocking_question`,
-4. `escalation_packet` must name `decision_needed`, `options`, `constraints`, and one `blocking_question`.
-
-If the active packet template is missing any mandatory field, dispatch must fail closed and the packet must be reshaped first.
+This capsule does not own packet field names. If the active packet cannot satisfy the owner template, dispatch must fail closed and the packet must be reshaped first.
 
 ## Default Lane Sequence
 
@@ -109,10 +103,10 @@ Local write work still requires an explicit exception-path receipt and remains b
 artifact_path: process/project-packet-and-lane-runtime-capsule
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-packet-and-lane-runtime-capsule.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: 2026-05-22T03:06:52Z
+updated_at: 2026-06-13T01:35:00+03:00
 changelog_ref: project-packet-and-lane-runtime-capsule.changelog.jsonl

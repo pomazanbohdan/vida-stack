@@ -146,7 +146,7 @@ If the diagnostic finds no slow operations, record `observed_operations: []` and
 
 ## Bootstrap And TaskFlow Requirements
 
-1. This protocol is part of the active project bootstrap read path through `AGENTS.sidecar.md`, `docs/project-root-map.md`, and `docs/process/README.md`.
+1. This protocol is part of the active project bootstrap read path through `AGENTS.sidecar.md`, `docs/project-root-map.md`, and `docs/process/index.md`.
 2. Any bounded work item that runs commands must record timing evidence for commands that influence task selection, proof acceptance, PR closure, runtime continuation, or release admission.
 3. Timing evidence belongs in the active TaskFlow task notes or linked artifact before closure.
 4. A timing optimization that changes CI, scripts, command output, command options, diagnostics, or release gating must be its own TaskFlow item unless it is the direct bounded work item already in progress.

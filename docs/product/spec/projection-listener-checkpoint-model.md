@@ -1,8 +1,8 @@
 # VIDA Projection, Listener, And Checkpoint Model
 
-Status: draft `v1` bounded runtime artifact
+Status: active canonical runtime model
 
-Revision: `2026-03-09`
+Revision: `2026-06-13`
 
 Purpose: define the smallest lawful runtime surface for derived projections, listener topics, and checkpoint hints without collapsing state, receipts, proof, and projection into one layer.
 
@@ -15,7 +15,7 @@ This artifact defines:
 3. checkpoint hint semantics,
 4. interrupt/gateway mapping boundaries,
 5. grouped projection consistency boundaries,
-6. future checkpoint commit and replay boundaries.
+6. ownership boundaries against checkpoint commit and replay law.
 
 It does not define:
 
@@ -58,8 +58,7 @@ Rule:
 1. checkpoints are runtime durability artifacts,
 2. checkpoints are not canonical state by themselves,
 3. if checkpoint creation is decision-relevant, it must be receipt-backed or proof-backed,
-4. future checkpoint commit law may advance only a gap-less cursor,
-5. future delayed checkpoint commits require idempotent downstream handlers.
+4. checkpoint commit, replay lineage, and delayed checkpoint writes are owned by [checkpoint-commit-and-replay-model.md](checkpoint-commit-and-replay-model.md).
 
 ### 2.4 Gateway
 
@@ -96,9 +95,7 @@ Accepted for future work, not required in this pass:
 2. branch-aware merge strategies,
 3. multi-subscriber fan-out infrastructure,
 4. eventless automatic transitions triggered from checkpoint completion,
-5. gap-less checkpoint commit progression,
-6. replay/fork from checkpoint for proof reproduction and doctor/debug use,
-7. pending checkpoint writes after partial failure.
+5. replay/fork consumers for proof reproduction and doctor/debug use.
 
 ## 5. Mapping To Existing VIDA Surfaces
 
@@ -111,8 +108,8 @@ Accepted for future work, not required in this pass:
 7. `boot_migration_gate` -> boot checkpoint and doctor visibility
 8. `run_graph` -> durable resumability ledger for operator projections
 9. future gateway handle index -> correlation-based resume targeting
-10. future machine lint law -> static validation of checkpoint/gateway graph correctness
-11. future checkpoint commit/replay lineage -> grouped checkpoint progression and replay safety
+10. future static validation -> checkpoint/gateway graph correctness
+11. `checkpoint-commit-and-replay-model` -> grouped checkpoint progression and replay safety
 
 ## 6. Invariants
 
@@ -128,10 +125,10 @@ Accepted for future work, not required in this pass:
 artifact_path: product/spec/projection-listener-checkpoint-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/projection-listener-checkpoint-model.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: '2026-06-13T00:00:00+03:00'
 changelog_ref: projection-listener-checkpoint-model.changelog.jsonl

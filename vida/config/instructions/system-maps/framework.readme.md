@@ -20,7 +20,7 @@ Canonical split:
 
 1. `vida/config/instructions/` -> active framework instruction canon.
 2. `docs/product/spec/` -> promoted stable product/spec canon.
-3. `docs/process/framework-source-lineage-index.md` -> project-owned provenance index for deleted framework-formation sources.
+3. `Git history and active artifact sidecars` -> project-owned provenance index for deleted framework-formation sources.
 4. sidecar changelogs plus Git history -> historical evidence only.
 5. `docs/process/` -> canonical project operational runbooks.
 6. `scripts/` -> executable project operations referenced by `docs/process/`.
@@ -35,7 +35,7 @@ Migration policy:
 
 1. New active framework instruction docs belong in flat filenames under `vida/config/instructions/`.
 2. Settled framework/product law belongs in `docs/product/spec/` or `vida/config/**`, not in revived plan/research trees.
-3. Historical source lineage is recorded in `docs/process/framework-source-lineage-index.md`.
+3. Historical source lineage is recorded in `Git history and active artifact sidecars`.
 4. New project docs and build/ops runbooks belong in `docs/` or `docs/process/`.
 5. New executable project workflows belong in `scripts/`, not `scripts/`.
 

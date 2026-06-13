@@ -254,6 +254,41 @@ fn consume_final_toon_bool(value: bool) -> &'static str {
     }
 }
 
+fn consume_final_design_first_delegated_lanes(execution_plan: &serde_json::Value) -> String {
+    let required_lanes = execution_plan["orchestration_contract"]["delegation_policy"]
+        ["required_lanes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(display_lane_label)
+        .collect::<Vec<_>>();
+    if !required_lanes.is_empty() {
+        return required_lanes.join(", ");
+    }
+
+    let active_cycle = execution_plan["orchestration_contract"]["active_cycle"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    let mut lanes = Vec::new();
+    if active_cycle
+        .iter()
+        .any(|step| *step == "delegate_specification_or_research_lane")
+    {
+        lanes.push("specification");
+    }
+    if active_cycle
+        .iter()
+        .any(|step| *step == "delegate_implementer_lane")
+    {
+        lanes.push("implementer");
+    }
+    lanes.join(", ")
+}
+
 fn consume_final_toon_text(
     payload: &super::TaskflowDirectConsumptionPayload,
     snapshot_path: &str,
@@ -320,15 +355,8 @@ fn consume_final_toon_text(
                 &consume_final_operator_command_text(command),
             ));
         }
-        let required_lanes = payload.role_selection.execution_plan["orchestration_contract"]
-            ["delegation_policy"]["required_lanes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-            .map(display_lane_label)
-            .collect::<Vec<_>>()
-            .join(", ");
+        let required_lanes =
+            consume_final_design_first_delegated_lanes(&payload.role_selection.execution_plan);
         if !required_lanes.is_empty() {
             lines.push(consume_final_toon_line("delegated_lanes", &required_lanes));
         }
@@ -420,11 +448,18 @@ async fn consume_final_requested_owned_paths(
 fn apply_consume_final_downstream_dispatch_contract(
     dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     direct_consumption_ready: bool,
+    docflow_ready: bool,
+    conversational_mode: bool,
+    blocker_code: Option<&str>,
 ) {
     if direct_consumption_ready {
         return;
     }
-    if dispatch_receipt.downstream_dispatch_target.as_deref() != Some("closure") {
+    let docflow_verdict_block = super::blocker_code_str(super::BlockerCode::DocflowVerdictBlock);
+    let should_clear_downstream = (!docflow_ready && !conversational_mode)
+        || dispatch_receipt.downstream_dispatch_target.as_deref() == Some("closure")
+        || blocker_code == Some(docflow_verdict_block);
+    if !should_clear_downstream {
         return;
     }
     dispatch_receipt.downstream_dispatch_target = None;
@@ -938,6 +973,9 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         apply_consume_final_downstream_dispatch_contract(
                             &mut dispatch_receipt,
                             direct_consumption_ready,
+                            docflow_verdict.ready,
+                            role_selection.conversational_mode.is_some(),
+                            consume_final_blocker_code.as_deref(),
                         );
                         if !consume_final_mode.is_read_only() {
                             let owned_paths_override = consume_final_owned_paths_override(
@@ -1929,6 +1967,12 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
             role_selection.execution_plan["default_route"]["activation_agent_type"]
                 .as_str()
                 .map(str::to_string)
+                .or_else(|| {
+                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
+                        ["activation_agent_type"]
+                        .as_str()
+                        .map(str::to_string)
+                })
         } else {
             super::dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
                 .and_then(|route| route.get("activation_agent_type"))
@@ -1947,6 +1991,12 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
             role_selection.execution_plan["default_route"]["activation_runtime_role"]
                 .as_str()
                 .map(str::to_string)
+                .or_else(|| {
+                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
+                        ["activation_runtime_role"]
+                        .as_str()
+                        .map(str::to_string)
+                })
         } else {
             super::dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
                 .and_then(|route| route.get("activation_runtime_role"))
@@ -2247,6 +2297,55 @@ mod tests {
             Some("business_analyst")
         );
         assert_eq!(receipt.dispatch_command.as_deref(), Some("vida agent-init"));
+    }
+
+    #[test]
+    fn conversational_dispatch_receipt_uses_runtime_assignment_activation_fallback() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "clarify spec scope".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec![
+                "clarify".to_string(),
+                "spec".to_string(),
+                "scope".to_string(),
+            ],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "business_analyst",
+                    "selected_tier": "middle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-scope-discussion",
+            "latest_status": {
+                "next_node": "business_analyst",
+                "task_class": "scope_discussion"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "specification");
+        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
+        assert_eq!(
+            receipt.activation_runtime_role.as_deref(),
+            Some("business_analyst")
+        );
+        assert_eq!(receipt.selected_backend.as_deref(), Some("middle"));
     }
 
     #[test]
@@ -3206,6 +3305,57 @@ mod tests {
                     .to_string()
                 )
             }
+        );
+    }
+
+    #[test]
+    fn consume_final_design_first_delegated_lanes_prefers_required_lanes() {
+        let execution_plan = serde_json::json!({
+            "status": "design_first",
+            "orchestration_contract": {
+                "active_cycle": [
+                    "publish_initial_execution_plan",
+                    "delegate_specification_or_research_lane",
+                    "replan_after_design_gate",
+                    "shape_work_pool_and_dev_packets",
+                    "delegate_implementer_lane"
+                ],
+                "delegation_policy": {
+                    "required_lanes": [
+                        "specification",
+                        "implementer",
+                        "coach",
+                        "verifier",
+                        "execution_preparation"
+                    ]
+                }
+            }
+        });
+
+        assert_eq!(
+            super::consume_final_design_first_delegated_lanes(&execution_plan),
+            "specification, implementer, coach, verifier, execution preparation"
+        );
+    }
+
+    #[test]
+    fn consume_final_design_first_delegated_lanes_falls_back_to_active_cycle() {
+        let execution_plan = serde_json::json!({
+            "status": "design_first",
+            "orchestration_contract": {
+                "active_cycle": [
+                    "delegate_specification_or_research_lane",
+                    "delegate_implementer_lane"
+                ],
+                "delegation_policy": {
+                    "required_lanes": []
+                }
+            }
+        });
+
+        assert_eq!(
+            super::consume_final_design_first_delegated_lanes(&execution_plan),
+            "specification, implementer"
         );
     }
 

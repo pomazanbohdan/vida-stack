@@ -108,7 +108,7 @@ Adjacent canonical owners:
 
 ## References
 
-1. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
 2. `docs/product/spec/canonical-runtime-layer-matrix.md`
 3. `docs/product/spec/root-map-and-runtime-surface-model.md`
 

@@ -51,7 +51,7 @@ Read this map when:
 
 This map aligns with the `VIDA 1.0` runtime observability target captured in:
 
-1. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
 
 -----
 artifact_path: config/system-maps/observability.map

@@ -1,6 +1,6 @@
 # Runtime Transition Map
 
-Purpose: provide one canonical transition registry from legacy helper surfaces to current runtime homes and make migration-only or historical-only status explicit without turning this map into a second owner of execution or verification law.
+Purpose: provide one canonical transition registry from legacy helper surfaces to current runtime homes, define the script/runtime boundary during cutover, and make migration-only or historical-only status explicit without turning this map into a second owner of execution or verification law.
 
 ## Active Transitional Runtime
 
@@ -21,6 +21,15 @@ Interpretation rule:
 
 1. concrete operator commands for `run-graph`, capability-registry, and context-governance belong to the active `vida taskflow` runtime surface or its help surface, not to the peer `core` owner protocols,
 2. the peer `core` protocols keep semantic ownership of law, boundaries, and proof conditions above those concrete runtime commands.
+
+Script/runtime boundary rule:
+
+1. the TaskFlow runtime family is the active transitional runtime surface,
+2. legacy `*.sh` and `*.py` helpers are migration-source wrappers only,
+3. project delivery scripts stay in `scripts/` and are not part of this framework transition contract,
+4. do not keep two active canonical runtime surfaces,
+5. when a legacy wrapper has a `vida taskflow` equivalent, `vida taskflow` becomes canonical immediately,
+6. legacy wrappers remain only until the equivalent behavior is either migrated or explicitly retired.
 
 ## Historical-Only Until Retired Or Reimplemented
 
@@ -74,6 +83,22 @@ Current owner notes:
 2. `framework-wave-start.sh` remains a migration-only helper shortcut to existing owners in `core.orchestration-protocol.md`, `command-instructions/routing.use-case-packs-protocol.md`, and `diagnostic-instructions/analysis.framework-self-analysis-protocol.md`; no separate framework-wave-start law is promoted yet,
 3. `framework-task-sync.py` remains a migration-only helper shortcut to `runtime-instructions/work.task-state-reconciliation-protocol`; no separate framework-wave task-sync law is promoted yet,
 4. framework-wave wrappers remain migration-only references until a stronger canonical owner is promoted.
+
+Migration rules:
+
+1. identify the canonical caller surface first,
+2. preserve CLI arguments and exit-code semantics when compatibility is still required,
+3. move parsing, derivation, validation, and state logic into the TaskFlow runtime family,
+4. demote the old wrapper to historical-only status or delete it,
+5. re-run consumer tests that depend on the command,
+6. update this map and linked framework references in the same change.
+
+Verification expectations:
+
+1. the bounded TaskFlow runtime-family implementation build passes when code changes are in scope,
+2. direct `vida taskflow` command smoke or targeted tests pass when executable behavior changes,
+3. at least one real framework consumer path is verified after migration,
+4. old wrapper references are either removed or marked historical-only.
 
 -----
 artifact_path: config/system-maps/runtime-transition.map

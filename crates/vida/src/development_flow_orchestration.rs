@@ -706,6 +706,41 @@ fn orchestration_lane_step_label(dispatch_target: &str) -> &'static str {
     }
 }
 
+fn dispatch_contract_lane_logical_class<'a>(
+    dispatch_contract: &'a serde_json::Value,
+    dispatch_target: &str,
+) -> Option<&'a str> {
+    let lane = dispatch_contract["lane_catalog"].get(dispatch_target)?;
+    lane["task_class"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            lane["runtime_role"]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+        })
+}
+
+fn orchestration_lane_step_label_for_contract(
+    dispatch_contract: &serde_json::Value,
+    dispatch_target: &str,
+) -> &'static str {
+    match dispatch_contract_lane_logical_class(dispatch_contract, dispatch_target) {
+        Some("specification" | "business_analyst" | "analyst") => {
+            "delegate_specification_or_research_lane"
+        }
+        Some("implementation" | "worker" | "implementer" | "developer") => {
+            "delegate_implementer_lane"
+        }
+        Some("review" | "coach" | "implementation_review") => "delegate_coach_lane",
+        Some("verification" | "verifier" | "proof") => "delegate_verifier_lane",
+        Some("architecture" | "solution_architect" | "execution_preparation") => {
+            "delegate_execution_preparation_lane"
+        }
+        _ => orchestration_lane_step_label(dispatch_target),
+    }
+}
+
 fn orchestration_checkpoint_label(dispatch_target: &str) -> &'static str {
     match dispatch_target {
         "implementer" => "after_implementation_evidence",
@@ -714,6 +749,24 @@ fn orchestration_checkpoint_label(dispatch_target: &str) -> &'static str {
         "specification" => "after_design_gate",
         "execution_preparation" => "after_execution_preparation_evidence",
         _ => "after_lane_evidence",
+    }
+}
+
+fn orchestration_checkpoint_label_for_contract(
+    dispatch_contract: &serde_json::Value,
+    dispatch_target: &str,
+) -> &'static str {
+    match dispatch_contract_lane_logical_class(dispatch_contract, dispatch_target) {
+        Some("specification" | "business_analyst" | "analyst") => "after_design_gate",
+        Some("implementation" | "worker" | "implementer" | "developer") => {
+            "after_implementation_evidence"
+        }
+        Some("review" | "coach" | "implementation_review") => "after_review_evidence",
+        Some("verification" | "verifier" | "proof") => "after_verification_evidence",
+        Some("architecture" | "solution_architect" | "execution_preparation") => {
+            "after_execution_preparation_evidence"
+        }
+        _ => orchestration_checkpoint_label(dispatch_target),
     }
 }
 
@@ -735,20 +788,16 @@ fn build_runtime_orchestration_contract(
             "replan_after_design_gate".to_string(),
             "shape_work_pool_and_dev_packets".to_string(),
         ];
-        cycle.extend(
-            execution_lane_sequence
-                .iter()
-                .map(|lane| orchestration_lane_step_label(lane).to_string()),
-        );
+        cycle.extend(execution_lane_sequence.iter().map(|lane| {
+            orchestration_lane_step_label_for_contract(dispatch_contract, lane).to_string()
+        }));
         cycle.push("synthesize_closure_or_replan".to_string());
         serde_json::json!(cycle)
     } else {
         let mut cycle = vec!["publish_initial_execution_plan".to_string()];
-        cycle.extend(
-            execution_lane_sequence
-                .iter()
-                .map(|lane| orchestration_lane_step_label(lane).to_string()),
-        );
+        cycle.extend(execution_lane_sequence.iter().map(|lane| {
+            orchestration_lane_step_label_for_contract(dispatch_contract, lane).to_string()
+        }));
         cycle.push("synthesize_closure_or_replan".to_string());
         serde_json::json!(cycle)
     };
@@ -758,19 +807,15 @@ fn build_runtime_orchestration_contract(
             "after_work_pool_shape".to_string(),
             "after_dev_packet_shape".to_string(),
         ];
-        checkpoints.extend(
-            execution_lane_sequence
-                .iter()
-                .map(|lane| orchestration_checkpoint_label(lane).to_string()),
-        );
+        checkpoints.extend(execution_lane_sequence.iter().map(|lane| {
+            orchestration_checkpoint_label_for_contract(dispatch_contract, lane).to_string()
+        }));
         serde_json::json!(checkpoints)
     } else {
         let mut checkpoints = vec!["after_packet_shape".to_string()];
-        checkpoints.extend(
-            execution_lane_sequence
-                .iter()
-                .map(|lane| orchestration_checkpoint_label(lane).to_string()),
-        );
+        checkpoints.extend(execution_lane_sequence.iter().map(|lane| {
+            orchestration_checkpoint_label_for_contract(dispatch_contract, lane).to_string()
+        }));
         serde_json::json!(checkpoints)
     };
 
@@ -1080,7 +1125,8 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
 mod tests {
     use super::{
         apply_implementation_analysis_route_overrides, build_design_first_tracked_flow_bootstrap,
-        build_resolved_development_dispatch_contract, supported_autonomous_execution_settings,
+        build_resolved_development_dispatch_contract, build_runtime_orchestration_contract,
+        supported_autonomous_execution_settings,
     };
     use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
@@ -1216,6 +1262,17 @@ mod tests {
             contract["execution_lane_sequence"],
             json!(["developer", "reviewer"])
         );
+        let orchestration_contract = build_runtime_orchestration_contract(true, true, &contract);
+        assert!(orchestration_contract["active_cycle"]
+            .as_array()
+            .expect("active cycle should be an array")
+            .iter()
+            .any(|step| step == "delegate_implementer_lane"));
+        assert!(orchestration_contract["replanning"]["checkpoints"]
+            .as_array()
+            .expect("replanning checkpoints should be an array")
+            .iter()
+            .any(|step| step == "after_implementation_evidence"));
         assert_eq!(
             contract["lane_catalog"]["developer"]["runtime_role"],
             "worker"

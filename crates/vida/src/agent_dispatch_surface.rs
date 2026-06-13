@@ -14,6 +14,12 @@ use crate::{
     state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
     AgentHostBridgeArgs, AgentSelectArgs, AgentStatusArgs,
 };
+use runtime_path_policy::atomic_write::write_json_replace;
+use runtime_path_policy::bounded_json::read_json_value_file;
+use runtime_path_policy::{
+    existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
+    ArtifactPathKind, PathPolicyError, StateRoot,
+};
 
 const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
@@ -128,69 +134,93 @@ fn read_host_bridge_request(
         .map(Path::to_path_buf)
         .or_else(|| infer_host_bridge_state_root_from_request_path(path));
     if let Some(state_root) = inferred_state_root {
-        return match canonical_state_artifact_path(&state_root, &path.display().to_string(), true) {
-            Ok(canonical_path) => {
-                read_canonical_host_bridge_json_artifact(&canonical_path, "host bridge request")
-            }
-            Err(_) => read_canonical_host_bridge_json_artifact(path, "host bridge request"),
-        };
+        let canonical_path =
+            canonical_state_artifact_path(&state_root, &path.display().to_string(), true)?;
+        return read_canonical_host_bridge_json_artifact(&canonical_path, "host bridge request");
     }
     read_canonical_host_bridge_json_artifact(path, "host bridge request")
 }
 
-fn write_host_bridge_request(path: &Path, request: &serde_json::Value) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "Failed to inspect host bridge request `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "Host bridge request `{}` is a symlink; refusing to write through it.",
-            path.display()
-        ));
-    }
-    let encoded = serde_json::to_string_pretty(request).map_err(|error| {
-        format!(
-            "Failed to encode host bridge request `{}` as JSON: {error}",
-            path.display()
-        )
-    })?;
-    std::fs::write(path, encoded).map_err(|error| {
-        format!(
-            "Failed to write host bridge request `{}`: {error}",
-            path.display()
-        )
-    })
+fn write_host_bridge_request(
+    state_root: &Path,
+    path: &Path,
+    request: &serde_json::Value,
+) -> Result<(), String> {
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    let request_file =
+        existing_regular_file_under_root(&state_root, path, ArtifactPathKind::HostBridgeRequest)
+            .map_err(|error| host_bridge_policy_error(error, "host bridge request"))?;
+    let output = new_output_path_under_root(
+        &state_root,
+        request_file.path(),
+        ArtifactPathKind::HostBridgeRequest,
+        true,
+    )
+    .map_err(|error| host_bridge_policy_error(error, "host bridge request"))?;
+    write_json_replace(&output, request)
+        .map_err(|error| host_bridge_policy_error(error, "host bridge request"))
 }
 
-fn host_bridge_artifact_file(path: &Path) -> Result<Option<serde_json::Value>, String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "Failed to inspect implementation artifact `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "Implementation artifact `{}` is a symlink; refusing to follow it.",
-            path.display()
-        ));
+fn host_bridge_artifact_file(
+    state_root: &Path,
+    path: &Path,
+) -> Result<Option<serde_json::Value>, String> {
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    let artifact =
+        existing_regular_file_under_root(&state_root, path, ArtifactPathKind::TaskAttemptArtifact)
+            .map_err(|error| host_bridge_policy_error(error, "implementation artifact"))?;
+    match read_json_value_file(&artifact, MAX_HOST_BRIDGE_ARTIFACT_BYTES) {
+        Ok(value) => Ok(Some(value)),
+        Err(PathPolicyError::Json { .. }) => Ok(None),
+        Err(error) => Err(host_bridge_policy_error(error, "implementation artifact")),
     }
-    if !metadata.is_file() {
-        return Err(format!(
-            "Implementation artifact `{}` is not a file.",
-            path.display()
-        ));
+}
+
+fn host_bridge_policy_error(error: PathPolicyError, label: &str) -> String {
+    match error {
+        PathPolicyError::DotSegment { path, .. } => {
+            format!("{label} path `{}` contains a dot segment", path.display())
+        }
+        PathPolicyError::Metadata { path, source, .. } => {
+            format!("Failed to inspect {label} `{}`: {source}", path.display())
+        }
+        PathPolicyError::Symlink { path, .. } => {
+            format!(
+                "{label} `{}` is a symlink; refusing to follow it.",
+                path.display()
+            )
+        }
+        PathPolicyError::NotRegularFile { path, .. } => {
+            format!("{label} `{}` is not a regular file.", path.display())
+        }
+        PathPolicyError::Canonicalize { path, source, .. } => {
+            format!(
+                "Failed to canonicalize {label} `{}`: {source}",
+                path.display()
+            )
+        }
+        PathPolicyError::OutsideStateRoot { path, root, .. } => format!(
+            "{label} `{}` is outside VIDA state root `{}`.",
+            path.display(),
+            root.display()
+        ),
+        PathPolicyError::TooLarge {
+            path, max_bytes, ..
+        } => format!("{label} `{}` exceeds {max_bytes} bytes.", path.display()),
+        PathPolicyError::Json { path, source, .. } => {
+            format!(
+                "Failed to encode {label} `{}` as JSON: {source}",
+                path.display()
+            )
+        }
+        PathPolicyError::Read { path, source, .. } => {
+            format!("Failed to read {label} `{}`: {source}", path.display())
+        }
+        PathPolicyError::Write { path, source, .. } => {
+            format!("Failed to write {label} `{}`: {source}", path.display())
+        }
+        other => other.to_string(),
     }
-    let raw = std::fs::read_to_string(path).map_err(|error| {
-        format!(
-            "Failed to read implementation artifact `{}`: {error}",
-            path.display()
-        )
-    })?;
-    Ok(serde_json::from_str::<serde_json::Value>(&raw).ok())
 }
 
 fn normalized_host_bridge_attempt_id(run_id: &str, value: Option<&str>) -> String {
@@ -326,80 +356,15 @@ fn write_host_bridge_normalized_implementation_artifact(
     path: &Path,
     artifact: &serde_json::Value,
 ) -> Result<(), String> {
-    let canonical_state_root = std::fs::canonicalize(state_root).map_err(|error| {
-        format!(
-            "Failed to canonicalize VIDA state root `{}`: {error}",
-            state_root.display()
-        )
-    })?;
-    let parent = path.parent().ok_or_else(|| {
-        format!(
-            "Implementation artifact path `{}` has no parent directory.",
-            path.display()
-        )
-    })?;
-    if std::fs::symlink_metadata(parent).is_err() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "Failed to create implementation artifact directory `{}`: {error}",
-                parent.display()
-            )
-        })?;
-    }
-    let metadata = std::fs::symlink_metadata(parent).map_err(|error| {
-        format!(
-            "Failed to inspect implementation artifact directory `{}`: {error}",
-            parent.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "Implementation artifact directory `{}` is a symlink; refusing to write through it.",
-            parent.display()
-        ));
-    }
-    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
-        format!(
-            "Failed to canonicalize implementation artifact directory `{}`: {error}",
-            parent.display()
-        )
-    })?;
-    if !canonical_parent.starts_with(&canonical_state_root) {
-        return Err(format!(
-            "Implementation artifact directory `{}` escapes VIDA state root `{}`.",
-            canonical_parent.display(),
-            canonical_state_root.display()
-        ));
-    }
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "Implementation artifact `{}` is a symlink; refusing to write through it.",
-                path.display()
-            ));
-        }
-    }
-    let encoded = serde_json::to_string_pretty(artifact).map_err(|error| {
-        format!(
-            "Failed to encode normalized implementation artifact `{}`: {error}",
-            path.display()
-        )
-    })?;
-    std::fs::write(path, encoded).map_err(|error| {
-        format!(
-            "Failed to write normalized implementation artifact `{}`: {error}",
-            path.display()
-        )
-    })
-}
-
-fn path_contains_dot_segment(path: &Path) -> bool {
-    path.components().any(|component| {
-        matches!(
-            component,
-            std::path::Component::CurDir | std::path::Component::ParentDir
-        )
-    })
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    let output_path = new_output_path_under_root(
+        &state_root,
+        path,
+        ArtifactPathKind::TaskAttemptArtifact,
+        true,
+    )
+    .map_err(|error| error.to_string())?;
+    write_json_replace(&output_path, artifact).map_err(|error| error.to_string())
 }
 
 const MAX_HOST_BRIDGE_ARTIFACT_BYTES: u64 = 1024 * 1024;
@@ -463,38 +428,19 @@ fn canonical_state_artifact_path(
         )
     })?;
     if require_existing_file {
-        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
-            format!(
-                "Failed to inspect host bridge artifact `{}`: {error}",
-                path.display()
-            )
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "Host bridge artifact `{}` is a symlink; refusing to follow it.",
-                path.display()
-            ));
-        }
-        if !metadata.is_file() {
-            return Err(format!(
-                "Host bridge artifact `{}` is not a regular file.",
-                path.display()
-            ));
-        }
-        let canonical_path = std::fs::canonicalize(&path).map_err(|error| {
-            format!(
-                "Failed to canonicalize host bridge artifact `{}`: {error}",
-                path.display()
-            )
-        })?;
-        if !canonical_path.starts_with(&canonical_state_root) {
-            return Err(format!(
-                "Host bridge artifact `{}` escapes VIDA state root `{}`.",
-                canonical_path.display(),
-                canonical_state_root.display()
-            ));
-        }
-        Ok(canonical_path)
+        let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+        existing_regular_file_under_root(&state_root, &path, ArtifactPathKind::HostBridgeRequest)
+            .map(|file| file.path().to_path_buf())
+            .map_err(|error| match error {
+                runtime_path_policy::PathPolicyError::OutsideStateRoot { path, root, .. } => {
+                    format!(
+                        "Host bridge artifact `{}` escapes VIDA state root `{}`.",
+                        path.display(),
+                        root.display()
+                    )
+                }
+                other => other.to_string(),
+            })
     } else {
         let parent = path.parent().ok_or_else(|| {
             format!(
@@ -1370,7 +1316,7 @@ async fn attach_host_bridge_implementation_artifacts(
     let mut artifact_refs = Vec::new();
     let mut source_artifact_refs = Vec::new();
     for (index, artifact_path) in command.attach_artifacts.iter().enumerate() {
-        let artifact_json = match host_bridge_artifact_file(artifact_path) {
+        let artifact_json = match host_bridge_artifact_file(store.root(), artifact_path) {
             Ok(json) => json,
             Err(error) => {
                 return emit_host_bridge_attach_blocked(
@@ -1503,7 +1449,7 @@ async fn attach_host_bridge_implementation_artifacts(
             serde_json::json!(source_artifact_refs),
         );
     }
-    if let Err(error) = write_host_bridge_request(&command.request, &request) {
+    if let Err(error) = write_host_bridge_request(store.root(), &command.request, &request) {
         return emit_host_bridge_attach_blocked(
             &command.request,
             command.json,
@@ -3327,17 +3273,8 @@ fn validate_materialized_agent_dispatch_packet(
     if dispatch_packet_path.trim().is_empty() {
         return Err("dispatch packet path is empty".to_string());
     }
-    if !packet_path.exists() {
-        return Err(format!(
-            "dispatch packet path does not exist: {dispatch_packet_path}"
-        ));
-    }
-    let raw = std::fs::read_to_string(packet_path).map_err(|error| {
-        format!("Failed to read materialized dispatch packet `{dispatch_packet_path}`: {error}")
-    })?;
-    let packet = serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
-        format!("Failed to parse materialized dispatch packet `{dispatch_packet_path}`: {error}")
-    })?;
+    let packet =
+        read_canonical_host_bridge_json_artifact(packet_path, "materialized dispatch packet")?;
     if packet["run_id"].as_str() != Some(lane.task_id.as_str()) {
         return Err(format!(
             "materialized packet run_id mismatch: expected `{}`, got `{}`",
@@ -3916,6 +3853,31 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
             .map(|run_id| run_id == summary.run_id)
             .unwrap_or(true)
     });
+    let tasks = store.all_tasks().await.unwrap_or_default();
+    let task_ids = tasks.iter().map(|task| task.id.clone()).collect::<Vec<_>>();
+    let closed_task_ids = tasks
+        .iter()
+        .filter(|task| crate::state_store::StateStore::task_status_is_closed_like(&task.status))
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
+    let current_runtime_task_stale = latest_status.as_ref().and_then(|status| {
+        agent_status_runtime_task_stale_code(
+            &status.task_id,
+            &task_ids,
+            &closed_task_ids,
+            crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
+                latest_recovery.as_ref(),
+            ),
+        )
+    });
+    let current_runtime_task_missing =
+        current_runtime_task_stale.is_some_and(|code| code == "next_action_target_missing");
+    let current_runtime_task_closed = current_runtime_task_stale
+        .is_some_and(|code| code == "closed_task_active_run_projection_mismatch");
+    let latest_recovery_is_terminal_retired_runtime_run =
+        crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
+            latest_recovery.as_ref(),
+        );
     let active_lanes_count = latest_status
         .as_ref()
         .filter(|status| {
@@ -3973,7 +3935,8 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
     let reclaimable_lanes = latest_recovery
         .as_ref()
         .filter(|summary| {
-            !summary.delegation_gate.delegated_cycle_open
+            !latest_recovery_is_terminal_retired_runtime_run
+                && !summary.delegation_gate.delegated_cycle_open
                 && matches!(
                     summary.lifecycle_stage.as_str(),
                     "closure_complete" | "completed" | "lane_completed"
@@ -3995,10 +3958,7 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
                 )
             })
         } else if !reclaimable_lanes.is_empty() {
-            Some(format!(
-                "vida taskflow settle --run-id {}",
-                crate::shell_quote(&summary.run_id)
-            ))
+            Some("vida taskflow settle".to_string())
         } else {
             None
         }
@@ -4013,8 +3973,33 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
                 .unwrap_or_else(|| "blocked_dispatch".to_string()),
         );
     }
+    if current_runtime_task_missing {
+        blocker_codes.push("next_action_target_missing".to_string());
+    }
+    if current_runtime_task_closed {
+        blocker_codes.push("closed_task_active_run_projection_mismatch".to_string());
+    }
     let next_actions = if blocker_codes.is_empty() {
         Vec::new()
+    } else if current_runtime_task_missing || current_runtime_task_closed {
+        latest_status
+            .as_ref()
+            .map(|status| {
+                let mut actions = Vec::new();
+                if current_runtime_task_closed {
+                    actions.push(
+                        crate::status_surface_signals::closed_task_active_run_projection_mismatch_next_action(),
+                    );
+                }
+                actions.push(
+                    crate::status_surface_signals::runtime_binding_task_missing_next_action(
+                        Some(status.run_id.as_str()),
+                        &status.task_id,
+                    ),
+                );
+                actions
+            })
+            .unwrap_or_default()
     } else {
         next_recovery_command
             .as_ref()
@@ -4065,6 +4050,23 @@ fn agent_status_payload(
         extra_fields,
     )
     .expect("agent status operator payload should be valid")
+}
+
+fn agent_status_runtime_task_stale_code(
+    task_id: &str,
+    task_ids: &[String],
+    closed_task_ids: &[String],
+    terminal_retired_runtime_run: bool,
+) -> Option<&'static str> {
+    if terminal_retired_runtime_run {
+        None
+    } else if !task_ids.iter().any(|id| id == task_id) {
+        Some("next_action_target_missing")
+    } else if closed_task_ids.iter().any(|id| id == task_id) {
+        Some("closed_task_active_run_projection_mismatch")
+    } else {
+        None
+    }
 }
 
 fn print_agent_status_payload(payload: &serde_json::Value, json: bool) {
@@ -4240,9 +4242,20 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
             emit_host_bridge_payload(&payload, command.json)
         }
         Err(error) => {
-            let blocker_codes = vec!["host_bridge_request_unreadable".to_string()];
-            let next_actions =
-                vec!["provide a readable host_tool_bridge_request JSON artifact".to_string()];
+            let path_safety_error = error.contains("dot-segment")
+                || error.contains("escapes VIDA state root")
+                || error.contains("symlink");
+            let blocker_codes = vec![if path_safety_error {
+                "host_bridge_request_untrusted_path".to_string()
+            } else {
+                "host_bridge_request_unreadable".to_string()
+            }];
+            let next_actions = vec![if path_safety_error {
+                "provide a host_tool_bridge_request JSON artifact under the VIDA state root"
+                    .to_string()
+            } else {
+                "provide a readable host_tool_bridge_request JSON artifact".to_string()
+            }];
             let artifact_refs = serde_json::json!({
                 "request_path": command.request.display().to_string()
             });
@@ -4671,11 +4684,12 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
-        configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
-        dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
-        host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
-        host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
+        agent_status_runtime_task_stale_code, apply_continuation_dispatch_gate_to_preview,
+        build_agent_dispatch_next_preview, configured_dev_team_first_step_for_task,
+        dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
+        dispatch_target_for_agent_dispatch_lane, host_bridge_adapter_payload,
+        host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
+        host_bridge_normalized_implementation_artifact_path,
         host_bridge_packet_matches_reconciled_active_request,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
@@ -4693,6 +4707,46 @@ mod tests {
     use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::{AgentDispatchNextArgs, AgentHostBridgeArgs};
     use std::process::ExitCode;
+
+    #[test]
+    fn agent_status_blocks_closed_runtime_task_target() {
+        assert_eq!(
+            agent_status_runtime_task_stale_code(
+                "closed-task",
+                &["closed-task".to_string()],
+                &["closed-task".to_string()],
+                false,
+            ),
+            Some("closed_task_active_run_projection_mismatch")
+        );
+        assert_eq!(
+            agent_status_runtime_task_stale_code(
+                "missing-task",
+                &["other-task".to_string()],
+                &[],
+                false
+            ),
+            Some("next_action_target_missing")
+        );
+        assert_eq!(
+            agent_status_runtime_task_stale_code(
+                "closed-task",
+                &["closed-task".to_string()],
+                &[],
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            agent_status_runtime_task_stale_code(
+                "closed-task",
+                &[],
+                &["closed-task".to_string()],
+                true
+            ),
+            None
+        );
+    }
 
     fn coach_dispatch_lane_preview(role_label: &str, task_id: &str) -> AgentDispatchLanePreview {
         AgentDispatchLanePreview {

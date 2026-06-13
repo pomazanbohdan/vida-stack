@@ -23,6 +23,8 @@ members = [
     "crates/taskflow-state",
     "crates/taskflow-state-fs",
     "crates/taskflow-state-surreal",
+    "crates/runtime-path-policy",
+    "crates/operator-output",
     "crates/vida-contracts",
     "crates/vida-test-support",
     "crates/vida-pi-agent",

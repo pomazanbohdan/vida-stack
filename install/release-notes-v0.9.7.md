@@ -26,7 +26,7 @@ Observed local validation for the 2026-05-04 release wave:
 6. `cargo test -p vida lane_surface -- --test-threads=1`
 7. `cargo test -p vida root_session_write_guard -- --test-threads=1`
 8. `cargo test -p vida --test boot_smoke agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsafe_rejections -- --test-threads=1`
-9. `target\debug\vida.exe docflow check --root . docs/product/spec/orchestrator-runtime-contract-hardening-design.md docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md docs/process/codex-agent-configuration-guide.md`
+9. `target\debug\vida.exe docflow check --root . docs/product/spec/orchestrator-runtime-contract-hardening-contract.md docs/product/spec/codex-app-agent-lifecycle-cleanup-contract.md docs/process/codex-agent-configuration-guide.md`
 10. `target\debug\vida.exe orchestrator-init --json`
 11. `target\debug\vida.exe agent dispatch-next --json`
 12. `target\debug\vida.exe agent select --runtime-role verifier --task-class verification --json`

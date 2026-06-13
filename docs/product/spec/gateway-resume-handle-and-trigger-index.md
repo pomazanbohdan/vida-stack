@@ -1,10 +1,12 @@
 # VIDA Gateway Resume Handle And Trigger Index
 
-Status: draft `v1` bounded runtime artifact
+Status: canonical future-direction runtime spec
 
-Revision: `2026-03-09`
+Revision: `2026-06-13`
 
 Purpose: define the lawful future shape for resumable gateway handles and indexed trigger matching without promoting vendor bookmark models into root product law.
+
+Current execution note: this document defines a future runtime direction and does not claim an executable gateway-handle surface in the current TaskFlow runtime family.
 
 ## 1. Scope
 
@@ -122,10 +124,10 @@ LangGraph alignment note:
 artifact_path: product/spec/gateway-resume-handle-and-trigger-index
 artifact_type: product_spec
 artifact_version: 1
-artifact_revision: 2026-03-10
+artifact_revision: 2026-06-13
 schema_version: 1
 status: canonical
 source_path: docs/product/spec/gateway-resume-handle-and-trigger-index.md
 created_at: 2026-03-09T12:00:46+02:00
-updated_at: 2026-03-12T20:45:00+02:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: gateway-resume-handle-and-trigger-index.changelog.jsonl

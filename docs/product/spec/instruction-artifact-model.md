@@ -167,7 +167,7 @@ Canonical rule:
 
 This spec absorbs and supersedes product-instruction semantics previously scattered across:
 
-1. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
 2. `agent-definitions/model.agent-definitions-contract.md`
 3. `docs/product/spec/instruction-artifact-model.md`
 4. `prompt-templates/worker.packet-templates.md`

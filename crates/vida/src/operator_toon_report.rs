@@ -1,89 +1,19 @@
-pub(crate) struct OperatorToonField {
-    pub(crate) key: String,
-    pub(crate) value: serde_json::Value,
-}
-
-impl OperatorToonField {
-    pub(crate) fn text(key: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            key: key.into(),
-            value: serde_json::Value::String(value.into()),
-        }
-    }
-
-    pub(crate) fn value(key: impl Into<String>, value: serde_json::Value) -> Self {
-        Self {
-            key: key.into(),
-            value,
-        }
-    }
-}
+pub(crate) use operator_output::toon_report::OperatorToonField;
 
 pub(crate) fn render(surface: &str, fields: Vec<OperatorToonField>) -> String {
-    let mut payload = serde_json::Map::new();
-    for field in fields {
-        let key = taskflow_format_toon::sanitize_toon_scalar(&field.key);
-        if key.trim().is_empty() {
-            continue;
-        }
-        payload.insert(key, sanitize_value(field.value));
-    }
-    render_value(surface, serde_json::Value::Object(payload))
+    operator_output::toon_report::render(surface, fields)
 }
 
 pub(crate) fn render_value(surface: &str, value: serde_json::Value) -> String {
-    taskflow_format_toon::render_value_section(surface, &sanitize_value(value))
+    operator_output::toon_report::render_value(surface, value)
 }
 
 pub(crate) fn print(surface: &str, fields: Vec<OperatorToonField>) {
-    println!("{}", render(surface, fields));
+    operator_output::toon_report::print(surface, fields);
 }
 
 pub(crate) fn select_fields(value: serde_json::Value, fields: Option<&str>) -> serde_json::Value {
-    let Some(fields) = fields else {
-        return value;
-    };
-    let wanted = fields
-        .split(',')
-        .map(str::trim)
-        .filter(|field| !field.is_empty())
-        .collect::<Vec<_>>();
-    if wanted.is_empty() {
-        return value;
-    }
-    let Some(object) = value.as_object() else {
-        return value;
-    };
-    let mut selected = serde_json::Map::new();
-    for field in wanted {
-        if let Some(value) = object.get(field) {
-            selected.insert(field.to_string(), value.clone());
-        }
-    }
-    serde_json::Value::Object(selected)
-}
-
-fn sanitize_value(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::String(value) => {
-            serde_json::Value::String(taskflow_format_toon::sanitize_toon_scalar(&value))
-        }
-        serde_json::Value::Array(values) => {
-            serde_json::Value::Array(values.into_iter().map(sanitize_value).collect())
-        }
-        serde_json::Value::Object(object) => serde_json::Value::Object(
-            object
-                .into_iter()
-                .map(|(key, value)| {
-                    (
-                        taskflow_format_toon::sanitize_toon_scalar(&key),
-                        sanitize_value(value),
-                    )
-                })
-                .collect(),
-        ),
-        other => other,
-    }
+    operator_output::toon_report::select_fields(value, fields)
 }
 
 #[cfg(test)]
@@ -103,18 +33,6 @@ mod tests {
         assert!(output.starts_with("vida status\n"));
         assert!(output.contains("status: pass"));
         assert!(output.contains("backend: \"state-store\""));
-    }
-
-    #[test]
-    fn render_escapes_control_characters_in_keys_and_values() {
-        let output = render(
-            "vida status",
-            vec![OperatorToonField::text("bad\nkey", "bad\x1bvalue")],
-        );
-
-        assert_eq!(output.lines().count(), 2);
-        assert!(output.contains("value"));
-        assert!(!output.contains('\x1b'));
     }
 
     #[test]

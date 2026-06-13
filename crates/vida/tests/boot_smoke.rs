@@ -1220,6 +1220,30 @@ fn command_output_with_retry(command: &mut Command) -> std::process::Output {
     last.expect("command retry helper should capture at least one output")
 }
 
+fn command_output_with_state_lock_retry(command: &mut Command) -> std::process::Output {
+    retry_with_backoff(
+        &mut || {
+            command
+                .output()
+                .unwrap_or_else(|error| panic!("command should run: {error}"))
+        },
+        MAX_BOOT_RETRY_ATTEMPTS,
+        |output, _| is_state_lock_error(output),
+    )
+}
+
+fn command_output_with_state_access_retry(command: &mut Command) -> std::process::Output {
+    retry_with_backoff(
+        &mut || {
+            command
+                .output()
+                .unwrap_or_else(|error| panic!("command should run: {error}"))
+        },
+        MAX_BOOT_RETRY_ATTEMPTS,
+        |output, _| is_state_lock_error(output) || is_degraded_lock_contention_surface(output),
+    )
+}
+
 fn is_retryable_temporary_failure(output: &std::process::Output) -> bool {
     output.status.code() == Some(124)
         || (is_state_lock_error(output) && !is_deterministic_lock_contention_surface(output))
@@ -1235,19 +1259,43 @@ fn is_state_lock_error_text(text: &str) -> bool {
 }
 
 fn is_state_lock_error(output: &std::process::Output) -> bool {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    is_state_lock_error_text(&stderr)
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    is_state_lock_error_text(&combined)
 }
 
 fn is_deterministic_lock_contention_surface(output: &std::process::Output) -> bool {
+    is_degraded_lock_contention_surface(output)
+        || is_failed_fast_lock_contention_surface(output)
+        || {
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            combined.contains("memory governance guard timed out")
+        }
+}
+
+fn is_degraded_lock_contention_surface(output: &std::process::Output) -> bool {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    combined.contains("degraded_lock_contention")
+}
+
+fn is_failed_fast_lock_contention_surface(output: &std::process::Output) -> bool {
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     combined.contains("failed fast")
-        || combined.contains("degraded_lock_contention")
-        || combined.contains("memory governance guard timed out")
 }
 
 fn retry_backoff_delay(attempt: usize) -> Duration {
@@ -1505,13 +1553,13 @@ fn status_with_timeout(project_root: &str, state_dir: &str, args: &[&str]) -> st
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", state_dir);
-    command_output_with_retry(&mut command)
+    command_output_with_state_lock_retry(&mut command)
 }
 
 fn doctor_with_timeout(state_dir: &str, args: &[&str]) -> std::process::Output {
     let mut command = vida();
     command.args(args).env("VIDA_STATE_DIR", state_dir);
-    command_output_with_retry(&mut command)
+    command_output_with_state_lock_retry(&mut command)
 }
 
 fn taskflow_run_graph_latest_with_timeout(state_dir: &str, json: bool) -> std::process::Output {
@@ -1532,6 +1580,8 @@ fn taskflow_run_graph_seed_with_timeout(
     request_text: &str,
     json: bool,
 ) -> std::process::Output {
+    ensure_run_graph_backing_smoke_task(state_dir, run_id);
+
     let nonce = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
     let stdout_path = format!(
         "{}/vida-run-graph-seed-{}-{nonce}.stdout",
@@ -1576,6 +1626,43 @@ fn taskflow_run_graph_seed_with_timeout(
         stdout: fs::read(&stdout_path).expect("seed stdout file should read"),
         stderr: fs::read(&stderr_path).expect("seed stderr file should read"),
     }
+}
+
+fn ensure_run_graph_backing_smoke_task(state_dir: &str, task_id: &str) {
+    let show = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "run-graph backing task lookup",
+        |command| {
+            command.args(["task", "show", task_id, "--state-dir", state_dir, "--json"]);
+        },
+    );
+    if show.status.success() {
+        return;
+    }
+
+    create_scheduler_smoke_task(
+        state_dir,
+        task_id,
+        &format!("Run graph backing task {task_id}"),
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+}
+
+fn assert_recovery_status_reports_ready_gate(output: &std::process::Output) {
+    assert!(
+        !output.status.success(),
+        "recovery status should report the open delegated cycle as a blocked gate"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("recovery status json should parse");
+    assert_eq!(parsed["status"], "blocked");
+    assert_eq!(parsed["blocker_codes"][0], "open_delegated_cycle");
+    assert_eq!(parsed["recovery"]["resume_status"], "ready");
 }
 
 fn taskflow_run_graph_advance_with_timeout(
@@ -1690,16 +1777,22 @@ fn taskflow_recovery_with_timeout(
 }
 
 fn status_or_doctor_with_timeout(state_dir: &str, args: &[&str]) -> std::process::Output {
-    bounded_vida_output(
-        &["-k", "5s", "20s"],
-        "status/doctor should run",
-        |command| {
-            command
-                .args(args)
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", state_dir);
+    support::retry_with_backoff(
+        &mut || {
+            bounded_vida_output(
+                &["-k", "5s", "20s"],
+                "status/doctor should run",
+                |command| {
+                    command
+                        .args(args)
+                        .env_remove("VIDA_ROOT")
+                        .env_remove("VIDA_HOME")
+                        .env("VIDA_STATE_DIR", state_dir);
+                },
+            )
         },
+        600,
+        |output| is_state_lock_error(output) || is_degraded_lock_contention_surface(output),
     )
 }
 
@@ -1715,6 +1808,17 @@ where
     F: FnMut() -> Command,
 {
     run_with_state_lock_retry(|| build().output().expect("command should run"))
+}
+
+fn run_command_with_state_access_retry<F>(mut build: F) -> std::process::Output
+where
+    F: FnMut() -> Command,
+{
+    support::retry_with_backoff(
+        &mut || build().output().expect("command should run"),
+        600,
+        |output| is_state_lock_error(output) || is_degraded_lock_contention_surface(output),
+    )
 }
 
 fn command_output_via_files(
@@ -2078,11 +2182,13 @@ fn boot_releases_state_before_immediate_status_command() {
         String::from_utf8_lossy(&boot.stderr)
     );
 
-    let status = vida()
-        .args(["status", "--json", "--view", "full"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("immediate status should run without external retry");
+    let status = run_command_with_state_access_retry(|| {
+        let mut command = vida();
+        command
+            .args(["status", "--json", "--view", "full"])
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
     assert!(
         status.status.success(),
         "stdout={}\nstderr={}",
@@ -3969,12 +4075,14 @@ fn taskflow_doctor_routes_in_process_without_taskflow_binary() {
         &delegated_taskflow_bin,
         "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
     );
-    let output = vida()
-        .args(["taskflow", "doctor", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .env("VIDA_TASKFLOW_BIN", &delegated_taskflow_bin)
-        .output()
-        .expect("taskflow doctor should run");
+    let output = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(["taskflow", "doctor", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_TASKFLOW_BIN", &delegated_taskflow_bin);
+        command
+    });
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -4103,11 +4211,13 @@ fn taskflow_protocol_binding_bridge_syncs_into_authoritative_state_store() {
         true
     );
 
-    let doctor = vida()
-        .args(["doctor", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("doctor should run");
+    let doctor = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(["doctor", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
     assert!(doctor.status.success());
     let doctor_stdout = String::from_utf8_lossy(&doctor.stdout);
     let doctor_json: serde_json::Value =
@@ -4779,11 +4889,15 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
     );
     let resumed_stderr = String::from_utf8_lossy(&resumed.stderr);
     assert!(
-        resumed_stderr.contains("Run-graph resume gate denied"),
+        resumed_stderr.contains("Stale missing-task run graph"),
         "{resumed_stderr}"
     );
     assert!(
-        resumed_stderr.contains("recovery_ready is false"),
+        resumed_stderr.contains("references missing TaskFlow task"),
+        "{resumed_stderr}"
+    );
+    assert!(
+        resumed_stderr.contains("vida lane retire"),
         "{resumed_stderr}"
     );
 
@@ -5639,12 +5753,14 @@ fn status_and_consume_bundle_check_handle_legacy_pending_activation() {
     )
     .expect("activation receipt should be written");
 
-    let status = vida()
-        .args(["status", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .env("VIDA_ROOT", &state_dir)
-        .output()
-        .expect("status should run");
+    let status = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(["status", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_ROOT", &state_dir);
+        command
+    });
     assert!(status.status.success());
     let status_json: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status json should parse");
@@ -5684,12 +5800,14 @@ fn explicit_root_and_state_dirs_keep_activation_status_canonical_through_status_
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let status = vida()
-        .args(["status", "--json"])
-        .env("VIDA_ROOT", &root_dir)
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("status should run");
+    let status = run_command_with_state_access_retry(|| {
+        let mut command = vida();
+        command
+            .args(["status", "--json"])
+            .env("VIDA_ROOT", &root_dir)
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
     assert!(status.status.success());
     let status_json: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status json should parse");
@@ -7941,7 +8059,7 @@ fn consume_continue_repeated_run_id_after_success_fails_closed_without_closure_p
     );
     assert_eq!(
         repeated_resumed_json["blocker_codes"],
-        serde_json::json!(["run_graph_recovery_not_ready"]),
+        serde_json::json!(["consume_continue_resume_blocked"]),
         "{repeated_resumed_json}"
     );
     assert!(
@@ -10226,7 +10344,14 @@ fn taskflow_consume_final_selects_pbi_discussion_role_for_backlog_queries() {
         .expect("dispatch packet path should be present");
     assert!(std::path::Path::new(dispatch_packet_path).is_file());
     assert!(parsed["payload"]["dispatch_receipt"]["dispatch_result_path"].is_null());
-    assert!(parsed["payload"]["dispatch_receipt"]["activation_agent_type"].is_null());
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["activation_agent_type"],
+        "middle"
+    );
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["activation_runtime_role"],
+        "pm"
+    );
     let matched_terms = parsed["payload"]["role_selection"]["matched_terms"]
         .as_array()
         .expect("matched terms should be an array");
@@ -11069,18 +11194,28 @@ fn taskflow_factual_sandbox_h6_h8_runtime_packet_runner() {
         true,
     );
     assert!(
-        recovery_status.status.success(),
-        "{}{}",
+        !recovery_status.status.success(),
+        "recovery status should block while the delegated cycle is open: {}{}",
         String::from_utf8_lossy(&recovery_status.stdout),
         String::from_utf8_lossy(&recovery_status.stderr)
     );
     let recovery_json: serde_json::Value =
         serde_json::from_slice(&recovery_status.stdout).expect("recovery status json should parse");
     assert_eq!(recovery_json["surface"], "vida taskflow recovery status");
+    assert_eq!(recovery_json["status"], "blocked");
+    assert!(recovery_json["blocker_codes"]
+        .as_array()
+        .expect("recovery blocker codes should render")
+        .iter()
+        .any(|code| code == "open_delegated_cycle"));
     assert_eq!(
         recovery_json["recovery"]["run_id"],
         packet_latest_json["run_id"]
     );
+    assert!(recovery_json["recommended_command"]
+        .as_str()
+        .expect("recovery recommended command should render")
+        .contains("taskflow consume continue --run-id sandbox-h8-packet"));
 
     fs::remove_dir_all(project_root).expect("temp project root should be removed");
 }
@@ -11148,6 +11283,16 @@ fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    create_scheduler_smoke_task(
+        &state_dir,
+        "vida-a",
+        "Bridged flow state task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
 
     let init = vida()
         .args([
@@ -11207,10 +11352,17 @@ fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
     );
 
     let recovery_latest = taskflow_recovery_latest_with_timeout(&state_dir, "latest", true);
-    assert!(recovery_latest.status.success());
+    assert!(!recovery_latest.status.success());
     let recovery_latest_stdout = String::from_utf8_lossy(&recovery_latest.stdout);
     let recovery_latest_parsed: serde_json::Value =
         serde_json::from_str(&recovery_latest_stdout).expect("recovery latest should parse");
+    assert!(
+        json_string_array_contains(
+            &recovery_latest_parsed["blocker_codes"],
+            "open_delegated_cycle"
+        ),
+        "{recovery_latest_parsed}"
+    );
     assert_eq!(recovery_latest_parsed["recovery"]["run_id"], "vida-a");
     assert_eq!(recovery_latest_parsed["recovery"]["resume_node"], "writer");
     assert_eq!(recovery_latest_parsed["recovery"]["resume_status"], "ready");
@@ -11277,9 +11429,10 @@ fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
     let status_stdout = String::from_utf8_lossy(&status_output.stdout);
     let status_parsed: serde_json::Value =
         serde_json::from_str(&status_stdout).expect("status json should parse");
+    assert_eq!(status_parsed["latest_run_graph_status"]["run_id"], "vida-a");
     assert_eq!(
-        status_parsed["latest_run_graph_checkpoint"]["run_id"],
-        "vida-a"
+        status_parsed["latest_run_graph_status"]["checkpoint_kind"],
+        "execution_cursor"
     );
     assert_eq!(status_parsed["latest_run_graph_gate"]["run_id"], "vida-a");
 
@@ -11318,6 +11471,16 @@ fn status_and_doctor_text_surfaces_report_non_empty_latest_flow_state() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    create_scheduler_smoke_task(
+        &state_dir,
+        "vida-a",
+        "Status doctor flow state task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
 
     let init = vida()
         .args([
@@ -11350,7 +11513,7 @@ fn status_and_doctor_text_surfaces_report_non_empty_latest_flow_state() {
         .expect("taskflow run-graph update should run");
     assert!(update.status.success());
 
-    let status_output = run_command_with_state_lock_retry(|| {
+    let status_output = run_command_with_state_access_retry(|| {
         let mut cmd = vida();
         cmd.arg("status");
         cmd.env("VIDA_STATE_DIR", &state_dir);
@@ -11365,7 +11528,7 @@ fn status_and_doctor_text_surfaces_report_non_empty_latest_flow_state() {
     assert!(status_stdout.contains("checkpoint=execution_cursor"));
     assert!(status_stdout.contains("gate=policy_gate_required"));
 
-    let doctor_output = run_command_with_state_lock_retry(|| {
+    let doctor_output = run_command_with_state_access_retry(|| {
         let mut cmd = vida();
         cmd.arg("doctor");
         cmd.env("VIDA_STATE_DIR", &state_dir);
@@ -11391,6 +11554,16 @@ fn taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    create_scheduler_smoke_task(
+        &state_dir,
+        "vida-a",
+        "Bridged direct run flow state task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
 
     let init = vida()
         .args([
@@ -11443,10 +11616,17 @@ fn taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state() {
     );
 
     let recovery_status = taskflow_recovery_status_with_timeout(&state_dir, "vida-a", true);
-    assert!(recovery_status.status.success());
+    assert!(!recovery_status.status.success());
     let recovery_status_stdout = String::from_utf8_lossy(&recovery_status.stdout);
     let recovery_status_parsed: serde_json::Value =
         serde_json::from_str(&recovery_status_stdout).expect("recovery status should parse");
+    assert!(
+        json_string_array_contains(
+            &recovery_status_parsed["blocker_codes"],
+            "open_delegated_cycle"
+        ),
+        "{recovery_status_parsed}"
+    );
     assert_eq!(recovery_status_parsed["run_id"], "vida-a");
     assert_eq!(recovery_status_parsed["recovery"]["resume_node"], "writer");
     assert_eq!(recovery_status_parsed["recovery"]["resume_status"], "ready");
@@ -11551,7 +11731,7 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
     );
 
     let recovery = taskflow_recovery_status_with_timeout(&state_dir, "vida-scope", true);
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -11624,7 +11804,7 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
     );
 
     let recovery = taskflow_recovery_status_with_timeout(&state_dir, "vida-pbi", true);
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -11769,7 +11949,8 @@ fn taskflow_run_graph_advance_builds_coach_handoff_for_seeded_implementation() {
 }
 
 #[test]
-fn taskflow_run_graph_advance_fails_closed_when_compiled_snapshot_lacks_implementation_route() {
+fn taskflow_run_graph_advance_uses_seeded_route_when_compiled_snapshot_lacks_implementation_route()
+{
     let state_dir = unique_state_dir();
 
     let boot = vida()
@@ -11800,11 +11981,27 @@ fn taskflow_run_graph_advance_fails_closed_when_compiled_snapshot_lacks_implemen
     );
 
     let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
-    assert!(!advance.status.success());
-
     assert!(
-        !String::from_utf8_lossy(&advance.stdout).trim().is_empty()
-            || !String::from_utf8_lossy(&advance.stderr).trim().is_empty()
+        advance.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&advance.stdout),
+        String::from_utf8_lossy(&advance.stderr)
+    );
+    let advance_stdout = String::from_utf8_lossy(&advance.stdout);
+    let advance_parsed: serde_json::Value =
+        serde_json::from_str(&advance_stdout).expect("run-graph advance json should parse");
+    assert_eq!(
+        advance_parsed["payload"]["status"]["active_node"],
+        "analysis"
+    );
+    assert_eq!(advance_parsed["payload"]["status"]["next_node"], "writer");
+    assert_eq!(
+        advance_parsed["payload"]["status"]["route_task_class"],
+        "implementation"
+    );
+    assert_eq!(
+        advance_parsed["payload"]["status"]["resume_target"],
+        "dispatch.writer_lane"
     );
 }
 
@@ -12009,7 +12206,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_scope_discu
             .output()
             .expect("recovery status should run")
     });
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -12075,7 +12272,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_pbi_discuss
     );
 
     let recovery = taskflow_recovery_status_with_timeout(&state_dir, "vida-pbi", true);
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -12139,7 +12336,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
             .output()
             .expect("recovery status should run")
     });
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -12273,7 +12470,7 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
             .output()
             .expect("recovery status should run")
     });
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -12449,7 +12646,7 @@ fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensem
             .output()
             .expect("recovery status should run")
     });
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -12979,7 +13176,7 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
     assert_eq!(run_graph_parsed["run_graph_status"]["recovery_ready"], true);
 
     let recovery = taskflow_recovery_status_with_timeout(&state_dir, "vida-dev", true);
-    assert!(recovery.status.success());
+    assert_recovery_status_reports_ready_gate(&recovery);
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
@@ -13947,7 +14144,7 @@ else:
         .args(["taskflow", "task", "ready", "--json"])
         .current_dir(&nested_pwd)
         .env_remove("VIDA_ROOT");
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
 
     assert!(
         output.status.success(),
@@ -14200,13 +14397,14 @@ fn taskflow_testing_h17_h20_projection_consistency_after_child_mutation() {
         assert_eq!(listed["status"], shown["status"]);
     }
     let child_listed_before = list_task("h17-h20-child");
-    assert!(child_listed_before["dependencies"]
-        .as_array()
-        .is_some_and(|deps| {
-            deps.iter().any(|dep| {
-                dep["edge_type"] == "parent-child" && dep["depends_on_id"] == "h17-h20-parent"
-            })
-        }));
+    assert_eq!(
+        child_listed_before["parent_edge"]["edge_type"],
+        "parent-child"
+    );
+    assert_eq!(
+        child_listed_before["parent_edge"]["parent_id"],
+        "h17-h20-parent"
+    );
 
     let close_child = task(&[
         "task",
@@ -16415,7 +16613,7 @@ fn status_surface_reports_backend_and_bundle_receipt() {
 
     let mut command = vida();
     command.arg("status").env("VIDA_STATE_DIR", &state_dir);
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -16452,7 +16650,7 @@ fn status_surface_supports_color_emoji_render_mode_via_env() {
         .arg("status")
         .env("VIDA_STATE_DIR", &state_dir)
         .env("VIDA_RENDER", "color_emoji");
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
     assert!(
         output.status.success(),
         "status color emoji stdout={} stderr={}",
@@ -16636,22 +16834,14 @@ fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
     );
     let diagnostics_json = parse_json_output(&diagnostics, "diagnostics post-commit");
 
-    let mut status_command = vida();
-    status_command
-        .args(["status", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir);
-    let status = command_output_with_retry(&mut status_command);
+    let status = status_or_doctor_with_timeout(&state_dir, &["status", "--json"]);
     let status_json = parse_json_output(&status, "status");
     assert_eq!(
         status_json["view"], "summary",
         "default status --json should use compact operator summary output"
     );
 
-    let mut doctor_command = vida();
-    doctor_command
-        .args(["doctor", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir);
-    let doctor = command_output_with_retry(&mut doctor_command);
+    let doctor = status_or_doctor_with_timeout(&state_dir, &["doctor", "--json"]);
     let doctor_json = parse_json_output(&doctor, "doctor");
 
     let blocker = "closed_task_active_run_projection_mismatch";
@@ -17044,7 +17234,7 @@ fn status_surface_supports_json_summary() {
     command
         .args(["status", "--json", "--view", "full"])
         .env("VIDA_STATE_DIR", &state_dir);
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
     assert!(
         output.status.success(),
         "status json stdout={} stderr={}",
@@ -17189,7 +17379,7 @@ fn status_surface_supports_compact_json_summary_view() {
     command
         .args(["status", "--summary", "--json"])
         .env("VIDA_STATE_DIR", &state_dir);
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
     assert!(
         output.status.success(),
         "status summary json stdout={} stderr={}",

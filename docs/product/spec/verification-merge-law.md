@@ -1,10 +1,10 @@
 # VIDA Verification Merge Law
 
-Status: draft `v1` bounded future artifact
+Status: active canonical verification law
 
-Revision: `2026-03-09`
+Revision: `2026-06-13`
 
-Purpose: define the future lawful aggregation surface for parallel or multi-verifier verification without collapsing verifier independence into opaque consensus heuristics.
+Purpose: define the lawful aggregation surface for single-verifier, parallel, and multi-verifier verification without collapsing verifier independence into opaque consensus heuristics.
 
 ## 1. Scope
 
@@ -22,17 +22,18 @@ It does not define:
 3. replacement of verification with coach review,
 4. automatic task closure from merge output alone.
 
-## 2. Candidate Merge Policies
+## 2. Supported Merge Policies
 
-Future verification aggregation should remain explicit and receipt-backed.
+Verification aggregation must remain explicit and receipt-backed.
 
-Initial candidate policies:
+Supported policies:
 
 1. `all_pass`
 2. `quorum_pass`
 3. `first_strong_fail`
 4. `manual_reconcile`
-5. `best_evidence_wins` only when explicitly lawful for a bounded domain
+
+No additional merge policy is admitted unless a future owner spec and runtime protocol add it explicitly.
 
 ## 3. Policy Semantics
 
@@ -91,10 +92,10 @@ If any admissibility rule fails, the system must not emit a normal merged pass.
 artifact_path: product/spec/verification-merge-law
 artifact_type: product_spec
 artifact_version: 1
-artifact_revision: 2026-03-10
+artifact_revision: 2026-06-13
 schema_version: 1
 status: canonical
 source_path: docs/product/spec/verification-merge-law.md
 created_at: 2026-03-09T12:00:46+02:00
-updated_at: 2026-03-09T20:28:59+02:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: verification-merge-law.changelog.jsonl
