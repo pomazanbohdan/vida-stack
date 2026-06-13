@@ -7695,6 +7695,55 @@ fn task_update_title_priority() {
 }
 
 #[test]
+fn task_import_jsonl_does_not_auto_parent_open_child_to_completed_root() {
+    let state_dir = unique_state_dir();
+    let jsonl_path = format!("{state_dir}/completed-root-open-child.jsonl");
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    fs::write(
+        &jsonl_path,
+        concat!(
+            "{\"id\":\"vida-root-completed\",\"title\":\"Completed root\",\"description\":\"completed root\",\"status\":\"completed\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+            "{\"id\":\"vida-open-child\",\"title\":\"Open child\",\"description\":\"open child\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+        ),
+    )
+    .expect("write completed-root import jsonl");
+
+    let import_output = vida()
+        .args(["task", "import-jsonl", &jsonl_path, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("import-jsonl should run");
+    assert!(!import_output.status.success());
+    assert!(
+        !import_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&import_output.stderr)
+    );
+    let actual_json: serde_json::Value = serde_json::from_slice(&import_output.stdout)
+        .expect("blocked import-jsonl json should parse");
+    assert_release1_shared_envelope_fields(&actual_json, "blocked import-jsonl");
+    assert_eq!(actual_json["status"], "blocked");
+    assert_eq!(actual_json["surface"], "vida task import-jsonl");
+    assert_eq!(
+        actual_json["blocker_codes"],
+        serde_json::json!(["dependency_graph_issues"])
+    );
+    assert!(
+        actual_json["error"]
+            .as_str()
+            .expect("import error should render")
+            .contains("missing_required_parent_edge"),
+        "completed root must not receive a synthesized parent-child edge: {actual_json}"
+    );
+
+    let list_json = run_command_json(&["task", "list", "--json"], &state_dir);
+    assert_eq!(list_json["status"], "pass");
+    assert_eq!(list_json["task_count"], 0);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_import_jsonl_invalid_graph_returns_json_envelope() {
     let state_dir = unique_state_dir();
     let jsonl_path = format!("{state_dir}/issues.jsonl");
