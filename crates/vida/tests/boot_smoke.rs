@@ -4075,12 +4075,14 @@ fn taskflow_doctor_routes_in_process_without_taskflow_binary() {
         &delegated_taskflow_bin,
         "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
     );
-    let output = vida()
-        .args(["taskflow", "doctor", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .env("VIDA_TASKFLOW_BIN", &delegated_taskflow_bin)
-        .output()
-        .expect("taskflow doctor should run");
+    let output = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(["taskflow", "doctor", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_TASKFLOW_BIN", &delegated_taskflow_bin);
+        command
+    });
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -4209,11 +4211,13 @@ fn taskflow_protocol_binding_bridge_syncs_into_authoritative_state_store() {
         true
     );
 
-    let doctor = vida()
-        .args(["doctor", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("doctor should run");
+    let doctor = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(["doctor", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
     assert!(doctor.status.success());
     let doctor_stdout = String::from_utf8_lossy(&doctor.stdout);
     let doctor_json: serde_json::Value =
@@ -5749,12 +5753,14 @@ fn status_and_consume_bundle_check_handle_legacy_pending_activation() {
     )
     .expect("activation receipt should be written");
 
-    let status = vida()
-        .args(["status", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .env("VIDA_ROOT", &state_dir)
-        .output()
-        .expect("status should run");
+    let status = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(["status", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_ROOT", &state_dir);
+        command
+    });
     assert!(status.status.success());
     let status_json: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status json should parse");
@@ -17381,7 +17387,7 @@ fn status_surface_supports_compact_json_summary_view() {
     command
         .args(["status", "--summary", "--json"])
         .env("VIDA_STATE_DIR", &state_dir);
-    let output = command_output_with_retry(&mut command);
+    let output = command_output_with_state_access_retry(&mut command);
     assert!(
         output.status.success(),
         "status summary json stdout={} stderr={}",
