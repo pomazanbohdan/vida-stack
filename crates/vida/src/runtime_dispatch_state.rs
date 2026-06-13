@@ -5,12 +5,13 @@ use time::format_description::well_known::Rfc3339;
 
 use super::*;
 use crate::release1_contracts::canonical_lane_status_str;
+use crate::runtime_assignment_policy::DispatchContractLane;
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 use crate::runtime_contract_vocab::{
-    backend_admissibility_key_for_task_class, canonical_dispatch_target_name,
-    RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM,
-    RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, TASK_CLASS_ARCHITECTURE,
-    TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION, TASK_CLASS_VERIFICATION,
+    canonical_dispatch_target_name, RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH,
+    RUNTIME_ROLE_PM, RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER,
+    TASK_CLASS_ARCHITECTURE, TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION,
+    TASK_CLASS_VERIFICATION,
 };
 #[cfg(test)]
 use crate::runtime_dispatch_downstream_packets::downstream_dispatch_packet_body;
@@ -1137,8 +1138,10 @@ pub(crate) fn policy_dispatch_target_for_admissibility(
             let policy_dispatch_target = backend_policy_dispatch_target_for_resolution(&resolution);
             dispatch_contract_lane(execution_plan, policy_dispatch_target)
                 .and_then(|lane| lane["task_class"].as_str())
-                .and_then(backend_admissibility_key_for_task_class)
-                .map(str::to_string)
+                .and_then(
+                    crate::runtime_assignment_policy::backend_admissibility_key_for_task_class,
+                )
+                .map(|key| key.into_string())
                 .unwrap_or_else(|| policy_dispatch_target.to_string())
         })
         .unwrap_or_else(|| dispatch_target.trim().to_string())
@@ -1422,18 +1425,13 @@ fn backend_admissibility_key_for_dispatch_target(
 ) -> String {
     let policy_dispatch_target =
         policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
-    let canonical_target = canonical_dispatch_target_name(&policy_dispatch_target);
-    match canonical_target.as_str() {
-        "implementer" | "writer" => "implementation".to_string(),
-        "execution_preparation" => "architecture".to_string(),
-        "implementation" | "verification" | "architecture" | "specification" | "coach"
-        | "analysis" | "review" => canonical_target,
-        other => dispatch_contract_lane(execution_plan, &policy_dispatch_target)
-            .and_then(|lane| lane["task_class"].as_str())
-            .and_then(backend_admissibility_key_for_task_class)
-            .unwrap_or(other)
-            .to_string(),
-    }
+    let lane = dispatch_contract_lane(execution_plan, &policy_dispatch_target)
+        .map(DispatchContractLane::from_value);
+    crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
+        &policy_dispatch_target,
+        lane.as_ref(),
+    )
+    .into_string()
 }
 
 fn dispatch_target_requires_strict_backend_admissibility(

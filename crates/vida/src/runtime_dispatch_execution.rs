@@ -9,9 +9,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 #[cfg(windows)]
 use std::os::windows::process::ExitStatusExt;
 
-use crate::runtime_contract_vocab::{
-    backend_admissibility_key_for_task_class, canonical_dispatch_target_name,
-};
+use crate::runtime_assignment_policy::DispatchContractLane;
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 use taskflow_host_bridge::{
@@ -22,11 +20,11 @@ use taskflow_host_bridge::{
 };
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
-    match canonical_dispatch_target_name(dispatch_target).as_str() {
-        "implementer" => "implementation".to_string(),
-        "execution_preparation" => "architecture".to_string(),
-        other => other.to_string(),
-    }
+    crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
+        dispatch_target,
+        None,
+    )
+    .into_string()
 }
 
 fn backend_admissibility_key_for_dispatch_target(
@@ -38,16 +36,13 @@ fn backend_admissibility_key_for_dispatch_target(
             execution_plan,
             dispatch_target,
         );
-    let canonical_target = canonical_dispatch_target_for_admissibility(&policy_dispatch_target);
-    match canonical_target.as_str() {
-        "implementation" | "verification" | "architecture" | "specification" | "coach"
-        | "analysis" | "review" => canonical_target,
-        other => crate::dispatch_contract_lane(execution_plan, &policy_dispatch_target)
-            .and_then(|lane| lane["task_class"].as_str())
-            .and_then(backend_admissibility_key_for_task_class)
-            .unwrap_or(other)
-            .to_string(),
-    }
+    let lane = crate::dispatch_contract_lane(execution_plan, &policy_dispatch_target)
+        .map(DispatchContractLane::from_value);
+    crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
+        &policy_dispatch_target,
+        lane.as_ref(),
+    )
+    .into_string()
 }
 
 fn dispatch_target_requires_strict_admissibility(
