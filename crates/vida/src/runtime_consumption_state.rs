@@ -555,7 +555,15 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_from_summa
     }
 
     match dispatch_receipt_summary {
-        Ok(Some(summary)) if summary.run_id == latest_status_run_id => Ok(None),
+        Ok(Some(summary))
+            if taskflow_authority::final_snapshot::final_snapshot_dispatch_receipt_authority_is_persisted(
+                Some(payload_run_id),
+                Some(latest_status_run_id),
+                Some(summary.run_id.as_str()),
+            ) =>
+        {
+            Ok(None)
+        }
         Ok(_) => Ok(Some(
             RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER.to_string(),
         )),
@@ -714,7 +722,14 @@ fn runtime_consumption_snapshot_has_admissible_release_admission(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
 
-    admitted && blockers_clear && !matches!(status, "" | "block" | "blocked")
+    let authority = taskflow_authority::final_snapshot::FinalSnapshotReleaseAdmission {
+        admitted,
+        blockers_empty: blockers_clear,
+        status,
+    };
+    taskflow_authority::final_snapshot::final_snapshot_has_admissible_release_admission(Some(
+        &authority,
+    ))
 }
 
 pub(crate) fn latest_final_runtime_consumption_snapshot_path(
@@ -849,17 +864,6 @@ pub(crate) fn latest_terminal_consume_continue_snapshot_run_id(
 ) -> Result<Option<String>, String> {
     let snapshot_dir = state_root.join("runtime-consumption");
     latest_runtime_consumption_snapshot_matching(&snapshot_dir, |file_name, snapshot| {
-        if !file_name.starts_with("final-") {
-            return None;
-        }
-        if snapshot.get("surface").and_then(serde_json::Value::as_str)
-            != Some("vida taskflow consume continue")
-        {
-            return None;
-        }
-        if snapshot.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
-            return None;
-        }
         let top_level_next_actions_empty = snapshot
             .get("next_actions")
             .and_then(serde_json::Value::as_array)
@@ -878,12 +882,26 @@ pub(crate) fn latest_terminal_consume_continue_snapshot_run_id(
             .and_then(|truth| truth.get("projection_source"))
             .and_then(serde_json::Value::as_str)
             == Some("deferred_agent_handoff_receipt");
-        if !((top_level_next_actions_empty && operator_next_actions_empty && blockers_empty)
-            || (deferred_handoff_projection && blockers_empty))
-        {
-            return None;
-        }
-        runtime_consumption_snapshot_source_run_id(snapshot).map(str::to_string)
+        let authority_snapshot =
+            taskflow_authority::final_snapshot::TerminalConsumeContinueSnapshot {
+                file_name,
+                surface: snapshot
+                    .get("surface")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                status: snapshot
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                top_level_next_actions_empty,
+                operator_next_actions_empty,
+                blockers_empty,
+                deferred_handoff_projection,
+                source_run_id: runtime_consumption_snapshot_source_run_id(snapshot),
+            };
+        taskflow_authority::final_snapshot::terminal_consume_continue_snapshot_run_id(
+            &authority_snapshot,
+        )
     })
 }
 

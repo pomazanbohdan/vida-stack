@@ -2339,21 +2339,18 @@ pub(crate) fn missing_task_stale_blocked_run_can_retire(
     status: &crate::state_store::RunGraphStatus,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(status) {
-        return false;
-    }
-
-    let lane_status = receipt.lane_status.as_str();
-    let blocked_or_running = matches!(
-        lane_status,
-        value if value == crate::LaneStatus::LaneRunning.as_str()
-            || value == crate::LaneStatus::LaneBlocked.as_str()
-    );
-    let prelaunch_packet_ready = receipt.dispatch_status == "executed"
-        && lane_status == crate::LaneStatus::LaneCompleted.as_str()
-        && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready");
-
-    (receipt.dispatch_status == "blocked" && blocked_or_running) || prelaunch_packet_ready
+    let status = taskflow_authority::stale_guard::StaleRunGraphStatus {
+        status: status.status.as_str(),
+        lifecycle_stage: status.lifecycle_stage.as_str(),
+        next_node: status.next_node.as_deref(),
+        resume_target: status.resume_target.as_str(),
+    };
+    let receipt = taskflow_authority::stale_guard::StaleRunGraphReceipt {
+        dispatch_status: receipt.dispatch_status.as_str(),
+        lane_status: receipt.lane_status.as_str(),
+        downstream_dispatch_status: receipt.downstream_dispatch_status.as_deref(),
+    };
+    taskflow_authority::stale_guard::missing_task_stale_blocked_run_can_retire(&status, &receipt)
 }
 
 const MAX_LANE_PACKET_READ_BYTES: u64 = 1024 * 1024;

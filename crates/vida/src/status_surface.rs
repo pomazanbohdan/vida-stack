@@ -1022,10 +1022,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_dispatch_receipt.as_ref(),
                         &taskflow_active_candidates,
                     );
-                let latest_run_graph_task_stale_for_write_guard = latest_run_graph_task_missing
-                    || latest_run_graph_task_closed
-                    || (!exception_takeover_matches_active_taskflow_work
-                        && latest_run_graph_task_orthogonal_to_taskflow);
+                let latest_run_graph_task_stale_for_write_guard =
+                    taskflow_authority::stale_guard::latest_run_graph_task_stale_for_write_guard(
+                        latest_run_graph_task_missing,
+                        latest_run_graph_task_closed,
+                        exception_takeover_matches_active_taskflow_work,
+                        latest_run_graph_task_orthogonal_to_taskflow,
+                    );
                 let has_taskflow_active_candidates = !taskflow_active_candidates.is_empty();
                 let continuation_binding =
                     crate::continuation_binding_summary::add_taskflow_active_work_truth(
@@ -1418,8 +1421,14 @@ fn latest_run_graph_task_orthogonal_to_taskflow_active_work(
         return false;
     };
 
-    latest_run_graph_status_task_id.is_some_and(|task_id| task_id != candidate_task_id)
-        || latest_run_graph_receipt_run_id.is_some_and(|run_id| run_id != candidate_task_id)
+    let active_candidate = taskflow_authority::stale_guard::TaskflowActiveCandidate {
+        task_id: candidate_task_id,
+    };
+    taskflow_authority::stale_guard::latest_run_graph_task_orthogonal_to_taskflow_active_work(
+        latest_run_graph_status_task_id,
+        latest_run_graph_receipt_run_id,
+        &[active_candidate],
+    )
 }
 
 fn exception_takeover_metadata_matches_taskflow_active_work(
@@ -2005,10 +2014,12 @@ async fn refresh_cached_status_projection_runtime_fields(
             latest_run_graph_dispatch_receipt.as_ref(),
             &taskflow_active_candidates,
         );
-    let latest_run_graph_task_stale_for_write_guard = latest_run_graph_task_missing
-        || latest_run_graph_task_closed
-        || (!exception_takeover_matches_active_taskflow_work
-            && latest_run_graph_task_orthogonal_to_taskflow_active_work(
+    let latest_run_graph_task_stale_for_write_guard =
+        taskflow_authority::stale_guard::latest_run_graph_task_stale_for_write_guard(
+            latest_run_graph_task_missing,
+            latest_run_graph_task_closed,
+            exception_takeover_matches_active_taskflow_work,
+            latest_run_graph_task_orthogonal_to_taskflow_active_work(
                 latest_run_graph_status
                     .as_ref()
                     .map(|status| status.task_id.as_str()),
@@ -2016,7 +2027,8 @@ async fn refresh_cached_status_projection_runtime_fields(
                     .as_ref()
                     .map(|receipt| receipt.run_id.as_str()),
                 &taskflow_active_candidates,
-            ));
+            ),
+        );
     let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
         continuation_binding,
         taskflow_active_candidates,
@@ -2272,16 +2284,30 @@ fn cached_status_projection_admissible(
     serde_json::from_str::<serde_json::Value>(cached)
         .ok()
         .is_some_and(|payload| {
-            payload
-                .get("surface")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|surface| surface == "vida status")
-                && payload
+            let Some((current_session_id, current_worktree_environment_id)) =
+                current_projection_session_values(state_dir)
+            else {
+                return false;
+            };
+            let current_session = taskflow_authority::projection_cache::CachedProjectionSession {
+                session_id: current_session_id.as_deref(),
+                worktree_environment_id: current_worktree_environment_id.as_deref(),
+            };
+            let projection = taskflow_authority::projection_cache::CachedStatusProjection {
+                surface: payload.get("surface").and_then(serde_json::Value::as_str),
+                has_status: payload
                     .get("status")
                     .and_then(serde_json::Value::as_str)
-                    .is_some()
-                && cached_status_projection_has_required_shape(summary_only, &payload)
-                && cached_status_projection_matches_current_session(state_dir, &payload)
+                    .is_some(),
+                shape: cached_status_projection_shape(&payload),
+                session: cached_projection_session(&payload),
+                cache: cached_projection_cache_contract(&payload),
+            };
+            taskflow_authority::projection_cache::cached_status_projection_admissible(
+                summary_only,
+                &projection,
+                &current_session,
+            )
         })
 }
 
@@ -2289,96 +2315,109 @@ fn cached_status_projection_has_required_shape(
     summary_only: bool,
     payload: &serde_json::Value,
 ) -> bool {
-    if summary_only {
-        return true;
-    }
-    if payload
-        .get("current_session")
-        .is_some_and(serde_json::Value::is_object)
-    {
-        return true;
-    }
-    payload
-        .get("storage_metadata")
-        .is_some_and(serde_json::Value::is_object)
-        && payload
-            .get("state_spine")
-            .is_some_and(serde_json::Value::is_object)
-        && payload
-            .get("operator_contracts")
-            .is_some_and(serde_json::Value::is_object)
+    taskflow_authority::projection_cache::cached_status_projection_has_required_shape(
+        summary_only,
+        &cached_status_projection_shape(payload),
+    )
 }
 
 fn cached_status_projection_matches_current_session(
     state_dir: &std::path::Path,
     payload: &serde_json::Value,
 ) -> bool {
-    let cached_worktree_environment_id = payload["current_session"]["worktree_environment_id"]
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let Some(cached_session_id) = payload["current_session"]["session_id"]
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        if cached_worktree_environment_id.is_none()
-            && cached_projection_is_state_bound_read_only_operator_fallback(payload)
-        {
-            return true;
-        }
-        return cached_worktree_environment_id.is_some_and(|cached_id| {
-            let Ok(owner_evidence) =
-                crate::orchestrator_session_surface::build_runtime_owner_evidence(state_dir, false)
-            else {
-                return false;
-            };
-            owner_evidence["current_session"]["worktree_environment_id"]
-                .as_str()
-                .map(str::trim)
-                .is_some_and(|current_id| current_id == cached_id)
-        });
-    };
-    let Ok(owner_evidence) =
-        crate::orchestrator_session_surface::build_runtime_owner_evidence(state_dir, false)
+    let Some((current_session_id, current_worktree_environment_id)) =
+        current_projection_session_values(state_dir)
     else {
         return false;
     };
-    if let Some(cached_id) = cached_worktree_environment_id {
-        if owner_evidence["current_session"]["worktree_environment_id"]
-            .as_str()
-            .map(str::trim)
-            .is_some_and(|current_id| current_id == cached_id)
-        {
-            return true;
-        }
-    }
-    owner_evidence["current_session"]["session_id"]
-        .as_str()
-        .map(str::trim)
-        .is_some_and(|current_session_id| current_session_id == cached_session_id)
+    let current_session = taskflow_authority::projection_cache::CachedProjectionSession {
+        session_id: current_session_id.as_deref(),
+        worktree_environment_id: current_worktree_environment_id.as_deref(),
+    };
+    taskflow_authority::projection_cache::cached_status_projection_matches_current_session(
+        &cached_projection_session(payload),
+        &current_session,
+    )
 }
 
 fn cached_projection_is_state_bound_read_only_operator_fallback(
     payload: &serde_json::Value,
 ) -> bool {
-    let marker_present = payload
-        .get("projection_cache_dependencies")
-        .and_then(|dependencies| dependencies.get("task_snapshot_marker"))
-        .is_some();
-    let freshness_contract = payload
-        .get("projection_cache")
-        .and_then(|cache| cache.get("freshness_contract"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    taskflow_authority::projection_cache::cached_projection_is_state_bound_read_only_operator_fallback(
+        &cached_projection_cache_contract(payload),
+    )
+}
 
-    marker_present
-        && matches!(
-            freshness_contract,
-            "state_marker_fresh_structural_cache_ok_for_read_only_operator_query"
-                | "bounded_state_marker_stale_ok_for_doctor_summary_read_only_operator_query"
-                | "recent_bounded_stale_ok_for_read_only_operator_query"
-        )
+fn cached_status_projection_shape(
+    payload: &serde_json::Value,
+) -> taskflow_authority::projection_cache::CachedProjectionShape {
+    taskflow_authority::projection_cache::CachedProjectionShape {
+        has_current_session: payload
+            .get("current_session")
+            .is_some_and(serde_json::Value::is_object),
+        has_storage_metadata: payload
+            .get("storage_metadata")
+            .is_some_and(serde_json::Value::is_object),
+        has_state_spine: payload
+            .get("state_spine")
+            .is_some_and(serde_json::Value::is_object),
+        has_operator_contracts: payload
+            .get("operator_contracts")
+            .is_some_and(serde_json::Value::is_object),
+    }
+}
+
+fn cached_projection_session(
+    payload: &serde_json::Value,
+) -> taskflow_authority::projection_cache::CachedProjectionSession<'_> {
+    taskflow_authority::projection_cache::CachedProjectionSession {
+        session_id: payload["current_session"]["session_id"].as_str(),
+        worktree_environment_id: payload["current_session"]["worktree_environment_id"].as_str(),
+    }
+}
+
+fn current_projection_session_values(
+    state_dir: &std::path::Path,
+) -> Option<(Option<String>, Option<String>)> {
+    let owner_evidence =
+        crate::orchestrator_session_surface::build_runtime_owner_evidence(state_dir, false).ok()?;
+    Some((
+        owner_evidence["current_session"]["session_id"]
+            .as_str()
+            .map(str::to_string),
+        owner_evidence["current_session"]["worktree_environment_id"]
+            .as_str()
+            .map(str::to_string),
+    ))
+}
+
+fn cached_projection_cache_contract(
+    payload: &serde_json::Value,
+) -> taskflow_authority::projection_cache::ProjectionCacheContract<'_> {
+    let dependencies = payload.get("projection_cache_dependencies");
+    taskflow_authority::projection_cache::ProjectionCacheContract {
+        freshness_contract: payload
+            .get("projection_cache")
+            .and_then(|cache| cache.get("freshness_contract"))
+            .and_then(serde_json::Value::as_str),
+        operator_markers: taskflow_authority::projection_cache::ProjectionCacheOperatorMarkers {
+            task_snapshot_marker: dependencies
+                .and_then(|dependencies| dependencies.get("task_snapshot_marker"))
+                .is_some(),
+            dispatch_receipts_marker: dependencies
+                .and_then(|dependencies| dependencies.get("dispatch_receipts_marker"))
+                .is_some(),
+            continuation_bindings_marker: dependencies
+                .and_then(|dependencies| dependencies.get("continuation_bindings_marker"))
+                .is_some(),
+            run_graph_updates_marker: dependencies
+                .and_then(|dependencies| dependencies.get("run_graph_updates_marker"))
+                .is_some(),
+            runtime_consumption_snapshots_marker: dependencies
+                .and_then(|dependencies| dependencies.get("runtime_consumption_snapshots_marker"))
+                .is_some(),
+        },
+    }
 }
 
 #[cfg(test)]

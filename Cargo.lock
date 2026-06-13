@@ -6477,6 +6477,7 @@ dependencies = [
  "serde_yaml",
  "surrealdb",
  "tarpc",
+ "taskflow-authority",
  "taskflow-cli",
  "taskflow-contracts",
  "taskflow-core",

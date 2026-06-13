@@ -66,49 +66,51 @@ fn exception_takeover_state_label(
     latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
 ) -> Option<&'static str> {
-    let Some(receipt) = latest_receipt else {
-        return None;
-    };
-    if !has_nonempty_value(receipt.exception_path_receipt_id.as_deref()) {
-        return None;
-    }
-    let gate_blocked = latest_recovery.is_some_and(|recovery| {
-        recovery
-            .delegation_gate
-            .local_exception_takeover_gate
-            .trim()
-            == "blocked_open_delegated_cycle"
+    let receipt = latest_receipt.map(|receipt| {
+        taskflow_authority::exception_takeover::ExceptionTakeoverReceipt {
+            lane_status: receipt.lane_status.as_str(),
+            exception_path_receipt_id: receipt.exception_path_receipt_id.as_deref(),
+            supersedes_receipt_id: receipt.supersedes_receipt_id.as_deref(),
+        }
     });
-    if !gate_blocked && receipt.lane_status == "lane_exception_takeover" {
-        return Some("active");
-    }
-    if !gate_blocked && receipt.lane_status == "lane_exception_recorded" {
-        return Some("admissible_not_active");
-    }
-    let takeover_state = crate::release1_contracts::exception_takeover_state(
-        receipt.exception_path_receipt_id.as_deref(),
-        receipt.supersedes_receipt_id.as_deref(),
-        latest_recovery.map(|recovery| {
-            recovery
+    let recovery = latest_recovery.map(|recovery| {
+        taskflow_authority::exception_takeover::ExceptionTakeoverRecovery {
+            local_exception_takeover_gate: recovery
                 .delegation_gate
                 .local_exception_takeover_gate
-                .as_str()
-        }),
-    );
-    if takeover_state.is_active() {
-        return Some("active");
-    }
-    if receipt.lane_status == "lane_exception_takeover" {
-        return Some("admissible_not_active");
-    }
-    Some("receipt_recorded")
+                .as_str(),
+        }
+    });
+    taskflow_authority::exception_takeover::exception_takeover_state_label(
+        receipt.as_ref(),
+        recovery.as_ref(),
+    )
+    .map(taskflow_authority::exception_takeover::ExceptionTakeoverStateLabel::as_str)
 }
 
 fn exception_takeover_is_lawfully_active(
     latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
 ) -> bool {
-    exception_takeover_state_label(latest_receipt, latest_recovery) == Some("active")
+    let receipt = latest_receipt.map(|receipt| {
+        taskflow_authority::exception_takeover::ExceptionTakeoverReceipt {
+            lane_status: receipt.lane_status.as_str(),
+            exception_path_receipt_id: receipt.exception_path_receipt_id.as_deref(),
+            supersedes_receipt_id: receipt.supersedes_receipt_id.as_deref(),
+        }
+    });
+    let recovery = latest_recovery.map(|recovery| {
+        taskflow_authority::exception_takeover::ExceptionTakeoverRecovery {
+            local_exception_takeover_gate: recovery
+                .delegation_gate
+                .local_exception_takeover_gate
+                .as_str(),
+        }
+    });
+    taskflow_authority::exception_takeover::exception_takeover_is_lawfully_active(
+        receipt.as_ref(),
+        recovery.as_ref(),
+    )
 }
 
 pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
