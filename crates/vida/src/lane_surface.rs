@@ -4664,11 +4664,20 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                                     return ExitCode::from(2);
                                 }
                                 Err(metadata_error) => {
-                                    eprintln!(
-                                        "Failed to verify exception bounded unit `{task_id}` before retiring lane `{run_id}` after run task `{}` lookup failed: {metadata_error}",
-                                        status.task_id
+                                    let missing_exception_task = matches!(
+                                        metadata_error,
+                                        crate::state_store::StateStoreError::MissingTask { .. }
                                     );
-                                    return ExitCode::from(2);
+                                    let stale_blocked_exception_takeover =
+                                        receipt.dispatch_status == "blocked";
+                                    if !missing_exception_task || !stale_blocked_exception_takeover
+                                    {
+                                        eprintln!(
+                                            "Failed to verify exception bounded unit `{task_id}` before retiring lane `{run_id}` after run task `{}` lookup failed: {metadata_error}",
+                                            status.task_id
+                                        );
+                                        return ExitCode::from(2);
+                                    }
                                 }
                             },
                             None => {
@@ -7320,6 +7329,24 @@ mod tests {
             .record_run_graph_dispatch_receipt(&receipt)
             .await
             .expect("persist exception takeover receipt");
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: missing_exception_unit,
+                title: "Open exception bounded unit",
+                display_id: None,
+                description: "",
+                issue_type: "defect",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create open exception bounded task");
 
         let mut metadata = ExceptionTakeoverMetadata {
             run_id: None,
@@ -7425,6 +7452,124 @@ mod tests {
             binding.active_bounded_unit,
             seeded_binding.active_bounded_unit
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_retire_allows_exception_takeover_when_exception_bounded_unit_is_missing() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-retire-missing-exception-unit-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "runtime-codify-parent-child-closure-consistency-project";
+        let missing_exception_unit = "project-sidecar-testing-defect-policy";
+
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "test_author", "test");
+        status.run_id = run_id.to_string();
+        status.task_id = run_id.to_string();
+        status.active_node = "test_author".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "dispatch.test_author".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist missing exception unit status");
+
+        let packet_dir = root.join("runtime-consumption").join("dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path =
+            packet_dir.join("runtime-codify-parent-child-closure-consistency-project.json");
+        std::fs::write(&packet_path, format!("{{\"run_id\":\"{run_id}\"}}"))
+            .expect("write stale dispatch packet");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        receipt.exception_path_receipt_id = Some(format!("{run_id}-exception-takeover"));
+        receipt.supersedes_receipt_id = Some(format!("{run_id}-exception-takeover"));
+        receipt.blocker_code = Some("host_tool_bridge_adapter_required".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist superseded exception takeover receipt");
+
+        let mut metadata = ExceptionTakeoverMetadata {
+            run_id: None,
+            dispatch_target: None,
+            dispatch_packet_path: None,
+            source_exception_path_receipt_id: None,
+            reason_class: "host_tool_bridge_adapter_required".to_string(),
+            active_bounded_unit: missing_exception_unit.to_string(),
+            owned_write_scope: vec!["crates/vida/src/lane_surface.rs".to_string()],
+            why_delegated_or_rerouted_path_is_not_currently_lawful: "blocked".to_string(),
+            why_local_write_is_the_smallest_safe_bounded_workaround: "bounded".to_string(),
+            return_to_normal_posture_condition: "verified".to_string(),
+            verification_plan: vec!["test".to_string()],
+            recorded_at: "2026-06-13T00:00:00Z".to_string(),
+        };
+        metadata.bind_to_receipt(&receipt);
+        write_exception_takeover_metadata(store.root(), run_id, &metadata)
+            .expect("exception metadata should persist");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "retire".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                run_id.to_string(),
+                "--reason".to_string(),
+                "missing TaskFlow task stale run".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after missing exception unit retire");
+        let retired = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read retired status");
+        assert_eq!(retired.status, "completed");
+        assert_eq!(retired.lifecycle_stage, "closure_complete");
+        assert_eq!(retired.resume_target, "none");
+        let receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read retired receipt")
+            .expect("receipt should exist");
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("retired_closed_task_run")
+        );
+        assert!(store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read continuation binding")
+            .is_none());
 
         let _ = std::fs::remove_dir_all(&root);
     }
