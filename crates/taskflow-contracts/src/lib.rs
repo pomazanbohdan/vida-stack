@@ -2,8 +2,14 @@ use serde::{Deserialize, Serialize};
 use taskflow_core::{IssueType, TaskId, TaskStatus, Timestamp};
 
 pub mod artifact_kind;
+pub mod decision_table;
 
 pub use artifact_kind::{ArtifactKind, UnknownArtifactKind};
+pub use decision_table::{
+    DECISION_TABLE_SCHEMA_VERSION, DecisionTableCondition, DecisionTableEvaluationRequest,
+    DecisionTableEvaluationResponse, DecisionTableEvaluationStatus, DecisionTableInput,
+    DecisionTableOperator, DecisionTableOutput, DecisionTableRule, DecisionTableValue,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {
