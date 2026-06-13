@@ -148,8 +148,20 @@ impl BackendAdmissibilityKey {
 pub(crate) fn backend_admissibility_key_for_task_class(
     task_class: &str,
 ) -> Option<BackendAdmissibilityKey> {
-    crate::runtime_contract_vocab::backend_admissibility_key_for_task_class(task_class)
-        .map(backend_admissibility_key_from_canonical)
+    match task_class.trim() {
+        "implementation" | "delivery_task" | "execution_block" | "writer" => {
+            Some(BackendAdmissibilityKey::Implementation)
+        }
+        "verification" | "test_authoring" | "quality_gate" | "release_readiness" => {
+            Some(BackendAdmissibilityKey::Verification)
+        }
+        "architecture" | "execution_preparation" | "escalation" => {
+            Some(BackendAdmissibilityKey::Architecture)
+        }
+        "specification" | "planning" | "analysis" => Some(BackendAdmissibilityKey::Specification),
+        "coach" | "review" | "validation" => Some(BackendAdmissibilityKey::Coach),
+        _ => None,
+    }
 }
 
 pub(crate) fn backend_admissibility_key_for_dispatch_target(
@@ -217,19 +229,6 @@ pub(crate) fn canonical_dispatch_target_name(value: &str) -> String {
     canonical_dispatch_target_alias(value)
         .unwrap_or_else(|| value.trim())
         .to_string()
-}
-
-fn backend_admissibility_key_from_canonical(value: &str) -> BackendAdmissibilityKey {
-    match value {
-        "implementation" => BackendAdmissibilityKey::Implementation,
-        "verification" => BackendAdmissibilityKey::Verification,
-        "architecture" => BackendAdmissibilityKey::Architecture,
-        "specification" => BackendAdmissibilityKey::Specification,
-        "coach" => BackendAdmissibilityKey::Coach,
-        "analysis" => BackendAdmissibilityKey::Analysis,
-        "review" => BackendAdmissibilityKey::Review,
-        other => BackendAdmissibilityKey::Conservative(other.to_string()),
-    }
 }
 
 #[derive(Debug, Clone)]
