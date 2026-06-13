@@ -44,6 +44,18 @@ fn blocker_code_value(code: taskflow_contracts::BlockerCode) -> String {
     code.as_str().to_string()
 }
 
+fn release1_contract_status_value(ok: bool) -> &'static str {
+    taskflow_contracts::release1_contract_status_str(ok)
+}
+
+fn release1_pass_status() -> &'static str {
+    taskflow_contracts::Release1ContractStatus::Pass.as_str()
+}
+
+fn release1_blocked_status() -> &'static str {
+    taskflow_contracts::Release1ContractStatus::Blocked.as_str()
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct AgentDispatchLaneSelectionTruth {
     selected_carrier: String,
@@ -477,7 +489,7 @@ async fn append_host_bridge_dispatch_receipt_blockers(
     {
         return;
     }
-    let retryable_blocked_receipt = receipt.dispatch_status == "blocked"
+    let retryable_blocked_receipt = receipt.dispatch_status == release1_blocked_status()
         && (receipt
             .blocker_code
             .as_deref()
@@ -574,7 +586,8 @@ fn retryable_host_bridge_completion_request_for_state_root(
 ) -> bool {
     if !matches!(
         host_bridge_request_string(request, "status"),
-        Some("blocked" | "retryable_blocked")
+        Some(status)
+            if status == release1_blocked_status() || status == "retryable_blocked"
     ) || host_bridge_request_string(request, "dispatch_transport") != Some("host_tool_bridge")
     {
         return false;
@@ -594,7 +607,8 @@ fn retryable_host_bridge_completion_request_for_state_root(
         let Ok(artifact) = read_canonical_host_bridge_json_artifact(&path, artifact_label) else {
             continue;
         };
-        if artifact.get("status").and_then(serde_json::Value::as_str) == Some("blocked")
+        if artifact.get("status").and_then(serde_json::Value::as_str)
+            == Some(release1_blocked_status())
             && host_bridge_artifact_has_retryable_completion_blocker(&artifact)
         {
             return true;
@@ -674,7 +688,7 @@ fn emit_host_bridge_payload(payload: &serde_json::Value, as_json: bool) -> ExitC
             "status",
             payload["status"].as_str().unwrap_or("unknown"),
         )];
-        if payload["status"].as_str() == Some("pass") {
+        if payload["status"].as_str() == Some(release1_pass_status()) {
             if let Some(command) = payload["host_bridge"]["artifact_attach_command"].as_str() {
                 fields.push(crate::operator_toon_report::OperatorToonField::text(
                     "attach_artifact",
@@ -698,7 +712,7 @@ fn emit_host_bridge_payload(payload: &serde_json::Value, as_json: bool) -> ExitC
         }
         crate::operator_toon_report::print("vida agent host-bridge", fields);
     }
-    if payload["status"].as_str() == Some("pass") {
+    if payload["status"].as_str() == Some(release1_pass_status()) {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
@@ -768,7 +782,7 @@ async fn attach_host_bridge_implementation_artifacts(
             serde_json::json!({ "request_path": command.request.display().to_string() }),
         );
     }
-    if payload["status"].as_str() != Some("pass") {
+    if payload["status"].as_str() != Some(release1_pass_status()) {
         return emit_host_bridge_payload(&payload, command.json);
     }
     let run_id = match payload["host_bridge"]["run_id"]
@@ -1051,7 +1065,7 @@ async fn attach_host_bridge_implementation_artifacts(
         "consolidation_receipt_id": consolidation_receipt_id,
     });
     let (shared_fields, operator_contracts) = host_bridge_operator_fields(
-        "pass",
+        release1_pass_status(),
         Vec::new(),
         vec![completion_command.clone()],
         vec![completion_command],
@@ -1059,7 +1073,7 @@ async fn attach_host_bridge_implementation_artifacts(
     );
     let payload = serde_json::json!({
         "surface": "vida agent host-bridge attach-artifact",
-        "status": "pass",
+        "status": release1_pass_status(),
         "blocker_codes": [],
         "shared_fields": shared_fields,
         "operator_contracts": operator_contracts,
@@ -1084,7 +1098,7 @@ fn emit_host_bridge_attach_blocked(
     artifact_refs: serde_json::Value,
 ) -> ExitCode {
     let (shared_fields, operator_contracts) = host_bridge_operator_fields(
-        "blocked",
+        release1_blocked_status(),
         blocker_codes.clone(),
         next_actions.clone(),
         next_actions,
@@ -1092,7 +1106,7 @@ fn emit_host_bridge_attach_blocked(
     );
     let payload = serde_json::json!({
         "surface": "vida agent host-bridge attach-artifact",
-        "status": "blocked",
+        "status": release1_blocked_status(),
         "blocker_codes": blocker_codes,
         "shared_fields": shared_fields,
         "operator_contracts": operator_contracts,
@@ -1269,7 +1283,7 @@ fn build_carrier_selection_api_descriptor(
     serde_json::json!({
         "surface": "vida agent select",
         "mode": "config_driven_runtime_assignment",
-        "status": if first_class.is_empty() { "blocked" } else { "pass" },
+        "status": release1_contract_status_value(!first_class.is_empty()),
         "blocker_codes": if first_class.is_empty() {
             vec!["carrier_selection_api_requires_configured_dev_team_roles"]
         } else {
@@ -1412,7 +1426,11 @@ fn build_dev_team_flow_projection(
         })
         .collect::<Vec<_>>();
     serde_json::json!({
-        "status": if blocker_codes.is_empty() { "ready" } else { "blocked" },
+        "status": if blocker_codes.is_empty() {
+            "ready"
+        } else {
+            release1_blocked_status()
+        },
         "flow_id": selected_flow.and_then(|flow| flow["flow_id"].as_str()),
         "flow_class": selected_flow.and_then(|flow| flow["flow_class"].as_str()),
         "work_item_bindings": selected_flow
@@ -1614,13 +1632,14 @@ fn selection_truth_guard_blockers(truth: &AgentDispatchLaneSelectionTruth) -> Ve
                 .to_string(),
         );
     }
-    if truth.selected_model_profile_readiness_status == "blocked" {
+    if truth.selected_model_profile_readiness_status == release1_blocked_status() {
         blockers.push("selected_model_profile_not_ready".to_string());
     }
-    if matches!(
-        truth.selected_external_backend_readiness_status.as_str(),
-        "external_backend_dispatch_blocked" | "blocked"
-    ) {
+    let external_backend_readiness_status =
+        truth.selected_external_backend_readiness_status.as_str();
+    if external_backend_readiness_status == "external_backend_dispatch_blocked"
+        || external_backend_readiness_status == release1_blocked_status()
+    {
         blockers.push(
             taskflow_contracts::BlockerCode::SelectedExternalBackendNotReady
                 .as_str()
@@ -1692,7 +1711,7 @@ fn agent_dispatch_fanout_guard_from_projection(
         .flat_map(|lane| selection_truth_guard_blockers(&lane.selection_truth))
         .collect::<Vec<_>>();
     serde_json::json!({
-        "status": if blocker_codes.is_empty() && assignment_blockers.is_empty() { "pass" } else { "blocked" },
+        "status": release1_contract_status_value(blocker_codes.is_empty() && assignment_blockers.is_empty()),
         "configured_max_parallel_agents": configured_max_parallel_agents.max(1),
         "lanes_requested": lanes_requested,
         "effective_max_parallel_agents": effective_max_parallel_agents,
@@ -1721,13 +1740,9 @@ fn agent_dispatch_fanout_guard_from_scheduler_plan(
             .collect::<Vec<_>>();
         object.insert(
             "status".to_string(),
-            serde_json::json!(
-                if blocker_codes.is_empty() && assignment_blocker_codes.is_empty() {
-                    "pass"
-                } else {
-                    "blocked"
-                }
-            ),
+            serde_json::json!(release1_contract_status_value(
+                blocker_codes.is_empty() && assignment_blocker_codes.is_empty()
+            )),
         );
         object.insert(
             "lanes_selected".to_string(),
@@ -1874,7 +1889,7 @@ fn build_agent_dispatch_next_preview_standard(
             &blocker_codes,
         );
         return AgentDispatchNextPreview {
-            status: "blocked".to_string(),
+            status: release1_blocked_status().to_string(),
             mode: "preview".to_string(),
             lanes_requested,
             configured_max_parallel_agents,
@@ -2066,11 +2081,7 @@ fn build_agent_dispatch_next_preview_standard(
         );
     }
 
-    let status = if blocker_codes.is_empty() {
-        "pass"
-    } else {
-        "blocked"
-    };
+    let status = release1_contract_status_value(blocker_codes.is_empty());
     let fanout_guard = agent_dispatch_fanout_guard_from_projection(
         projection,
         lanes_requested,
@@ -2238,7 +2249,7 @@ fn build_agent_dispatch_next_preview_dev_team(
             &blocker_codes,
         );
         return AgentDispatchNextPreview {
-            status: "blocked".to_string(),
+            status: release1_blocked_status().to_string(),
             mode: "preview-dev-team".to_string(),
             lanes_requested,
             configured_max_parallel_agents,
@@ -2419,11 +2430,7 @@ fn build_agent_dispatch_next_preview_dev_team(
         );
     }
 
-    let status = if blocker_codes.is_empty() {
-        "pass"
-    } else {
-        "blocked"
-    };
+    let status = release1_contract_status_value(blocker_codes.is_empty());
     let flow_projection = build_dev_team_flow_projection(
         activation_bundle,
         selected_flow_id,
@@ -2634,12 +2641,7 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
         selected_lanes.clear();
     }
 
-    let status = if blocker_codes.is_empty() {
-        "pass"
-    } else {
-        "blocked"
-    }
-    .to_string();
+    let status = release1_contract_status_value(blocker_codes.is_empty()).to_string();
     let configured_parallel =
         usize::try_from(plan.configured_max_parallel_agents).unwrap_or(usize::MAX);
     let effective_parallel = if lanes_requested == 0 {
@@ -2754,7 +2756,7 @@ fn apply_continuation_dispatch_gate_to_preview(
         .filter(|value| !value.is_empty())
         .collect::<std::collections::BTreeSet<_>>();
 
-    preview.status = "blocked".to_string();
+    preview.status = release1_blocked_status().to_string();
     preview.selected_lanes.clear();
     preview.lanes_selected = 0;
     if let Some(blocker) = crate::release1_contracts::blocker_code_value(
@@ -2842,7 +2844,10 @@ fn fail_closed_flow_projection_for_continuation_gate(preview: &mut AgentDispatch
         "diagnostic_only": true
     });
     if let Some(flow_projection) = preview.flow_projection.as_object_mut() {
-        flow_projection.insert("status".to_string(), serde_json::json!("blocked"));
+        flow_projection.insert(
+            "status".to_string(),
+            serde_json::json!(release1_blocked_status()),
+        );
         flow_projection.insert(
             "blocked_by_continuation_gate".to_string(),
             serde_json::json!(true),
@@ -2958,7 +2963,7 @@ async fn materialize_configured_agent_dispatch_lane(
         "run_id": lane.task_id,
         "latest_status": {
             "run_id": lane.task_id,
-            "status": "pass",
+            "status": release1_pass_status(),
             "active_node": expected_dispatch_target,
             "next_node": expected_dispatch_target,
             "task_class": lane.task_class,
@@ -3047,9 +3052,9 @@ async fn materialize_agent_dispatch_next_packets(
     state_dir: &std::path::Path,
     activation_bundle: &serde_json::Value,
 ) -> AgentDispatchNextPreview {
-    if preview.status != "pass" {
+    if preview.status != release1_pass_status() {
         preview.packet_materialization = serde_json::json!({
-            "status": "blocked",
+            "status": release1_blocked_status(),
             "requested": true,
             "materializes_packets": false,
             "reason": "dispatch preview is blocked",
@@ -3059,12 +3064,12 @@ async fn materialize_agent_dispatch_next_packets(
         return preview;
     }
     if preview.selected_lanes.is_empty() {
-        preview.status = "blocked".to_string();
+        preview.status = release1_blocked_status().to_string();
         preview
             .blocker_codes
             .push("no_dispatch_lanes_selected".to_string());
         preview.packet_materialization = serde_json::json!({
-            "status": "blocked",
+            "status": release1_blocked_status(),
             "requested": true,
             "materializes_packets": false,
             "reason": "no selected lanes can be materialized",
@@ -3162,15 +3167,15 @@ async fn materialize_agent_dispatch_next_packets(
             }
         }
         preview.packet_materialization = serde_json::json!({
-            "status": "pass",
+            "status": release1_pass_status(),
             "requested": true,
             "materializes_packets": true,
             "artifacts": preview.parallelization_planner["packet_artifacts"].clone(),
         });
     } else {
-        preview.status = "blocked".to_string();
+        preview.status = release1_blocked_status().to_string();
         preview.packet_materialization = serde_json::json!({
-            "status": "blocked",
+            "status": release1_blocked_status(),
             "requested": true,
             "materializes_packets": false,
             "errors": errors,
@@ -3317,7 +3322,7 @@ fn emit_agent_dispatch_next_preview(
             println!("next: {first_command}");
         }
     }
-    if preview.status == "pass" {
+    if preview.status == release1_pass_status() {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
@@ -3538,7 +3543,7 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
     let blocked_dispatch_count = latest_receipt
         .as_ref()
         .filter(|receipt| {
-            receipt.dispatch_status == "blocked"
+            receipt.dispatch_status == release1_blocked_status()
                 || receipt
                     .blocker_code
                     .as_deref()
@@ -3642,7 +3647,7 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
         "next_recovery_command": next_recovery_command,
     });
     let payload = agent_status_payload(blocker_codes, next_actions, artifact_refs, extra_fields);
-    let success = payload["status"].as_str() == Some("pass");
+    let success = payload["status"].as_str() == Some(release1_pass_status());
     print_agent_status_payload(&payload, command.json);
     if success {
         ExitCode::SUCCESS
@@ -3744,7 +3749,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
             "request_path": command.request.display().to_string()
         });
         let (shared_fields, operator_contracts) = host_bridge_operator_fields(
-            "blocked",
+            release1_blocked_status(),
             blocker_codes.clone(),
             next_actions.clone(),
             next_actions,
@@ -3752,7 +3757,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
         );
         let payload = serde_json::json!({
             "surface": "vida agent host-bridge",
-            "status": "blocked",
+            "status": release1_blocked_status(),
             "blocker_codes": blocker_codes,
             "shared_fields": shared_fields,
             "operator_contracts": operator_contracts
@@ -3784,7 +3789,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                     .await;
             }
             if command.complete {
-                if payload["status"].as_str() != Some("pass") {
+                if payload["status"].as_str() != Some(release1_pass_status()) {
                     return emit_host_bridge_payload(&payload, command.json);
                 }
                 let Some(host_agent_id) = command
@@ -3810,7 +3815,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                             })
                         });
                     let (shared_fields, operator_contracts) = host_bridge_operator_fields(
-                        "blocked",
+                        release1_blocked_status(),
                         blocker_codes.clone(),
                         next_actions.clone(),
                         next_actions,
@@ -3818,7 +3823,10 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                     );
                     let mut blocked = payload.clone();
                     if let Some(object) = blocked.as_object_mut() {
-                        object.insert("status".to_string(), serde_json::json!("blocked"));
+                        object.insert(
+                            "status".to_string(),
+                            serde_json::json!(release1_blocked_status()),
+                        );
                         object.insert(
                             "blocker_codes".to_string(),
                             serde_json::json!(blocker_codes),
@@ -3847,7 +3855,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                             "request_path": command.request.display().to_string()
                         });
                         let (shared_fields, operator_contracts) = host_bridge_operator_fields(
-                            "blocked",
+                            release1_blocked_status(),
                             blocker_codes.clone(),
                             vec![error.clone()],
                             vec!["repair the host bridge request before completion".to_string()],
@@ -3855,7 +3863,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                         );
                         let blocked = serde_json::json!({
                             "surface": "vida agent host-bridge",
-                            "status": "blocked",
+                            "status": release1_blocked_status(),
                             "blocker_codes": blocker_codes,
                             "shared_fields": shared_fields,
                             "operator_contracts": operator_contracts
@@ -3886,7 +3894,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                 "request_path": command.request.display().to_string()
             });
             let (shared_fields, operator_contracts) = host_bridge_operator_fields(
-                "blocked",
+                release1_blocked_status(),
                 blocker_codes.clone(),
                 next_actions.clone(),
                 next_actions,
@@ -3894,7 +3902,7 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
             );
             let payload = serde_json::json!({
                 "surface": "vida agent host-bridge",
-                "status": "blocked",
+                "status": release1_blocked_status(),
                 "blocker_codes": blocker_codes,
                 "shared_fields": shared_fields,
                 "operator_contracts": operator_contracts,
@@ -3926,11 +3934,8 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
                 &command.task_class,
                 &command.runtime_role,
             );
-            let status = if selection["enabled"].as_bool().unwrap_or(false) {
-                "pass"
-            } else {
-                "blocked"
-            };
+            let status =
+                release1_contract_status_value(selection["enabled"].as_bool().unwrap_or(false));
             let payload = serde_json::json!({
                 "surface": "vida agent select",
                 "status": status,
@@ -3960,7 +3965,7 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
                     println!("selected model profile: {profile}");
                 }
             }
-            if status == "pass" {
+            if status == release1_pass_status() {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(1)

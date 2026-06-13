@@ -8,6 +8,7 @@ use operator_output::{
     },
 };
 use serde_json::Value;
+use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 
 use crate::completion::host_bridge_request_status_allows_parent_completion;
 use crate::request::{
@@ -33,8 +34,8 @@ pub fn host_bridge_operator_fields(
     let spec = OperatorContractSpec {
         contract_id: "host-agent-bridge-adapter-v1",
         schema_version: "1",
-        pass_status: "pass",
-        blocked_status: "blocked",
+        pass_status: Release1ContractStatus::Pass.as_str(),
+        blocked_status: Release1ContractStatus::Blocked.as_str(),
         canonicalize_status: canonical_pass_blocked_contract_status_str,
         status_error_label: "canonical pass/blocked",
     };
@@ -168,11 +169,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
                 .to_string(),
         );
     }
-    let status = if blocker_codes.is_empty() {
-        "pass"
-    } else {
-        "blocked"
-    };
+    let status = release1_contract_status_str(blocker_codes.is_empty());
     let receipt_id = match (run_id, dispatch_target) {
         (Some(run_id), Some(dispatch_target)) => {
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
@@ -193,7 +190,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
     } else {
         None
     };
-    let host_tool_calls = if status == "pass" {
+    let host_tool_calls = if status == Release1ContractStatus::Pass.as_str() {
         serde_json::json!([
             {
                 "tool": "multi_agent_v1.spawn_agent",
@@ -216,7 +213,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
     } else {
         serde_json::json!([])
     };
-    let adapter_capacity_status = if status == "pass" {
+    let adapter_capacity_status = if status == Release1ContractStatus::Pass.as_str() {
         "ready_to_attempt"
     } else {
         "not_checked_due_request_blockers"
@@ -233,7 +230,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             "If the parent host tool reports thread or capacity exhaustion, close stale host agents or write a blocked host bridge result with blocker_code host_agent_capacity_unavailable."
         ]
     });
-    let next_actions = if status == "pass" {
+    let next_actions = if status == Release1ContractStatus::Pass.as_str() {
         artifact_attach_command
             .iter()
             .chain(std::iter::once(&input.completion_command))

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 use time::OffsetDateTime;
 
 use crate::provenance::HostBridgeProvenanceDecision;
@@ -48,11 +49,7 @@ pub fn materialize_host_bridge_completion_evidence(
     }
 
     HostBridgeCompletionEvidence {
-        status: if blocker_codes.is_empty() {
-            "pass".to_string()
-        } else {
-            "blocked".to_string()
-        },
+        status: release1_contract_status_str(blocker_codes.is_empty()).to_string(),
         request_id: input.request.request_id.clone(),
         run_id: input.request.run_id.clone(),
         dispatch_target: input.request.dispatch_target.clone(),
@@ -120,7 +117,8 @@ pub fn host_bridge_existing_request_status_is_admissible(status: &str) -> bool {
 
 #[must_use]
 pub fn host_bridge_completed_artifact_status_is_admissible(status: &str) -> bool {
-    status == "pass"
+    taskflow_contracts::canonical_release1_contract_status_str(status)
+        == Some(Release1ContractStatus::Pass.as_str())
 }
 
 #[must_use]
@@ -152,15 +150,15 @@ pub fn normalize_host_bridge_provenance_for_completion(
 pub fn host_bridge_completion_verdict(blocker_codes: &[String]) -> HostBridgeCompletionVerdict {
     if blocker_codes.is_empty() {
         HostBridgeCompletionVerdict {
-            status: "pass".to_string(),
+            status: Release1ContractStatus::Pass.as_str().to_string(),
             execution_state: "executed".to_string(),
-            completion_verdict: "pass".to_string(),
+            completion_verdict: Release1ContractStatus::Pass.as_str().to_string(),
             completion_ready: true,
         }
     } else {
         HostBridgeCompletionVerdict {
-            status: "blocked".to_string(),
-            execution_state: "blocked".to_string(),
+            status: Release1ContractStatus::Blocked.as_str().to_string(),
+            execution_state: Release1ContractStatus::Blocked.as_str().to_string(),
             completion_verdict: "rework_required".to_string(),
             completion_ready: false,
         }
@@ -170,14 +168,14 @@ pub fn host_bridge_completion_verdict(blocker_codes: &[String]) -> HostBridgeCom
 #[must_use]
 pub fn host_bridge_request_status_after_completion(blocker_codes: &[String]) -> String {
     if blocker_codes.is_empty() {
-        "pass".to_string()
+        Release1ContractStatus::Pass.as_str().to_string()
     } else if blocker_codes
         .iter()
         .all(|blocker| host_bridge_completion_retryable_blocker(blocker))
     {
         "retryable_blocked".to_string()
     } else {
-        "blocked".to_string()
+        Release1ContractStatus::Blocked.as_str().to_string()
     }
 }
 
