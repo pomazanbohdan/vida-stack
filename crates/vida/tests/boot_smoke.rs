@@ -16834,22 +16834,14 @@ fn diagnostics_status_and_doctor_share_closed_run_projection_blocker() {
     );
     let diagnostics_json = parse_json_output(&diagnostics, "diagnostics post-commit");
 
-    let mut status_command = vida();
-    status_command
-        .args(["status", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir);
-    let status = command_output_with_state_lock_retry(&mut status_command);
+    let status = status_or_doctor_with_timeout(&state_dir, &["status", "--json"]);
     let status_json = parse_json_output(&status, "status");
     assert_eq!(
         status_json["view"], "summary",
         "default status --json should use compact operator summary output"
     );
 
-    let mut doctor_command = vida();
-    doctor_command
-        .args(["doctor", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir);
-    let doctor = command_output_with_state_lock_retry(&mut doctor_command);
+    let doctor = status_or_doctor_with_timeout(&state_dir, &["doctor", "--json"]);
     let doctor_json = parse_json_output(&doctor, "doctor");
 
     let blocker = "closed_task_active_run_projection_mismatch";
