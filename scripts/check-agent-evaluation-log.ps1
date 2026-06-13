@@ -45,6 +45,22 @@ function Get-BlockAfterHeading {
     return $Body.Substring($contentStart, $end - $contentStart).Trim()
 }
 
+function Get-ProofFieldValue {
+    param(
+        [string]$ProofBlock,
+        [string]$FieldName
+    )
+
+    $escapedFieldName = [regex]::Escape($FieldName)
+    $pattern = "(?ms)^-\s*$escapedFieldName\s*:\s*(?<value>.*?)(?=^-\s+\S|\z)"
+    $match = [regex]::Match($ProofBlock, $pattern)
+    if (-not $match.Success) {
+        return $null
+    }
+
+    return $match.Groups["value"].Value.Trim()
+}
+
 function Get-ScorecardSections {
     param([string]$Content)
 
@@ -100,11 +116,9 @@ function Test-ScorecardSection {
             $issues.Add((New-CheckIssue "proof_count_shrinkage_without_rationale" "Proof block reports test-count shrinkage or under-run without rationale." $sectionName))
         }
 
-        $declaredMatch = [regex]::Match($proofBlock, "(?im)^\s*-\s*declared_proof\s*:\s*(?<value>.+?)\s*$")
-        $executedMatch = [regex]::Match($proofBlock, "(?im)^\s*-\s*executed_proof\s*:\s*(?<value>.+?)\s*$")
-        if ($declaredMatch.Success -and $executedMatch.Success) {
-            $declaredProof = $declaredMatch.Groups["value"].Value.Trim()
-            $executedProof = $executedMatch.Groups["value"].Value.Trim()
+        $declaredProof = Get-ProofFieldValue $proofBlock "declared_proof"
+        $executedProof = Get-ProofFieldValue $proofBlock "executed_proof"
+        if ($null -ne $declaredProof -and $null -ne $executedProof) {
             if ($declaredProof -ne $executedProof -and $proofBlock -notmatch '(?i)\brationale\s*:') {
                 $issues.Add((New-CheckIssue "declared_executed_proof_mismatch" "declared_proof and executed_proof differ without rationale." $sectionName))
             }
