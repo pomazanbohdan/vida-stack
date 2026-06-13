@@ -102,11 +102,19 @@ fn format_surface_line(render: RenderMode, label: &str, value: &str) -> String {
 }
 
 pub(crate) fn print_surface_ok(render: RenderMode, label: &str, value: &str) {
+    println!("{}", format_surface_ok_line(render, label, value));
+}
+
+fn format_surface_ok_line(render: RenderMode, label: &str, value: &str) -> String {
+    let safe_label = taskflow_format_toon::sanitize_toon_scalar(label);
+    let safe_value = taskflow_format_toon::sanitize_toon_scalar(value);
     match render {
-        RenderMode::Plain => println!("{label}: pass ({value})"),
-        RenderMode::Color => println!("\x1b[1;34m{label}\x1b[0m: \x1b[1;32mpass\x1b[0m ({value})"),
+        RenderMode::Plain => format!("{safe_label}: pass ({safe_value})"),
+        RenderMode::Color => {
+            format!("\x1b[1;34m{safe_label}\x1b[0m: \x1b[1;32mpass\x1b[0m ({safe_value})")
+        }
         RenderMode::ColorEmoji => {
-            println!("✅ \x1b[1;34m{label}\x1b[0m: \x1b[1;32mpass\x1b[0m ({value})")
+            format!("✅ \x1b[1;34m{safe_label}\x1b[0m: \x1b[1;32mpass\x1b[0m ({safe_value})")
         }
     }
 }
@@ -249,7 +257,7 @@ pub(crate) fn print_compact_command_families(render: RenderMode, surface: &str) 
 
 #[cfg(test)]
 mod tests {
-    use super::format_surface_line;
+    use super::{format_surface_line, format_surface_ok_line};
     use crate::RenderMode;
 
     #[test]
@@ -265,6 +273,40 @@ mod tests {
             r"epic epic-OSC-\u{1b}]52;c;dmFsaWRhdG9y\u{7}-END: 1/1 closed (100.00%)"
         );
         assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
+    }
+
+    #[test]
+    fn format_surface_ok_line_escapes_control_characters_in_labels_and_values() {
+        let rendered = format_surface_ok_line(
+            RenderMode::Plain,
+            "launcher\rpaths",
+            "project_root=/tmp/evil-\x1b]52;c;dmFsaWRhdG9y\x07\nnext=spoofed",
+        );
+
+        assert_eq!(
+            rendered,
+            r"launcher\rpaths: pass (project_root=/tmp/evil-\u{1b}]52;c;dmFsaWRhdG9y\u{7}\nnext=spoofed)"
+        );
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
+        assert!(!rendered.contains('\r'));
+        assert!(!rendered.contains('\n'));
+    }
+
+    #[test]
+    fn format_surface_ok_line_preserves_structural_color_sequences_only() {
+        let rendered = format_surface_ok_line(
+            RenderMode::Color,
+            "run\x1b[31m",
+            "task=evil\x1b]52;c;dmFsaWRhdG9y\x07",
+        );
+
+        assert_eq!(
+            rendered,
+            "\x1b[1;34mrun\\u{1b}[31m\x1b[0m: \x1b[1;32mpass\x1b[0m (task=evil\\u{1b}]52;c;dmFsaWRhdG9y\\u{7})"
+        );
+        assert_eq!(rendered.matches('\x1b').count(), 4);
         assert!(!rendered.contains('\x07'));
     }
 }
