@@ -131,7 +131,8 @@ impl ApprovalStatus {
 
 #[allow(dead_code)]
 pub(crate) fn canonical_approval_status_str(value: &str) -> Option<&'static str> {
-    ApprovalStatus::from_str(value).map(ApprovalStatus::as_str)
+    taskflow_contracts::canonical_approval_status_str(value)
+        .or_else(|| ApprovalStatus::from_str(value).map(ApprovalStatus::as_str))
 }
 
 #[allow(dead_code)]
@@ -208,7 +209,8 @@ impl LaneStatus {
 }
 
 pub(crate) fn canonical_lane_status_str(value: &str) -> Option<&'static str> {
-    LaneStatus::from_str(value).map(LaneStatus::as_str)
+    taskflow_contracts::canonical_lane_status_str(value)
+        .or_else(|| LaneStatus::from_str(value).map(LaneStatus::as_str))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -714,11 +716,12 @@ impl Release1ContractStatus {
 }
 
 pub(crate) fn canonical_release1_contract_status_str(value: &str) -> Option<&'static str> {
-    Release1ContractStatus::from_str(value).map(Release1ContractStatus::as_str)
+    taskflow_contracts::canonical_release1_contract_status_str(value)
+        .or_else(|| Release1ContractStatus::from_str(value).map(Release1ContractStatus::as_str))
 }
 
 pub(crate) fn release1_contract_status_str(ok: bool) -> &'static str {
-    Release1ContractStatus::from_bool(ok).as_str()
+    taskflow_contracts::release1_contract_status_str(ok)
 }
 
 pub(crate) fn has_evidence_id(value: Option<&str>) -> bool {
@@ -3679,6 +3682,42 @@ mod tests {
             Some("blocked")
         );
         assert_eq!(canonical_release1_contract_status_str("unknown"), None);
+    }
+
+    #[test]
+    fn status_code_registry_parity_covers_release1_status_surfaces() {
+        for status in taskflow_contracts::ApprovalStatus::all() {
+            assert_eq!(
+                taskflow_contracts::canonical_approval_status_str(status.as_str()),
+                Some(status.as_str())
+            );
+            assert_eq!(
+                super::canonical_approval_status_str(status.as_str()),
+                Some(status.as_str())
+            );
+        }
+        for status in taskflow_contracts::LaneStatus::all() {
+            assert_eq!(
+                taskflow_contracts::canonical_lane_status_str(status.as_str()),
+                Some(status.as_str())
+            );
+            assert_eq!(
+                super::canonical_lane_status_str(status.as_str()),
+                Some(status.as_str())
+            );
+        }
+        for status in taskflow_contracts::Release1ContractStatus::all() {
+            assert_eq!(
+                taskflow_contracts::canonical_release1_contract_status_str(status.as_str()),
+                Some(status.as_str())
+            );
+            assert_eq!(
+                super::canonical_release1_contract_status_str(status.as_str()),
+                Some(status.as_str())
+            );
+        }
+        assert_eq!(super::release1_contract_status_str(true), "pass");
+        assert_eq!(super::release1_contract_status_str(false), "blocked");
     }
 
     #[test]

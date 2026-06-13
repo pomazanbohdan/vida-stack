@@ -4,6 +4,7 @@ use taskflow_core::{IssueType, TaskId, TaskStatus, Timestamp};
 pub mod artifact_kind;
 pub mod blocker_code;
 pub mod decision_table;
+pub mod status_code;
 
 pub use artifact_kind::{ArtifactKind, UnknownArtifactKind};
 pub use blocker_code::{
@@ -16,6 +17,11 @@ pub use decision_table::{
     DECISION_TABLE_SCHEMA_VERSION, DecisionTableCondition, DecisionTableEvaluationRequest,
     DecisionTableEvaluationResponse, DecisionTableEvaluationStatus, DecisionTableInput,
     DecisionTableOperator, DecisionTableOutput, DecisionTableRule, DecisionTableValue,
+};
+pub use status_code::{
+    ApprovalStatus, LaneStatus, Release1ContractStatus, UnknownStatusCode,
+    canonical_approval_status_str, canonical_lane_status_str,
+    canonical_release1_contract_status_str, release1_contract_status_str,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
