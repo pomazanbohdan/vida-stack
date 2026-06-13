@@ -156,8 +156,7 @@ pub(crate) fn backend_admissibility_key_for_dispatch_target(
     dispatch_target: &str,
     dispatch_contract_lane: Option<&DispatchContractLane<'_>>,
 ) -> BackendAdmissibilityKey {
-    let canonical_target =
-        crate::runtime_contract_vocab::canonical_dispatch_target_name(dispatch_target.trim());
+    let canonical_target = canonical_dispatch_target_name(dispatch_target.trim());
 
     if let Some(task_class_key) = dispatch_contract_lane
         .and_then(|lane| lane.task_class)
@@ -184,6 +183,40 @@ pub(crate) fn backend_admissibility_key_for_dispatch_target(
         "review" => BackendAdmissibilityKey::Review,
         other => BackendAdmissibilityKey::Conservative(other.to_string()),
     }
+}
+
+pub(crate) fn canonical_dispatch_target_alias(value: &str) -> Option<&'static str> {
+    use crate::runtime_contract_vocab::{
+        DISPATCH_TARGET_ANALYSIS, DISPATCH_TARGET_CLOSURE, DISPATCH_TARGET_COACH,
+        DISPATCH_TARGET_EXECUTION_PREPARATION, DISPATCH_TARGET_IMPLEMENTER,
+        DISPATCH_TARGET_SPECIFICATION, DISPATCH_TARGET_VERIFICATION, RUNTIME_ROLE_BUSINESS_ANALYST,
+        RUNTIME_ROLE_PM, RUNTIME_ROLE_PROVER, RUNTIME_ROLE_SOLUTION_ARCHITECT,
+        RUNTIME_ROLE_VERIFIER, RUNTIME_ROLE_WORKER,
+    };
+
+    match value.trim() {
+        "writer" | "implementation" | RUNTIME_ROLE_WORKER => Some(DISPATCH_TARGET_IMPLEMENTER),
+        RUNTIME_ROLE_BUSINESS_ANALYST | RUNTIME_ROLE_PM => Some(DISPATCH_TARGET_SPECIFICATION),
+        RUNTIME_ROLE_VERIFIER | RUNTIME_ROLE_PROVER => Some(DISPATCH_TARGET_VERIFICATION),
+        "escalation" | "architecture" | RUNTIME_ROLE_SOLUTION_ARCHITECT => {
+            Some(DISPATCH_TARGET_EXECUTION_PREPARATION)
+        }
+        "release" | "release/closure" => Some(DISPATCH_TARGET_CLOSURE),
+        DISPATCH_TARGET_ANALYSIS => Some(DISPATCH_TARGET_ANALYSIS),
+        DISPATCH_TARGET_COACH => Some(DISPATCH_TARGET_COACH),
+        DISPATCH_TARGET_CLOSURE => Some(DISPATCH_TARGET_CLOSURE),
+        DISPATCH_TARGET_EXECUTION_PREPARATION => Some(DISPATCH_TARGET_EXECUTION_PREPARATION),
+        DISPATCH_TARGET_IMPLEMENTER => Some(DISPATCH_TARGET_IMPLEMENTER),
+        DISPATCH_TARGET_SPECIFICATION => Some(DISPATCH_TARGET_SPECIFICATION),
+        DISPATCH_TARGET_VERIFICATION => Some(DISPATCH_TARGET_VERIFICATION),
+        _ => None,
+    }
+}
+
+pub(crate) fn canonical_dispatch_target_name(value: &str) -> String {
+    canonical_dispatch_target_alias(value)
+        .unwrap_or_else(|| value.trim())
+        .to_string()
 }
 
 fn backend_admissibility_key_from_canonical(value: &str) -> BackendAdmissibilityKey {
@@ -581,5 +614,20 @@ mod tests {
             backend_admissibility_key_for_dispatch_target("custom-lane", None).as_str(),
             "custom-lane"
         );
+    }
+
+    #[test]
+    fn dispatch_target_aliases_normalize_in_routing_policy() {
+        assert_eq!(
+            canonical_dispatch_target_name("business_analyst"),
+            "specification"
+        );
+        assert_eq!(canonical_dispatch_target_name("prover"), "verification");
+        assert_eq!(
+            canonical_dispatch_target_name("escalation"),
+            "execution_preparation"
+        );
+        assert_eq!(canonical_dispatch_target_name("release/closure"), "closure");
+        assert_eq!(canonical_dispatch_target_name("custom-lane"), "custom-lane");
     }
 }

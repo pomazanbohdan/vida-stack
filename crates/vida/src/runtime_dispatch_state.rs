@@ -5,13 +5,12 @@ use time::format_description::well_known::Rfc3339;
 
 use super::*;
 use crate::release1_contracts::canonical_lane_status_str;
-use crate::runtime_assignment_policy::DispatchContractLane;
+use crate::runtime_assignment_policy::{canonical_dispatch_target_name, DispatchContractLane};
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 use crate::runtime_contract_vocab::{
-    canonical_dispatch_target_name, RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH,
-    RUNTIME_ROLE_PM, RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER,
-    TASK_CLASS_ARCHITECTURE, TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION,
-    TASK_CLASS_VERIFICATION,
+    RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM,
+    RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, TASK_CLASS_ARCHITECTURE,
+    TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION, TASK_CLASS_VERIFICATION,
 };
 #[cfg(test)]
 use crate::runtime_dispatch_downstream_packets::downstream_dispatch_packet_body;
