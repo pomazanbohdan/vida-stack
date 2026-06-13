@@ -5594,6 +5594,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "taskflow-authority"
+version = "0.9.7"
+dependencies = [
+ "runtime-path-policy",
+ "serde",
+ "serde_json",
+ "taskflow-contracts",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "taskflow-cli"
 version = "0.9.7"
 dependencies = [

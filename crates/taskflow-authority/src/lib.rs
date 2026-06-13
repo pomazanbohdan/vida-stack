@@ -1,0 +1,35 @@
+pub mod authority_chain;
+pub mod continuation_binding;
+pub mod errors;
+pub mod exception_takeover;
+pub mod final_snapshot;
+pub mod projection_cache;
+pub mod stale_guard;
+pub mod terminal_closure;
+
+pub use errors::TaskflowAuthorityError;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn public_authority_modules_are_registered() {
+        let modules = [
+            crate::authority_chain::MODULE,
+            crate::terminal_closure::MODULE,
+            crate::stale_guard::MODULE,
+            crate::exception_takeover::MODULE,
+            crate::projection_cache::MODULE,
+            crate::final_snapshot::MODULE,
+            crate::continuation_binding::MODULE,
+        ];
+
+        assert_eq!(modules.len(), 7);
+        assert!(modules.contains(&"authority_chain"));
+        assert!(modules.contains(&"terminal_closure"));
+        assert!(modules.contains(&"stale_guard"));
+        assert!(modules.contains(&"exception_takeover"));
+        assert!(modules.contains(&"projection_cache"));
+        assert!(modules.contains(&"final_snapshot"));
+        assert!(modules.contains(&"continuation_binding"));
+    }
+}
