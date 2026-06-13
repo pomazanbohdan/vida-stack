@@ -255,6 +255,18 @@ fn consume_final_toon_bool(value: bool) -> &'static str {
 }
 
 fn consume_final_design_first_delegated_lanes(execution_plan: &serde_json::Value) -> String {
+    let required_lanes = execution_plan["orchestration_contract"]["delegation_policy"]
+        ["required_lanes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(display_lane_label)
+        .collect::<Vec<_>>();
+    if !required_lanes.is_empty() {
+        return required_lanes.join(", ");
+    }
+
     let active_cycle = execution_plan["orchestration_contract"]["active_cycle"]
         .as_array()
         .into_iter()
@@ -274,18 +286,7 @@ fn consume_final_design_first_delegated_lanes(execution_plan: &serde_json::Value
     {
         lanes.push("implementer");
     }
-    if lanes.is_empty() {
-        execution_plan["orchestration_contract"]["delegation_policy"]["required_lanes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-            .map(display_lane_label)
-            .collect::<Vec<_>>()
-            .join(", ")
-    } else {
-        lanes.join(", ")
-    }
+    lanes.join(", ")
 }
 
 fn consume_final_toon_text(
@@ -3304,6 +3305,57 @@ mod tests {
                     .to_string()
                 )
             }
+        );
+    }
+
+    #[test]
+    fn consume_final_design_first_delegated_lanes_prefers_required_lanes() {
+        let execution_plan = serde_json::json!({
+            "status": "design_first",
+            "orchestration_contract": {
+                "active_cycle": [
+                    "publish_initial_execution_plan",
+                    "delegate_specification_or_research_lane",
+                    "replan_after_design_gate",
+                    "shape_work_pool_and_dev_packets",
+                    "delegate_implementer_lane"
+                ],
+                "delegation_policy": {
+                    "required_lanes": [
+                        "specification",
+                        "implementer",
+                        "coach",
+                        "verifier",
+                        "execution_preparation"
+                    ]
+                }
+            }
+        });
+
+        assert_eq!(
+            super::consume_final_design_first_delegated_lanes(&execution_plan),
+            "specification, implementer, coach, verifier, execution preparation"
+        );
+    }
+
+    #[test]
+    fn consume_final_design_first_delegated_lanes_falls_back_to_active_cycle() {
+        let execution_plan = serde_json::json!({
+            "status": "design_first",
+            "orchestration_contract": {
+                "active_cycle": [
+                    "delegate_specification_or_research_lane",
+                    "delegate_implementer_lane"
+                ],
+                "delegation_policy": {
+                    "required_lanes": []
+                }
+            }
+        });
+
+        assert_eq!(
+            super::consume_final_design_first_delegated_lanes(&execution_plan),
+            "specification, implementer"
         );
     }
 
