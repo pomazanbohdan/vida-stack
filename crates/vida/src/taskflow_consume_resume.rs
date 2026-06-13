@@ -3838,6 +3838,30 @@ fn retry_backend_for_dispatch_receipt(
     let route_fallback =
         route.and_then(crate::taskflow_routing::fallback_executor_backend_from_route);
     if dispatch_receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority") {
+        if dispatch_receipt
+            .dispatch_packet_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .and_then(|path| {
+                crate::read_json_file_if_present(std::path::Path::new(path))
+                    .or_else(|| dispatch_packet_json_from_current_project(path))
+            })
+            .and_then(|packet| {
+                (packet["packet_kind"].as_str() == Some("runtime_dispatch_packet")).then_some(())
+            })
+            .is_some()
+        {
+            if let Some(next_review_backend) = route.and_then(|route| {
+                crate::taskflow_routing::fanout_executor_backends_from_route(route)
+                    .into_iter()
+                    .map(|backend| backend.trim().to_string())
+                    .find(|backend| {
+                        !backend.is_empty() && Some(backend.as_str()) != current_backend
+                    })
+            }) {
+                return Some(next_review_backend);
+            }
+        }
         if let Some(packet_retry_backend) = dispatch_receipt
             .dispatch_packet_path
             .as_deref()
@@ -3904,6 +3928,18 @@ fn retry_backend_from_dispatch_packet(
         .or_else(|| dispatch_packet_json_from_current_project(packet_path))?;
     let execution_plan = &packet["role_selection_full"]["execution_plan"];
     let route = super::execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
+    if packet["packet_kind"].as_str() == Some("runtime_dispatch_packet")
+        && dispatch_target == "coach"
+    {
+        if let Some(next_review_backend) = route.and_then(|route| {
+            crate::taskflow_routing::fanout_executor_backends_from_route(route)
+                .into_iter()
+                .map(|backend| backend.trim().to_string())
+                .find(|backend| !backend.is_empty() && Some(backend.as_str()) != current_backend)
+        }) {
+            return Some(next_review_backend);
+        }
+    }
     if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
         execution_plan,
         dispatch_target,
@@ -5948,9 +5984,8 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
         let latest_receipt = store
             .latest_run_graph_dispatch_receipt_summary()
             .await
-            .map_err(|error| {
-                format!("Failed to read latest run-graph dispatch receipt: {error}")
-            })?;
+            .ok()
+            .flatten();
         if let Some(status) = store
             .latest_run_graph_status()
             .await
@@ -6125,8 +6160,7 @@ fn rewrite_retry_dispatch_packet_if_downstream_carrier(
     else {
         return Ok(false);
     };
-    let packet = read_dispatch_packet(packet_path)
-        .ok()
+    let packet = crate::read_json_file_if_present(std::path::Path::new(packet_path))
         .or_else(|| dispatch_packet_json_from_current_project(packet_path))
         .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))?;
     let packet_kind = packet
@@ -7576,6 +7610,51 @@ mod tests {
     use std::fs;
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    async fn create_test_task_authority(
+        store: &StateStore,
+        task_id: &str,
+        status: &str,
+        source_repo: &str,
+    ) {
+        let parent_id = format!("test-parent-{task_id}");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: parent_id.as_str(),
+                title: "Test parent",
+                display_id: None,
+                description: "Parent fixture for run-graph resume tests",
+                issue_type: "epic",
+                status: "in_progress",
+                priority: 2,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo,
+            })
+            .await
+            .expect("create parent TaskFlow fixture");
+        store
+            .create_task(CreateTaskRequest {
+                task_id,
+                title: "Test task",
+                display_id: None,
+                description: "TaskFlow authority fixture for run-graph resume tests",
+                issue_type: "task",
+                status,
+                priority: 2,
+                parent_id: Some(parent_id.as_str()),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo,
+            })
+            .await
+            .expect("create TaskFlow authority fixture");
+    }
 
     fn taskflow_consume_resume_test_receipt(
         dispatch_kind: &str,
@@ -16431,6 +16510,8 @@ agent_system:
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let run_id = "run-missing-first-receipt-latest";
+        let source_repo = root.display().to_string();
+        create_test_task_authority(&store, run_id, "in_progress", &source_repo).await;
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             run_id,
             "implementation",
@@ -18153,6 +18234,9 @@ agent_system:
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        let source_repo = root.display().to_string();
+        create_test_task_authority(&store, "task-upstream", "in_progress", &source_repo).await;
+        create_test_task_authority(&store, "run-child", "in_progress", &source_repo).await;
 
         let mut upstream_status = crate::taskflow_run_graph::default_run_graph_status(
             "run-upstream",
