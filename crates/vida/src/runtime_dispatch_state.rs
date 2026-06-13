@@ -19920,6 +19920,64 @@ host_environment:
     }
 
     #[test]
+    fn dispatch_packet_declares_downstream_dispatch_from_packet_kind_or_target() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-downstream-packet-detect-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let downstream_kind = root.join("downstream-kind.json");
+        let downstream_target = root.join("downstream-target.json");
+        let dispatch = root.join("dispatch.json");
+        std::fs::write(
+            &downstream_kind,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet"
+            })
+            .to_string(),
+        )
+        .expect("downstream kind packet should write");
+        std::fs::write(
+            &downstream_target,
+            serde_json::json!({
+                "downstream_dispatch_target": "prover"
+            })
+            .to_string(),
+        )
+        .expect("downstream target packet should write");
+        std::fs::write(
+            &dispatch,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "dispatch_target": "tester"
+            })
+            .to_string(),
+        )
+        .expect("dispatch packet should write");
+
+        assert!(dispatch_packet_declares_downstream_dispatch(
+            downstream_kind
+                .to_str()
+                .expect("downstream kind path should be utf-8")
+        ));
+        assert!(dispatch_packet_declares_downstream_dispatch(
+            downstream_target
+                .to_str()
+                .expect("downstream target path should be utf-8")
+        ));
+        assert!(!dispatch_packet_declares_downstream_dispatch(
+            dispatch.to_str().expect("dispatch path should be utf-8")
+        ));
+        assert!(!dispatch_packet_declares_downstream_dispatch(
+            root.join("missing.json")
+                .to_str()
+                .expect("missing path should be utf-8")
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn execute_and_record_dispatch_receipt_blocks_internal_activation_view_only_packet_without_launch(
     ) {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -24135,7 +24193,7 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                         &store,
                         &project_root,
                         dispatch_packet_path,
-                        false,
+                        dispatch_packet_declares_downstream_dispatch(dispatch_packet_path),
                     )
                     .await?;
                 drop(store);
@@ -24188,7 +24246,7 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                         &store,
                         &project_root,
                         dispatch_packet_path,
-                        false,
+                        dispatch_packet_declares_downstream_dispatch(dispatch_packet_path),
                     )
                     .await?;
                 drop(store);
@@ -24768,6 +24826,18 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
         return true;
     }
     false
+}
+
+fn dispatch_packet_declares_downstream_dispatch(dispatch_packet_path: &str) -> bool {
+    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(dispatch_packet_path))
+    else {
+        return false;
+    };
+    packet["packet_kind"].as_str() == Some("runtime_downstream_dispatch_packet")
+        || packet["downstream_dispatch_target"]
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
 }
 
 pub(crate) fn dispatch_result_stale_after_seconds(result: &serde_json::Value) -> i64 {

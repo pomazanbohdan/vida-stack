@@ -5908,6 +5908,23 @@ fn resume_inputs_from_downstream_packet_without_store(
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 timestamp should render");
+    let activation_agent_type = string_field(&packet, "activation_agent_type").or_else(|| {
+        downstream_packet_runtime_assignment_field(&packet, "activation_agent_type")
+            .or_else(|| downstream_packet_runtime_assignment_field(&packet, "selected_tier"))
+            .or_else(|| downstream_packet_runtime_assignment_field(&packet, "selected_carrier_id"))
+    });
+    let activation_runtime_role = string_field(&packet, "activation_runtime_role").or_else(|| {
+        downstream_packet_runtime_assignment_field(&packet, "activation_runtime_role").or_else(
+            || downstream_packet_runtime_assignment_field(&packet, "selected_runtime_role"),
+        )
+    });
+    let selected_backend = string_field(&packet, "selected_backend").or_else(|| {
+        downstream_packet_runtime_assignment_field(&packet, "selected_backend_id")
+            .or_else(|| {
+                downstream_packet_runtime_assignment_field(&packet, "selected_dispatch_backend_id")
+            })
+            .or_else(|| downstream_packet_runtime_assignment_field(&packet, "selected_carrier_id"))
+    });
     let receipt = crate::state_store::RunGraphDispatchReceipt {
         run_id: run_id.clone(),
         dispatch_target: dispatch_target.clone(),
@@ -5938,9 +5955,9 @@ fn resume_inputs_from_downstream_packet_without_store(
         downstream_dispatch_active_target: None,
         downstream_dispatch_last_target: string_field(&packet, "source_dispatch_target")
             .or_else(|| string_field(&packet, "downstream_dispatch_last_target")),
-        activation_agent_type: string_field(&packet, "activation_agent_type"),
-        activation_runtime_role: string_field(&packet, "activation_runtime_role"),
-        selected_backend: string_field(&packet, "selected_backend"),
+        activation_agent_type,
+        activation_runtime_role,
+        selected_backend,
         recorded_at,
     };
     let run_graph_bootstrap = packet
@@ -5953,6 +5970,83 @@ fn resume_inputs_from_downstream_packet_without_store(
         role_selection,
         run_graph_bootstrap,
     })
+}
+
+fn downstream_packet_runtime_assignment_field(
+    packet: &serde_json::Value,
+    field: &str,
+) -> Option<String> {
+    packet
+        .get("runtime_assignment")
+        .or_else(|| packet.get("carrier_runtime_assignment"))
+        .and_then(|assignment| assignment.get(field))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            let dispatch_target = string_field(packet, "downstream_dispatch_target")?;
+            let role_selection = packet
+                .get("role_selection_full")
+                .cloned()
+                .and_then(|value| {
+                    serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
+                })?;
+            let (assignment, _) = super::runtime_dispatch_state::dispatch_target_runtime_assignment(
+                &role_selection.execution_plan,
+                &dispatch_target,
+            );
+            assignment
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            let role_selection = packet
+                .get("role_selection_full")
+                .cloned()
+                .and_then(|value| {
+                    serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
+                })?;
+            let active_packet = packet
+                .get("delivery_task_packet")
+                .or_else(|| packet.get("verifier_proof_packet"))
+                .or_else(|| packet.get("coach_review_packet"))
+                .or_else(|| packet.get("execution_block_packet"))?;
+            let flow_key = active_packet
+                .get("handoff_task_class")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    active_packet
+                        .get("handoff_runtime_role")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|role| match role.trim() {
+                            "verifier" | "prover" => Some("verification"),
+                            "coach" => Some("coach"),
+                            "business_analyst" => Some("specification"),
+                            "solution_architect" => Some("architecture"),
+                            "worker" => Some("implementation"),
+                            _ => None,
+                        })
+                })?
+                .trim();
+            role_selection
+                .execution_plan
+                .pointer(&format!(
+                    "/development_flow/{flow_key}/runtime_assignment/{field}"
+                ))
+                .or_else(|| {
+                    role_selection.execution_plan.pointer(&format!(
+                        "/development_flow/{flow_key}/carrier_runtime_assignment/{field}"
+                    ))
+                })
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
 }
 
 fn resume_inputs_from_agent_init_packet_arg_without_store(
@@ -6811,14 +6905,31 @@ fn agent_init_packet_selection(
     let selected_role = packet
         .get("activation_runtime_role")
         .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            downstream.then(|| {
+                downstream_packet_runtime_assignment_field(&packet, "activation_runtime_role")
+                    .or_else(|| {
+                        downstream_packet_runtime_assignment_field(&packet, "selected_runtime_role")
+                    })
+            })?
+        })
         .or_else(|| {
             packet
                 .get("role_selection")
                 .and_then(|value| value.get("selected_role"))
                 .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            packet
+                .get("role_selection_full")
+                .and_then(|value| value.get("selected_role"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
         })
         .filter(|value| !value.is_empty())
-        .unwrap_or("unknown");
+        .unwrap_or_else(|| "unknown".to_string());
     if selected_role == "orchestrator" || selected_role == "unknown" {
         return Err(
             "Packet activation requires a non-orchestrator runtime role in the dispatch packet."
@@ -8363,6 +8474,87 @@ mod agent_init_surface_tests {
                 crate::shell_quote(packet_path)
             )),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn downstream_packet_resume_uses_target_runtime_assignment_when_top_level_activation_is_missing(
+    ) {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("downstream-prover-packet.json");
+        let mut role_selection = test_role_selection();
+        role_selection.execution_plan = serde_json::json!({
+            "development_flow": {
+                "verification": {
+                    "runtime_assignment": {
+                        "activation_agent_type": "senior",
+                        "activation_runtime_role": "verifier",
+                        "selected_backend_id": "internal_subagents",
+                        "selected_tier": "senior",
+                        "selected_runtime_role": "verifier"
+                    }
+                }
+            }
+        });
+        fs::write(
+            &packet_path,
+            serde_json::to_string(&serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": {
+                    "goal": "Execute bounded prover handoff",
+                    "scope_in": ["dispatch_target:prover"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["prover handoff result is recorded"],
+                    "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch --json",
+                    "proof_target": "prover dispatch result",
+                    "stop_rules": ["stop after prover result"],
+                    "blocking_question": "Does prover handoff retain downstream carrier assignment?"
+                },
+                "run_id": "run-downstream-prover",
+                "source_dispatch_target": "tester",
+                "downstream_dispatch_target": "prover",
+                "downstream_dispatch_ready": true,
+                "downstream_dispatch_blockers": [],
+                "downstream_dispatch_status": "packet_ready",
+                "downstream_lane_status": "packet_ready",
+                "activation_agent_type": null,
+                "activation_runtime_role": null,
+                "selected_backend": null,
+                "role_selection_full": role_selection,
+                "run_graph_bootstrap": {
+                    "run_id": "run-downstream-prover"
+                }
+            }))
+            .expect("packet json should encode"),
+        )
+        .expect("packet should write");
+
+        let inputs = resume_inputs_from_downstream_packet_without_store(
+            packet_path.to_str().expect("packet path should be utf-8"),
+        )
+        .expect("downstream packet should build resume inputs");
+        let selection = agent_init_packet_selection(
+            packet_path.to_str().expect("packet path should be utf-8"),
+            read_agent_init_packet_arg(packet_path.to_str().expect("packet path should be utf-8"))
+                .expect("packet should read"),
+            true,
+        )
+        .expect("downstream packet selection should use runtime assignment role");
+
+        assert_eq!(inputs.dispatch_receipt.dispatch_target, "prover");
+        assert_eq!(selection["selected_role"], "verifier");
+        assert_eq!(
+            inputs.dispatch_receipt.activation_agent_type.as_deref(),
+            Some("senior")
+        );
+        assert_eq!(
+            inputs.dispatch_receipt.activation_runtime_role.as_deref(),
+            Some("verifier")
+        );
+        assert_eq!(
+            inputs.dispatch_receipt.selected_backend.as_deref(),
+            Some("internal_subagents")
         );
     }
 
