@@ -11,7 +11,7 @@ Purpose: preserve the instruction-source trail while moving current canon into `
 1. `agent-definition-protocol.md`
    Current role: historical framework/runtime source
    Current canon: [instruction-artifact-model.md](/home/unnamed/project/vida-stack/docs/product/spec/instruction-artifact-model.md)
-2. `docs/process/framework-source-lineage-index.md`
+2. `Git history and active artifact sidecars`
    Current role: historical source artifact
    Current canon: [instruction-artifact-model.md](/home/unnamed/project/vida-stack/docs/product/spec/instruction-artifact-model.md)
 3. deleted historical YAML template/schema input formerly at `docs/framework/templates/instruction-contract.yaml`

@@ -27,7 +27,7 @@ Required runtime artifacts:
 
 Upstream supporting artifacts:
 
-1. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
 2. `docs/product/spec/agent-role-skill-profile-flow-model.md`
 3. `system-maps/template.map`
 

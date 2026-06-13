@@ -124,6 +124,41 @@ pub(crate) fn dispatch_summary_has_clean_completed_lane(
     })
 }
 
+pub(crate) fn dispatch_summary_has_active_exception_takeover(
+    receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
+    expected_run_id: Option<&str>,
+) -> bool {
+    expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+        && receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn dispatch_summary_has_exception_takeover_continuation_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
+    expected_run_id: Option<&str>,
+) -> bool {
+    expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+        && matches!(
+            receipt.lane_status.as_str(),
+            "lane_exception_takeover" | "lane_exception_recorded"
+        )
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
 pub(crate) fn dispatch_receipt_has_clean_completed_lane(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     expected_run_id: Option<&str>,
@@ -133,6 +168,54 @@ pub(crate) fn dispatch_receipt_has_clean_completed_lane(
         && receipt.lane_status == "lane_completed"
         && receipt.blocker_code.is_none()
         && receipt.downstream_dispatch_blockers.is_empty()
+}
+
+pub(crate) fn dispatch_receipt_has_active_exception_takeover(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    expected_run_id: Option<&str>,
+) -> bool {
+    expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+        && receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn dispatch_receipt_has_exception_takeover_continuation_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    expected_run_id: Option<&str>,
+) -> bool {
+    expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+        && matches!(
+            receipt.lane_status.as_str(),
+            "lane_exception_takeover" | "lane_exception_recorded"
+        )
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn recovery_summary_is_terminal_retired_runtime_run(
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> bool {
+    recovery.is_some_and(|summary| {
+        summary.resume_status == "completed"
+            && summary.lifecycle_stage == "closure_complete"
+            && !summary.delegation_gate.delegated_cycle_open
+            && summary.delegation_gate.blocker_code.is_none()
+            && summary.resume_target == "none"
+            && summary.task_id == summary.run_id
+    })
 }
 
 pub(crate) fn dispatch_receipt_downstream_blockers_superseded_by_ready_handoff(
@@ -428,6 +511,81 @@ mod tests {
     }
 
     #[test]
+    fn active_exception_takeover_requires_matching_run_and_complete_receipt_pair() {
+        let mut receipt = receipt_for("run-1");
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+
+        assert!(dispatch_receipt_has_active_exception_takeover(
+            &receipt,
+            Some("run-1")
+        ));
+        assert!(!dispatch_receipt_has_active_exception_takeover(
+            &receipt,
+            Some("other-run")
+        ));
+
+        receipt.supersedes_receipt_id = None;
+        assert!(!dispatch_receipt_has_active_exception_takeover(
+            &receipt,
+            Some("run-1")
+        ));
+    }
+
+    #[test]
+    fn continuation_exception_takeover_evidence_accepts_recorded_or_active_lane() {
+        let mut summary = summary_for("run-1");
+        summary.lane_status = "lane_exception_recorded".to_string();
+        summary.exception_path_receipt_id = Some("exception-1".to_string());
+        summary.supersedes_receipt_id = Some("exception-1".to_string());
+
+        assert!(
+            dispatch_summary_has_exception_takeover_continuation_evidence(&summary, Some("run-1"))
+        );
+        assert!(!dispatch_summary_has_active_exception_takeover(
+            &summary,
+            Some("run-1")
+        ));
+
+        summary.lane_status = "lane_exception_takeover".to_string();
+        assert!(
+            dispatch_summary_has_exception_takeover_continuation_evidence(&summary, Some("run-1"))
+        );
+
+        summary.supersedes_receipt_id = None;
+        assert!(
+            !dispatch_summary_has_exception_takeover_continuation_evidence(&summary, Some("run-1"))
+        );
+    }
+
+    #[test]
+    fn full_receipt_continuation_exception_evidence_accepts_recorded_or_active_lane() {
+        let mut receipt = receipt_for("run-1");
+        receipt.lane_status = "lane_exception_recorded".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+
+        assert!(
+            dispatch_receipt_has_exception_takeover_continuation_evidence(&receipt, Some("run-1"))
+        );
+        assert!(!dispatch_receipt_has_active_exception_takeover(
+            &receipt,
+            Some("run-1")
+        ));
+
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        assert!(
+            dispatch_receipt_has_exception_takeover_continuation_evidence(&receipt, Some("run-1"))
+        );
+
+        receipt.exception_path_receipt_id = None;
+        assert!(
+            !dispatch_receipt_has_exception_takeover_continuation_evidence(&receipt, Some("run-1"))
+        );
+    }
+
+    #[test]
     fn full_receipt_clean_ready_and_completed_lane_require_no_stale_downstream_blockers() {
         let mut receipt = receipt_for("run-1");
         assert!(dispatch_receipt_has_clean_ready_downstream_handoff(
@@ -493,5 +651,51 @@ mod tests {
             ),
             "recovery-ready downstream handoff should supersede stale source-lane blockers"
         );
+    }
+
+    fn recovery_summary_for(run_id: &str) -> crate::state_store::RunGraphRecoverySummary {
+        crate::state_store::RunGraphRecoverySummary {
+            run_id: run_id.to_string(),
+            task_id: run_id.to_string(),
+            active_node: "closure".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            handoff_state: "none".to_string(),
+            checkpoint_kind: "none".to_string(),
+            policy_gate: "closed_task_stale_run_retired".to_string(),
+            resume_status: "completed".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "closure".to_string(),
+                lifecycle_stage: "closure_complete".to_string(),
+                delegated_cycle_open: false,
+                delegated_cycle_state: "clear".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                blocker_code: None,
+                reporting_pause_gate: "closure_candidate".to_string(),
+                continuation_signal: "continue_after_reports".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn terminal_retired_runtime_run_requires_closed_clear_self_task_recovery() {
+        let terminal = recovery_summary_for("vida-scope");
+        assert!(recovery_summary_is_terminal_retired_runtime_run(Some(
+            &terminal
+        )));
+
+        let mut open_cycle = recovery_summary_for("vida-scope");
+        open_cycle.delegation_gate.delegated_cycle_open = true;
+        assert!(!recovery_summary_is_terminal_retired_runtime_run(Some(
+            &open_cycle
+        )));
+
+        let mut task_backed = terminal;
+        task_backed.task_id = "real-task".to_string();
+        assert!(!recovery_summary_is_terminal_retired_runtime_run(Some(
+            &task_backed
+        )));
     }
 }

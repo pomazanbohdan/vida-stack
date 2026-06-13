@@ -21,14 +21,10 @@ Default feature-delivery flow:
 11. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; if the root-session write guard is still active, continue through packet shaping or `vida agent-init` dispatch instead of local coding.
 12. Host-local shell/edit capability is not a lane-change receipt and does not authorize root-session coding.
 13. Finding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session coding; wait, reroute, or record the exception path first.
-14. Under continued-development intent, stay in commentary/progress mode until the user explicitly asks to stop; do not emit final closure wording while a next lawful TaskFlow continuation item is already known.
-15. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.
-16. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.
-17. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.
-18. Sticky continuation intent is not permission to self-select `ready_head[0]`, the first ready backlog item, or any adjacent slice; continue only when the active bounded unit is explicit from user wording or runtime evidence.
-19. If `vida status --json` or `vida orchestrator-init --json` cannot state `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to ambiguity instead of continuing implementation.
-20. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
-21. Prefer the launcher-owned intake/runtime progression surfaces over manual reconstruction:
+14. Continuation, pause-boundary, and generic-ready-item behavior is owned by `project-orchestrator-session-start-protocol.md` and the decision table in `project-orchestrator-reusable-prompt.md`; continue only when the active bounded unit is explicit from user wording or runtime evidence.
+15. If `vida status --json` or `vida orchestrator-init --json` cannot state bounded-unit and route fields when runtime is usable, fail closed to ambiguity instead of continuing implementation.
+16. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+17. Prefer the launcher-owned intake/runtime progression surfaces over manual reconstruction:
    - `vida taskflow consume final "<request>" --json` to materialize the routed intake, dispatch receipt, and first lawful packet
    - `vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]` to resume one persisted chain entry; legacy runtime packets may be normalized to the canonical packet-minimum path scope before fail-closed validation
    - `vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]` to let the bounded scheduler progress ready steps automatically
@@ -46,10 +42,10 @@ Default feature-delivery flow:
 artifact_path: process/project-operations
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-02'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-operations.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-06-02T03:58:00+03:00
+updated_at: 2026-06-13T01:35:00+03:00
 changelog_ref: project-operations.changelog.jsonl

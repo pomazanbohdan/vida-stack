@@ -1,20 +1,73 @@
-use std::process::Command;
+use std::ffi::OsStr;
+use std::io;
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[path = "support/runtime_consumption.rs"]
 mod runtime_consumption;
 
-fn vida() -> Command {
-    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
+struct VidaCommand {
+    command: Command,
+}
+
+impl VidaCommand {
+    fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.command.arg(arg);
+        self
+    }
+
+    fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.command.args(args);
+        self
+    }
+
+    fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.command.env(key, value);
+        self
+    }
+
+    fn output(&mut self) -> io::Result<Output> {
+        let mut last = None;
+        for attempt in 0..20 {
+            let output = self.command.output()?;
+            if !is_state_store_read_lock_contention(&output) {
+                return Ok(output);
+            }
+            last = Some(output);
+            thread::sleep(Duration::from_millis((50 * (attempt + 1)).min(500)));
+        }
+        Ok(last.expect("retry loop should capture lock-contention output"))
+    }
+}
+
+fn is_state_store_read_lock_contention(output: &Output) -> bool {
+    !output.status.success()
+        && (String::from_utf8_lossy(&output.stdout).contains("state_store_read_lock_contention")
+            || String::from_utf8_lossy(&output.stderr).contains("state_store_read_lock_contention"))
+}
+
+fn vida() -> VidaCommand {
+    VidaCommand {
+        command: vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida")),
+    }
 }
 
 fn unique_state_dir() -> String {
+    static STATE_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
+    let counter = STATE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!(
-        "/tmp/vida-doctor-contract-state-{}-{nanos}",
+        "/tmp/vida-doctor-contract-state-{}-{nanos}-{counter}",
         std::process::id()
     )
 }
@@ -947,11 +1000,11 @@ fn status_and_doctor_default_human_output_is_compact_toon_with_explicit_json_par
         "status default should start with TOON section title: {status_stdout}"
     );
     assert!(
-        status_stdout.contains("  state_dir:"),
+        status_stdout.contains("state dir:"),
         "status default should expose compact TOON field names: {status_stdout}"
     );
     assert!(
-        status_stdout.contains("  runtime_consumption:"),
+        status_stdout.contains("runtime consumption:"),
         "status default should expose compact runtime evidence: {status_stdout}"
     );
     assert!(
@@ -995,11 +1048,11 @@ fn status_and_doctor_default_human_output_is_compact_toon_with_explicit_json_par
         "doctor default should start with TOON section title: {doctor_stdout}"
     );
     assert!(
-        doctor_stdout.contains("  storage_metadata:"),
+        doctor_stdout.contains("storage metadata:"),
         "doctor default should expose compact TOON field names: {doctor_stdout}"
     );
     assert!(
-        doctor_stdout.contains("  runtime_consumption:"),
+        doctor_stdout.contains("runtime consumption:"),
         "doctor default should expose compact runtime evidence: {doctor_stdout}"
     );
     assert_not_json_output("vida doctor", &doctor_stdout);

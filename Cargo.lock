@@ -3461,6 +3461,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "operator-output"
+version = "0.9.7"
+dependencies = [
+ "common-format-toon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "toon-format",
+]
+
+[[package]]
 name = "ordered-float"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4586,6 +4597,15 @@ dependencies = [
  "num-traits",
  "serde",
  "smallvec",
+]
+
+[[package]]
+name = "runtime-path-policy"
+version = "0.9.7"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -6425,7 +6445,9 @@ dependencies = [
  "futures",
  "interprocess",
  "libc",
+ "operator-output",
  "ratatui 0.30.0",
+ "runtime-path-policy",
  "serde",
  "serde_json",
  "serde_yaml",

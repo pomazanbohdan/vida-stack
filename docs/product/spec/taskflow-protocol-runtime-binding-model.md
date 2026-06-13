@@ -307,7 +307,7 @@ Database-first acceptance rule:
 ## 12. References
 
 1. `docs/product/spec/canonical-runtime-layer-matrix.md`
-2. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
+2. `current TaskFlow runtime owner specs`
 3. `docs/product/spec/compiled-runtime-bundle-contract.md`
 4. `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
 5. `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`

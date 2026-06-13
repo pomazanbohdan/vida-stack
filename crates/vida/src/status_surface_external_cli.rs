@@ -1616,6 +1616,39 @@ pub(crate) fn external_cli_tool_contract_summary(
     )
 }
 
+fn selected_cli_runtime_root_configured(
+    overlay: &serde_yaml::Value,
+    selected_cli_system: &str,
+    selected_cli_entry: Option<&serde_yaml::Value>,
+) -> bool {
+    let explicit_system_entry = crate::yaml_lookup(
+        overlay,
+        &["host_environment", "systems", selected_cli_system],
+    );
+    let explicit = crate::yaml_lookup(
+        overlay,
+        &[
+            "host_environment",
+            "systems",
+            selected_cli_system,
+            "runtime_root",
+        ],
+    )
+    .and_then(serde_yaml::Value::as_str)
+    .map(str::trim);
+    if explicit_system_entry.is_some() {
+        return explicit.is_some_and(|value| !value.is_empty());
+    }
+    if explicit.is_some() {
+        return explicit.is_some_and(|value| !value.is_empty());
+    }
+    selected_cli_entry
+        .and_then(|entry| crate::yaml_lookup(entry, &["runtime_root"]))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
 pub(crate) fn external_cli_preflight_summary(
     overlay: &serde_yaml::Value,
     selected_cli_system: &str,
@@ -1702,20 +1735,19 @@ fn external_cli_preflight_summary_with_probe(
             (sandbox_active, network_reachable)
         }
     };
-    let tool_contract = external_cli_tool_contract_summary(
+    let runtime_root_configured =
+        selected_cli_runtime_root_configured(overlay, selected_cli_system, selected_cli_entry);
+    let tool_contract = crate::release1_contracts::cli_probe_tool_contract_summary(
         selected_execution_class.as_str(),
         requires_external_cli,
-        selected_cli_entry,
+        selected_cli_entry.is_some(),
+        runtime_root_configured,
     );
     let tool_contract_blocked = tool_contract["status"].as_str() == Some("blocked");
     let tool_contract_blocker = crate::release1_contracts::cli_probe_tool_contract_blocker_code(
         selected_execution_class.as_str(),
         selected_cli_entry.is_some(),
-        selected_cli_entry
-            .and_then(|entry| crate::yaml_lookup(entry, &["runtime_root"]))
-            .and_then(serde_yaml::Value::as_str)
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty()),
+        runtime_root_configured,
     );
     let baseline_for_blocker = |blocker_code: Option<crate::release1_contracts::BlockerCode>| {
         let trace_baseline = crate::release1_contracts::cli_probe_trace_baseline_summary(

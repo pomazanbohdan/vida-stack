@@ -908,28 +908,17 @@ impl StateStore {
 
         let terminal_completion_evidence = matches!(plan.status.as_str(), "completed")
             || (route.lifecycle_stage == "closure_complete" && plan.active_node == "closure");
-        let non_blocked_active_execution_cursor = !matches!(
-            route.lifecycle_stage.as_str(),
-            "analysis_blocked"
-                | "implementation_blocked"
-                | "verification_blocked"
-                | "closure_blocked"
-        ) && governance.handoff_state == "none"
-            && resume.resume_target == "none";
-
-        Ok(
-            (terminal_completion_evidence || non_blocked_active_execution_cursor)
-                && plan.next_node.is_none()
-                && !matches!(
-                    route.lifecycle_stage.as_str(),
-                    "analysis_blocked"
-                        | "implementation_blocked"
-                        | "verification_blocked"
-                        | "closure_blocked"
-                )
-                && governance.handoff_state == "none"
-                && resume.resume_target == "none",
-        )
+        Ok(terminal_completion_evidence
+            && plan.next_node.is_none()
+            && !matches!(
+                route.lifecycle_stage.as_str(),
+                "analysis_blocked"
+                    | "implementation_blocked"
+                    | "verification_blocked"
+                    | "closure_blocked"
+            )
+            && governance.handoff_state == "none"
+            && resume.resume_target == "none")
     }
 
     async fn run_graph_dispatch_has_receipt_backed_closure_truth(
@@ -1554,6 +1543,15 @@ impl StateStore {
             .map(|task| (task.id.clone(), task))
             .collect::<BTreeMap<_, _>>();
         let mut touched_task_ids = BTreeSet::new();
+        let import_root_task_ids = records
+            .iter()
+            .filter(|(_, record)| {
+                !work_item_requires_parent(&record.issue_type)
+                    && !Self::task_status_is_closed_like(&record.status)
+            })
+            .map(|(_, record)| record.id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
 
         for (line, mut record) in records {
             let task_id = record.id.trim().to_string();
@@ -1600,6 +1598,29 @@ impl StateStore {
                         ),
                         thread_id: String::new(),
                     });
+                }
+            }
+            let has_parent_edge = record
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.edge_type == "parent-child");
+            if !has_parent_edge
+                && !Self::task_status_is_closed_like(&record.status)
+                && work_item_requires_parent(&record.issue_type)
+            {
+                if let [root_task_id] = import_root_task_ids.as_slice() {
+                    if root_task_id != &task_id {
+                        record.dependencies.push(TaskDependencyJsonlRecord {
+                            issue_id: task_id.clone(),
+                            depends_on_id: root_task_id.clone(),
+                            edge_type: "parent-child".to_string(),
+                            created_at: record.updated_at.clone(),
+                            created_by: record.created_by.clone(),
+                            metadata: "{\"source\":\"single_root_jsonl_import_compat\"}"
+                                .to_string(),
+                            thread_id: String::new(),
+                        });
+                    }
                 }
             }
 

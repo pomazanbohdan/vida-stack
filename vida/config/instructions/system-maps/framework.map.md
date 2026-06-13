@@ -26,7 +26,7 @@ Top-level repository layout:
    - promoted stable product prose canon.
 4. `vida/config/`
    - executable product law and runtime-readable projections.
-5. `docs/process/framework-source-lineage-index.md`
+5. `Git history and active artifact sidecars`
    - project-owned provenance index for deleted framework-formation plan/research inputs,
    - not active framework law.
 6. TaskFlow runtime-family implementation surfaces
@@ -173,7 +173,7 @@ Canonical artifact classes:
 1. `plan`
    - strategic or execution-program artifact,
    - historical formation artifact after promotion,
-   - lineage preserved in `docs/process/framework-source-lineage-index.md`
+   - lineage preserved in `Git history and active artifact sidecars`
 2. `runtime_spec`
    - human-readable runtime law/specification that may be shared across implementations,
    - active home: `docs/product/spec/**` with executable projections in `vida/config/**`
@@ -211,10 +211,10 @@ Use one normalized vocabulary.
 
 1. `strategic plan`
    - top-level direction-setting plan whose settled semantics have already been promoted,
-   - historical lineage is preserved in `docs/process/framework-source-lineage-index.md`
+   - historical lineage is preserved in `Git history and active artifact sidecars`
 2. `execution-spec artifact`
    - detailed plan/spec artifact that concretizes a strategic direction before promotion,
-   - after promotion its lineage is preserved only in `docs/process/framework-source-lineage-index.md`
+   - after promotion its lineage is preserved only in `Git history and active artifact sidecars`
 3. `runtime spec`
    - shared semantic runtime model independent of one implementation substrate.
 
@@ -269,7 +269,7 @@ Legacy rule:
 1. “legacy” must never mean merely “older date”,
 2. an artifact is legacy only when its state is explicitly `history_evidence`,
 3. deleted framework-formation plan/research trees are not active canon,
-4. historical lineage is retained through Git history, active artifact sidecars, and `docs/process/framework-source-lineage-index.md`.
+4. historical lineage is retained through Git history, active artifact sidecars, and `Git history and active artifact sidecars`.
 
 ## 6. Shared Runtime-Spec Spine
 
@@ -303,14 +303,14 @@ Implementation posture:
 Current shared runtime-spec lineage:
 
 1. active promoted owners live in `docs/product/spec/**`, `vida/config/instructions/**`, and `vida/config/**`
-2. deleted formation sources are indexed in `docs/process/framework-source-lineage-index.md`
+2. deleted formation sources are indexed in `Git history and active artifact sidecars`
 
 Promotion rule:
 
 1. when a runtime-spec boundary is stable, keep its settled product-law portion in `docs/product/spec/**`,
 2. executable projections then belong in `vida/config/**`,
 3. implementation-specific details remain in TaskFlow/DocFlow runtime-family implementation surfaces or later target runtimes,
-4. historical formation inputs are preserved only through `docs/process/framework-source-lineage-index.md`, active artifact sidecars, and Git history.
+4. historical formation inputs are preserved only through `Git history and active artifact sidecars`, active artifact sidecars, and Git history.
 
 ## 7. Promotion And Projection Rules
 

@@ -180,7 +180,7 @@ The partial kernel must not silently redefine the already frozen `0.3` kernels.
 
 ### 7.1 Task Lifecycle Rule
 
-Per `docs/process/framework-source-lineage-index.md`, canonical `Task.lifecycle_state` remains:
+Per `Git history and active artifact sidecars`, canonical `Task.lifecycle_state` remains:
 
 1. `open`
 2. `in_progress`
@@ -194,7 +194,7 @@ Rule:
 
 ### 7.2 Route Stage Rule
 
-Per `docs/process/framework-source-lineage-index.md`, canonical route stages remain:
+Per `Git history and active artifact sidecars`, canonical route stages remain:
 
 1. `analysis`
 2. `writer`
@@ -280,9 +280,9 @@ The config-driven kernel must ultimately serve these root command homes:
 
 Parity remains grounded in:
 
-1. `docs/process/framework-source-lineage-index.md`
-2. `docs/process/framework-source-lineage-index.md`
-3. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
+2. `Git history and active artifact sidecars`
+3. `Git history and active artifact sidecars`
 4. `docs/product/spec/external-pattern-borrow-map.md` for approved external semantic borrow decisions
 
 Rule:

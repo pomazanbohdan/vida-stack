@@ -101,7 +101,13 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         );
     let downstream_lane_id = downstream_target_resolution
         .as_ref()
-        .and_then(|resolution| resolution.lane_id.clone());
+        .and_then(|resolution| {
+            if raw_downstream_target == resolution.dispatch_target {
+                None
+            } else {
+                resolution.lane_id.clone()
+            }
+        });
     let downstream_target = downstream_target_resolution
         .as_ref()
         .map(|resolution| resolution.dispatch_target.as_str())
@@ -154,7 +160,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     };
     let activation_command = packet_path
         .and_then(|path| path.to_str())
-        .map(crate::runtime_dispatch_state::agent_init_command_for_packet_path);
+        .map(crate::runtime_dispatch_state::agent_init_execute_command_for_packet_path);
     let handoff_task_class =
         crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
             &role_selection.execution_plan,

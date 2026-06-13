@@ -214,12 +214,10 @@ Normalization rule:
 9. finding the patch location or reproducing a runtime defect is still read-only packet shaping evidence, not permission for root-session completion of the same write scope.
 10. recorded saturation recovery must explicitly check whether any delegated Codex lanes already completed or were superseded and can now be closed/reclaimed before "agent limits" remains a valid blocker.
 11. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
-12. under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.
-13. do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.
-14. if closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.
-15. sticky continuation intent does not authorize choosing `ready_head[0]`, the first ready task, or an adjacent slice by plausibility; continue only when the active bounded unit is explicit from user wording or runtime evidence.
-16. if `vida status --json` or `vida orchestrator-init --json` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to an ambiguity report instead of continuing implementation.
-17. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+12. continuation, pause-boundary, and generic-ready-item behavior is owned by `project-orchestrator-session-start-protocol.md` and the decision table in `project-orchestrator-reusable-prompt.md`.
+13. if closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next explicit lawful continuation item without waiting for more user input.
+14. if `vida status --json` or `vida orchestrator-init --json` cannot expose explicit bounded-unit and route fields when runtime is usable, fail closed to an ambiguity report instead of continuing implementation.
+15. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
 
 Runtime contract hardening:
 
@@ -498,10 +496,10 @@ Operator boundary:
 artifact_path: process/codex-agent-configuration-guide
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-02'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: 2026-06-02T01:31:00+03:00
+updated_at: 2026-06-13T01:35:00+03:00
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl

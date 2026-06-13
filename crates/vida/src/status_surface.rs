@@ -1,6 +1,8 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
+use fs2::FileExt;
+
 use crate::{state_store, state_store::StateStore, StatusArgs};
 
 use crate::status_surface_json_report::{build_status_json_report, StatusJsonReportInputs};
@@ -10,7 +12,7 @@ use crate::status_surface_operator_contracts::{
 use crate::status_surface_text_report::{emit_status_text_report, StatusTextReportInputs};
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
-const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 const STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 
@@ -62,6 +64,14 @@ pub(crate) fn dispatch_packet_json_from_project_path(
     project_root: &std::path::Path,
     packet_path: &str,
 ) -> Option<serde_json::Value> {
+    dispatch_packet_json_and_path_from_project_path(project_root, packet_path)
+        .map(|(packet, _path)| packet)
+}
+
+pub(crate) fn dispatch_packet_json_and_path_from_project_path(
+    project_root: &std::path::Path,
+    packet_path: &str,
+) -> Option<(serde_json::Value, std::path::PathBuf)> {
     let packet_path = packet_path.trim();
     if packet_path.is_empty() {
         return None;
@@ -98,7 +108,7 @@ pub(crate) fn dispatch_packet_json_from_project_path(
     if !candidate.starts_with(&project_root) {
         return None;
     }
-    let Ok(file) = std::fs::File::open(candidate) else {
+    let Ok(file) = std::fs::File::open(&candidate) else {
         return None;
     };
     let mut raw = String::new();
@@ -109,7 +119,9 @@ pub(crate) fn dispatch_packet_json_from_project_path(
     if raw.len() as u64 > DISPATCH_PACKET_REF_READ_LIMIT_BYTES {
         return None;
     }
-    serde_json::from_str::<serde_json::Value>(&raw).ok()
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .map(|packet| (packet, candidate))
 }
 
 fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -136,6 +148,27 @@ fn string_path(value: &serde_json::Value, path: &[&str]) -> Option<String> {
 pub(crate) fn non_empty_str(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
+}
+
+fn effective_latest_run_graph_status(
+    current_session_status: Option<crate::state_store::RunGraphStatus>,
+    global_status: Option<&crate::state_store::RunGraphStatus>,
+    terminal_task_active_status: Option<&crate::state_store::RunGraphStatus>,
+) -> Option<crate::state_store::RunGraphStatus> {
+    if current_session_status.is_some() {
+        return current_session_status;
+    }
+    if std::env::var("VIDA_SESSION_ID")
+        .ok()
+        .as_deref()
+        .and_then(non_empty_str)
+        .is_some()
+    {
+        return None;
+    }
+    global_status
+        .cloned()
+        .or_else(|| terminal_task_active_status.cloned())
 }
 
 pub(crate) fn first_non_empty_artifact_ref<'a>(
@@ -201,6 +234,51 @@ pub(crate) fn emit_degraded_read_lock_surface(
     ExitCode::from(1)
 }
 
+pub(crate) fn state_store_lock_present(state_dir: &std::path::Path) -> bool {
+    [
+        state_dir.join(".vida-authoritative-open.guard"),
+        state_dir.join("LOCK"),
+        state_dir
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join(".vida-authoritative-open.guard"),
+        state_dir
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("LOCK"),
+    ]
+    .into_iter()
+    .any(|path| {
+        let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+        else {
+            return false;
+        };
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                let _ = file.unlock();
+                false
+            }
+            Err(error) => {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) || error.raw_os_error().is_some_and(|code| {
+                    code == libc::EWOULDBLOCK
+                        || code == libc::EAGAIN
+                        || (cfg!(windows) && matches!(code, 5 | 32 | 33))
+                })
+            }
+        }
+    })
+}
+
 pub(crate) fn degraded_read_lock_toon_text(surface: &str, payload: &serde_json::Value) -> String {
     crate::operator_toon_report::render(
         surface,
@@ -234,6 +312,15 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let summary_only = args.summary || matches!(view, "compact" | "summary");
     let field_selection = args.fields.as_deref();
     let selected_output = field_selection.is_some();
+    if state_store_lock_present(&state_dir) {
+        return emit_degraded_read_lock_surface(
+            "vida status",
+            &state_dir,
+            render,
+            as_json,
+            "another VIDA process still holds the authoritative datastore lock",
+        );
+    }
 
     if as_json && !selected_output {
         if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
@@ -338,7 +425,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         }
     }
 
-    match StateStore::open_existing_read_only_with_timeout(
+    match StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.clone(),
         STATUS_SURFACE_LOCK_TIMEOUT,
     )
@@ -449,6 +536,11 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+                let latest_run_graph_status = effective_latest_run_graph_status(
+                    latest_run_graph_status,
+                    latest_global_run_graph_status.as_ref(),
+                    latest_terminal_task_active_run_graph_status.as_ref(),
+                );
                 let latest_run_graph_run_id = latest_run_graph_status
                     .as_ref()
                     .map(|status| status.run_id.as_str());
@@ -741,6 +833,26 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     _ => false,
                 };
+                let terminal_task_active_run_graph_task_missing =
+                    match latest_terminal_task_active_run_graph_status.as_ref() {
+                        Some(terminal)
+                            if latest_run_graph_status
+                                .as_ref()
+                                .map(|current| current.run_id == terminal.run_id)
+                                .unwrap_or(true) =>
+                        {
+                            match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, terminal).await {
+                                Ok(verdict) => verdict.task_missing(),
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to read terminal task-active run graph task authority: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        }
+                        _ => false,
+                    };
                 let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
                     || global_closed_run_is_current
                     || terminal_closed_run_is_current
@@ -891,6 +1003,19 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_task_closed,
                         latest_run_graph_task_missing,
                     );
+                let continuation_binding = if terminal_task_active_run_graph_task_missing {
+                    match latest_terminal_task_active_run_graph_status.as_ref() {
+                        Some(status) => {
+                            crate::continuation_binding_summary::add_stale_missing_task_run_graph_status(
+                                continuation_binding,
+                                status,
+                            )
+                        }
+                        None => continuation_binding,
+                    }
+                } else {
+                    continuation_binding
+                };
                 let exception_takeover_matches_active_taskflow_work =
                     exception_takeover_metadata_matches_taskflow_active_work(
                         store.root(),
@@ -1179,7 +1304,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                     };
                     normalize_status_projection_json_shape(&mut summary_json);
-                    if !summary_only {
+                    if !summary_only && !as_json {
                         compact_status_projection_for_fast_operator_render(&mut summary_json);
                     }
                     let rendered_json = crate::operator_toon_report::select_fields(
@@ -1187,11 +1312,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         field_selection,
                     );
                     if as_json {
-                        println!(
-                            "{}",
+                        let rendered = if summary_only {
+                            serde_json::to_string(&rendered_json)
+                        } else {
                             serde_json::to_string_pretty(&rendered_json)
-                                .expect("status summary should render as json")
-                        );
+                        }
+                        .expect("status summary should render as json");
+                        println!("{rendered}");
                     } else {
                         println!(
                             "{}",
@@ -1412,7 +1539,7 @@ fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str
     };
     normalize_status_projection_json_shape(&mut payload);
     if summary_only {
-        return serde_json::to_string_pretty(&payload).unwrap_or_else(|_| cached.to_string());
+        return serde_json::to_string(&payload).unwrap_or_else(|_| cached.to_string());
     };
     compact_status_projection_for_fast_operator_render(&mut payload);
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| cached.to_string())
@@ -1448,9 +1575,9 @@ async fn cached_status_projection_current_runtime_admissible(
         return true;
     }
 
-    let Ok(store) = StateStore::open_existing_read_only_with_timeout(
+    let Ok(store) = StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.to_path_buf(),
-        std::time::Duration::from_secs(2),
+        std::time::Duration::from_millis(250),
     )
     .await
     else {
@@ -1589,12 +1716,113 @@ fn refresh_cached_protocol_binding_projection(
     Some(())
 }
 
+fn refresh_cached_project_activation_projection(
+    payload: &mut serde_json::Value,
+    activation_truth: &crate::project_activator_surface::ProjectActivationStatusTruth,
+) -> Option<()> {
+    let object = payload.as_object_mut()?;
+    object.insert(
+        "project_activation".to_string(),
+        serde_json::json!({
+            "status": activation_truth.status,
+            "activation_pending": activation_truth.activation_pending,
+            "next_steps": activation_truth.next_steps,
+        }),
+    );
+    if activation_truth.activation_pending {
+        return Some(());
+    }
+
+    for path in [
+        &["blocker_codes"][..],
+        &["shared_fields", "blocker_codes"][..],
+        &["operator_contracts", "blocker_codes"][..],
+    ] {
+        let pointer = format!("/{}", path.join("/"));
+        let Some(current) = payload.pointer_mut(&pointer) else {
+            continue;
+        };
+        remove_string_from_json_array(current, "activation_pending");
+        remove_string_from_json_array(current, "project_activation_unknown");
+    }
+
+    for path in [
+        &["next_actions"][..],
+        &["shared_fields", "next_actions"][..],
+        &["operator_contracts", "next_actions"][..],
+    ] {
+        let pointer = format!("/{}", path.join("/"));
+        let Some(current) = payload.pointer_mut(&pointer) else {
+            continue;
+        };
+        remove_activation_pending_next_actions_from_json_array(
+            current,
+            &activation_truth.next_steps,
+        );
+    }
+
+    refresh_cached_projection_status_from_blockers(payload)?;
+    for path in [&["shared_fields"][..], &["operator_contracts"][..]] {
+        let pointer = format!("/{}", path.join("/"));
+        let target = payload.pointer_mut(&pointer)?;
+        refresh_cached_projection_status_from_blockers(target)?;
+    }
+
+    Some(())
+}
+
+fn refresh_cached_projection_status_from_blockers(payload: &mut serde_json::Value) -> Option<()> {
+    let blockers_empty = payload
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(|blockers| blockers.is_empty());
+    payload.as_object_mut()?.insert(
+        "status".to_string(),
+        serde_json::Value::String(if blockers_empty { "pass" } else { "blocked" }.into()),
+    );
+    Some(())
+}
+
+fn remove_activation_pending_next_actions_from_json_array(
+    value: &mut serde_json::Value,
+    current_activation_next_steps: &[String],
+) {
+    let generic_activation_action = crate::status_surface_signals::project_activation_next_action();
+    if let Some(rows) = value.as_array_mut() {
+        rows.retain(|entry| {
+            entry.as_str().is_none_or(|text| {
+                text != generic_activation_action
+                    && !current_activation_next_steps
+                        .iter()
+                        .any(|action| action == text)
+                    && !is_activation_pending_repair_next_action(text)
+            })
+        });
+    }
+}
+
+fn is_activation_pending_repair_next_action(text: &str) -> bool {
+    [
+        "vida init",
+        "vida project-activator",
+        "bootstrap carriers",
+        "host CLI",
+        "AGENTS.sidecar.md",
+        "project-doc roots",
+        "agent-extension",
+        "agent configuration becomes visible to the runtime environment",
+        "activation override",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
+}
+
 async fn refresh_cached_status_projection_runtime_fields(
     state_dir: &std::path::Path,
     cached: &str,
 ) -> Option<String> {
     let mut payload = serde_json::from_str::<serde_json::Value>(cached).ok()?;
-    let store = StateStore::open_existing_read_only_with_timeout(
+    let store = StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.to_path_buf(),
         Duration::from_secs(2),
     )
@@ -1615,6 +1843,11 @@ async fn refresh_cached_status_projection_runtime_fields(
             Ok(summary) => summary,
             Err(_) => return None,
         };
+    let latest_run_graph_status = effective_latest_run_graph_status(
+        latest_run_graph_status,
+        latest_global_run_graph_status.as_ref(),
+        latest_terminal_task_active_run_graph_status.as_ref(),
+    );
     let latest_run_graph_run_id = latest_run_graph_status
         .as_ref()
         .map(|status| status.run_id.as_str());
@@ -1818,9 +2051,56 @@ async fn refresh_cached_status_projection_runtime_fields(
         }
         _ => false,
     };
+    let latest_run_graph_terminal_closure_without_truth = match latest_run_graph_status.as_ref() {
+        Some(status)
+            if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                status,
+            ) =>
+        {
+            !store
+                .run_graph_terminal_closure_has_task_close_truth(status)
+                .await
+                .ok()?
+                && all_tasks
+                    .iter()
+                    .any(|task| task.id == status.task_id && task.status == "closed")
+        }
+        _ => false,
+    };
+    let terminal_task_active_run_graph_task_missing =
+        match latest_terminal_task_active_run_graph_status.as_ref() {
+            Some(terminal)
+                if latest_run_graph_status
+                    .as_ref()
+                    .map(|current| current.run_id == terminal.run_id)
+                    .unwrap_or(true) =>
+            {
+                crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                    &store, terminal,
+                )
+                .await
+                .ok()?
+                .task_missing()
+            }
+            _ => false,
+        };
     let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
         || global_closed_run_is_current
-        || terminal_closed_run_is_current;
+        || terminal_closed_run_is_current
+        || latest_run_graph_terminal_closure_without_truth;
+    let continuation_binding = if terminal_task_active_run_graph_task_missing {
+        match latest_terminal_task_active_run_graph_status.as_ref() {
+            Some(status) => {
+                crate::continuation_binding_summary::add_stale_missing_task_run_graph_status(
+                    continuation_binding,
+                    status,
+                )
+            }
+            None => continuation_binding,
+        }
+    } else {
+        continuation_binding
+    };
     let continuation_binding = if closed_task_active_run_projection_mismatch {
         crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
             continuation_binding,
@@ -1842,6 +2122,9 @@ async fn refresh_cached_status_projection_runtime_fields(
         crate::taskflow_task_bridge::infer_project_root_from_state_root(store.root())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let activation_truth =
+        crate::project_activator_surface::canonical_project_activation_status_truth(&project_root);
+    refresh_cached_project_activation_projection(&mut payload, &activation_truth)?;
     let latest_run_graph_surface_truth =
         latest_run_graph_dispatch_receipt
             .as_ref()
@@ -2007,6 +2290,12 @@ fn cached_status_projection_has_required_shape(
     payload: &serde_json::Value,
 ) -> bool {
     if summary_only {
+        return true;
+    }
+    if payload
+        .get("current_session")
+        .is_some_and(serde_json::Value::is_object)
+    {
         return true;
     }
     payload
@@ -3019,6 +3308,79 @@ mod tests {
 
         let _ = fs::remove_dir_all(root);
         restore_vida_session_id(saved_session_id);
+    }
+
+    #[test]
+    fn status_cached_projection_refresh_removes_stale_activation_pending_blocker() {
+        let activation_truth = crate::project_activator_surface::ProjectActivationStatusTruth {
+            status: "ready_enough_for_normal_work".to_string(),
+            activation_pending: false,
+            next_steps: vec![
+                "activation looks ready enough for normal orchestrator and worker initialization"
+                    .to_string(),
+            ],
+        };
+        let mut payload = serde_json::json!({
+            "surface": "vida status",
+            "status": "blocked",
+            "blocker_codes": ["activation_pending", "project_activation_unknown"],
+            "next_actions": [
+                "run `vida init` in the project root to materialize bootstrap carriers",
+                "continue `vida taskflow consume continue --run-id run-live`"
+            ],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["activation_pending", "project_activation_unknown"],
+                "next_actions": [
+                    "run `vida init` in the project root to materialize bootstrap carriers",
+                    "continue `vida taskflow consume continue --run-id run-live`"
+                ]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["activation_pending", "project_activation_unknown"],
+                "next_actions": [
+                    "run `vida init` in the project root to materialize bootstrap carriers",
+                    "continue `vida taskflow consume continue --run-id run-live`"
+                ]
+            },
+            "project_activation": {
+                "status": "pending",
+                "activation_pending": true,
+                "next_steps": ["run `vida init` in the project root to materialize bootstrap carriers"]
+            }
+        });
+
+        super::refresh_cached_project_activation_projection(&mut payload, &activation_truth)
+            .expect("cached project activation should refresh");
+
+        assert_eq!(
+            payload["project_activation"]["status"],
+            "ready_enough_for_normal_work"
+        );
+        assert_eq!(payload["project_activation"]["activation_pending"], false);
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            payload["operator_contracts"]["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            payload["next_actions"],
+            serde_json::json!(["continue `vida taskflow consume continue --run-id run-live`"])
+        );
+        assert_eq!(
+            payload["shared_fields"]["next_actions"],
+            serde_json::json!(["continue `vida taskflow consume continue --run-id run-live`"])
+        );
+        assert_eq!(
+            payload["operator_contracts"]["next_actions"],
+            serde_json::json!(["continue `vida taskflow consume continue --run-id run-live`"])
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

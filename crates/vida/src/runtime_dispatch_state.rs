@@ -96,9 +96,20 @@ async fn reopen_authoritative_state_store_for_dispatch_phase(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     phase: &str,
 ) -> Result<StateStore, String> {
+    let state_root = state_root.to_path_buf();
     tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
-        StateStore::open_existing(state_root.to_path_buf()),
+        async move {
+            loop {
+                match StateStore::open_existing(state_root.clone()).await {
+                    Ok(store) => return Ok(store),
+                    Err(error) if dispatch_state_reopen_error_is_retryable(&error) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        },
     )
     .await
     .map_err(|_| {
@@ -110,6 +121,13 @@ async fn reopen_authoritative_state_store_for_dispatch_phase(
         )
     })?
     .map_err(|error| dispatch_state_reopen_failure_message(receipt, phase, error))
+}
+
+fn dispatch_state_reopen_error_is_retryable(error: &crate::state_store::StateStoreError) -> bool {
+    let error = error.to_string();
+    error.contains("Session not found")
+        || error.contains("timed out while waiting for authoritative datastore lock")
+        || error.contains("another VIDA process still holds the authoritative datastore lock")
 }
 
 fn configured_internal_host_handoff_timeout_seconds(project_root: &Path) -> Option<u64> {
@@ -1163,11 +1181,10 @@ pub(crate) fn downstream_activation_fields(
         ),
         "closure" => ("closure".to_string(), None, None, None),
         _ => {
-            let lane =
-                dispatch_contract_lane(&role_selection.execution_plan, &policy_dispatch_target)
-                    .or_else(|| {
-                        dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)
-                    });
+            let lane = dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)
+                .or_else(|| {
+                    dispatch_contract_lane(&role_selection.execution_plan, &policy_dispatch_target)
+                });
             (
                 "agent_lane".to_string(),
                 Some("vida agent-init".to_string()),
@@ -1188,50 +1205,68 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
     execution_plan: &'a serde_json::Value,
     dispatch_target: &str,
 ) -> Option<&'a serde_json::Value> {
-    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
-    let dispatch_target = dispatch_target.as_str();
+    let requested_dispatch_target = dispatch_target.trim();
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, requested_dispatch_target);
+    let dispatch_target = policy_dispatch_target.as_str();
     let development_flow = &execution_plan["development_flow"];
-    if dispatch_target == "analysis" {
-        if let Some(route) = development_flow
-            .get("analysis")
-            .filter(|value| !value.is_null())
-        {
-            return Some(route);
+
+    let mut targets = Vec::new();
+    for target in [requested_dispatch_target, dispatch_target] {
+        if !target.is_empty() && !targets.iter().any(|seen| seen == target) {
+            targets.push(target.to_string());
         }
-        return development_flow
-            .get("implementation")
-            .filter(|value| !value.is_null());
     }
     if let Some(canonical_target) =
         dispatch_target_for_runtime_role(execution_plan, dispatch_target)
             .filter(|target| target != dispatch_target)
     {
-        if let Some(route) =
-            execution_plan_route_for_dispatch_target(execution_plan, &canonical_target)
-        {
-            return Some(route);
+        if !targets.iter().any(|seen| seen == &canonical_target) {
+            targets.push(canonical_target);
         }
     }
-    let canonical_route_key = match dispatch_target {
-        "implementer" | "writer" => Some("implementation"),
-        "execution_preparation" => Some("architecture"),
-        _ => None,
-    };
-    if let Some(route_key) = canonical_route_key {
+
+    for target in targets {
+        let target = target.as_str();
+        if target == "analysis" {
+            if let Some(route) = development_flow
+                .get("analysis")
+                .filter(|value| !value.is_null())
+            {
+                return Some(route);
+            }
+            if let Some(route) = development_flow
+                .get("implementation")
+                .filter(|value| !value.is_null())
+            {
+                return Some(route);
+            }
+        }
+        let canonical_route_key = match target {
+            "implementer" | "writer" => Some("implementation"),
+            "execution_preparation" => Some("architecture"),
+            _ => None,
+        };
+        if let Some(route_key) = canonical_route_key {
+            if let Some(route) = development_flow
+                .get(route_key)
+                .filter(|value| !value.is_null())
+            {
+                return Some(route);
+            }
+        }
         if let Some(route) = development_flow
-            .get(route_key)
+            .get(target)
             .filter(|value| !value.is_null())
         {
             return Some(route);
         }
+        if let Some(route) = dispatch_contract_lane(execution_plan, target) {
+            return Some(route);
+        }
     }
-    if let Some(route) = development_flow
-        .get(dispatch_target)
-        .filter(|value| !value.is_null())
-    {
-        return Some(route);
-    }
-    dispatch_contract_lane(execution_plan, dispatch_target)
+
+    None
 }
 
 fn non_empty_assignment_string(assignment: &serde_json::Value, key: &str) -> bool {
@@ -1318,45 +1353,55 @@ pub(crate) fn dispatch_target_runtime_assignment(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> (serde_json::Value, &'static str) {
-    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
-    let dispatch_target = dispatch_target.as_str();
-    if let Some((assignment, source)) =
-        execution_plan_route_for_dispatch_target(execution_plan, dispatch_target).and_then(
-            |route| {
-                authoritative_runtime_assignment_candidate(runtime_assignment_from_route(route))
-                    .map(|assignment| {
-                        let source = if route.get("carrier_runtime_assignment").is_some() {
-                            "route_carrier_runtime_assignment"
-                        } else {
-                            "route_runtime_assignment"
-                        };
-                        (assignment, source)
-                    })
-            },
-        )
-    {
-        return (assignment, source);
+    let requested_dispatch_target = dispatch_target.trim();
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, requested_dispatch_target);
+    let mut targets = Vec::new();
+    for target in [requested_dispatch_target, policy_dispatch_target.as_str()] {
+        if !target.is_empty() && !targets.iter().any(|seen| seen == target) {
+            targets.push(target.to_string());
+        }
     }
 
-    if let Some((assignment, source)) =
-        legacy_dispatch_contract_activation_for_target(execution_plan, dispatch_target).and_then(
-            |(activation, source)| {
+    for dispatch_target in targets {
+        let dispatch_target = dispatch_target.as_str();
+        if let Some((assignment, source)) =
+            execution_plan_route_for_dispatch_target(execution_plan, dispatch_target).and_then(
+                |route| {
+                    authoritative_runtime_assignment_candidate(runtime_assignment_from_route(route))
+                        .map(|assignment| {
+                            let source = if route.get("carrier_runtime_assignment").is_some() {
+                                "route_carrier_runtime_assignment"
+                            } else {
+                                "route_runtime_assignment"
+                            };
+                            (assignment, source)
+                        })
+                },
+            )
+        {
+            return (assignment, source);
+        }
+
+        if let Some((assignment, source)) =
+            legacy_dispatch_contract_activation_for_target(execution_plan, dispatch_target)
+                .and_then(|(activation, source)| {
+                    authoritative_runtime_assignment_candidate(activation)
+                        .map(|assignment| (assignment, source))
+                })
+        {
+            return (assignment, source);
+        }
+
+        if let Some((assignment, source)) = dispatch_contract_lane(execution_plan, dispatch_target)
+            .map(dispatch_contract_lane_activation)
+            .and_then(|activation| {
                 authoritative_runtime_assignment_candidate(activation)
-                    .map(|assignment| (assignment, source))
-            },
-        )
-    {
-        return (assignment, source);
-    }
-
-    if let Some((assignment, source)) = dispatch_contract_lane(execution_plan, dispatch_target)
-        .map(dispatch_contract_lane_activation)
-        .and_then(|activation| {
-            authoritative_runtime_assignment_candidate(activation)
-                .map(|assignment| (assignment, "dispatch_contract_lane_activation"))
-        })
-    {
-        return (assignment, source);
+                    .map(|assignment| (assignment, "dispatch_contract_lane_activation"))
+            })
+        {
+            return (assignment, source);
+        }
     }
 
     if let Some(assignment) = authoritative_runtime_assignment_candidate(
@@ -5969,6 +6014,9 @@ pub(crate) async fn maybe_bridge_closed_implementer_task_into_receipt(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     closed_task_id: Option<&str>,
 ) -> Result<bool, String> {
+    if receipt.dispatch_kind != "agent_lane" {
+        return Ok(false);
+    }
     let (role_selection, run_graph_bootstrap) = decode_receipt_packet_context(receipt)?;
     maybe_bridge_closed_implementer_task_into_receipt_with_context(
         store,
@@ -6010,6 +6058,9 @@ pub(crate) async fn maybe_bridge_closed_specification_task_into_receipt(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     closed_task_id: Option<&str>,
 ) -> Result<bool, String> {
+    if receipt.dispatch_kind != "agent_lane" {
+        return Ok(false);
+    }
     let (role_selection, run_graph_bootstrap) = decode_receipt_packet_context(receipt)?;
     if closed_task_id.is_some_and(|value| {
         tracked_specification_task_id(&role_selection).as_deref() != Some(value)
@@ -6451,11 +6502,21 @@ pub(crate) fn runtime_dispatch_packet_kind(
     dispatch_target: &str,
     dispatch_kind: &str,
 ) -> String {
-    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
     if dispatch_kind == "taskflow_pack" {
         return "tracked_flow_packet".to_string();
     }
-    dispatch_contract_lane(execution_plan, &dispatch_target)
+    let requested_dispatch_target = dispatch_target.trim();
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, requested_dispatch_target);
+    for target in [requested_dispatch_target, policy_dispatch_target.as_str()] {
+        if let Some(packet_template_kind) = dispatch_contract_lane(execution_plan, target)
+            .and_then(|lane| json_string(lane.get("packet_template_kind")))
+            .filter(|value| !value.is_empty())
+        {
+            return packet_template_kind;
+        }
+    }
+    dispatch_contract_lane(execution_plan, &policy_dispatch_target)
         .and_then(|lane| json_string(lane.get("packet_template_kind")))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "delivery_task_packet".to_string())
@@ -7140,15 +7201,20 @@ pub(crate) fn runtime_packet_handoff_task_class_for_plan(
     dispatch_target: &str,
     handoff_runtime_role: &str,
 ) -> String {
-    let dispatch_target = policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
-    dispatch_contract_lane(execution_plan, &dispatch_target)
-        .and_then(|lane| lane["task_class"].as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            runtime_packet_handoff_task_class(&dispatch_target, handoff_runtime_role).to_string()
-        })
+    let requested_dispatch_target = dispatch_target.trim();
+    let policy_dispatch_target =
+        policy_dispatch_target_for_admissibility(execution_plan, requested_dispatch_target);
+    for target in [requested_dispatch_target, policy_dispatch_target.as_str()] {
+        if let Some(task_class) = dispatch_contract_lane(execution_plan, target)
+            .and_then(|lane| lane["task_class"].as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        {
+            return task_class;
+        }
+    }
+    runtime_packet_handoff_task_class(&policy_dispatch_target, handoff_runtime_role).to_string()
 }
 
 fn packet_nonempty_string(value: Option<&serde_json::Value>) -> bool {
@@ -18478,6 +18544,76 @@ host_environment:
         assert!(!bridged);
         assert_eq!(receipt.dispatch_status, "executing");
         assert!(!receipt.downstream_dispatch_ready);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn task_close_bridges_ignore_stale_run_retire_receipts_without_packet_context() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-stale-retire-bridge-skip-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.join("state"))
+            .await
+            .expect("open state store");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "stale-retire-run".to_string(),
+            dispatch_target: "planning".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "stale_run_retire".to_string(),
+            dispatch_surface: Some("vida lane retire".to_string()),
+            dispatch_command: Some(
+                "vida lane retire stale-retire-run --receipt-id stale-retire-run".to_string(),
+            ),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some("synthetic cleanup receipt".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("retired_closed_task_run".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("closure".to_string()),
+            downstream_dispatch_last_target: Some("closure".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-12T00:00:00Z".to_string(),
+        };
+
+        let mut specification_receipt = receipt.clone();
+        let specification_bridged = maybe_bridge_closed_specification_task_into_receipt(
+            &store,
+            &mut specification_receipt,
+            Some("closed-task"),
+        )
+        .await
+        .expect("non-agent specification bridge should skip cleanly");
+        assert!(!specification_bridged);
+
+        let mut implementer_receipt = receipt;
+        let implementer_bridged = maybe_bridge_closed_implementer_task_into_receipt(
+            &store,
+            &mut implementer_receipt,
+            Some("closed-task"),
+        )
+        .await
+        .expect("non-agent implementer bridge should skip cleanly");
+        assert!(!implementer_bridged);
 
         let _ = std::fs::remove_dir_all(&root);
     }

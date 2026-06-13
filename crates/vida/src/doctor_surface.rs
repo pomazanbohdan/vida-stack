@@ -20,7 +20,7 @@ const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
 const CLOSED_TASK_ACTIVE_RUN_PROJECTION_MISMATCH_BLOCKER: &str =
     "closed_task_active_run_projection_mismatch";
-const DOCTOR_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const DOCTOR_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 fn governance_projection_blocker_codes(
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
     memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
@@ -77,6 +77,13 @@ fn is_unsupported_architecture_reserved_workflow_boundary(value: &str) -> bool {
     )
 }
 
+fn run_graph_status_has_unsupported_architecture_reserved_workflow_boundary(
+    status: &crate::state_store::RunGraphStatus,
+) -> bool {
+    is_unsupported_architecture_reserved_workflow_boundary(&status.policy_gate)
+        || is_unsupported_architecture_reserved_workflow_boundary(&status.context_state)
+}
+
 fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> bool {
     let payload = match std::fs::read_to_string(snapshot_path) {
         Ok(payload) => payload,
@@ -106,6 +113,17 @@ fn selected_effective_bundle_receipt_id(
             (!receipt_id.is_empty()).then(|| receipt_id.to_string())
         })
         .unwrap_or_else(|| effective_instruction_bundle.receipt_id.clone())
+}
+
+fn terminal_task_active_run_matches_effective_run(
+    terminal: &crate::state_store::RunGraphStatus,
+    current_session_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+) -> bool {
+    current_session_run_graph_status
+        .map(|current| current.run_id == terminal.run_id)
+        .or_else(|| latest_run_graph_status.map(|latest| latest.run_id == terminal.run_id))
+        .unwrap_or(true)
 }
 
 fn trace_evidence_blocker_codes(
@@ -255,6 +273,7 @@ fn doctor_operator_blocker_codes(
     root_session_write_guard: &serde_json::Value,
     latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     latest_run_graph_gate: Option<&crate::state_store::RunGraphGateSummary>,
+    latest_terminal_task_active_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_run_graph_snapshot_inconsistent: bool,
     latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
@@ -352,16 +371,24 @@ fn doctor_operator_blocker_codes(
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string());
     }
-    if latest_run_graph_gate.as_ref().is_some_and(|summary| {
-        is_unsupported_architecture_reserved_workflow_boundary(&summary.policy_gate)
-            || is_unsupported_architecture_reserved_workflow_boundary(&summary.context_state)
-    }) {
+    let unsupported_architecture_reserved_workflow_boundary =
+        latest_run_graph_gate.as_ref().is_some_and(|summary| {
+            is_unsupported_architecture_reserved_workflow_boundary(&summary.policy_gate)
+                || is_unsupported_architecture_reserved_workflow_boundary(&summary.context_state)
+        }) || latest_terminal_task_active_run_graph_status
+            .as_ref()
+            .is_some_and(|status| {
+                run_graph_status_has_unsupported_architecture_reserved_workflow_boundary(status)
+            });
+    if unsupported_architecture_reserved_workflow_boundary {
         operator_blocker_codes.push(
             blocker_code_str(BlockerCode::UnsupportedArchitectureReservedWorkflowBoundary)
                 .to_string(),
         );
     }
-    if latest_run_graph_gate.is_some() && latest_run_graph_dispatch_receipt.is_none() {
+    if (latest_run_graph_gate.is_some() || unsupported_architecture_reserved_workflow_boundary)
+        && latest_run_graph_dispatch_receipt.is_none()
+    {
         operator_blocker_codes
             .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string());
     }
@@ -552,8 +579,17 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let render = args.render;
     let as_json = args.json;
     let summary_only = args.summary;
+    if crate::status_surface::state_store_lock_present(&state_dir) {
+        return crate::status_surface::emit_degraded_read_lock_surface(
+            "vida doctor",
+            &state_dir,
+            render,
+            as_json,
+            "another VIDA process still holds the authoritative datastore lock",
+        );
+    }
 
-    match super::StateStore::open_existing_read_only_with_timeout(
+    match super::StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.clone(),
         DOCTOR_SURFACE_LOCK_TIMEOUT,
     )
@@ -725,28 +761,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             let current_session_run_graph_run_id = current_session_run_graph_status
                 .as_ref()
                 .map(|status| status.run_id.as_str());
-            let current_session_run_graph_checkpoint = match current_session_run_graph_run_id {
-                Some(run_id) => match store.run_graph_checkpoint_summary(run_id).await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("current-session run graph checkpoint: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                }
-                .into(),
-                None => None,
-            };
-            let current_session_run_graph_gate = match current_session_run_graph_run_id {
-                Some(run_id) => match store.run_graph_gate_summary(run_id).await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("current-session run graph gate: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                }
-                .into(),
-                None => None,
-            };
             let mut current_session_run_graph_dispatch_receipt_checkpoint_leakage = false;
             let current_session_run_graph_dispatch_receipt = match current_session_run_graph_status
                 .as_ref()
@@ -785,12 +799,37 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     }
                 },
             };
-            let current_session_run_graph_recovery =
-                match current_session_run_graph_run_id.or_else(|| {
+            let current_session_effective_run_graph_run_id = current_session_run_graph_run_id
+                .or_else(|| {
                     current_session_run_graph_dispatch_receipt
                         .as_ref()
                         .map(|receipt| receipt.run_id.as_str())
-                }) {
+                });
+            let current_session_run_graph_checkpoint =
+                match current_session_effective_run_graph_run_id {
+                    Some(run_id) => match store.run_graph_checkpoint_summary(run_id).await {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            eprintln!("current-session run graph checkpoint: failed ({error})");
+                            return ExitCode::from(1);
+                        }
+                    }
+                    .into(),
+                    None => None,
+                };
+            let current_session_run_graph_gate = match current_session_effective_run_graph_run_id {
+                Some(run_id) => match store.run_graph_gate_summary(run_id).await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("current-session run graph gate: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                }
+                .into(),
+                None => None,
+            };
+            let current_session_run_graph_recovery =
+                match current_session_effective_run_graph_run_id {
                     Some(run_id) => match store.run_graph_recovery_summary(run_id).await {
                         Ok(summary) => summary,
                         Err(error) => {
@@ -873,8 +912,8 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             .map(|receipt| receipt.run_id.as_str()),
                     );
             let (
-                latest_run_graph_task_missing,
-                latest_run_graph_task_closed,
+                mut latest_run_graph_task_missing,
+                mut latest_run_graph_task_closed,
                 latest_run_graph_task_stale,
             ) = match latest_run_graph_status.as_ref() {
                 Some(status) => match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
@@ -890,6 +929,32 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 },
                 None => (false, false, false),
             };
+            let terminal_task_active_run_graph_task_stale =
+                match latest_terminal_task_active_run_graph_status.as_ref() {
+                    Some(terminal)
+                        if latest_run_graph_status
+                            .as_ref()
+                            .map(|status| status.run_id == terminal.run_id)
+                            .unwrap_or(true) =>
+                    {
+                        match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, terminal).await {
+                            Ok(verdict) => {
+                                latest_run_graph_task_missing |= verdict.task_missing();
+                                latest_run_graph_task_closed |= verdict.task_closed_stale_run();
+                                verdict.task_missing() || verdict.task_closed_stale_run()
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "latest terminal task-active run graph task authority: failed ({error})"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                    _ => false,
+                };
+            let latest_run_graph_task_stale =
+                latest_run_graph_task_stale || terminal_task_active_run_graph_task_stale;
             let latest_run_graph_approval_receipt = match latest_run_graph_status.as_ref() {
                 Some(status) => match store
                     .run_graph_approval_delegation_receipt(&status.run_id)
@@ -1023,9 +1088,38 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     }
                     _ => false,
                 };
+            let terminal_task_active_run_is_current =
+                match latest_terminal_task_active_run_graph_status.as_ref() {
+                    Some(terminal) if terminal_task_active_run_matches_effective_run(
+                        terminal,
+                        current_session_run_graph_status.as_ref(),
+                        latest_run_graph_status.as_ref(),
+                    ) =>
+                    {
+                        if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                            terminal,
+                        ) {
+                            match store
+                                .run_graph_terminal_closure_has_task_close_truth(terminal)
+                                .await
+                            {
+                                Ok(has_truth) => !has_truth,
+                                Err(error) => {
+                                    eprintln!(
+                                        "latest terminal task-active closure evidence: failed ({error})"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        } else {
+                            true
+                        }
+                    }
+                    _ => false,
+                };
             let unresolved_closed_task_active_run = !latest_run_graph_terminal_closure
                 && latest_run_graph_task_closed
-                || latest_terminal_task_active_run_graph_status.is_some()
+                || terminal_task_active_run_is_current
                 || latest_run_graph_terminal_closure_without_receipt_truth;
             let (trace_evidence, trace_evidence_blocker_codes, trace_evidence_next_actions) =
                 build_trace_evidence_summary(
@@ -1071,6 +1165,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     &root_session_write_guard,
                     latest_run_graph_recovery.as_ref(),
                     latest_run_graph_gate.as_ref(),
+                    latest_terminal_task_active_run_graph_status.as_ref(),
                     latest_run_graph_dispatch_receipt.as_ref(),
                     latest_run_graph_snapshot_inconsistent,
                     current_session_run_graph_dispatch_receipt_checkpoint_leakage,
@@ -1358,129 +1453,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     store.root(),
                     doctor_json_projection_name(summary_only),
                     &summary_json,
-                );
-                return ExitCode::SUCCESS;
-            }
-
-            if matches!(render, crate::RenderMode::Plain) {
-                crate::operator_toon_report::print(
-                    "vida doctor",
-                    vec![
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "storage_metadata",
-                            storage_metadata_display.clone(),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "authoritative_state_spine",
-                            format!(
-                                "state-v{} surfaces={} mutation_root={}",
-                                state_spine.state_schema_version,
-                                state_spine.entity_surface_count,
-                                state_spine.authoritative_mutation_root
-                            ),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "task_store",
-                            task_store.as_display(),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "run_graph",
-                            run_graph.as_display(),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "launcher_runtime_paths",
-                            format!(
-                                "vida={} project_root={} taskflow_surface={}",
-                                launcher_runtime_paths.vida,
-                                launcher_runtime_paths.project_root,
-                                launcher_runtime_paths.taskflow_surface
-                            ),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "dependency_graph",
-                            "0 issues",
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "boot_compatibility",
-                            format!(
-                                "{} ({})",
-                                boot_compatibility.classification, boot_compatibility.next_step
-                            ),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "migration_preflight",
-                            format!(
-                                "{} / {} ({})",
-                                canonical_compatibility_class_str(
-                                    &migration_preflight.compatibility_classification
-                                )
-                                .unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
-                                migration_preflight.migration_state,
-                                migration_preflight.next_step
-                            ),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "runtime_consumption",
-                            runtime_consumption.as_display(),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "root_session_write_guard",
-                            match root_session_write_guard["reason"].as_str() {
-                                Some(reason) => format!(
-                                    "{} ({reason})",
-                                    root_session_write_guard["status"]
-                                        .as_str()
-                                        .unwrap_or("unknown")
-                                ),
-                                None => root_session_write_guard["status"]
-                                    .as_str()
-                                    .unwrap_or("unknown")
-                                    .to_string(),
-                            },
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "protocol_binding",
-                            protocol_binding.as_display(),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "trace_evidence",
-                            trace_evidence_display(&trace_evidence),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "latest_run_graph_status",
-                            latest_run_graph_status
-                                .as_ref()
-                                .map(|status| status.as_display())
-                                .unwrap_or_else(|| "none".to_string()),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "latest_run_graph_recovery",
-                            latest_run_graph_recovery
-                                .as_ref()
-                                .map(|summary| summary.as_display())
-                                .unwrap_or_else(|| "none".to_string()),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "latest_run_graph_checkpoint",
-                            latest_run_graph_checkpoint
-                                .as_ref()
-                                .map(|summary| summary.as_display())
-                                .unwrap_or_else(|| "none".to_string()),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "latest_run_graph_gate",
-                            latest_run_graph_gate
-                                .as_ref()
-                                .map(|summary| summary.as_display())
-                                .unwrap_or_else(|| "none".to_string()),
-                        ),
-                        crate::operator_toon_report::OperatorToonField::text(
-                            "effective_instruction_bundle",
-                            effective_instruction_bundle
-                                .mandatory_chain_order
-                                .join(" -> "),
-                        ),
-                    ],
                 );
                 return ExitCode::SUCCESS;
             }
@@ -2151,6 +2123,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
             false,
             None,
@@ -2200,6 +2173,48 @@ mod tests {
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
             None
         );
+    }
+
+    #[test]
+    fn terminal_task_active_run_matching_uses_current_session_before_global_latest() {
+        let mut current = crate::taskflow_run_graph::default_run_graph_status(
+            "run-current",
+            "task-current",
+            "implementation",
+        );
+        current.run_id = "run-current".to_string();
+        let mut global = crate::taskflow_run_graph::default_run_graph_status(
+            "run-global",
+            "task-global",
+            "implementation",
+        );
+        global.run_id = "run-global".to_string();
+        let mut terminal = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal",
+            "task-terminal",
+            "implementation",
+        );
+        terminal.run_id = "run-terminal".to_string();
+
+        assert!(!super::terminal_task_active_run_matches_effective_run(
+            &terminal,
+            Some(&current),
+            Some(&global)
+        ));
+
+        terminal.run_id = "run-current".to_string();
+        assert!(super::terminal_task_active_run_matches_effective_run(
+            &terminal,
+            Some(&current),
+            Some(&global)
+        ));
+
+        terminal.run_id = "run-global".to_string();
+        assert!(super::terminal_task_active_run_matches_effective_run(
+            &terminal,
+            None,
+            Some(&global)
+        ));
     }
 
     #[test]

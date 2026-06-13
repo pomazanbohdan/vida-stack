@@ -26,7 +26,6 @@
 > - some proof-surface commands declared in specs are still fail-closed/unsupported in the launcher.
 >
 > **Internal validation status:** the current framework/spec stack has passed bounded documentation/runtime checks (`check`, `activation-check`, `protocol-coverage-check`, `proofcheck`), exact-version release manifest checks, and post-fix CLI smoke for the installed `vida` binary.
-> - consolidated audit: [docs/process/framework-three-layer-refactoring-audit.md](docs/process/framework-three-layer-refactoring-audit.md)
 > - proven environment/status conditions: [docs/process/vida1-development-conditions.md](docs/process/vida1-development-conditions.md)
 
 > [!IMPORTANT]
@@ -338,8 +337,8 @@ In the current `0.9.0` transition line, the installer gives you one `vida` launc
 
 The next product target behind that launcher is:
 
-- `Release 1`: host-shell CLI integration for one visible `VIDA` operator surface
-- `Release 2`: host-project integration where the same runtime embeds into another project environment
+- CLI-first runtime hardening for one visible `VIDA` operator surface
+- host-project integration where the same runtime embeds into another project environment
 
 ---
 
@@ -381,7 +380,6 @@ These standards are designed so each layer is independently coherent and future 
 ### Spec navigation
 
 - 📑 [Current Spec Map](docs/product/spec/current-spec-map.md)
-- 🧭 [Release 1](docs/product/spec/release-1-plan.md)
 - 🎯 [Compiled Autonomous Delivery Runtime Architecture](docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md)
 - 🧱 [Runtime Surface Model](docs/product/spec/root-map-and-runtime-surface-model.md)
 - 👥 [Role / Skill / Profile / Flow Model](docs/product/spec/agent-role-skill-profile-flow-model.md)
@@ -415,9 +413,9 @@ vida taskflow protocol-binding sync --json
 
 ## 🧠 Architecture Direction
 
-`VIDA 0.9.0` transition is the self-hosting stabilization and runtime-hardening line before `Release 1`.
+`VIDA 0.9.0` transition is the self-hosting stabilization and runtime-hardening line before the next stable runtime profile.
 
-Its job is to make the runtime trustworthy enough that `Release 1` can be built on stable DB-first semantics and predictable operator behavior.
+Its job is to make the runtime trustworthy enough to build on stable DB-first semantics and predictable operator behavior.
 
 That means:
 
@@ -426,7 +424,7 @@ That means:
 - `vida taskflow protocol-binding sync|status|check` are the active protocol-binding synchronization surfaces
 - source-of-truth law stays in `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`
 - current release work hardens semantics, schema migrations, and operator stability before `1.0` closure
-- Rust `taskflow` and `docflow` remain active parallel implementation tracks for `Release 1`
+- Rust `taskflow` and `docflow` remain active parallel implementation tracks for the current runtime profile
 - future `vida` composes those compiled runtimes into one CLI-first autonomous delivery runtime
 
 ---
@@ -456,10 +454,10 @@ For detailed rules, read [CONTRIBUTING.md](CONTRIBUTING.md).
 artifact_path: project/repository/readme
 artifact_type: repository_doc
 artifact_version: '1'
-artifact_revision: '2026-06-01'
+artifact_revision: '2026-06-12'
 schema_version: '1'
 status: canonical
 source_path: README.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-06-01T17:45:00+03:00'
+updated_at: '2026-06-12T00:00:00+03:00'
 changelog_ref: README.changelog.jsonl

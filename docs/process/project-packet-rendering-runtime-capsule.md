@@ -31,18 +31,11 @@ For routine write-producing work:
 2. refine to `execution_block_packet` only when one-owner bounded closure still fails,
 3. keep coach/verifier/escalation packets tied to the same bounded unit rather than widening scope.
 
-## Required Packet Fields
+## Packet Field Ownership
 
 The runtime-visible packet minimum is template-specific and must match `docs/process/project-development-packet-template-protocol.md`.
 
-Dispatch-readiness summary:
-
-1. `delivery_task_packet` and `execution_block_packet` require `goal`, `scope_in`, `owned_paths` or `read_only_paths`, `definition_of_done`, `verification_command`, `proof_target`, `stop_rules`, and `blocking_question`,
-2. `coach_review_packet` requires `review_goal`, `owned_paths` or `read_only_paths`, `definition_of_done`, `proof_target`, and `blocking_question`,
-3. `verifier_proof_packet` requires `proof_goal`, `verification_command`, `proof_target`, `owned_paths` or `read_only_paths`, and `blocking_question`,
-4. `escalation_packet` requires `decision_needed`, `options`, `constraints`, and `blocking_question`.
-
-If the active template minimum is missing, the packet is not dispatch-ready and runtime must fail closed instead of emitting a `packet_ready` handoff.
+This capsule does not own required field lists. Dispatch readiness means the active packet validates against the owner template and the active prompt-stack layer can be named. If the owner template minimum is missing, the packet is not dispatch-ready and runtime must fail closed instead of emitting a `packet_ready` handoff.
 
 ## Prompt-Stack Minimum
 
@@ -79,10 +72,10 @@ If those answers are missing, continue shaping instead of dispatching.
 artifact_path: process/project-packet-rendering-runtime-capsule
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-packet-rendering-runtime-capsule.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: '2026-03-13T18:05:15+02:00'
+updated_at: 2026-06-13T01:35:00+03:00
 changelog_ref: project-packet-rendering-runtime-capsule.changelog.jsonl

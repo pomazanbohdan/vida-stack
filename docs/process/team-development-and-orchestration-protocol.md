@@ -260,8 +260,9 @@ complete or explicitly block this checklist:
 2. Focused proof bundle and debug build result recorded.
 3. Scoped code/test/doc commit created and pushed when the active publication
    pattern authorizes it.
-4. Agent evaluation documentation updated, checked, committed, and pushed under
-   the same publication pattern.
+4. Executor/validator scorecard recorded in TaskFlow closure evidence or the
+   relevant process document and committed/pushed when that document changed
+   under the same publication pattern.
 5. Completed host-agent handles closed or deleted; cleanup failures recorded by
    handle id and blocker.
 6. Executor and validator scored on a 10-point scale with token/tool-call
@@ -665,9 +666,9 @@ After each closure-ready task:
    that specific task, publication batch, or repeatable publication pattern; the
    active epic instruction to push after every task is such a repeatable pattern
    until the operator pauses, revokes, or narrows it,
-5. update the agent evaluation documentation with the executor/validator
-   scorecard and next routing rule,
-6. commit and push the evaluation documentation under the same active
+5. record the executor/validator scorecard and next routing rule in TaskFlow
+   closure evidence or the relevant process document,
+6. commit and push any changed scorecard-bearing document under the same active
    publication pattern,
 7. leave unfinished red-test or rework files unstaged unless they are the explicit closed scope.
 
@@ -707,7 +708,7 @@ After bootstrap, development agents must know immediately:
 7. the default decomposition leaf is `delivery_task`, with `execution_block` reserved for packets that still violate one-owner bounded closure.
 8. delegated agents are the normal path for write-producing work once a lawful packet exists.
 9. packet interpretation follows the project prompt-stack protocol rather than ad hoc precedence guesses.
-10. no session is write-ready until the project boot-readiness validation protocol passes.
+10. no session is write-ready until the project session-start readiness gate passes.
 11. host subagent bridge execution is not default-authorized merely because a bounded VIDA dispatch exists or agent-only development is enabled; when the host API requires explicit subagent/delegation permission, agents must obtain current user or host-surface authorization before spawning host subagents.
 
 ## Routing
@@ -718,13 +719,13 @@ After bootstrap, development agents must know immediately:
 4. for mandatory skill activation, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
 5. for canonical packet templates, read `docs/process/project-development-packet-template-protocol.md`,
 6. for prompt-stack precedence, read `docs/process/project-agent-prompt-stack-protocol.md`,
-7. for bounded boot validation, read `docs/process/project-boot-readiness-validation-protocol.md`,
+7. for bounded boot validation, read `docs/process/project-orchestrator-session-start-protocol.md`,
 8. for project Codex configuration, read `docs/process/codex-agent-configuration-guide.md`,
-9. for project agent-system posture, read `docs/process/agent-system-guide.md`,
-10. for project role/skill/profile/flow registries, read `docs/process/agent-extensions/README.md`,
+9. for project agent-system posture, read `docs/process/agent-system.md`,
+10. for project role/skill/profile/flow registries, read `docs/process/agent-extensions/index.md`,
 11. for canonical spec-to-task decomposition law, read `command-instructions/planning.form-task-protocol.md`,
 12. for delegated packet invariants, read `instruction-contracts/lane.worker-dispatch-protocol.md`,
-13. for Release-1 execution-program ownership, read `docs/product/spec/release-1-plan.md`.
+13. for Release-1 execution-program ownership, read `active runtime contract/profile specs`.
 
 -----
 artifact_path: process/team-development-and-orchestration-protocol

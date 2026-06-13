@@ -92,7 +92,7 @@ Runtime surfaces that may carry verification state include:
 
 1. `runtime-instructions/core.run-graph-protocol`
 2. `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`
-3. `docs/process/framework-source-lineage-index.md`
+3. `Git history and active artifact sidecars`
 
 ## Route Law Rule
 
@@ -108,7 +108,7 @@ If route metadata requires `independent_verification_required`:
 1. `instruction-contracts/core.orchestration-protocol`
 2. `instruction-contracts/core.agent-system-protocol`
 3. `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`
-4. `docs/process/framework-source-lineage-index.md`
+4. `Git history and active artifact sidecars`
 
 -----
 artifact_path: config/runtime-instructions/verification-lane.protocol

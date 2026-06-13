@@ -20,26 +20,26 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `docs/product/index.md`
 3. Product spec map:
    - `docs/product/spec/current-spec-map.md`
-4. Product spec provenance companion:
-   - `docs/product/spec/current-spec-provenance-map.md`
-5. Project documentation system:
+4. Product spec index:
+   - `docs/product/spec/index.md`
+5. Product spec detailed catalog:
+   - `docs/product/spec/current-spec-catalog.md`
+6. Project documentation system:
    - `docs/product/spec/project-documentation-law.md`
-6. Documentation/product alignment matrix:
+7. Documentation/product alignment matrix:
    - `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-7. Canonical runtime readiness law used by the project:
+8. Canonical runtime readiness law used by the project:
    - `docs/product/spec/canonical-runtime-readiness-law.md`
-8. Canonical runtime layer matrix:
+9. Canonical runtime layer matrix:
    - `docs/product/spec/canonical-runtime-layer-matrix.md`
-9. Documentation tooling map:
+10. Documentation tooling map:
    - `docs/process/documentation-tooling-map.md`
-10. Project agent-extension map:
-   - `docs/process/agent-extensions/README.md`
-11. Command timing and gate optimization protocol:
+11. Project agent-extension map:
+   - `docs/process/agent-extensions/index.md`
+12. Command timing and gate optimization protocol:
    - `docs/process/command-timing-and-gate-optimization-protocol.md`
-12. Project Error Search runtime diagnostics protocol:
+13. Project Error Search runtime diagnostics protocol:
     - `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-13. Generic runtime protocol promotion plan:
-    - `docs/process/generic-runtime-protocol-promotion-plan.md`
 14. Project-local TaskFlow runtime state and operator surfaces:
     - `.vida/data/state/`
     - `vida taskflow help`
@@ -60,35 +60,33 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 8. For documentation/product alignment questions, continue to `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`.
 9. For documentation tooling or operator-command questions, continue to `docs/process/documentation-tooling-map.md`.
 10. For runtime-layering, runtime-readiness, or runtime-architecture questions, continue to `docs/product/spec/canonical-runtime-layer-matrix.md`.
-11. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/README.md`.
+11. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/index.md`.
 12. For command timing, slow gates, script optimization, CI/local proof latency, or operator-friction diagnostics, continue to `docs/process/command-timing-and-gate-optimization-protocol.md`.
 13. For runtime defects, multi-defect pools, TaskFlow/DocFlow contradictions, run-graph/recovery/lane/dispatch/receipt blockers, session/worktree ownership conflicts, provider/model/carrier routing blockers, or CI failure clusters, continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
-14. For project-side workflow rules that may belong in generic runtime protocols, continue to `docs/process/generic-runtime-protocol-promotion-plan.md` before editing framework owner instructions.
-15. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
-16. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
-17. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
-18. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
-19. For repeatable development-session startup, prefer the compact startup bundle:
+14. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
+15. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
+16. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
+17. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
+18. For repeatable development-session startup, prefer the compact startup bundle:
    - `docs/process/project-orchestrator-startup-bundle.md`
-20. Expand to the full session-start protocol and reusable prompt only when the bundle does not settle the startup question:
+19. Expand to the full session-start protocol and reusable prompt only when the bundle does not settle the startup question:
    - `docs/process/project-orchestrator-session-start-protocol.md`
    - `docs/process/project-orchestrator-reusable-prompt.md`
-21. If startup readiness, skill gating, packet rendering, or packet/lane defaults remain unclear after the bundle, expand only the needed compact project runtime capsules:
+20. If startup readiness, skill gating, packet rendering, or packet/lane defaults remain unclear after the bundle, expand only the needed compact project runtime capsules:
    - `docs/process/project-start-readiness-runtime-capsule.md`
    - `docs/process/project-packet-rendering-runtime-capsule.md`
    - `docs/process/project-packet-and-lane-runtime-capsule.md`
-22. Open deeper owner docs only when those compact project surfaces still leave an edge case unresolved:
+21. Open deeper owner docs only when those compact project surfaces still leave an edge case unresolved:
    - `docs/process/project-skill-initialization-and-activation-protocol.md`
    - `docs/process/project-development-packet-template-protocol.md`
    - `docs/process/project-agent-prompt-stack-protocol.md`
-   - `docs/process/project-boot-readiness-validation-protocol.md`
-23. For long-running epic execution, model/cost optimization, per-task
+   - `docs/process/project-orchestrator-session-start-protocol.md`
+22. For long-running epic execution, model/cost optimization, per-task
     executor/validator scorecards, wave-first closure, post-task optimization,
     or task-completion checklists, continue early to:
    - `docs/process/project-orchestrator-operating-protocol.md`
    - `docs/process/team-development-and-orchestration-protocol.md`
-   - `docs/process/agent-model-evaluation-log.md`
-24. This path set is mandatory bootstrap context, not an optional later lookup.
+23. This path set is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
 
@@ -113,37 +111,37 @@ Project-routing rule:
    - If the stop-criterion cannot be stated, do NOT proceed. Ask the user to clarify the acceptance target before continuing.
 5. **NO WRITE WITHOUT TODO:** After creating the todo, execute only the single bounded action. Do not chain multiple write-producing actions in one turn without updating the todo list. After completing the action, close the todo through `vida task close <todo-id> --reason "<proof>" --json` and create the next todo before the following write-producing move. This prevents the "unbounded action loop" pattern where the model repeats the same action indefinitely without explicit stop conditions.
 6. **READ-ONLY EXCEPTION:** This rule does not apply to read-only actions: file reads, code analysis, diagnostic commands, searches, git log, status checks, or any operation that does not modify project files or state.
-7. Prefer the project canonical maps here over broad manual repo scanning when the task depends on project/product understanding.
-8. Documentation tooling and operator commands are mapped in `docs/process/documentation-tooling-map.md`.
-9. For documentation-shaped, spec-shaped, canonical-map, or runtime-law documentation work, activate the documentation tooling path early rather than treating it as a late optional step.
-10. The expected early route for such work is:
+7. **EXPLICIT RUNTIME-DEFECT BYPASS:** When the user/operator explicitly says VIDA runtime is defective for the current cleanup, planning, or documentation block, do not invent TODO receipts and do not run mutating VIDA runtime commands. Use bounded static analysis, file proof, script-only checks, and scoped commits. Record any missing TaskFlow/DocFlow evidence as a later runtime-repair follow-up once the runtime is usable.
+8. Prefer the project canonical maps here over broad manual repo scanning when the task depends on project/product understanding.
+9. Documentation tooling and operator commands are mapped in `docs/process/documentation-tooling-map.md`.
+10. For documentation-shaped, spec-shaped, canonical-map, or runtime-law documentation work, activate the documentation tooling path early rather than treating it as a late optional step.
+11. The expected early route for such work is:
    - `AGENTS.sidecar.md`
    - `docs/project-root-map.md`
    - `docs/process/documentation-tooling-map.md`
-11. `vida docflow` is the canonical project-side operator/runtime surface for bounded documentation validation, readiness, relation, and proof work once the relevant project/spec context is known.
-12. Do not postpone `vida docflow` usage until after broad manual documentation work when the task already depends on documentation mutation, validation, readiness, or proof-shaped output.
-13. For task/backlog lifecycle work, prefer the DB-backed `vida taskflow task` surface over flat task artifacts.
-14. The expected local operator path is plain `vida taskflow ...` with project-local defaults already bound to this repository root; manual `VIDA_ROOT=...` overrides are fallback-only.
-15. Project-local development routing is intentionally thin after generic runtime protocol promotion:
+12. When runtime is usable, `vida docflow` is the canonical project-side operator/runtime surface for bounded documentation validation, readiness, relation, and proof work once the relevant project/spec context is known.
+13. Do not postpone `vida docflow` usage when runtime is usable and the task already depends on documentation mutation, validation, readiness, or proof-shaped output.
+14. For task/backlog lifecycle work, prefer the DB-backed `vida taskflow task` surface over flat task artifacts.
+15. The expected local operator path is plain `vida taskflow ...` with project-local defaults already bound to this repository root; manual `VIDA_ROOT=...` overrides are fallback-only.
+16. Project-local development routing is intentionally thin after generic runtime protocol promotion:
    - use `docs/process/project-orchestrator-operating-protocol.md` for the vida-stack top-level loop and local read set,
-   - use `docs/process/generic-runtime-protocol-promotion-plan.md` to decide whether a reusable rule belongs in generic runtime owners or remains local residue,
    - use `docs/process/command-timing-and-gate-optimization-protocol.md` for local proof ladder, slow gates, script timing, and CI/non-blocking iteration decisions,
    - use `docs/process/project-error-search-runtime-diagnostics-protocol.md` for VIDA-specific application of the generic `Error Search / Bug Reasoning` algorithm.
-16. Generic runtime owner law is not duplicated here. Resolve these owners through `vida protocol view <id>` or the mapped runtime instruction docs when a case needs the full rule:
+17. Generic runtime owner law is not duplicated here. Resolve these owners through `vida protocol view <id>` or the mapped runtime instruction docs when a case needs the full rule:
    - active-unit binding, anti-stop, final-report, and continuation law: `instruction-contracts/core.orchestration-runtime-capsule`, `instruction-contracts/core.orchestration-protocol`, and `runtime-instructions/work.taskflow-protocol`,
    - TaskFlow state, parent/child closure, scheduling, and source-neutral intake: `runtime-instructions/work.taskflow-protocol`,
    - command timing and fast/long gate discipline: `runtime-instructions/work.command-execution-discipline-protocol`,
    - delegated handoff, packet readiness, result synthesis, and host-agent bridge boundaries: `instruction-contracts/lane.worker-dispatch-protocol`, `runtime-instructions/lane.agent-handoff-context-protocol`, and active agent-system/carrier registry owners,
    - release/version/readiness gates: the mapped release and runtime readiness process/spec owners.
-17. Project residue that remains valid in this sidecar:
+18. Project residue that remains valid in this sidecar:
    - active repository paths and canonical docs maps,
    - DB-backed TODO-before-write command shape and explicit stop criteria,
    - root `AGENTS.md` and `install/assets/AGENTS.scaffold.md` synchronization when either bootstrap carrier changes,
    - current local proof scripts and release/install timing decisions as documented in the command-timing protocol,
    - vida-stack temporary artifact commit guard and project-local worktree-root policy.
-18. Role, model, carrier, host CLI, flow, and worktree authority must remain configuration-derived from `vida.config.yaml`, enabled agent-extension registries, and current TaskFlow/runtime state. Concrete values may be recorded only as observed evidence, not as owner law.
-19. Historical labels, release labels, and external project names are provenance only unless a current project spec or release task makes them active. Do not add new hardcoded historical or source-project names as runtime authority.
-20. Temporary artifact commit guard: the orchestrator must never commit scratch output, advisory drafts, logs, generated local release/package directories, caches, temp folders, sentinel files, or session-only analysis artifacts such as root-level `tmp*`, `tmp/`, `_temp/`, `temp/`, `logs/`, `dist/`, `target/`, root-level `false`, `true`, `null`, `undefined`, `nul`, `*.tmp`, `*.temp`, `*.log`, `*.bak`, `*.swp`, or `*.pid`. Before every commit, run a tracked-temp scan (`git ls-files` filtered for these paths/patterns, including `git ls-files tmp* false true null undefined nul`) and treat any match outside an explicitly documented, product-owned fixture/artifact path as a repo-hygiene defect to remove before committing.
+19. Role, model, carrier, host CLI, flow, and worktree authority must remain configuration-derived from `vida.config.yaml`, enabled agent-extension registries, and current TaskFlow/runtime state. Concrete values may be recorded only as observed evidence, not as owner law.
+20. Historical labels, release labels, and external project names are provenance only unless a current project spec or release task makes them active. Do not add new hardcoded historical or source-project names as runtime authority.
+21. Temporary artifact commit guard: the orchestrator must never commit scratch output, advisory drafts, logs, generated local release/package directories, caches, temp folders, sentinel files, or session-only analysis artifacts such as root-level `tmp*`, `tmp/`, `_temp/`, `temp/`, `logs/`, `dist/`, `target/`, root-level `false`, `true`, `null`, `undefined`, `nul`, `*.tmp`, `*.temp`, `*.log`, `*.bak`, `*.swp`, or `*.pid`. Before every commit, run a tracked-temp scan (`git ls-files` filtered for these paths/patterns, including `git ls-files tmp* false true null undefined nul`) and treat any match outside an explicitly documented, product-owned fixture/artifact path as a repo-hygiene defect to remove before committing.
 
 ## Epic Execution Optimization Overlay
 
@@ -152,17 +150,17 @@ Project-routing rule:
 3. Every task uses the three-step loop: `Bind -> Delegate -> Close`.
 4. `Bind` must record the active task id, parent/wave, exact invariant, owned paths, non-goals, proof bundle, dirty-worktree boundaries, and whether the next move is sequential or parallel-safe.
 5. `Delegate` must prefer the cheapest capable executor and the smallest prompt that can satisfy the task. For the currently observed epic pattern, use the cheap mini/highest-reasoning carrier for hunk classification, read-only preflight, source-copy documentation, test-only patches, and one-file implementation packets; use the stronger medium validator for TaskFlow, host-bridge, receipt authority, path policy, public CLI, release, or wave-closure gates.
-6. `Close` must run the declared proof bundle, update TaskFlow, close the task when ready, commit only scoped files, push under the active repeatable publication instruction, update the agent evaluation documentation, commit that documentation, push it, and then check parent/wave closure readiness.
+6. `Close` must run the declared proof bundle, update TaskFlow, close the task when ready, commit only scoped files, push under the active repeatable publication instruction, record the optimization scorecard in TaskFlow closure evidence or the relevant process doc, and then check parent/wave closure readiness.
 7. A current explicit operator instruction to commit and push after each task is a repeatable publication authorization for the active epic until the operator pauses, revokes, or narrows it. This resolves lower-level "push only when authorized" rules for this active epic without creating global push authority for unrelated work.
 8. In dirty files, stage by invariant rather than by file. If an adjacent hunk looks useful but is outside the active bounded unit, leave it unstaged and create/update a follow-up TaskFlow item instead of bundling it into the commit.
-9. After every closed task, record a compact optimization scorecard in the agent evaluation log: executor, validator, reasoning effort, score, token visibility, tool-call count, proof quality, rework count, residual risks, and the next routing rule.
-10. After every closed task, run the canonical Post-Task Self-Analysis STOP gate from `docs/process/project-orchestrator-operating-protocol.md` before selecting unrelated work. The gate includes base fields, 20 fixed criteria, dynamic criteria created from the session segment since the previous task closure, and meta-analysis remediation that must update docs, scripts, code, tests, or TaskFlow defects when evidence requires it.
-11. The post-task checklist is mandatory before selecting the next task: close/delete completed agent handles; run graph/closure-ready checks; check parent/wave readiness; update epic task/wave metrics; update evaluation docs; pass the Post-Task Self-Analysis STOP gate; commit/push scoped code and docs; classify any runtime or workflow friction as a TaskFlow optimization defect.
+9. After every closed task, record a compact optimization scorecard in the TaskFlow task note or closure evidence: executor, validator, reasoning effort, score, token visibility, tool-call count, proof quality, rework count, residual risks, and the next routing rule.
+10. After every closed task, run the canonical Post-Task Self-Analysis STOP gate from `docs/process/project-orchestrator-operating-protocol.md` before selecting unrelated work.
+11. The detailed post-task checklist and scorecard field ownership live in `docs/process/project-orchestrator-operating-protocol.md`; this sidecar only requires using that owner surface before next-task selection.
 12. Do not optimize for leaf percentage alone. The primary epic milestone metric is closed waves over total waves; task percent is secondary evidence.
-13. If a task closes an architectural/process slice or a wave, run the runtime self-diagnostic and release/install the system `vida` binary before treating the slice or wave as operationally closed.
+13. If a task closes an architectural/process slice or a wave, run the runtime self-diagnostic and release/install the system `vida` binary before treating the slice or wave as operationally closed. Any actionable residual from that diagnostic must become a TaskFlow implementation task, an update to an existing TaskFlow task, or an explicit `no_task_reason` cited in the closure evidence; a prose-only diagnostic residual is not closure.
 14. Parallelism is allowed only for disjoint read-only scans, PR intake, proof-gap review, and dirty-hunk classification. Production edits in the same Rust file, TaskFlow mutation, DocFlow owner docs, release install, and GitHub mutations stay sequential unless TaskFlow conflict domains prove otherwise.
 15. User-facing progress after each task should be compact: closed task, proof, commits pushed, task percent, wave count, self-analysis outcome, next bounded unit or blocker.
-16. These optimization rules are top-level project overlay. Detailed prompt wording, lane responsibilities, and scorecard templates live in `docs/process/project-orchestrator-operating-protocol.md`, `docs/process/team-development-and-orchestration-protocol.md`, and `docs/process/agent-model-evaluation-log.md`.
+16. These optimization rules are top-level project overlay. Detailed prompt wording, lane responsibilities, and scorecard criteria live in `docs/process/project-orchestrator-operating-protocol.md` and `docs/process/team-development-and-orchestration-protocol.md`.
 
 ## Runtime DX And Architectural Rule Overlay
 
@@ -184,7 +182,7 @@ Generic defective-runtime recovery law is owned by the orchestration, TaskFlow, 
 
 1. Prefer normal `vida orchestrator-init`, TaskFlow, run-graph, lane, dispatch, `vida agent-init`, `vida doctor`, and DocFlow surfaces before emulation.
 2. If one of those surfaces is itself defective, record the blocker in TaskFlow when writable and keep `active_bounded_unit`, `why_this_unit`, and `sequential_vs_parallel_posture` explicit.
-3. Use `docs/process/project-error-search-runtime-diagnostics-protocol.md` for VIDA command/blocker evidence and `docs/process/generic-runtime-protocol-promotion-plan.md` before promoting any reusable repair rule.
+3. Use `docs/process/project-error-search-runtime-diagnostics-protocol.md` for VIDA command/blocker evidence and promote reusable repair rules only through the mapped generic runtime owner protocols.
 4. Keep local emulation bounded to diagnosis, shaping, or the smallest active recovery unit needed to restore the canonical runtime path.
 5. Never invent receipts, delete runtime state by hand, or treat advisory output as write authority.
 6. Exit emulation when canonical surfaces can again select, dispatch, continue, recover, diagnose, and close the active bounded unit with receipt-backed evidence.
@@ -246,10 +244,10 @@ Verification checklist for complex or architectural work:
 artifact_path: project/repository/agents.sidecar
 artifact_type: bootstrap_doc
 artifact_version: '1'
-artifact_revision: '2026-03-15'
+artifact_revision: '2026-06-12'
 schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-06-05T11:08:00+03:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: AGENTS.sidecar.changelog.jsonl

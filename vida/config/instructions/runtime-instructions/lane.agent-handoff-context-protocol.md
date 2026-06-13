@@ -219,7 +219,7 @@ Exception-path interaction rule:
 
 This protocol's historical external-alignment lineage is preserved in:
 
-1. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
 
 ## References
 
@@ -227,7 +227,7 @@ This protocol's historical external-alignment lineage is preserved in:
 2. `runtime-instructions/core.context-governance-protocol`
 3. `instruction-contracts/overlay.session-context-continuity-protocol`
 4. `prompt-templates/worker.packet-templates`
-5. `docs/process/framework-source-lineage-index.md`
+5. `Git history and active artifact sidecars`
 
 -----
 artifact_path: config/runtime-instructions/agent-handoff-context.protocol

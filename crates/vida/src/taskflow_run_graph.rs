@@ -200,8 +200,18 @@ fn completed_status_signal(value: &str) -> bool {
     normalized == "completed" || normalized == "complete" || normalized.ends_with("_complete")
 }
 
-fn terminal_run_graph_status_resolved(status: &RunGraphStatus) -> bool {
+pub(crate) fn terminal_run_graph_status_resolved(status: &RunGraphStatus) -> bool {
     completed_status_signal(&status.status) && completed_status_signal(&status.lifecycle_stage)
+}
+
+pub(crate) fn missing_task_run_graph_requires_stale_cleanup(
+    status: Option<&RunGraphStatus>,
+    task_missing: bool,
+) -> bool {
+    task_missing
+        && status
+            .map(|status| !terminal_run_graph_status_resolved(status))
+            .unwrap_or(false)
 }
 
 fn terminal_recovery_summary_resolved(
@@ -1348,15 +1358,7 @@ fn sanitize_placeholder_continuation_bind_next_action(
 }
 
 fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -> Option<&str> {
-    if receipt.lane_status == "lane_exception_takeover"
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+    if crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_exception_takeover_continuation_evidence(receipt, None)
     {
         return Some("active_exception_takeover");
     }
@@ -1540,11 +1542,14 @@ fn next_lawful_operator_action_for_projection(
     terminal_consume_continue_run_id: Option<&str>,
     task_missing: bool,
 ) -> Option<String> {
-    if task_missing {
+    if missing_task_run_graph_requires_stale_cleanup(Some(status), task_missing) {
         return Some(format!(
             "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"",
             status.run_id, status.run_id
         ));
+    }
+    if task_missing {
+        return None;
     }
     if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
@@ -1933,9 +1938,43 @@ fn recovery_surface_contract_with_owned_scope(
             owned_write_scope_hint,
         );
     let ready_handoff_resolves_open_cycle = recovery_ready_handoff_resolves_open_cycle(summary);
+    let projection_ready_handoff_resolves_open_cycle = summary.delegation_gate.delegated_cycle_open
+        && summary.delegation_gate.blocker_code.as_deref() == Some("open_delegated_cycle")
+        && summary.recovery_ready
+        && summary.resume_status == "ready"
+        && summary.resume_target.starts_with("dispatch.")
+        && projection_truth
+            .dispatch_receipt
+            .as_ref()
+            .is_some_and(|receipt| {
+                summary.active_node == receipt.dispatch_target
+                    && matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
+                    && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
+            });
+    let downstream_ready_handoff_resolves_open_cycle = summary.delegation_gate.delegated_cycle_open
+        && summary.delegation_gate.blocker_code.as_deref() == Some("open_delegated_cycle")
+        && summary.recovery_ready
+        && summary.resume_status == "ready"
+        && summary.resume_target.starts_with("dispatch.")
+        && projection_truth
+            .dispatch_receipt
+            .as_ref()
+            .is_some_and(|receipt| {
+                receipt
+                    .downstream_dispatch_target
+                    .as_deref()
+                    .is_some_and(|target| target == summary.active_node)
+                    && receipt
+                        .downstream_dispatch_status
+                        .as_deref()
+                        .is_some_and(|status| status == "packet_ready")
+                    && receipt.downstream_dispatch_blockers.is_empty()
+            });
     let mut blocker_codes = if projection_resolves_open_cycle
         || active_exception_takeover_resolves_open_cycle
         || ready_handoff_resolves_open_cycle
+        || projection_ready_handoff_resolves_open_cycle
+        || downstream_ready_handoff_resolves_open_cycle
     {
         Vec::new()
     } else {
@@ -1947,7 +1986,9 @@ fn recovery_surface_contract_with_owned_scope(
             .map(|value| vec![value.to_string()])
             .unwrap_or_default()
     };
-    if !active_exception_takeover_resolves_open_cycle {
+    if !active_exception_takeover_resolves_open_cycle
+        && !downstream_ready_handoff_resolves_open_cycle
+    {
         blocker_codes.extend(projection_truth_blocker_codes_for_ready_handoff(
             &summary.active_node,
             &summary.resume_status,
@@ -2086,15 +2127,9 @@ fn recovery_projection_has_active_exception_takeover(
         .dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
-            receipt.lane_status == "lane_exception_takeover"
-                && receipt
-                    .exception_path_receipt_id
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-                && receipt
-                    .supersedes_receipt_id
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
+            crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_active_exception_takeover(
+                receipt, None,
+            )
         })
 }
 
@@ -2214,16 +2249,10 @@ fn active_exception_takeover_receipt_matches_status(
     let Some(receipt) = receipt else {
         return false;
     };
-    receipt.run_id == status.run_id
-        && receipt.lane_status == "lane_exception_takeover"
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+    crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_active_exception_takeover(
+        receipt,
+        Some(&status.run_id),
+    )
 }
 
 fn status_derived_exception_takeover_binding(
@@ -2639,6 +2668,20 @@ fn projection_truth_blocker_codes_for_ready_handoff(
     {
         return normalize_run_graph_blocker_codes(&[], projection_truth.stale_state_suspected);
     }
+    if projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            status == "ready"
+                && recovery_ready
+                && resume_target.starts_with("dispatch.")
+                && active_node == receipt.dispatch_target
+                && matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
+                && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
+        })
+    {
+        return Vec::new();
+    }
     projection_truth_blocker_codes(projection_truth)
 }
 
@@ -2694,6 +2737,12 @@ fn run_graph_status_surface_blocker_codes(
             crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
         })
     {
+        return Vec::new();
+    }
+    if active_exception_takeover_receipt_matches_status(
+        status,
+        projection_truth.dispatch_receipt.as_ref(),
+    ) {
         return Vec::new();
     }
 
@@ -5153,12 +5202,19 @@ fn run_graph_blocker_evidence(
     if !is_blocked_advance {
         return Ok(None);
     }
-    let blocker_code = run_graph_blocker_code(args.status).ok_or_else(|| {
-        format!(
-            "run-graph advance blocked without explicit blocker evidence for `{}` status `{}`; refusing to continue (fail-closed)",
-            args.run_id, args.status
+    let is_active_exception_takeover = args.error.contains("active exception takeover");
+    let blocker_code = if is_active_exception_takeover {
+        crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::OpenDelegatedCycle,
         )
-    })?;
+    } else {
+        run_graph_blocker_code(args.status).ok_or_else(|| {
+            format!(
+                "run-graph advance blocked without explicit blocker evidence for `{}` status `{}`; refusing to continue (fail-closed)",
+                args.run_id, args.status
+            )
+        })?
+    };
     let canonical_blocker_codes =
         canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code])).ok_or_else(
             || {
@@ -5185,6 +5241,11 @@ fn run_graph_blocker_evidence(
             "resume_target": args.resume_target,
             "next_node": args.next_node,
             "source": "run_graph_state",
+            "evidence_kind": if is_active_exception_takeover {
+                "active_exception_takeover"
+            } else {
+                "run_graph_status_blocker"
+            },
         }]
     })))
 }
@@ -6252,6 +6313,10 @@ async fn derive_seeded_run_graph_status_with_stage(
             );
             selection.execution_plan =
                 build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
+            inject_configured_dev_team_route_into_execution_plan(
+                &mut selection.execution_plan,
+                &route,
+            );
             inject_task_planner_metadata(&mut selection, &task.planner_metadata);
             if let Some(path) =
                 existing_design_backed_task_design_doc_path(store, &bounded_task_id).await
@@ -6456,50 +6521,48 @@ fn collect_disabled_external_backend_refs_from_value(
     refs: &mut Vec<serde_json::Value>,
     seen: &mut BTreeSet<String>,
 ) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, child) in map {
-                let child_path = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
-                if ACTUATABLE_SELECTED_BACKEND_KEYS.contains(&key.as_str()) {
-                    if let Some(backend_id) = child.as_str().map(str::trim) {
-                        let seen_key = format!("{child_path}\u{1f}{backend_id}");
-                        if seen.insert(seen_key) {
-                            if let Some(reference) = disabled_external_backend_ref_from_overlay(
-                                overlay,
-                                backend_id,
-                                &child_path,
-                            ) {
-                                refs.push(reference);
+    const MAX_BACKEND_REF_SCAN_DEPTH: usize = 96;
+    const MAX_BACKEND_REF_SCAN_NODES: usize = 20_000;
+
+    let mut stack = vec![(value, path.to_string(), 0usize)];
+    let mut visited_nodes = 0usize;
+    while let Some((value, path, depth)) = stack.pop() {
+        visited_nodes += 1;
+        if visited_nodes > MAX_BACKEND_REF_SCAN_NODES || depth > MAX_BACKEND_REF_SCAN_DEPTH {
+            continue;
+        }
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    let child_path = if path.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    if ACTUATABLE_SELECTED_BACKEND_KEYS.contains(&key.as_str()) {
+                        if let Some(backend_id) = child.as_str().map(str::trim) {
+                            let seen_key = format!("{child_path}\u{1f}{backend_id}");
+                            if seen.insert(seen_key) {
+                                if let Some(reference) = disabled_external_backend_ref_from_overlay(
+                                    overlay,
+                                    backend_id,
+                                    &child_path,
+                                ) {
+                                    refs.push(reference);
+                                }
                             }
                         }
                     }
+                    stack.push((child, child_path, depth + 1));
                 }
-                collect_disabled_external_backend_refs_from_value(
-                    overlay,
-                    child,
-                    &child_path,
-                    refs,
-                    seen,
-                );
             }
-        }
-        serde_json::Value::Array(values) => {
-            for (index, child) in values.iter().enumerate() {
-                let child_path = format!("{path}[{index}]");
-                collect_disabled_external_backend_refs_from_value(
-                    overlay,
-                    child,
-                    &child_path,
-                    refs,
-                    seen,
-                );
+            serde_json::Value::Array(values) => {
+                for (index, child) in values.iter().enumerate() {
+                    stack.push((child, format!("{path}[{index}]"), depth + 1));
+                }
             }
+            _ => {}
         }
-        _ => {}
     }
 }
 
@@ -6528,15 +6591,19 @@ fn dispatch_context_route_assignment_catalog_drift(
     state_root: &std::path::Path,
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Option<serde_json::Value> {
+    set_dispatch_init_timeout_stage(None, "drift_resolve_project_root");
     let project_root =
         crate::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(state_root);
+    set_dispatch_init_timeout_stage(None, "drift_load_model_profile_catalog");
     let catalog = crate::runtime_dispatch_state::current_project_model_profile_catalog_for_root(
         project_root.as_ref(),
     );
+    set_dispatch_init_timeout_stage(None, "drift_load_project_overlay");
     let overlay =
         crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root.as_ref())
             .ok();
     if let Some(overlay) = overlay.as_ref() {
+        set_dispatch_init_timeout_stage(None, "drift_scan_execution_plan_disabled_backends");
         if let Some(drift) = disabled_external_backend_refs_payload_for_value_from_overlay(
             overlay,
             &role_selection.execution_plan,
@@ -6551,17 +6618,21 @@ fn dispatch_context_route_assignment_catalog_drift(
             }));
         }
     }
+    set_dispatch_init_timeout_stage(None, "drift_collect_dispatch_targets");
     for target in dispatch_init_route_targets(&role_selection.execution_plan) {
+        set_dispatch_init_timeout_stage(None, "drift_lookup_route_for_target");
         let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
             &role_selection.execution_plan,
             &target,
         );
+        set_dispatch_init_timeout_stage(None, "drift_build_route_explain_payload");
         let payload = crate::taskflow_routing::route_explain_payload(
             &role_selection.execution_plan,
             &target,
             route,
         );
         if !catalog.is_empty() {
+            set_dispatch_init_timeout_stage(None, "drift_check_catalog_drift");
             if let Some(drift) =
                 crate::runtime_dispatch_state::route_assignment_catalog_drift_payload(
                     &payload, &catalog,
@@ -6574,6 +6645,7 @@ fn dispatch_context_route_assignment_catalog_drift(
             }
         }
         if let Some(overlay) = overlay.as_ref() {
+            set_dispatch_init_timeout_stage(None, "drift_check_overlay_disabled_backends");
             if let Some(drift) =
                 crate::taskflow_proxy::disabled_external_backend_refs_payload_from_overlay(
                     overlay, &payload,
@@ -6700,6 +6772,8 @@ impl RunGraphDispatchInitArtifacts {
             .dispatch_receipt
             .downstream_dispatch_packet_path
             .clone();
+        let taskflow_handoff_plan =
+            compact_taskflow_handoff_plan_for_dispatch_init(&self.taskflow_handoff_plan);
         serde_json::json!({
             "surface": "vida taskflow run-graph dispatch-init",
             "requested_run_id": self.requested_run_id,
@@ -6707,10 +6781,27 @@ impl RunGraphDispatchInitArtifacts {
             "dispatch_receipt": self.dispatch_receipt,
             "dispatch_packet_path": self.dispatch_packet_path,
             "downstream_dispatch_packet_path": downstream_dispatch_packet_path,
-            "taskflow_handoff_plan": self.taskflow_handoff_plan,
+            "taskflow_handoff_plan": taskflow_handoff_plan,
             "run_graph_bootstrap": self.run_graph_bootstrap,
+            "full_handoff_plan_location": "dispatch_packet",
         })
     }
+}
+
+fn compact_taskflow_handoff_plan_for_dispatch_init(plan: &serde_json::Value) -> serde_json::Value {
+    let mut summary = serde_json::Map::new();
+    for key in [
+        "status",
+        "handoff_ready",
+        "design_packet_activation_source",
+        "required_artifacts",
+        "execution_preparation_artifacts",
+    ] {
+        if let Some(value) = plan.get(key) {
+            summary.insert(key.to_string(), value.clone());
+        }
+    }
+    serde_json::Value::Object(summary)
 }
 
 fn dispatch_init_cache_record_id(value: &str) -> String {
@@ -7268,6 +7359,61 @@ fn configured_dev_team_lane_selection_from_snapshot(
         execution_plan: serde_json::Value::Null,
         reason: "configured_dev_team_first_step_dispatch_init".to_string(),
     }
+}
+
+fn inject_configured_dev_team_route_into_execution_plan(
+    execution_plan: &mut serde_json::Value,
+    route: &crate::dev_team_sequence_contract::ConfiguredDevTeamTaskRoute,
+) {
+    let Some(root) = execution_plan.as_object_mut() else {
+        return;
+    };
+    let development_flow = root
+        .entry("development_flow".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(development_flow) = development_flow.as_object_mut() else {
+        return;
+    };
+    let dispatch_contract = development_flow
+        .entry("dispatch_contract".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(dispatch_contract) = dispatch_contract.as_object_mut() else {
+        return;
+    };
+    let lane_catalog = dispatch_contract
+        .entry("lane_catalog".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(lane_catalog) = lane_catalog.as_object_mut() else {
+        return;
+    };
+    lane_catalog.insert(
+        route.dispatch_target.clone(),
+        serde_json::json!({
+            "dispatch_target": route.dispatch_target,
+            "runtime_role": route.runtime_role,
+            "task_class": route.task_class,
+            "runtime_assignment": {
+                "enabled": true,
+                "runtime_role": route.runtime_role,
+                "task_class": route.task_class,
+                "activation_runtime_role": route.runtime_role,
+                "selected_backend_id": "internal_subagents",
+                "selected_dispatch_backend_id": "internal_subagents",
+            },
+            "carrier_runtime_assignment": {
+                "enabled": true,
+                "runtime_role": route.runtime_role,
+                "task_class": route.task_class,
+                "activation_runtime_role": route.runtime_role,
+                "selected_backend_id": "internal_subagents",
+                "selected_dispatch_backend_id": "internal_subagents",
+            },
+            "activation": {
+                "activation_runtime_role": route.runtime_role,
+                "task_class": route.task_class,
+            },
+        }),
+    );
 }
 
 fn apply_configured_dev_team_route_to_status(
@@ -7862,6 +8008,7 @@ async fn commit_previewed_run_graph_dispatch_init_artifacts(
                     "run_graph_dispatch_init",
                 )
                 .await?;
+                store.close().await;
                 Ok::<(), String>(())
             };
             match authoritative_commit.await {
@@ -8019,6 +8166,21 @@ pub(crate) async fn derive_advanced_run_graph_status(
 ) -> Result<TaskflowRunGraphAdvancePayload, String> {
     let compiled_control = compiled_run_graph_control(store).await?;
     let implementation = compiled_control.implementation;
+    let dispatch_receipt = store
+        .run_graph_dispatch_receipt(&existing.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read run-graph dispatch receipt for `{}` before advance: {error}",
+                existing.run_id
+            )
+        })?;
+    if active_exception_takeover_receipt_matches_status(&existing, dispatch_receipt.as_ref()) {
+        return Err(format!(
+            "run-graph advance blocked: run `{}` is in active exception takeover for `{}`; finish the scoped local work allowed by `vida lane takeover-ready {} --json`, then close the bounded task before advancing another runtime lane.",
+            existing.run_id, existing.active_node, existing.run_id
+        ));
+    }
 
     if existing.task_class == "implementation"
         && existing.route_task_class == "implementation"
@@ -9252,6 +9414,35 @@ mod tests {
         assert_eq!(
             shared_operator_output_contract_parity_error(&evidence),
             None
+        );
+    }
+
+    #[test]
+    fn run_graph_blocker_evidence_accepts_active_exception_takeover() {
+        let evidence = run_graph_blocker_evidence(RunGraphBlockerEvidenceArgs {
+            run_id: "run-active-exception",
+            active_node: "analyst",
+            status: "blocked",
+            route_task_class: "specification",
+            policy_gate: "not_required",
+            resume_target: "dispatch.analyst",
+            next_node: None,
+            error: "run-graph advance blocked: run `run-active-exception` is in active exception takeover for `analyst`; finish the scoped local work allowed by `vida lane takeover-ready run-active-exception --json`, then close the bounded task before advancing another runtime lane.",
+        })
+        .expect("active exception takeover should be explicit blocker evidence")
+        .expect("active exception takeover should render blocker evidence");
+
+        assert_eq!(
+            evidence["blockers"][0]["code"],
+            serde_json::json!("open_delegated_cycle")
+        );
+        assert_eq!(
+            evidence["blockers"][0]["evidence_kind"],
+            serde_json::json!("active_exception_takeover")
+        );
+        assert_eq!(
+            evidence["incident"]["active_node"],
+            serde_json::json!("analyst")
         );
     }
 
@@ -11094,6 +11285,36 @@ mod tests {
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
                 .as_deref(),
             Some("vida lane show run-timeout --json")
+        );
+    }
+
+    #[test]
+    fn missing_task_stale_cleanup_is_not_actionable_for_terminal_resolved_status() {
+        let mut terminal =
+            default_run_graph_status("run-terminal-missing", "implementation", "closure");
+        terminal.status = "completed".to_string();
+        terminal.lifecycle_stage = "closure_complete".to_string();
+        let mut active = default_run_graph_status("run-active-missing", "implementation", "coach");
+        active.status = "blocked".to_string();
+        active.lifecycle_stage = "coach_blocked".to_string();
+
+        assert!(!missing_task_run_graph_requires_stale_cleanup(
+            Some(&terminal),
+            true
+        ));
+        assert!(missing_task_run_graph_requires_stale_cleanup(
+            Some(&active),
+            true
+        ));
+        assert!(!missing_task_run_graph_requires_stale_cleanup(
+            Some(&active),
+            false
+        ));
+        assert!(next_lawful_operator_action_for_projection(&terminal, None, None, true).is_none());
+        assert!(
+            next_lawful_operator_action_for_projection(&active, None, None, true)
+                .as_deref()
+                .is_some_and(|action| action.starts_with("vida lane retire run-active-missing"))
         );
     }
 
@@ -14464,6 +14685,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_graph_advance_reports_active_exception_takeover_before_route_support_error() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let mut existing = default_run_graph_status(
+            "run-active-exception-advance",
+            "specification",
+            "specification",
+        );
+        existing.active_node = "analyst".to_string();
+        existing.status = "blocked".to_string();
+        existing.lifecycle_stage = "analyst_blocked".to_string();
+        existing.lane_id = "analyst_lane".to_string();
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-active-exception-advance");
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_command = None;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_packet_path = None;
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("record active exception takeover receipt");
+
+        let error = derive_advanced_run_graph_status(&store, existing)
+            .await
+            .expect_err("active exception takeover should block route advance");
+
+        assert!(error.contains("active exception takeover"));
+        assert!(error.contains("vida lane takeover-ready run-active-exception-advance --json"));
+        assert!(
+            !error.contains("currently supports only seeded implementation"),
+            "advance should not mask active exception takeover behind route support errors"
+        );
+    }
+
+    #[tokio::test]
     async fn seeded_worker_test_author_lane_can_advance_to_coach() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
@@ -15566,6 +15832,53 @@ mod tests {
         assert_eq!(
             payload["diagnosis_detail"]["blocker_codes"],
             serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn run_graph_status_surface_suppresses_open_cycle_after_active_exception_takeover() {
+        let mut status = default_run_graph_status(
+            "run-active-exception-status",
+            "specification",
+            "specification",
+        );
+        status.active_node = "analyst".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analyst_blocked".to_string();
+        status.lane_id = "analyst_lane".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "dispatch.analyst".to_string();
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-active-exception-status");
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_command = None;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_packet_path = None;
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida lane show run-active-exception-status --json".to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let blocker_codes = run_graph_status_surface_blocker_codes(&status, &projection_truth);
+
+        assert!(
+            blocker_codes.is_empty(),
+            "active exception takeover receipt should supersede stale open delegated cycle blockers"
         );
     }
 

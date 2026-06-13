@@ -1,9 +1,5 @@
 pub(crate) fn human_command(command: &str) -> String {
-    command
-        .split_whitespace()
-        .filter(|token| *token != "--json")
-        .collect::<Vec<_>>()
-        .join(" ")
+    operator_output::command_text::human_command(command)
 }
 
 #[cfg(test)]

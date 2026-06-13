@@ -192,7 +192,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .list_tasks(None, true)
         .await
         .map_err(|error| format!("Failed to read tasks for runtime bundle: {error}"))?;
-    let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
+    let (mut latest_run_graph_task_closed, mut latest_run_graph_task_missing) =
         match effective_latest_run_graph_status {
             Some(status) => {
                 let verdict =
@@ -210,6 +210,36 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             }
             None => (false, false),
         };
+    let terminal_task_active_status_is_current = latest_terminal_task_active_run_graph_status
+        .as_ref()
+        .is_some_and(|terminal| {
+            latest_run_graph_status
+                .as_ref()
+                .map(|current| current.run_id == terminal.run_id)
+                .unwrap_or(true)
+        });
+    let terminal_task_active_run_graph_task_missing = if terminal_task_active_status_is_current {
+        match latest_terminal_task_active_run_graph_status.as_ref() {
+            Some(terminal) => {
+                let verdict =
+                    crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                        store, terminal,
+                    )
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "Failed to read terminal task-active run graph task authority: {error}"
+                        )
+                    })?;
+                latest_run_graph_task_closed |= verdict.stale_for_active_projection();
+                latest_run_graph_task_missing |= verdict.task_missing();
+                verdict.task_missing()
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
     let latest_global_run_graph_task_closed = match latest_global_run_graph_status.as_ref() {
         Some(status) => {
             let verdict =
@@ -271,6 +301,19 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         continuation_binding,
         taskflow_active_candidates,
     );
+    let continuation_binding = if terminal_task_active_run_graph_task_missing {
+        match latest_terminal_task_active_run_graph_status.as_ref() {
+            Some(status) => {
+                crate::continuation_binding_summary::add_stale_missing_task_run_graph_status(
+                    continuation_binding,
+                    status,
+                )
+            }
+            None => continuation_binding,
+        }
+    } else {
+        continuation_binding
+    };
     let global_closed_run_is_current = latest_global_run_graph_task_closed
         && !latest_global_run_graph_terminal_closure_has_truth
         && latest_global_run_graph_status

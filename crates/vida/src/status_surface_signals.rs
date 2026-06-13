@@ -1,23 +1,15 @@
+use operator_output::next_actions;
+
 pub(crate) fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
 }
 
-fn human_command(command: &str) -> String {
-    crate::operator_command_text::human_command(command)
-}
-
 pub(crate) fn consume_continue_command(run_id: Option<&str>) -> String {
-    match run_id.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(run_id) => human_command(&format!(
-            "vida taskflow consume continue --run-id {} --json",
-            crate::shell_quote(run_id)
-        )),
-        None => human_command("vida taskflow consume continue --json"),
-    }
+    next_actions::consume_continue_command(run_id)
 }
 
 pub(crate) fn recovery_latest_command() -> String {
-    human_command("vida taskflow recovery latest --json")
+    next_actions::recovery_latest_command()
 }
 
 pub(crate) fn open_delegated_cycle_continue_next_action(run_id: Option<&str>) -> String {
@@ -28,22 +20,22 @@ pub(crate) fn open_delegated_cycle_continue_next_action(run_id: Option<&str>) ->
 }
 
 pub(crate) fn run_graph_latest_snapshot_inconsistent_next_action() -> String {
-    let status_command = human_command("vida status --json");
-    let continue_command = human_command("vida taskflow consume continue --json");
+    let status_command = next_actions::status_command();
+    let continue_command = next_actions::consume_continue_command(None);
     format!(
         "Inspect the concrete run/task/packet named by `{status_command}`; if the task or owned_paths are missing, repair or retire that stale run first. Only rerun `{continue_command}` after status, recovery, checkpoint, gate, and dispatch receipt can share one authoritative run_id, then recheck `{status_command}`."
     )
 }
 
 pub(crate) fn run_graph_latest_dispatch_receipt_signal_ambiguous_next_action() -> String {
-    let continue_command = human_command("vida taskflow consume continue --json");
+    let continue_command = next_actions::consume_continue_command(None);
     format!(
         "Rebuild the latest run-graph dispatch receipt with `{continue_command}` so lane_status and dispatch_status are canonical and aligned before trusting the operator signal."
     )
 }
 
 pub(crate) fn continuation_binding_ambiguous_next_action() -> String {
-    let status_command = human_command("vida status --json");
+    let status_command = next_actions::status_command();
     "Do not continue by heuristic. Inspect `".to_string()
         + &status_command
         + "`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation."
@@ -60,28 +52,22 @@ pub(crate) fn blocked_run_graph_status_next_actions(
         (Some(run_id), Some(task_id), true) => vec![
             format!(
                 "Inspect the blocked run-graph status with `{}` before writing.",
-                crate::operator_command_text::human_command(&format!(
-                    "vida taskflow recovery status {run_id} --json"
-                ))
+                next_actions::human_recovery_status_command(run_id)
             ),
             format!(
                 "Run `{task_id}` is already closed for blocked run `{run_id}`; retire that stale blocked run with `{}`, then refresh continuation evidence with `{}` before selecting the next bounded step.",
-                crate::operator_command_text::human_command(&format!(
-                    "vida lane retire {run_id} --receipt-id <concrete-receipt-id> --reason <reason> --json"
-                )),
-                crate::operator_command_text::human_command("vida taskflow consume continue --json")
+                next_actions::human_lane_retire_command(run_id),
+                next_actions::consume_continue_command(None)
             ),
         ],
         (Some(run_id), _, false) => vec![
             format!(
                 "Inspect the blocked run-graph status with `{}` and resolve the blocker before writing.",
-                crate::operator_command_text::human_command(&format!(
-                    "vida taskflow recovery status {run_id} --json"
-                ))
+                next_actions::human_recovery_status_command(run_id)
             ),
             format!(
                 "After the blocker is resolved, refresh continuation evidence with `{}` or bind the next bounded unit explicitly.",
-                crate::operator_command_text::human_command("vida taskflow consume continue --json")
+                next_actions::consume_continue_command(None)
             ),
         ],
         _ => vec![
@@ -103,9 +89,7 @@ pub(crate) fn runtime_binding_task_missing_next_action(
         .zip((!task_id.is_empty()).then_some(task_id))
     {
         Some((run_id, task_id)) => {
-            let recovery_command = crate::operator_command_text::human_command(&format!(
-                "vida taskflow recovery status {run_id} --json"
-            ));
+            let recovery_command = next_actions::human_recovery_status_command(run_id);
             format!(
                 "Runtime binding points to missing task `{task_id}` for run `{run_id}`. Inspect the concrete recovery state with `{recovery_command}`; only bind a new explicit task after the run reaches closure_complete, otherwise reconcile the recovery blocker or retire the stale run before continuing."
             )
@@ -122,17 +106,13 @@ pub(crate) fn recovery_resume_target_missing_next_action(
     let task_id = task_id.map(str::trim).filter(|value| !value.is_empty());
     match (run_id, task_id) {
         (Some(run_id), Some(task_id)) => {
-            let recovery_command = crate::operator_command_text::human_command(&format!(
-                "vida taskflow recovery status {run_id} --json"
-            ));
+            let recovery_command = next_actions::human_recovery_status_command(run_id);
             format!(
                 "Recovery for run `{run_id}` has no dispatch resume_target for task `{task_id}`. Inspect `{recovery_command}`; if the run is still inside an open delegated cycle, resolve that blocker through lane recovery before any explicit task bind. Only bind a new explicit task after closure_complete."
             )
         }
         (Some(run_id), None) => {
-            let recovery_command = crate::operator_command_text::human_command(&format!(
-                "vida taskflow recovery status {run_id} --json"
-            ));
+            let recovery_command = next_actions::human_recovery_status_command(run_id);
             format!(
                 "Recovery for run `{run_id}` has no dispatch resume_target. Inspect `{recovery_command}`; if the run is still inside an open delegated cycle, resolve that blocker through lane recovery before any explicit task bind. Only bind a new explicit task after closure_complete."
             )
@@ -146,16 +126,13 @@ pub(crate) fn terminal_next_action_requires_authoritative_run_state(
 ) -> String {
     match run_id.filter(|value| !value.trim().is_empty()) {
         Some(run_id) => {
-            let run_id = crate::shell_quote(run_id.trim());
-            let run_graph_command = crate::operator_command_text::human_command(&format!(
-                "vida taskflow run-graph status {run_id} --json"
-            ));
+            let run_graph_command = next_actions::human_run_graph_status_command(run_id.trim());
             format!(
                 "Do not continue by heuristic. First inspect the authoritative run state with `{run_graph_command}`, then either cite the explicit next bounded unit from the user and bind it with `vida taskflow continuation bind` using that concrete `run_id` and `task_id`, or stop and reconcile why the authoritative run state still lacks the next bounded unit before further implementation."
             )
         }
         None => {
-            let status_command = crate::operator_command_text::human_command("vida status --json");
+            let status_command = next_actions::status_command();
             "Do not continue by heuristic. First inspect the authoritative run state with `"
                 .to_string()
                 + &status_command
@@ -235,90 +212,90 @@ mod tests {
 }
 
 pub(crate) fn run_graph_latest_dispatch_receipt_summary_inconsistent_next_action() -> String {
-    let status_command = human_command("vida status --json");
-    let recovery_command = human_command("vida taskflow recovery latest --json");
+    let status_command = next_actions::status_command();
+    let recovery_command = next_actions::recovery_latest_command();
     format!(
         "Run `{status_command}` to refresh the latest run-graph dispatch receipt summary, then inspect `{recovery_command}`; rerun the blocked TaskFlow command only after latest status and dispatch receipt share the same concrete run_id."
     )
 }
 
 pub(crate) fn run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action() -> String {
-    let status_command = human_command("vida status --json");
+    let status_command = next_actions::status_command();
     format!(
         "Refresh the latest checkpoint evidence for the run graph before rerunning `{status_command}` so checkpoint rows and dispatch receipt evidence share the same run_id."
     )
 }
 
 pub(crate) fn protocol_binding_check_next_action() -> String {
-    let command = human_command("vida taskflow protocol-binding check --json");
+    let command = next_actions::human_taskflow_protocol_binding_check_command();
     format!("Run `{command}` and clear blockers.")
 }
 
 pub(crate) fn project_activation_next_action() -> String {
-    let command = human_command("vida project-activator --json");
+    let command = next_actions::human_project_activator_command();
     format!("Complete project activation via `{command}` before normal work.")
 }
 
 pub(crate) fn project_activation_unknown_next_action() -> String {
-    let command = human_command("vida project-activator --json");
+    let command = next_actions::human_project_activator_command();
     format!(
         "Resolve project root detection and run `{command}` to surface canonical activation state."
     )
 }
 
 pub(crate) fn missing_run_graph_dispatch_receipt_operator_evidence_next_action() -> String {
-    let command = human_command("vida taskflow consume continue --json");
+    let command = next_actions::consume_continue_command(None);
     format!(
         "Run `{command}` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
     )
 }
 
 pub(crate) fn closed_task_active_run_projection_mismatch_next_action() -> String {
-    let reconcile_command = human_command("vida task reconcile-closed-runs --limit 25 --json");
-    let inspect_command = human_command("vida taskflow run-graph status <run-id> --json");
+    let reconcile_command = next_actions::human_closed_run_reconcile_command();
+    let inspect_command = next_actions::human_run_graph_status_command("<run-id>");
     format!(
         "Run `{reconcile_command}` and inspect skipped runs with `{inspect_command}`; closed tasks must not remain projected as active runtime work."
     )
 }
 
 pub(crate) fn missing_root_session_write_guard_next_action() -> String {
-    let recovery_command = human_command("vida taskflow recovery latest --json");
-    let continue_command = human_command("vida taskflow consume continue --json");
+    let recovery_command = next_actions::recovery_latest_command();
+    let continue_command = next_actions::consume_continue_command(None);
     format!(
         "Run `{recovery_command}` and `{continue_command}` to confirm runtime artifacts expose the canonical root-session pre-write guard."
     )
 }
 
 pub(crate) fn recovery_readiness_blocked_next_action() -> String {
-    let recovery_command = human_command("vida taskflow recovery latest --json");
-    let continue_command = human_command("vida taskflow consume continue --json");
+    let recovery_command = next_actions::recovery_latest_command();
+    let continue_command = next_actions::consume_continue_command(None);
     format!(
         "Inspect `{recovery_command}`, then run `{continue_command}` after `recovery_ready=true` is proven for resume/rollback handoff."
     )
 }
 
 pub(crate) fn task_validate_graph_next_action() -> String {
-    let command = human_command("vida task validate-graph --json");
+    let command = next_actions::human_taskflow_graph_summary_command();
     format!("Run `{command}` and resolve graph issues.")
 }
 
 pub(crate) fn missing_retrieval_trust_source_operator_evidence_next_action() -> String {
-    let command = human_command("vida taskflow consume bundle check --json");
+    let command = next_actions::human_bundle_check_command();
     format!(
         "Run `{command}` so runtime consumption snapshots publish retrieval-trust source evidence."
     )
 }
 
 pub(crate) fn missing_retrieval_trust_signal_operator_evidence_next_action() -> String {
-    let sync_command = human_command("vida taskflow protocol-binding sync --json");
-    let bundle_command = human_command("vida taskflow consume bundle check --json");
+    let sync_command = next_actions::human_taskflow_protocol_binding_sync_command();
+    let bundle_command = next_actions::human_bundle_check_command();
     format!(
         "Run `{sync_command}` and `{bundle_command}` to materialize retrieval-trust citation/freshness/ACL signal."
     )
 }
 
 pub(crate) fn missing_retrieval_trust_operator_evidence_next_action() -> String {
-    let command = human_command("vida taskflow consume bundle check --json");
+    let command = next_actions::human_bundle_check_command();
     format!("Run `{command}` to record retrieval-trust operator evidence.")
 }
 

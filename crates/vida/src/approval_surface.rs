@@ -381,6 +381,15 @@ fn build_approval_envelope(
     }
 }
 
+async fn latest_approval_status(
+    store: &StateStore,
+) -> Result<Option<crate::state_store::RunGraphStatus>, crate::state_store::StateStoreError> {
+    match store.latest_run_graph_status().await? {
+        Some(status) => Ok(Some(status)),
+        None => store.latest_terminal_task_active_run_graph_status().await,
+    }
+}
+
 async fn dispatch_summary_for_status_run(
     store: &StateStore,
     run_id: &str,
@@ -475,7 +484,7 @@ pub(crate) async fn run_approval(args: ProxyArgs) -> ExitCode {
 
     match command {
         ApprovalCommand::ShowLatest { as_json } => {
-            let Some(status) = (match store.latest_run_graph_status().await {
+            let Some(status) = (match latest_approval_status(&store).await {
                 Ok(status) => status,
                 Err(error) => {
                     eprintln!("Failed to read latest approval status: {error}");

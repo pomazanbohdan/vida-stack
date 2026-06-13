@@ -20,7 +20,7 @@ Product/spec inputs:
 
 1. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
 2. `docs/product/spec/compiled-runtime-bundle-contract.md`
-3. `docs/product/spec/release-1-plan.md`
+3. `active runtime contract/profile specs`
 4. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
 5. `docs/product/spec/embedded-runtime-and-editable-projection-model.md`
 6. `docs/product/spec/runtime-paths-and-derived-cache-model.md`

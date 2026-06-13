@@ -2788,6 +2788,45 @@ hierarchy: framework,contracts
         ));
 
         let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels: Vec<String> = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "run-graph-latest-parent",
+                title: "Run graph latest parent",
+                display_id: None,
+                description: "parent",
+                issue_type: "epic",
+                status: "open",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create run graph latest parent");
+        for task_id in ["task-aaa", "task-bbb"] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title: "Run graph latest task",
+                    display_id: None,
+                    description: "task",
+                    issue_type: "task",
+                    status: "in_progress",
+                    priority: 0,
+                    parent_id: Some("run-graph-latest-parent"),
+                    labels: &labels,
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "test",
+                })
+                .await
+                .expect("create run graph latest task");
+        }
 
         let mut first = sample_run_graph_status();
         first.run_id = "run-aaa".to_string();

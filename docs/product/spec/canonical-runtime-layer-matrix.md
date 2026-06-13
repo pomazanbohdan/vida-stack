@@ -78,14 +78,13 @@ Runtime matrix rule:
 
 Primary owner references for the three-level spine:
 
-1. `docs/process/framework-three-layer-refactoring-audit.md`
-2. `instruction-contracts/meta.core-protocol-standard-protocol.md`
-3. `docs/product/spec/framework-project-documentation-layer-model.md`
-4. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-5. `docs/process/framework-source-lineage-index.md`
-6. `system-maps/framework.protocol-layers-map.md`
-7. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
-8. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
+1. `instruction-contracts/meta.core-protocol-standard-protocol.md`
+2. `docs/product/spec/framework-project-documentation-layer-model.md`
+3. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
+4. `Git history and active artifact sidecars`
+5. `system-maps/framework.protocol-layers-map.md`
+6. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
+7. `current TaskFlow runtime owner specs`
 
 Upper-layer derivation rule:
 
@@ -102,13 +101,13 @@ This control matrix strengthens the layer status view with owner, proof, and mig
 |---|---|---|---|---|---|---|---|
 | Layer 1 | `core` | `partial-development-kernel-model.md`; `canonical-machine-map.md`; `taskflow-protocol-runtime-binding-model.md` | TaskFlow runtime-family kernel bundle composition surfaces | runtime bundle validation; `vida docflow proofcheck --profile active-canon` | `bridge_backed` | runtime bundle boundary becomes ambiguous and later layers lose lawful owner splits | Rust-native kernel bundle ownership is not yet the sole execution path |
 | Layer 2 | `core` | `vida-0.3-route-and-receipt-spec.md`; `receipt-and-proof-law.md`; `canonical-machine-map.md` | TaskFlow route/state/receipt surfaces; DB-backed taskflow state authority | route/receipt proofs; runtime bundle composition checks | `bridge_backed` | route stages, receipt classes, or proof boundaries become non-queryable and runtime must stop before trustworthy progression | DB-first compiled Rust authority is still converging with legacy route/state law |
-| Layer 3 | `runtime-family execution` | `work.taskflow-protocol.md`; `model.boot-packet-protocol.md`; `taskflow-v1-runtime-modernization-plan.md` | TaskFlow runtime-family implementation surfaces; active Rust `taskflow-*` crates for native closure | tracked execution receipts; run-graph proofs; bounded task execution inspection | `bridge_backed` | tracked execution cannot prove block lifecycle or resumable progression and execution must not claim lawful continuity | Rust-native TaskFlow execution substrate is under active implementation beside bridge runtime |
+| Layer 3 | `runtime-family execution` | `work.taskflow-protocol.md`; `model.boot-packet-protocol.md`; `current TaskFlow runtime owner specs` | TaskFlow runtime-family implementation surfaces; active Rust `taskflow-*` crates for native closure | tracked execution receipts; run-graph proofs; bounded task execution inspection | `bridge_backed` | tracked execution cannot prove block lifecycle or resumable progression and execution must not claim lawful continuity | Rust-native TaskFlow execution substrate is under active implementation beside bridge runtime |
 | Layer 4 | `orchestration shell` | `core.agent-system-protocol.md`; `core.capability-registry-protocol.md`; `work.agent-lane-selection-protocol.md` | TaskFlow runtime-family routing/assignment surfaces; `crates/vida/src/main.rs` routing shell | route receipts; capability registry checks; lane-selection proofs | `bridge_backed` | lane assignment becomes implicit or role drift bypasses lawful route selection | `vida` shell still concentrates routing integration while Rust TaskFlow boundaries are being carved out |
 | Layer 5 | `orchestration shell` | `lane.worker-dispatch-protocol.md`; `lane.agent-handoff-context-protocol.md`; `core.context-governance-protocol.md` | packet/handoff surfaces in the TaskFlow runtime family; launcher-owned delegation bridges in `crates/vida` | handoff packets; bounded context receipts; verifier packet proofs | `bridge_backed` | delegation inherits broad context or loses provenance and replay-safe execution must stop | Native handoff/context governance still depends on bridge-era packet surfaces |
 | Layer 6 | `orchestration shell` + `runtime-family execution` gate seam | `work.verification-lane-protocol.md`; `work.verification-merge-protocol.md`; `verification-merge-law.md` | TaskFlow verification-merge surfaces; Rust review/verification closure remains in active modernization track | admissibility checks; merge proofs; approval/verification receipts | `bridge_backed` | verification, approval, and proof collapse into one informal close path and runtime must fail closed | Native closure gates are not yet the sole owner for end-to-end TaskFlow verification |
-| Layer 7 | `runtime-family execution` | `core.run-graph-protocol.md`; `recovery.checkpoint-replay-recovery-protocol.md`; `taskflow-v1-runtime-modernization-plan.md` | TaskFlow recovery/state surfaces; active Rust recovery/state crates | checkpoint lineage; replay-safe recovery checks; resumability proofs | `bridge_backed` | interruption-safe recovery is no longer provable and runtime may not advertise resumability | Rust-native checkpoint and replay ownership is still being completed |
+| Layer 7 | `runtime-family execution` | `core.run-graph-protocol.md`; `recovery.checkpoint-replay-recovery-protocol.md`; `current TaskFlow runtime owner specs` | TaskFlow recovery/state surfaces; active Rust recovery/state crates | checkpoint lineage; replay-safe recovery checks; resumability proofs | `bridge_backed` | interruption-safe recovery is no longer provable and runtime may not advertise resumability | Rust-native checkpoint and replay ownership is still being completed |
 | Layer 8 | `runtime-family execution` | `observability.map.md`; `canonical-runtime-readiness-law.md`; `operational-state-and-synchronization-model.md` | `vida docflow`; TaskFlow observability/readiness surfaces; future Rust readiness shell in `vida`/`taskflow-*` | `vida docflow readiness-check`; `proofcheck`; readiness reports and reconciliation views | `bridge_backed` | readiness cannot prove trust and direct runtime use must remain blocked | readiness is green canonically, but native TaskFlow observability/readiness closure is still converging |
-| Layer 9 | `runtime-family execution` + `DocFlow` activation seam | `runtime.direct-runtime-consumption-protocol.md`; `compiled-autonomous-delivery-runtime-architecture.md`; `taskflow-v1-runtime-modernization-plan.md`; `docflow-v1-runtime-modernization-plan.md` | TaskFlow direct-consumption surfaces; `crates/vida/src/main.rs`; active Rust `taskflow-*` and `docflow-*` integration surfaces | `vida taskflow consume final|continue|advance`; `vida docflow proofcheck`; explicit `DocFlow` activation for final evidence | `bridge_backed` | runtime consumes incomplete canon or bypasses `DocFlow` evidence and closure trust must fail closed | `TaskFlow -> DocFlow` direct native seam is still converging while both Rust families are under active development |
+| Layer 9 | `runtime-family execution` + `DocFlow` activation seam | `runtime.direct-runtime-consumption-protocol.md`; `compiled-autonomous-delivery-runtime-architecture.md`; `current TaskFlow runtime owner specs`; `current DocFlow/runtime owner specs` | TaskFlow direct-consumption surfaces; `crates/vida/src/main.rs`; active Rust `taskflow-*` and `docflow-*` integration surfaces | `vida taskflow consume final|continue|advance`; `vida docflow proofcheck`; explicit `DocFlow` activation for final evidence | `bridge_backed` | runtime consumes incomplete canon or bypasses `DocFlow` evidence and closure trust must fail closed | `TaskFlow -> DocFlow` direct native seam is still converging while both Rust families are under active development |
 
 ## 0.4 Session-Scoped Ownership Alignment
 
@@ -217,7 +216,7 @@ Freeze the runtime ownership split between canonical config, canonical state, re
 
 1. `docs/product/spec/partial-development-kernel-model.md`
 2. `docs/product/spec/canonical-machine-map.md`
-3. `docs/process/framework-source-lineage-index.md`
+3. `Git history and active artifact sidecars`
 
 ### 4.4 Standalone Value
 
@@ -238,7 +237,7 @@ Define the lawful runtime state machine, route-stage law, gate semantics, and pr
 
 ### 5.3 Strongest Current Evidence
 
-1. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
 2. `docs/product/spec/canonical-machine-map.md`
 3. `docs/product/spec/receipt-and-proof-law.md`
 
@@ -411,7 +410,7 @@ Allow the runtime to consume canonical law, canonical bundles, and canonical sta
 
 ### 12.3 Strongest Current Evidence
 
-1. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
 2. `docs/product/spec/root-map-and-runtime-surface-model.md`
 3. `bundles/default_runtime.yaml`
 4. `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
@@ -443,8 +442,8 @@ The highest-value remaining runtime gaps are:
 
 This spec absorbs and concentrates runtime-layer law previously scattered across:
 
-1. `docs/process/framework-source-lineage-index.md`
-2. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
+2. `Git history and active artifact sidecars`
 3. `docs/product/spec/partial-development-kernel-model.md`
 4. `docs/product/spec/canonical-machine-map.md`
 5. `docs/product/spec/projection-listener-checkpoint-model.md`
@@ -456,16 +455,16 @@ This spec absorbs and concentrates runtime-layer law previously scattered across
 11. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
 12. `runtime-instructions/work.verification-lane-protocol.md`
 13. `system-maps/observability.map.md`
-14. `docs/process/framework-source-lineage-index.md`
+14. `Git history and active artifact sidecars`
 
 -----
 artifact_path: product/spec/canonical-runtime-layer-matrix
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-15'
+artifact_revision: '2026-06-12'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-runtime-layer-matrix.md
 created_at: '2026-03-10T15:01:10+02:00'
-updated_at: 2026-05-15T09:13:16.6074088Z
+updated_at: 2026-06-12T00:00:00+03:00
 changelog_ref: canonical-runtime-layer-matrix.changelog.jsonl

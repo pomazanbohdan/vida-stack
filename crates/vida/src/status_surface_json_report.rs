@@ -124,6 +124,8 @@ pub(crate) fn build_status_json_report(
                 "authoritative_mutation_root": inputs.state_spine.authoritative_mutation_root,
             },
             "project_activation": project_activation,
+            "runtime_consumption": inputs.runtime_consumption,
+            "host_agents": host_agents_json_value(inputs.host_agents),
             "protocol_binding": inputs.protocol_binding,
             "root_session_write_guard": inputs.root_session_write_guard,
             "continuation_binding": inputs.continuation_binding,

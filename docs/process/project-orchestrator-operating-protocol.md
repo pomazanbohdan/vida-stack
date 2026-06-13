@@ -42,8 +42,7 @@ For active project development orchestration, the minimum project-side read set 
 
 1. `docs/process/project-orchestrator-operating-protocol.md`
 2. `docs/process/project-packet-and-lane-runtime-capsule.md`
-3. `docs/process/generic-runtime-protocol-promotion-plan.md` when a rule may belong in generic runtime owners
-4. `docs/product/spec/current-spec-map.md` when product/spec closure context is active
+3. `docs/product/spec/current-spec-map.md` when product/spec closure context is active
 
 The orchestrator should not widen beyond that set unless a blocker or ambiguity requires it.
 
@@ -55,7 +54,7 @@ Preferred startup helpers:
 4. `docs/process/project-start-readiness-runtime-capsule.md`
 5. `docs/process/project-packet-rendering-runtime-capsule.md`
 6. `docs/process/project-skill-initialization-and-activation-protocol.md`
-7. `docs/process/project-boot-readiness-validation-protocol.md`
+7. `docs/process/project-orchestrator-session-start-protocol.md`
 
 ## Top-Level Loop
 
@@ -196,7 +195,7 @@ Interpretation rule:
 
 1. packet fields must be rendered and checked through `docs/process/project-development-packet-template-protocol.md`,
 2. prompt-layer precedence must follow `docs/process/project-agent-prompt-stack-protocol.md`,
-3. startup must satisfy `docs/process/project-boot-readiness-validation-protocol.md` before the first write-producing dispatch,
+3. startup must satisfy `docs/process/project-orchestrator-session-start-protocol.md` before the first write-producing dispatch,
 4. runtime surfaces such as `vida taskflow consume final`, dispatch-packet persistence, resume, and `vida agent-init` must fail closed when the active packet template minimum is missing.
 5. for `tracked_flow_packet` handoffs, raw `create_command` is initial materialization evidence only; once the tracked task id already exists, continue through the runtime-provided ensure/reuse command instead of retrying duplicate creation.
 
@@ -335,9 +334,9 @@ Every task in a long-running refactor epic uses:
 4. close the TaskFlow item only when closure-ready passes,
 5. commit only scoped task files and push when the active publication pattern
    authorizes it,
-6. update `docs/process/agent-model-evaluation-log.md`,
+6. record the optimization scorecard in the TaskFlow closure evidence,
 7. run DocFlow/diff checks for documentation changes,
-8. commit and push the evaluation-doc update under the same publication pattern,
+8. commit and push scoped documentation updates under the same publication pattern,
 9. run Post-Task Self-Analysis and update instructions again when the analysis
    changes the operating rule,
 10. check parent/wave closure readiness,
@@ -353,8 +352,13 @@ Every task in a long-running refactor epic uses:
 Post-Task Self-Analysis is a STOP gate after every closed task and before
 selecting unrelated work. The next unrelated task is blocked until the
 orchestrator records the base fields, checks all 20 fixed criteria below,
-creates the dynamic criteria from the just-finished session segment, and applies
-or records the meta-analysis remediation.
+applies or records the meta-analysis remediation, creates or updates TaskFlow
+implementation tasks for every actionable self-analysis or self-diagnostic
+finding, cites those task ids or an explicit `no_task_reason`, and then
+completes the final checklist item: the dynamic-criteria STOP point for the
+just-finished session segment. The fixed list is the baseline only; it is not a
+substitute for generating at least one new additional session-derived criterion
+every time.
 
 Base fields:
 
@@ -368,11 +372,12 @@ Base fields:
    proof bundle, staging, or parallel/sequential posture for the next task,
 5. `docs_update`: whether the finding requires updating project instructions,
    scorecard templates, prompt templates, scripts, code, tests, or TaskFlow
-   optimization defects,
+   optimization defects, and which TaskFlow implementation task id owns each
+   actionable follow-up,
 6. `workflow_score_10`: orchestrator process score considering cost, tool calls,
    proof strength, rework, elapsed time, and closure quality.
 
-Twenty fixed required criteria:
+Twenty fixed required criteria (baseline list, not the final dynamic step):
 
 1. Active bounded unit was explicit before write-producing work.
 2. Wave/parent closure distance improved or the task had a documented reason to
@@ -395,27 +400,41 @@ Twenty fixed required criteria:
 14. TaskFlow graph, closure-ready, and close state were current.
 15. Commit staging was by invariant, not by whole dirty file.
 16. Push/publication matched the active authorization pattern.
-17. Documentation/evaluation scorecard was updated before unrelated work.
+17. TaskFlow closure scorecard or relevant process-doc scorecard was updated before unrelated work.
 18. Parent/wave closure-ready state and epic task/wave metrics were refreshed.
 19. New runtime/tooling/process defects discovered during the task were created,
     updated, or explicitly deferred with reason.
 20. The next task routing rule changed when the evidence justified changing it,
     or explicitly remained unchanged with reason.
 
-Dynamic criteria requirement:
+Final dynamic criteria STOP point:
 
-1. After checking the 20 fixed criteria, analyze the session segment from the
-   previous task closure to the current task closure.
-2. Create additional dynamic criteria that capture new failure modes, waste
-   patterns, proof gaps, agent behavior, runtime/tooling friction, user feedback,
-   or documentation drift that the fixed list did not cover.
-3. Each dynamic criterion must be actionable and testable in the next task, with
+1. Run this step last, after the base fields, all 20 fixed criteria, and
+   meta-analysis remediation have been recorded.
+2. Analyze the session segment from the previous task closure to the current
+   task closure, including user feedback, agent returns, command delays,
+   proof failures, dirty-tree surprises, and documentation changes.
+3. Create at least one new additional dynamic criterion that captures failure
+   modes, waste patterns, proof gaps, agent behavior, runtime/tooling friction,
+   user feedback, or documentation drift observed in that exact session segment
+   and not already captured by the fixed list or prior dynamic criteria.
+4. Each dynamic criterion must be actionable and testable in the next task, with
    an expected evidence source or stop condition.
-4. Record which dynamic criteria become one-time checks for the next task and
+5. Record which dynamic criteria become one-time checks for the next task and
    which should be promoted into the fixed checklist, prompt template, script,
    code, test, or project documentation.
-5. If no new dynamic criteria are created, explicitly state why the fixed
-   checklist fully covered the session segment.
+6. Record each dynamic criterion in a lightweight registry line or table in the
+   scorecard. Each entry must include `criterion_id`, `owner`, `expected_evidence`,
+   `task_ref` or `no_task_reason`, `promotion_decision` (`one_time`, `promoted`,
+   `scripted`, `converted_to_task`, `duplicate`, or `retired`), and
+   `duplicate_of` when the criterion reuses an earlier rule.
+7. This is the last required checklist item for every task closure. The next
+   task remains blocked until this step creates and records at least one new
+   criterion for the current segment.
+8. Do not close the STOP gate by reusing only fixed criteria or previous dynamic
+   criteria. If the session segment appears fully covered, create a narrower
+   criterion from the strongest observed risk, delay, proof gap, or user
+   correction in that segment and mark whether it stays one-time or is promoted.
 
 Meta-analysis remediation:
 
@@ -425,9 +444,25 @@ Meta-analysis remediation:
 2. For every `risk` item, choose one remediation: add/adjust proof, update a
    prompt/checklist, create a follow-up TaskFlow task, update code/tests/scripts,
    update documentation/instructions, or record why no action is required.
-3. If remediation changes project behavior, update the relevant instruction,
+3. For every actionable finding from Post-Task Self-Analysis, runtime
+   self-diagnostic, release/install diagnostic, DocFlow check, TaskFlow check,
+   agent return, or user correction, create or update a concrete TaskFlow
+   implementation task unless the finding is already fully fixed inside the
+   just-closed task, is a duplicate of an existing TaskFlow task, or is tracked
+   only in an upstream issue with a recorded project-local no-task reason.
+4. Every created or updated follow-up must include acceptance criteria, proof
+   target, owner surface or owned path, and the source finding. Cite its task id
+   in the scorecard and final dynamic criteria section. A prose log entry alone
+   does not satisfy this gate.
+5. If the task touched, reviewed, cited, or depended on GitHub/open-source
+   intake, record open PR handling and processed issue closure state in the
+   scorecard. Open PRs must be processed, explicitly marked `no_open_prs` or
+   `not_applicable`, or kept open with `left_open_reason`. Processed issues must
+   be closed, explicitly marked `no_processed_issues` or `not_applicable`, or
+   kept open with `kept_open_reason`/`no_task_reason`.
+6. If remediation changes project behavior, update the relevant instruction,
    process doc, script, code, test, or TaskFlow defect before unrelated work.
-4. If remediation cannot be completed inside the just-closed task, create or
+7. If remediation cannot be completed inside the just-closed task, create or
    update a follow-up with acceptance criteria and cite it in the scorecard.
 
 ## Post-Task Optimization Checklist
@@ -438,21 +473,30 @@ After every task, the orchestrator must track:
 2. Declared proof bundle result.
 3. Debug build result.
 4. Scoped commit hash and push result.
-5. Documentation/evaluation scorecard commit hash and push result.
+5. TaskFlow closure scorecard evidence and any relevant process-doc commit hash/push result.
 6. Completed agent handles closed or cleanup blocker recorded.
-7. Executor model, reasoning effort, score, tokens, tool calls, and rework count.
-8. Validator model, reasoning effort, score, tokens, tool calls, and residual
-   risk.
+7. Executor model, reasoning effort, score, tokens, tool calls, wait cost, agent
+   count, and rework count. Each telemetry field must be marked `exact`,
+   `approximate`, or `not_exposed_by_host`; approximate fields must name the
+   observable basis.
+8. Validator model, reasoning effort, score, tokens, tool calls, wait cost, and
+   residual risk, using the same `exact` / `approximate` /
+   `not_exposed_by_host` telemetry shape.
 9. Post-Task Self-Analysis recorded with base fields, all 20 fixed criteria,
    dynamic criteria created from the latest session segment, and meta-analysis
    remediation outcomes.
-10. False-green risks found and whether they became tests or follow-up tasks.
-11. Dirty hunks preserved or follow-up task created for adjacent useful hunks.
-12. Parent/wave closure readiness and remaining child count.
-13. Epic task percentage and wave percentage.
-14. Runtime friction or slow-command defects created/updated when observed.
-15. PR/open-source intake state when the task came from a PR.
-16. Next routing rule written in the agent evaluation log.
+10. Implementation follow-up task ids recorded for every actionable
+    self-analysis or self-diagnostic finding, or a specific `no_task_reason`
+    recorded for non-actionable, duplicate, or upstream-only findings.
+11. False-green risks found and whether they became tests or follow-up tasks.
+12. Dirty hunks preserved or follow-up task created for adjacent useful hunks.
+13. Parent/wave closure readiness and remaining child count.
+14. Epic task percentage and wave percentage.
+15. Runtime friction or slow-command defects created/updated when observed.
+16. PR/open-source intake state recorded: open PRs processed or explicitly kept
+    open with reason, and processed issues closed or explicitly kept open with
+    reason.
+17. Next routing rule written in the TaskFlow closure scorecard or relevant process-doc evidence.
 
 If any checklist item cannot be proven, keep the current task or a follow-up
 TaskFlow item open instead of silently moving to unrelated work.
@@ -489,7 +533,7 @@ If those answers are not visible from the minimum read set, do not continue into
 4. for mandatory skill activation, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
 5. for routine packet rendering and prompt-stack interpretation, read `docs/process/project-packet-rendering-runtime-capsule.md`,
 6. for full packet-template law, read `docs/process/project-development-packet-template-protocol.md`,
-7. for bounded boot validation, read `docs/process/project-boot-readiness-validation-protocol.md`,
+7. for bounded boot validation, read `docs/process/project-orchestrator-session-start-protocol.md`,
 8. for full prompt-stack law, read `docs/process/project-agent-prompt-stack-protocol.md`,
 9. for full delegated-lane law and closure edge cases, read `docs/process/team-development-and-orchestration-protocol.md`,
 10. for Codex role/runtime posture, read `docs/process/codex-agent-configuration-guide.md`,
@@ -500,10 +544,10 @@ If those answers are not visible from the minimum read set, do not continue into
 artifact_path: process/project-orchestrator-operating-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-02'
+artifact_revision: '2026-06-12'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: 2026-06-03T15:45:00+03:00
+updated_at: 2026-06-12T00:00:00+03:00
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl

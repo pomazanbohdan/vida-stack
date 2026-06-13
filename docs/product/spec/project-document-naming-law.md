@@ -130,7 +130,7 @@ Examples:
 1. `compiled-runtime-bundle-contract.md`
 2. `team-coordination-model.md`
 3. `documentation-tooling-map.md`
-4. `framework-three-layer-refactoring-audit.md`
+4. `documentation-tooling-map.md`
 
 ## Forbidden Terminal Drift
 
@@ -180,10 +180,10 @@ When a nonconforming document is renamed:
 artifact_path: product/spec/project-document-naming-law
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-06-12'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/project-document-naming-law.md
 created_at: '2026-03-12T09:00:00+02:00'
-updated_at: '2026-03-12T07:32:33+02:00'
+updated_at: '2026-06-12T00:00:00+03:00'
 changelog_ref: project-document-naming-law.changelog.jsonl

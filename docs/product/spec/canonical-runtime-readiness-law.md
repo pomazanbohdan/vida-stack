@@ -185,10 +185,10 @@ This layer gives VIDA a pre-runtime gate that can say whether the canonical syst
 
 This spec absorbs and concentrates readiness law previously scattered across:
 
-1. `docs/process/framework-source-lineage-index.md`
-2. `docs/process/framework-source-lineage-index.md`
+1. `Git history and active artifact sidecars`
+2. `Git history and active artifact sidecars`
 3. `docs/product/spec/instruction-artifact-model.md`
-4. `docs/process/framework-source-lineage-index.md`
+4. `Git history and active artifact sidecars`
 
 -----
 artifact_path: product/spec/canonical-runtime-readiness-law

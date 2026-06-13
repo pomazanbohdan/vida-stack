@@ -10,22 +10,28 @@ This protocol defines:
 
 1. the minimum start checklist for a development orchestrator session,
 2. the required runtime checks and binding outputs before write-producing work,
-3. the compact read path for project-side launch readiness.
+3. the compact read path for project-side launch readiness,
+4. the full readiness gate when the startup bundle is insufficient.
+
+For routine startup, read `project-orchestrator-startup-bundle.md` first as the
+compact `always_on_core` routing surface. This protocol owns the full command
+path, readiness gate, and launch-readiness outputs when the session is fresh,
+ambiguous, blocked, audited, or changed.
 
 ## Session Start Checklist
 
 Run this checklist in order:
 
-1. confirm project-local runtime path with `vida status --json`,
-2. confirm current taskflow state with `vida orchestrator-init --json`,
+1. when runtime is usable, confirm project-local runtime path with `vida status --json`,
+2. when runtime is usable, confirm current taskflow state with `vida orchestrator-init --json`,
 3. read framework bootstrap carriers:
    - `AGENTS.md`
    - `AGENTS.sidecar.md`
    - `vida/root-map.md`
-4. read `docs/process/project-orchestrator-startup-bundle.md`
+4. read `docs/process/project-orchestrator-startup-bundle.md` for routine project routing context,
 5. read active product control maps needed by the current work line:
-   - `docs/product/spec/release-1-plan.md` when Release 1 is active
-   - `docs/product/spec/release-1-seam-map.md` when closure, handoff, or hardening is active
+   - `active runtime contract/profile specs` when Release 1 is active
+   - current runtime contract profile when closure, handoff, or hardening is active
 
 ## Runtime Preconditions
 
@@ -98,7 +104,7 @@ Backlog-wide pre-splitting into `execution_block` before first dispatch is forbi
 
 ## Minimal Shell Commands
 
-Use these commands as the canonical session-start smoke path:
+When runtime is usable, use these commands as the canonical session-start smoke path:
 
 ```bash
 vida status --json
@@ -118,7 +124,7 @@ vida taskflow task list --all --json
 3. for reusable session wording, read `docs/process/project-orchestrator-reusable-prompt.md`,
 4. for full packet-template law, read `docs/process/project-development-packet-template-protocol.md`,
 5. for full skill-activation law, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
-6. for full boot-readiness validation, read `docs/process/project-boot-readiness-validation-protocol.md`,
+6. this protocol owns full boot-readiness validation,
 7. for full prompt-stack law, read `docs/process/project-agent-prompt-stack-protocol.md`,
 8. for full delegated-lane law and packet closure edge cases, read `docs/process/team-development-and-orchestration-protocol.md`.
 
@@ -126,10 +132,10 @@ vida taskflow task list --all --json
 artifact_path: process/project-orchestrator-session-start-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-session-start-protocol.md
 created_at: '2026-03-13T18:55:00+02:00'
-updated_at: '2026-03-13T21:35:00+02:00'
+updated_at: 2026-06-13T01:35:00+03:00
 changelog_ref: project-orchestrator-session-start-protocol.changelog.jsonl
