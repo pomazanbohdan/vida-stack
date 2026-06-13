@@ -1415,6 +1415,9 @@ fn agent_init_downstream_packet_preview_synthesizes_request_text_from_stale_coac
                 "review_goal": "Validate implementer handoff evidence before coach approval.",
                 "review_subject": "feature dev task",
                 "blocking_question": "Does the implementer delivery include receipt-backed execution evidence?",
+                "definition_of_done": [
+                    "coach preview includes synthesized request text"
+                ],
                 "proof_target": "receipt-backed implementation evidence",
                 "expected_output": "Return blocker if implementation evidence is missing.",
                 "review_focus": [
