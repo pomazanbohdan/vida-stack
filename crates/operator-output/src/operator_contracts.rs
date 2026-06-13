@@ -442,6 +442,17 @@ pub fn replace_release1_operator_output_artifact_refs(
     payload: &mut Value,
     artifact_refs: Value,
 ) -> Result<(), String> {
+    write_release1_operator_output_artifact_refs(payload, artifact_refs)?;
+    if let Some(error) = shared_operator_output_contract_parity_error(payload) {
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+pub fn write_release1_operator_output_artifact_refs(
+    payload: &mut Value,
+    artifact_refs: Value,
+) -> Result<(), String> {
     {
         let object = payload
             .as_object_mut()
@@ -450,9 +461,6 @@ pub fn replace_release1_operator_output_artifact_refs(
     }
     payload["shared_fields"]["artifact_refs"] = artifact_refs.clone();
     payload["operator_contracts"]["artifact_refs"] = artifact_refs;
-    if let Some(error) = shared_operator_output_contract_parity_error(payload) {
-        return Err(error.to_string());
-    }
     Ok(())
 }
 

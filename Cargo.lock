@@ -5650,6 +5650,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "taskflow-host-bridge"
+version = "0.9.7"
+dependencies = [
+ "operator-output",
+ "runtime-path-policy",
+ "serde",
+ "serde_json",
+ "taskflow-contracts",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
 name = "taskflow-state"
 version = "0.9.7"
 dependencies = [
@@ -6457,6 +6470,7 @@ dependencies = [
  "taskflow-contracts",
  "taskflow-core",
  "taskflow-format-toon",
+ "taskflow-host-bridge",
  "taskflow-state",
  "taskflow-state-fs",
  "taskflow-state-surreal",

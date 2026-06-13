@@ -312,22 +312,7 @@ pub(crate) fn implementation_isolation_contract(
 }
 
 pub(crate) fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
-    matches!(
-        blocker_code,
-        "lane_completion_blocked_by_summary"
-            | "verification_rework_required"
-            | "coach_rework_required"
-            | "closure_evidence_blocked"
-            | "host_bridge_request_task_mismatch"
-            | "implementation_artifact_authority_missing"
-            | "implementation_artifact_changed_files_missing"
-            | "implementation_artifact_authority_invalid"
-            | "implementation_artifact_contract_invalid"
-            | "implementation_artifact_receipt_missing"
-            | "implementation_artifact_receipt_unverified"
-            | "implementation_artifacts_missing"
-            | "implementation_attempt_scope_guard_violation"
-    )
+    taskflow_host_bridge::host_bridge_completion_retryable_blocker(blocker_code)
 }
 
 pub(crate) struct ImplementationArtifactAuthority<'a> {

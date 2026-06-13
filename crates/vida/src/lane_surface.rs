@@ -8,6 +8,16 @@ use runtime_path_policy::{
     ArtifactPathKind, PathPolicyError, StateRoot,
 };
 use serde::Serialize;
+use taskflow_host_bridge::{
+    host_bridge_artifact_has_retryable_completion_blocker,
+    host_bridge_completion_retryable_blocker, host_bridge_completion_verdict,
+    host_bridge_request_status_after_completion,
+    materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
+    normalize_host_bridge_provenance_for_completion,
+    read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
+    validate_host_bridge_request_provenance, DispatchReceiptBindingInput,
+    HostBridgeCompletionInput, HostBridgeProvenanceInput, HostBridgeRequest, HostBridgeRequestPath,
+};
 use time::format_description::well_known::Rfc3339;
 
 use crate::contract_profile_adapter::render_operator_contract_envelope;
@@ -1109,7 +1119,7 @@ fn pending_host_bridge_next_action(
     let result_path =
         canonicalize_existing_regular_state_path(&state_root, &result_path, "dispatch result")
             .ok()?;
-    let result = read_host_bridge_request_at_path(&result_path).ok()?;
+    let result = read_host_bridge_json_artifact_at_path(&result_path).ok()?;
     let request = host_bridge_request_object(&result)?;
     let request_path = host_bridge_path_string(request, "request_path")
         .ok()?
@@ -1155,7 +1165,7 @@ fn host_bridge_request_path_for_run_target(
             }
             let canonical_path =
                 canonicalize_existing_regular_state_path(&state_root, &path, "request").ok()?;
-            let request = read_host_bridge_request_at_path(&canonical_path).ok()?;
+            let request = read_host_bridge_json_artifact_at_path(&canonical_path).ok()?;
             let run_matches = request
                 .get("run_id")
                 .and_then(serde_json::Value::as_str)
@@ -2513,7 +2523,7 @@ struct HostBridgeCompletionRequestContext {
 
 const MAX_HOST_BRIDGE_REQUEST_BYTES: u64 = 1024 * 1024;
 
-fn read_host_bridge_request_at_path(path: &Path) -> Result<serde_json::Value, String> {
+fn read_host_bridge_json_artifact_at_path(path: &Path) -> Result<serde_json::Value, String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         format!(
             "Failed to inspect host bridge request `{}`: {error}",
@@ -2554,7 +2564,9 @@ fn read_host_bridge_request(state_root: &Path, path: &str) -> Result<serde_json:
         Path::new(&normalized_path),
         "request",
     )?;
-    read_host_bridge_request_at_path(&canonical_path)
+    read_typed_host_bridge_request(&HostBridgeRequestPath::new(state_root, canonical_path))
+        .map(|request| request.raw)
+        .map_err(|error| error.to_string())
 }
 
 fn host_bridge_path_string<'a>(
@@ -2574,7 +2586,7 @@ fn host_bridge_packet_confirms_active_request(
     run_id: &str,
     dispatch_target: &str,
 ) -> bool {
-    let Ok(packet) = read_host_bridge_request_at_path(packet_path) else {
+    let Ok(packet) = read_host_bridge_json_artifact_at_path(packet_path) else {
         return false;
     };
     if packet.get("run_id").and_then(serde_json::Value::as_str) != Some(run_id) {
@@ -2656,7 +2668,7 @@ fn trusted_host_bridge_completion_request_context(
         }
     }
     let receipt_target_matches_request = receipt.dispatch_target.trim() == dispatch_target;
-    if retryable_completion_context && !receipt_target_matches_request {
+    if retryable_completion_context && !adapter_gate_context && !receipt_target_matches_request {
         return Err(
             "Retryable host bridge request dispatch target does not match persisted dispatch receipt evidence."
                 .to_string(),
@@ -2834,11 +2846,11 @@ fn validated_host_bridge_paths_from_receipt(
         &dispatch_result_path,
         "dispatch result",
     )?;
-    let result = read_host_bridge_request_at_path(&dispatch_result_path)?;
+    let result = read_host_bridge_json_artifact_at_path(&dispatch_result_path)?;
     let paths = match host_bridge_request_paths_from_dispatch_result(&result) {
         Ok(paths) => paths,
         Err(error) if allow_reconciled_request_paths => {
-            let mut request = read_host_bridge_request_at_path(&canonical_request_path)?;
+            let mut request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
             if request
                 .get("request_path")
                 .and_then(serde_json::Value::as_str)
@@ -2868,7 +2880,7 @@ fn validated_host_bridge_paths_from_receipt(
             canonical_paths_request_path.display()
         ));
     }
-    let request = read_host_bridge_request_at_path(&canonical_request_path)?;
+    let request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
     let request_result_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
         host_bridge_path_string(&request, "result_path")?,
     );
@@ -3323,29 +3335,6 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
     }
 }
 
-fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
-    crate::runtime_dispatch_packets::host_bridge_completion_retryable_blocker(blocker_code)
-}
-
-fn host_bridge_artifact_has_retryable_completion_blocker(artifact: &serde_json::Value) -> bool {
-    artifact
-        .get("blocker_code")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .is_some_and(host_bridge_completion_retryable_blocker)
-        || artifact
-            .get("blocker_codes")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|blockers| {
-                blockers.iter().any(|blocker| {
-                    blocker
-                        .as_str()
-                        .map(str::trim)
-                        .is_some_and(host_bridge_completion_retryable_blocker)
-                })
-            })
-}
-
 fn host_bridge_request_has_retryable_completion_evidence(
     state_root: &Path,
     request_path: &str,
@@ -3361,7 +3350,7 @@ fn host_bridge_request_has_retryable_completion_evidence(
         let Ok(path) = canonicalize_existing_regular_state_path(state_root, &path, field) else {
             continue;
         };
-        let Ok(artifact) = read_host_bridge_request_at_path(&path) else {
+        let Ok(artifact) = read_host_bridge_json_artifact_at_path(&path) else {
             continue;
         };
         if artifact.get("status").and_then(serde_json::Value::as_str) == Some("blocked")
@@ -3413,7 +3402,7 @@ fn materialize_host_bridge_completion_evidence(
         replace_existing_evidence,
         allow_reconciled_request_paths,
     )?;
-    let mut request = read_host_bridge_request_at_path(&canonical_request_path)?;
+    let mut request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
     if request.get("run_id").and_then(serde_json::Value::as_str) != Some(run_id) {
         return Err(format!(
             "Host bridge request `{request_path}` does not belong to run `{run_id}`."
@@ -3435,6 +3424,40 @@ fn materialize_host_bridge_completion_evidence(
     {
         return Err(format!(
             "Host bridge request `{request_path}` is not a `host_tool_bridge` request."
+        ));
+    }
+    let typed_request =
+        HostBridgeRequest::from_value(request.clone()).map_err(|error| error.to_string())?;
+    let provenance = validate_host_bridge_request_provenance(&HostBridgeProvenanceInput {
+        request: typed_request.clone(),
+        expected_run_id: Some(run_id.to_string()),
+        expected_task_id: Some(run_id.to_string()),
+        expected_dispatch_target: Some(dispatch_target.to_string()),
+    });
+    let retryable_completion_request =
+        host_bridge_request_has_retryable_completion_evidence(state_root, request_path);
+    let shared_provenance =
+        normalize_host_bridge_provenance_for_completion(&provenance, retryable_completion_request);
+    if !shared_provenance.blocker_codes.is_empty() {
+        return Err(format!(
+            "Host bridge request provenance failed shared validation: {}.",
+            shared_provenance.blocker_codes.join(",")
+        ));
+    }
+    let receipt_binding = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+        request: typed_request.clone(),
+        receipt: Some(serde_json::json!({
+            "receipt_backed": true,
+            "dispatch_status": persisted_receipt.dispatch_status,
+            "run_id": persisted_receipt.run_id,
+            "dispatch_target": persisted_receipt.dispatch_target,
+        })),
+        allow_active_packet_target_override: false,
+    });
+    if !receipt_binding.accepted {
+        return Err(format!(
+            "Host bridge request receipt binding failed shared validation: {}.",
+            receipt_binding.blocker_codes.join(",")
         ));
     }
     let request_result_path = validate_state_artifact_path_for_host_bridge_write(
@@ -3532,24 +3555,27 @@ fn materialize_host_bridge_completion_evidence(
     if let Some(summary_blocker_code) = summary_blocker_code {
         blocker_codes.push(summary_blocker_code);
     }
+    let shared_completion =
+        materialize_shared_host_bridge_completion_evidence(&HostBridgeCompletionInput {
+            request: typed_request,
+            provenance: shared_provenance,
+            receipt_binding,
+            artifact_refs: implementation_artifacts
+                .artifact_refs
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect(),
+        });
+    blocker_codes.extend(shared_completion.blocker_codes);
     blocker_codes.sort();
     blocker_codes.dedup();
     let blocker_code = blocker_codes.first().cloned();
-    let execution_state = if !blocker_codes.is_empty() {
-        "blocked"
-    } else {
-        "executed"
-    };
-    let status = if !blocker_codes.is_empty() {
-        "blocked"
-    } else {
-        "pass"
-    };
+    let verdict = host_bridge_completion_verdict(&blocker_codes);
     let result = serde_json::json!({
         "artifact_kind": "host_tool_bridge_result",
         "schema_version": 1,
-        "status": status,
-        "execution_state": execution_state,
+        "status": verdict.status.clone(),
+        "execution_state": verdict.execution_state.clone(),
         "request_id": request_id,
         "run_id": run_id,
         "dispatch_target": dispatch_target,
@@ -3587,7 +3613,7 @@ fn materialize_host_bridge_completion_evidence(
             "evidence_kind": "host_tool_bridge_result",
             "backend_id": backend_id,
             "receipt_backed": true,
-            "completion_verdict": if !blocker_codes.is_empty() { "rework_required" } else { "pass" },
+            "completion_verdict": verdict.completion_verdict.clone(),
             "records_dispatch_result": true
         },
         "recorded_at": recorded_at,
@@ -3595,7 +3621,7 @@ fn materialize_host_bridge_completion_evidence(
     let receipt = serde_json::json!({
         "artifact_kind": "host_tool_bridge_receipt",
         "schema_version": 1,
-        "status": status,
+        "status": verdict.status.clone(),
         "receipt_backed": true,
         "request_id": request_id,
         "run_id": run_id,
@@ -3632,15 +3658,7 @@ fn materialize_host_bridge_completion_evidence(
     } else {
         write_json_artifact_new(state_root, &receipt_path, &receipt, "host bridge receipt")?;
     }
-    let request_status = if status == "blocked"
-        && blocker_codes
-            .iter()
-            .all(|blocker| host_bridge_completion_retryable_blocker(blocker))
-    {
-        "retryable_blocked"
-    } else {
-        status
-    };
+    let request_status = host_bridge_request_status_after_completion(&blocker_codes);
     if let Some(object) = request.as_object_mut() {
         object.insert("status".to_string(), serde_json::json!(request_status));
         object.insert(
@@ -3672,7 +3690,7 @@ fn materialize_host_bridge_completion_evidence(
     Ok(HostBridgeCompletionEvidence {
         result_path: result_path.display().to_string(),
         receipt_path: receipt_path.display().to_string(),
-        execution_state: execution_state.to_string(),
+        execution_state: verdict.execution_state,
         blocker_code: blocker_code.clone(),
         blocker_codes,
     })

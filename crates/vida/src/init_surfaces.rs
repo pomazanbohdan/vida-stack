@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
@@ -24,6 +25,7 @@ const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
 const AGENT_INIT_EXECUTE_DISPATCH_MISSING_PACKET_ERROR: &str =
     "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`.";
+const AGENT_INIT_PACKET_ARG_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 static AGENT_INIT_READ_SURFACE_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
@@ -753,7 +755,7 @@ fn safe_dispatch_worker_id(run_id: &str, dispatch_target: &str) -> String {
 }
 
 fn dispatch_packet_flag_for_packet_path(packet_path: &str) -> &'static str {
-    let is_downstream = super::taskflow_consume_resume::read_dispatch_packet(packet_path)
+    let is_downstream = read_agent_init_packet_arg(packet_path)
         .ok()
         .is_some_and(|packet| {
             packet
@@ -1639,7 +1641,7 @@ async fn agent_init_execute_dispatch_resume_error_receipt_evidence(
         .run_id
         .or_else(|| {
             requested_dispatch_packet_path
-                .and_then(|path| super::taskflow_consume_resume::read_dispatch_packet(path).ok())
+                .and_then(|path| read_agent_init_packet_arg(path).ok())
                 .and_then(|packet| string_field(&packet, "run_id"))
         });
     let Some(run_id) = run_id else {
@@ -5813,12 +5815,61 @@ fn normalized_packet_arg_path(packet_path: &str) -> std::path::PathBuf {
     super::runtime_dispatch_state::normalize_persisted_runtime_path(unquoted)
 }
 
+fn read_agent_init_packet_arg_with_path(
+    packet_path: &str,
+) -> Result<(serde_json::Value, String), String> {
+    let normalized_packet_path = normalized_packet_arg_path(packet_path);
+    if normalized_packet_path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    }) {
+        return Err(format!(
+            "Agent init packet path `{packet_path}` must not contain dot segments"
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(&normalized_packet_path).map_err(|error| {
+        format!("Failed to read dispatch packet `{packet_path}` metadata: {error}")
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "Agent init packet path `{packet_path}` must resolve to a regular file"
+        ));
+    }
+    if metadata.len() > AGENT_INIT_PACKET_ARG_READ_LIMIT_BYTES {
+        return Err(format!(
+            "Agent init packet path `{packet_path}` exceeds the bounded read limit"
+        ));
+    }
+    let file = std::fs::File::open(&normalized_packet_path)
+        .map_err(|error| format!("Failed to read dispatch packet `{packet_path}`: {error}"))?;
+    let mut body = String::new();
+    file.take(AGENT_INIT_PACKET_ARG_READ_LIMIT_BYTES + 1)
+        .read_to_string(&mut body)
+        .map_err(|error| format!("Failed to read dispatch packet `{packet_path}`: {error}"))?;
+    if body.len() as u64 > AGENT_INIT_PACKET_ARG_READ_LIMIT_BYTES {
+        return Err(format!(
+            "Agent init packet path `{packet_path}` exceeds the bounded read limit"
+        ));
+    }
+    let packet = serde_json::from_str::<serde_json::Value>(&body)
+        .map_err(|error| format!("Failed to parse dispatch packet `{packet_path}`: {error}"))?;
+    crate::validate_runtime_dispatch_packet_contract(&packet, "Agent init dispatch packet")
+        .map_err(|error| {
+            format!("execution_preparation_gate_blocked: {error}; dispatch packet `{packet_path}`")
+        })?;
+    Ok((packet, normalized_packet_path.display().to_string()))
+}
+
+fn read_agent_init_packet_arg(packet_path: &str) -> Result<serde_json::Value, String> {
+    read_agent_init_packet_arg_with_path(packet_path).map(|(packet, _path)| packet)
+}
+
 fn resume_inputs_from_downstream_packet_without_store(
     packet_path: &str,
 ) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
-    let normalized_packet_path = normalized_packet_arg_path(packet_path);
-    let normalized_packet_path = normalized_packet_path.display().to_string();
-    let packet = super::taskflow_consume_resume::read_dispatch_packet(&normalized_packet_path)?;
+    let (packet, normalized_packet_path) = read_agent_init_packet_arg_with_path(packet_path)?;
     let run_id = string_field(&packet, "run_id")
         .ok_or_else(|| "Persisted downstream dispatch packet is missing run_id".to_string())?;
     let dispatch_target = string_field(&packet, "downstream_dispatch_target").ok_or_else(|| {
@@ -5941,12 +5992,7 @@ fn resume_inputs_from_agent_init_packet_arg_without_store(
 fn resume_inputs_from_dispatch_packet_without_store(
     packet_path: &str,
 ) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
-    let normalized_packet_path = normalized_packet_arg_path(packet_path);
-    let normalized_packet_path = normalized_packet_path.display().to_string();
-    let body = std::fs::read_to_string(&normalized_packet_path)
-        .map_err(|error| format!("Failed to read dispatch packet `{packet_path}`: {error}"))?;
-    let packet = serde_json::from_str::<serde_json::Value>(&body)
-        .map_err(|error| format!("Failed to parse dispatch packet `{packet_path}`: {error}"))?;
+    let (packet, normalized_packet_path) = read_agent_init_packet_arg_with_path(packet_path)?;
     let run_id = string_field(&packet, "run_id")
         .ok_or_else(|| "Persisted dispatch packet is missing run_id".to_string())?;
     let dispatch_target = string_field(&packet, "dispatch_target")
@@ -6091,7 +6137,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 true,
             )
         };
-        let packet = match super::taskflow_consume_resume::read_dispatch_packet(packet_path) {
+        let packet = match read_agent_init_packet_arg(packet_path) {
             Ok(packet) => packet,
             Err(error) => {
                 eprintln!("{error}");
@@ -6342,8 +6388,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     );
                     return ExitCode::from(2);
                 }
-                let packet = match super::taskflow_consume_resume::read_dispatch_packet(packet_path)
-                {
+                let packet = match read_agent_init_packet_arg(packet_path) {
                     Ok(packet) => packet,
                     Err(error) => {
                         eprintln!("{error}");
@@ -6364,8 +6409,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     );
                     return ExitCode::from(2);
                 }
-                let packet = match super::taskflow_consume_resume::read_dispatch_packet(packet_path)
-                {
+                let packet = match read_agent_init_packet_arg(packet_path) {
                     Ok(packet) => packet,
                     Err(error) => {
                         eprintln!("{error}");
@@ -7603,7 +7647,7 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
     )
     .await?;
     let bundle = build_taskflow_consume_bundle_payload(store).await?;
-    let packet = super::taskflow_consume_resume::read_dispatch_packet(packet_path)?;
+    let packet = read_agent_init_packet_arg(packet_path)?;
     let selection = agent_init_packet_selection(packet_path, packet, downstream)?;
 
     let project_activation_view =

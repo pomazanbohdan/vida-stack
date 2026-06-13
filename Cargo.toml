@@ -20,6 +20,7 @@ members = [
     "crates/taskflow-core",
     "crates/taskflow-format-jsonl",
     "crates/taskflow-format-toon",
+    "crates/taskflow-host-bridge",
     "crates/taskflow-state",
     "crates/taskflow-state-fs",
     "crates/taskflow-state-surreal",

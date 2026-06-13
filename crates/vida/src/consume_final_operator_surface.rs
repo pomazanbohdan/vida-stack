@@ -140,6 +140,11 @@ pub(crate) fn emit_taskflow_consume_final_json(
             );
         }
     }
+    for field in ["status", "blocker_codes", "next_actions"] {
+        let canonical = snapshot_with_operator_contracts["operator_contracts"][field].clone();
+        snapshot_with_operator_contracts[field] = canonical.clone();
+        snapshot_with_operator_contracts["shared_fields"][field] = canonical;
+    }
     replace_release1_operator_output_artifact_refs(
         &mut snapshot_with_operator_contracts,
         artifact_refs,

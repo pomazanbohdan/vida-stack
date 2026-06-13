@@ -31,6 +31,7 @@ taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-cli = { path = "../taskflow-cli" }
 taskflow-core = { path = "../taskflow-core" }
 taskflow-format-toon = { path = "../taskflow-format-toon" }
+taskflow-host-bridge = { path = "../taskflow-host-bridge" }
 taskflow-state = { path = "../taskflow-state" }
 taskflow-state-fs = { path = "../taskflow-state-fs" }
 taskflow-state-surreal = { path = "../taskflow-state-surreal" }

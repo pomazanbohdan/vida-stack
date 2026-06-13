@@ -203,7 +203,7 @@ pub(crate) fn replace_release1_operator_output_artifact_refs(
     payload: &mut Value,
     artifact_refs: Value,
 ) -> Result<(), String> {
-    operator_output::operator_contracts::replace_release1_operator_output_artifact_refs(
+    operator_output::operator_contracts::write_release1_operator_output_artifact_refs(
         payload,
         artifact_refs,
     )?;

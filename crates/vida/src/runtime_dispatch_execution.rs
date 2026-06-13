@@ -14,6 +14,12 @@ use crate::runtime_contract_vocab::{
 };
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
+use taskflow_host_bridge::{
+    host_bridge_completed_artifact_status_is_admissible,
+    host_bridge_completed_result_execution_state_is_admissible,
+    host_bridge_existing_request_status_is_admissible, validate_dispatch_receipt_binding,
+    DispatchReceiptBindingInput, HostBridgeRequest,
+};
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
     match canonical_dispatch_target_name(dispatch_target).as_str() {
@@ -2448,7 +2454,7 @@ fn validate_existing_host_bridge_request_matches_expected(
         .get("status")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if !matches!(status, "pending" | "completed") {
+    if !host_bridge_existing_request_status_is_admissible(status) {
         return Err(format!(
             "Existing host bridge request `{}` has inadmissible status `{status}`.",
             request_path.display()
@@ -2500,7 +2506,7 @@ fn validate_existing_host_bridge_request_identity_matches_expected(
         .get("status")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if !matches!(status, "pending" | "completed") {
+    if !host_bridge_existing_request_status_is_admissible(status) {
         return Err(format!(
             "Existing host bridge request `{}` has inadmissible status `{status}`.",
             request_path.display()
@@ -2788,17 +2794,49 @@ fn validate_host_bridge_request_dispatch_binding(
     dispatch_transport: &str,
     receipt_mode: &str,
 ) -> Result<(), String> {
-    for (field, expected) in [
-        ("run_id", receipt.run_id.as_str()),
-        ("task_id", receipt.run_id.as_str()),
-        ("dispatch_target", receipt.dispatch_target.as_str()),
-        ("backend_id", backend_id),
-        ("carrier_id", carrier_id),
-        ("execution_boundary", execution_boundary),
-        ("dispatch_transport", dispatch_transport),
-        ("receipt_mode", receipt_mode),
+    let typed_request =
+        HostBridgeRequest::from_value(request.clone()).map_err(|error| error.to_string())?;
+    let decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+        request: typed_request.clone(),
+        receipt: Some(serde_json::json!({
+            "receipt_backed": true,
+            "dispatch_status": receipt.dispatch_status,
+            "run_id": receipt.run_id,
+            "dispatch_target": receipt.dispatch_target,
+        })),
+        allow_active_packet_target_override: false,
+    });
+    if !decision.accepted {
+        return Err(format!(
+            "Host bridge request does not match active dispatch: {}.",
+            decision.blocker_codes.join(",")
+        ));
+    }
+    for (field, actual, expected) in [
+        (
+            "task_id",
+            typed_request.task_id.as_str(),
+            receipt.run_id.as_str(),
+        ),
+        ("backend_id", typed_request.backend_id.as_str(), backend_id),
+        ("carrier_id", typed_request.carrier_id.as_str(), carrier_id),
+        (
+            "execution_boundary",
+            typed_request.execution_boundary.as_str(),
+            execution_boundary,
+        ),
+        (
+            "dispatch_transport",
+            typed_request.dispatch_transport.as_str(),
+            dispatch_transport,
+        ),
+        (
+            "receipt_mode",
+            typed_request.receipt_mode.as_str(),
+            receipt_mode,
+        ),
     ] {
-        if request.get(field).and_then(serde_json::Value::as_str) != Some(expected) {
+        if actual != expected {
             return Err(format!(
                 "Host bridge request `{field}` does not match active dispatch."
             ));
@@ -2816,6 +2854,24 @@ fn validate_completed_host_bridge_artifacts(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     backend_id: &str,
 ) -> Result<(), String> {
+    if let Ok(typed_request) = HostBridgeRequest::from_value(request.clone()) {
+        let binding_decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+            request: typed_request,
+            receipt: Some(serde_json::json!({
+                "receipt_backed": true,
+                "dispatch_status": receipt.dispatch_status,
+                "run_id": receipt.run_id,
+                "dispatch_target": receipt.dispatch_target,
+            })),
+            allow_active_packet_target_override: false,
+        });
+        if !binding_decision.accepted {
+            return Err(format!(
+                "Host bridge request receipt binding failed shared validation: {}.",
+                binding_decision.blocker_codes.join(",")
+            ));
+        }
+    }
     let request_id = host_bridge_required_string(request, "request_id", "request")?;
     let request_path = host_bridge_required_string(request, "request_path", "request")?;
     let request_result_path = host_bridge_required_string(request, "result_path", "request")?;
@@ -2883,20 +2939,24 @@ fn validate_completed_host_bridge_artifacts(
     {
         return Err("Host bridge receipt artifact_kind is not host_tool_bridge_receipt.".into());
     }
-    if result.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
-        return Err("Host bridge result status is not pass.".into());
-    }
-    if bridge_receipt
+    if !result
         .get("status")
         .and_then(serde_json::Value::as_str)
-        != Some("pass")
+        .is_some_and(host_bridge_completed_artifact_status_is_admissible)
+    {
+        return Err("Host bridge result status is not pass.".into());
+    }
+    if !bridge_receipt
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(host_bridge_completed_artifact_status_is_admissible)
     {
         return Err("Host bridge receipt status is not pass.".into());
     }
-    if result
+    if !result
         .get("execution_state")
         .and_then(serde_json::Value::as_str)
-        != Some("executed")
+        .is_some_and(host_bridge_completed_result_execution_state_is_admissible)
     {
         return Err("Host bridge result execution_state is not executed.".into());
     }
