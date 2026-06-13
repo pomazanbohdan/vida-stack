@@ -7,7 +7,7 @@ pub(crate) fn build_project_activator_normal_work_defaults(
         "documentation_first_for_feature_requests": true,
         "intake_runtime": "vida taskflow consume final <request> --json",
         "local_feature_design_template": crate::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
-        "local_product_spec_guide": crate::DEFAULT_PROJECT_PRODUCT_SPEC_README,
+        "local_product_spec_index": crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX,
         "local_documentation_tooling_map": crate::DEFAULT_PROJECT_DOC_TOOLING_DOC,
         "local_agent_guide": crate::DEFAULT_PROJECT_AGENT_GUIDE_DOC,
         "local_host_agent_guide": crate::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,

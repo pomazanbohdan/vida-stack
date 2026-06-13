@@ -10,7 +10,7 @@ pub(crate) const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/dispatch-aliases.yaml");
 pub(crate) const DEFAULT_AGENT_EXTENSION_HOOK_TEMPLATES_YAML: &str =
     include_str!("../../../docs/product/spec/hook-templates.yaml");
-pub(crate) const DEFAULT_RUNTIME_AGENT_EXTENSIONS_README: &str = r#"# Runtime Agent Extensions
+pub(crate) const DEFAULT_RUNTIME_AGENT_EXTENSIONS_INDEX: &str = r#"# Runtime Agent Extensions
 
 This directory holds the active runtime-owned agent-extension projections for the project.
 
@@ -20,6 +20,7 @@ Runtime rule:
 2. Matching `*.sidecar.yaml` files are the editable override surfaces for project-local changes.
 3. Root `docs/process/agent-extensions/**` remains source/export/import lineage only; it is not the live runtime source.
 4. Edited sidecars become active only through runtime validation and import-safe execution paths.
+5. `README.md` is reserved for the repository root; this runtime projection uses `index.md`.
 "#;
 pub(crate) const DEFAULT_AGENT_EXTENSION_ROLES_SIDECAR_YAML: &str = "version: 1\nroles: []\n";
 pub(crate) const DEFAULT_AGENT_EXTENSION_SKILLS_SIDECAR_YAML: &str = "version: 1\nskills: []\n";
@@ -50,11 +51,11 @@ pub(crate) const DEFAULT_PROJECT_PROCESS_ROOT: &str = "docs/process";
 pub(crate) const DEFAULT_PROJECT_RESEARCH_ROOT: &str = "docs/research";
 pub(crate) const DEFAULT_PROJECT_ROOT_MAP: &str = "docs/project-root-map.md";
 pub(crate) const DEFAULT_PROJECT_PRODUCT_INDEX: &str = "docs/product/index.md";
-pub(crate) const DEFAULT_PROJECT_PRODUCT_SPEC_README: &str = "docs/product/spec/README.md";
+pub(crate) const DEFAULT_PROJECT_PRODUCT_SPEC_INDEX: &str = "docs/product/spec/index.md";
 pub(crate) const DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE: &str =
     "docs/product/spec/templates/feature-design-document.template.md";
-pub(crate) const DEFAULT_PROJECT_ARCHITECTURE_DOC: &str = "docs/product/architecture.md";
-pub(crate) const DEFAULT_PROJECT_PROCESS_README: &str = "docs/process/README.md";
+pub(crate) const DEFAULT_PROJECT_ARCHITECTURE_DOC: &str = DEFAULT_PROJECT_PRODUCT_SPEC_INDEX;
+pub(crate) const DEFAULT_PROJECT_PROCESS_INDEX: &str = "docs/process/index.md";
 pub(crate) const DEFAULT_PROJECT_DECISIONS_DOC: &str = "docs/process/decisions.md";
 pub(crate) const DEFAULT_PROJECT_ENVIRONMENTS_DOC: &str = "docs/process/environments.md";
 pub(crate) const DEFAULT_PROJECT_OPERATIONS_DOC: &str = "docs/process/project-operations.md";
@@ -72,7 +73,7 @@ pub(crate) const DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE: &str =
     "docs/process/project-start-readiness-runtime-capsule.md";
 pub(crate) const DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE: &str =
     "docs/process/project-packet-rendering-runtime-capsule.md";
-pub(crate) const DEFAULT_PROJECT_RESEARCH_README: &str = "docs/research/README.md";
+pub(crate) const DEFAULT_PROJECT_RESEARCH_INDEX: &str = "docs/research/index.md";
 pub(crate) const PROJECT_ACTIVATION_RECEIPT_LATEST: &str =
     ".vida/receipts/project-activation.latest.json";
 pub(crate) const SPEC_BOOTSTRAP_RECEIPT_LATEST: &str = ".vida/receipts/spec-bootstrap.latest.json";

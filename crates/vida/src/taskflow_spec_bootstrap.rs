@@ -335,37 +335,21 @@ fn docflow_output_is_ok(output: &str) -> bool {
         && !output.contains("error:")
         && !output.contains("❌ BLOCKING:")
 }
-fn register_design_doc_in_spec_readme(
-    project_root: &Path,
-    design_doc_rel: &str,
-) -> Result<bool, String> {
-    let readme_path = project_root.join(crate::DEFAULT_PROJECT_PRODUCT_SPEC_README);
-    if !readme_path.is_file() {
-        if let Some(parent) = readme_path.parent() {
+fn ensure_product_spec_index(project_root: &Path) -> Result<bool, String> {
+    let index_path = project_root.join(crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX);
+    if !index_path.is_file() {
+        if let Some(parent) = index_path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("Failed to create {}: {error}", parent.display()))?;
         }
         fs::write(
-            &readme_path,
-            crate::init_surfaces::render_project_product_spec_readme(),
+            &index_path,
+            crate::init_surfaces::render_project_product_spec_index(),
         )
-        .map_err(|error| format!("Failed to write {}: {error}", readme_path.display()))?;
+        .map_err(|error| format!("Failed to write {}: {error}", index_path.display()))?;
+        return Ok(true);
     }
-    let mut content = fs::read_to_string(&readme_path)
-        .map_err(|error| format!("Failed to read {}: {error}", readme_path.display()))?;
-    if content.contains(design_doc_rel) {
-        return Ok(false);
-    }
-    if !content.ends_with('\n') {
-        content.push('\n');
-    }
-    if !content.contains("Active design docs:") {
-        content.push_str("\nActive design docs:\n\n");
-    }
-    content.push_str(&format!("- `{design_doc_rel}`\n"));
-    fs::write(&readme_path, content)
-        .map_err(|error| format!("Failed to write {}: {error}", readme_path.display()))?;
-    Ok(true)
+    Ok(false)
 }
 
 fn ensure_project_docs_sidecar_pointers(project_root: &Path) -> Result<bool, String> {
@@ -630,8 +614,8 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         Err(error) => return Err(error),
     }
 
-    match register_design_doc_in_spec_readme(project_root, design_doc_path) {
-        Ok(true) => changed_files.push(crate::DEFAULT_PROJECT_PRODUCT_SPEC_README.to_string()),
+    match ensure_product_spec_index(project_root) {
+        Ok(true) => changed_files.push(crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX.to_string()),
         Ok(false) => {}
         Err(error) => return Err(error),
     }
@@ -723,7 +707,7 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         "design_doc": {
             "path": design_doc_path,
             "created": design_doc_created,
-            "registered_in": [crate::DEFAULT_PROJECT_PRODUCT_SPEC_README],
+            "registered_in": [crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX],
         },
         "next": {
             "plan_note": "publish a concise execution plan before mutating the design document or dispatching write-producing work",

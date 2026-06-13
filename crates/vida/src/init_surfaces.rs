@@ -3967,8 +3967,8 @@ pub(crate) fn write_runtime_agent_extension_projections(project_root: &Path) -> 
     let root = super::project_activator_surface::runtime_agent_extensions_root(project_root);
     super::ensure_dir(&root)?;
     write_file_if_missing(
-        &root.join("README.md"),
-        super::DEFAULT_RUNTIME_AGENT_EXTENSIONS_README,
+        &root.join("index.md"),
+        super::DEFAULT_RUNTIME_AGENT_EXTENSIONS_INDEX,
     )?;
     write_file_if_missing(
         &root.join("roles.yaml"),
@@ -4030,7 +4030,7 @@ pub(crate) fn write_runtime_agent_extension_projections(project_root: &Path) -> 
             "project_root": project_root.display().to_string(),
             "runtime_projection_root": root.display().to_string(),
             "base_projection_files": [
-                ".vida/project/agent-extensions/README.md",
+                ".vida/project/agent-extensions/index.md",
                 ".vida/project/agent-extensions/roles.yaml",
                 ".vida/project/agent-extensions/skills.yaml",
                 ".vida/project/agent-extensions/profiles.yaml",
@@ -4163,20 +4163,16 @@ pub(crate) fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(
             render_project_product_index(),
         ),
         (
-            project_root.join(super::DEFAULT_PROJECT_PRODUCT_SPEC_README),
-            render_project_product_spec_readme(),
+            project_root.join(super::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX),
+            render_project_product_spec_index(),
         ),
         (
             project_root.join(super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE),
             feature_template,
         ),
         (
-            project_root.join(super::DEFAULT_PROJECT_ARCHITECTURE_DOC),
-            render_project_architecture_doc(),
-        ),
-        (
-            project_root.join(super::DEFAULT_PROJECT_PROCESS_README),
-            render_project_process_readme(),
+            project_root.join(super::DEFAULT_PROJECT_PROCESS_INDEX),
+            render_project_process_index(),
         ),
         (
             project_root.join(super::DEFAULT_PROJECT_DECISIONS_DOC),
@@ -4244,8 +4240,8 @@ pub(crate) fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(
             render_project_host_agent_guide(),
         ),
         (
-            project_root.join(super::DEFAULT_PROJECT_RESEARCH_README),
-            render_project_research_readme(),
+            project_root.join(super::DEFAULT_PROJECT_RESEARCH_INDEX),
+            render_project_research_index(),
         ),
     ];
 
@@ -4287,7 +4283,7 @@ This project uses the following canonical documentation roots:\n\n\
 - `docs/research/` for research notes and discovery artifacts\n\n\
 Primary pointers:\n\n\
 - Product index: `{}`\n\
-- Product spec/readiness guide: `{}`\n\
+- Product spec index: `{}`\n\
 - Feature design template: `{}`\n\
 - Process index: `{}`\n\
 - Documentation tooling: `{}`\n\
@@ -4295,12 +4291,12 @@ Primary pointers:\n\n\
 - Research index: `{}`\n\
 - Repository overview: `README.md`\n",
             super::DEFAULT_PROJECT_PRODUCT_INDEX,
-            super::DEFAULT_PROJECT_PRODUCT_SPEC_README,
+            super::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX,
             super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
-            super::DEFAULT_PROJECT_PROCESS_README,
+            super::DEFAULT_PROJECT_PROCESS_INDEX,
             super::DEFAULT_PROJECT_DOC_TOOLING_DOC,
             super::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
-            super::DEFAULT_PROJECT_RESEARCH_README
+            super::DEFAULT_PROJECT_RESEARCH_INDEX
         ),
         "project/root-map",
         "document",
@@ -4313,10 +4309,8 @@ pub(crate) fn render_project_product_index() -> String {
         &format!(
             "# Product Index\n\n\
 Product documentation currently contains:\n\n\
-- `{}` for the initial project architecture outline\n\
-- `{}` for bounded feature/change design and ADR routing\n",
-            super::DEFAULT_PROJECT_ARCHITECTURE_DOC,
-            super::DEFAULT_PROJECT_PRODUCT_SPEC_README
+- `{}` for bounded product/spec navigation, feature/change design, and ADR routing\n",
+            super::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX
         ),
         "product/index",
         "product_index",
@@ -4324,45 +4318,31 @@ Product documentation currently contains:\n\n\
     )
 }
 
-pub(crate) fn render_project_product_spec_readme() -> String {
+pub(crate) fn render_project_product_spec_index() -> String {
     with_scaffold_footer(
         &format!(
-            "# Product Spec Guide\n\n\
-Use this directory for bounded product-facing feature/change design documents and linked ADRs.\n\n\
-Default rule:\n\n\
-1. If a request asks for research, detailed specifications, implementation planning, and then code, create or update one bounded design document before implementation.\n\
-2. Start from the local template at `{}`.\n\
-3. Open one feature epic and one spec-pack task in `vida taskflow` before normal implementation work begins.\n\
-4. Use `vida docflow init`, `vida docflow finalize-edit`, and `vida docflow check` to keep the document canonical.\n\
-5. Close the spec-pack task only after the design artifact is finalized and validated, then hand off through the next TaskFlow packet.\n\
-6. When one major decision needs durable standalone recording, add a linked ADR instead of overloading the design document.\n\
-\n\
-Suggested homes:\n\n\
-- `docs/product/spec/<feature>-design.md` for committed feature/change designs\n\
-- `docs/research/<topic>.md` for exploratory research before design closure\n",
+            "# Product Spec Index\n\n\
+Purpose: provide the local entrypoint for product/spec navigation without using nested README files.\n\n\
+Routing rule:\n\n\
+1. Start here for product/spec orientation.\n\
+2. Use `current-spec-map.md` for short routing decisions when that map exists.\n\
+3. Use `current-spec-catalog.md` for promoted active-canon artifact lookup when that catalog exists.\n\
+4. Use `{}` for new bounded feature/change design docs.\n\
+5. Keep repository-level narrative in the root `README.md`, not in product/spec indexes.\n",
             super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
         ),
-        "product/spec/readme",
-        "product_spec",
-        "docs/product/spec/README.md",
+        "product/spec/index",
+        "product_spec_index",
+        "docs/product/spec/index.md",
     )
 }
 
-pub(crate) fn render_project_architecture_doc() -> String {
+pub(crate) fn render_project_process_index() -> String {
     with_scaffold_footer(
-        "# Architecture\n\nCurrent project posture:\n\n- VIDA bootstrap scaffold is initialized\n- project documentation roots are materialized\n- project-specific implementation modules are not yet defined\n",
-        "product/architecture",
-        "document",
-        "docs/product/architecture.md",
-    )
-}
-
-pub(crate) fn render_project_process_readme() -> String {
-    with_scaffold_footer(
-        "# Process Docs\n\nThis directory contains the minimum process documentation expected by VIDA activation.\n\nAvailable process docs:\n\n- `decisions.md`\n- `environments.md`\n- `project-operations.md`\n- `agent-system.md`\n- `documentation-tooling-map.md`\n- `codex-agent-configuration-guide.md` (current host-agent guide filename)\n",
-        "process/readme",
+        "# Process Index\n\nThis directory contains the minimum process documentation expected by VIDA activation.\n\nAvailable process docs:\n\n- `decisions.md`\n- `environments.md`\n- `project-operations.md`\n- `agent-system.md`\n- `documentation-tooling-map.md`\n- `codex-agent-configuration-guide.md` (current host-agent guide filename)\n\n`README.md` is reserved for the repository root.\n",
+        "process/index",
         "process_doc",
-        "docs/process/README.md",
+        "docs/process/index.md",
     )
 }
 
@@ -4506,12 +4486,12 @@ This scaffold gives `vida init` a ready-enough project runtime projection. Proje
     )
 }
 
-pub(crate) fn render_project_research_readme() -> String {
+pub(crate) fn render_project_research_index() -> String {
     with_scaffold_footer(
-        "# Research Notes\n\nUse this directory for research artifacts, discovery notes, and external references that support future project work.\n",
-        "research/readme",
+        "# Research Notes\n\nUse this directory for research artifacts, discovery notes, and external references that support future project work.\n\n`README.md` is reserved for the repository root.\n",
+        "research/index",
         "document",
-        "docs/research/README.md",
+        "docs/research/index.md",
     )
 }
 
@@ -4550,12 +4530,11 @@ fn scaffold_artifact_path_for(relative_source_path: &Path) -> &'static str {
         "README.md" => "project/readme",
         "docs/project-root-map.md" => "project/root-map",
         "docs/product/index.md" => "product/index",
-        "docs/product/architecture.md" => "product/architecture",
-        "docs/product/spec/README.md" => "product/spec/readme",
+        "docs/product/spec/index.md" => "product/spec/index",
         "docs/product/spec/templates/feature-design-document.template.md" => {
             "product/spec/templates/feature-design-document.template"
         }
-        "docs/process/README.md" => "process/readme",
+        "docs/process/index.md" => "process/index",
         "docs/process/agent-system.md" => "process/agent-system",
         "docs/process/codex-agent-configuration-guide.md" => {
             "process/codex-agent-configuration-guide"
@@ -4576,14 +4555,14 @@ fn scaffold_artifact_path_for(relative_source_path: &Path) -> &'static str {
             "process/project-packet-rendering-runtime-capsule"
         }
         "docs/process/project-operations.md" => "process/project-operations",
-        "docs/research/README.md" => "research/readme",
+        "docs/research/index.md" => "research/index",
         _ => "project/scaffold-doc",
     }
 }
 
 fn scaffold_artifact_type_for(relative_source_path: &Path) -> &'static str {
     match relative_source_path.to_string_lossy().as_ref() {
-        "docs/process/README.md"
+        "docs/process/index.md"
         | "docs/process/agent-system.md"
         | "docs/process/codex-agent-configuration-guide.md"
         | "docs/process/decisions.md"
@@ -4595,7 +4574,7 @@ fn scaffold_artifact_type_for(relative_source_path: &Path) -> &'static str {
         | "docs/process/project-packet-rendering-runtime-capsule.md"
         | "docs/process/project-operations.md" => "process_doc",
         "docs/product/index.md" => "product_index",
-        "docs/product/spec/README.md"
+        "docs/product/spec/index.md"
         | "docs/product/spec/templates/feature-design-document.template.md" => "product_spec",
         _ => "document",
     }
@@ -4748,7 +4727,7 @@ fn print_init_summary(project_root: &Path, activation_view: &serde_json::Value) 
     println!("vida init project bootstrap ready");
     println!("project root: {}", project_root.display());
     println!(
-        "materialized: AGENTS.md, AGENTS.sidecar.md, vida.config.yaml, vida/config/instructions/bundles/**, README.md, docs/project-root-map.md, docs/product/**, docs/process/**, docs/research/README.md, .vida/config, .vida/db, .vida/cache, .vida/framework, .vida/project, .vida/project/agent-extensions/*, .vida/project/agent-extensions/*.sidecar.yaml, .vida/receipts, .vida/runtime, .vida/scratchpad"
+        "materialized: AGENTS.md, AGENTS.sidecar.md, vida.config.yaml, vida/config/instructions/bundles/**, README.md, docs/project-root-map.md, docs/product/**, docs/process/**, docs/research/index.md, .vida/config, .vida/db, .vida/cache, .vida/framework, .vida/project, .vida/project/agent-extensions/*, .vida/project/agent-extensions/*.sidecar.yaml, .vida/receipts, .vida/runtime, .vida/scratchpad"
     );
     println!(
         "activation status: {}",

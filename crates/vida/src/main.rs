@@ -381,19 +381,16 @@ mod tests {
         assert!(harness.path().join(DEFAULT_PROJECT_PRODUCT_INDEX).is_file());
         assert!(harness
             .path()
-            .join(DEFAULT_PROJECT_PRODUCT_SPEC_README)
+            .join(DEFAULT_PROJECT_PRODUCT_SPEC_INDEX)
             .is_file());
         assert!(harness
             .path()
             .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
             .is_file());
+        assert!(harness.path().join(DEFAULT_PROJECT_PROCESS_INDEX).is_file());
         assert!(harness
             .path()
-            .join(DEFAULT_PROJECT_PROCESS_README)
-            .is_file());
-        assert!(harness
-            .path()
-            .join(DEFAULT_PROJECT_RESEARCH_README)
+            .join(DEFAULT_PROJECT_RESEARCH_INDEX)
             .is_file());
         assert!(harness.path().join(".vida/config").is_dir());
         assert!(harness.path().join(".vida/db").is_dir());
@@ -402,7 +399,7 @@ mod tests {
         assert!(harness.path().join(".vida/project").is_dir());
         assert!(harness
             .path()
-            .join(".vida/project/agent-extensions/README.md")
+            .join(".vida/project/agent-extensions/index.md")
             .is_file());
         assert!(harness
             .path()

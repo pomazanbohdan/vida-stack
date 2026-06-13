@@ -127,12 +127,12 @@ Purpose: provide the project-level agent instruction overlay for `{project_title
    - `{DEFAULT_PROJECT_ROOT_MAP}`\n\
 2. Project product index:\n\
    - `{DEFAULT_PROJECT_PRODUCT_INDEX}`\n\
-3. Project product spec/readiness guide:\n\
-   - `{DEFAULT_PROJECT_PRODUCT_SPEC_README}`\n\
+3. Project product spec index:\n\
+   - `{DEFAULT_PROJECT_PRODUCT_SPEC_INDEX}`\n\
 4. Local feature/change design template:\n\
    - `{DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE}`\n\
 5. Project process index:\n\
-   - `{DEFAULT_PROJECT_PROCESS_README}`\n\
+   - `{DEFAULT_PROJECT_PROCESS_INDEX}`\n\
 6. Project documentation tooling map:\n\
    - `{DEFAULT_PROJECT_DOC_TOOLING_DOC}`\n\
 7. Project agent-system baseline:\n\
@@ -140,7 +140,7 @@ Purpose: provide the project-level agent instruction overlay for `{project_title
 8. Project host-agent guide:\n\
    - `{DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC}`\n\
 9. Project research index:\n\
-   - `{DEFAULT_PROJECT_RESEARCH_README}`\n\n\
+   - `{DEFAULT_PROJECT_RESEARCH_INDEX}`\n\n\
 ## Working Rule\n\n\
 1. Read this sidecar immediately after `AGENTS.md` and the bounded VIDA init surface.\n\
 2. For bounded feature/change work that asks for research, specification, planning, and implementation, start with the local feature-design template and the documentation tooling path before code execution.\n\
@@ -792,9 +792,9 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let vida_scratchpad_dir = project_root.join(".vida/scratchpad");
     let project_root_map = project_root.join("docs/project-root-map.md");
     let product_index = project_root.join("docs/product/index.md");
-    let product_spec_readme = project_root.join(DEFAULT_PROJECT_PRODUCT_SPEC_README);
+    let product_spec_index = project_root.join(DEFAULT_PROJECT_PRODUCT_SPEC_INDEX);
     let feature_design_template = project_root.join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE);
-    let process_readme = project_root.join("docs/process/README.md");
+    let process_index = project_root.join(DEFAULT_PROJECT_PROCESS_INDEX);
     let codex_agent_guide = project_root.join(DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC);
     let documentation_tooling_map = project_root.join(DEFAULT_PROJECT_DOC_TOOLING_DOC);
     let startup_bundle = project_root.join(DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE);
@@ -804,7 +804,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let packet_rendering_capsule =
         project_root.join(DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE);
     let runtime_agent_extensions = runtime_agent_extensions_root(project_root);
-    let runtime_agent_extensions_readme = runtime_agent_extensions.join("README.md");
+    let runtime_agent_extensions_index = runtime_agent_extensions.join("index.md");
     let runtime_agent_extension_roles = runtime_agent_extensions.join("roles.yaml");
     let runtime_agent_extension_skills = runtime_agent_extensions.join("skills.yaml");
     let runtime_agent_extension_profiles = runtime_agent_extensions.join("profiles.yaml");
@@ -830,9 +830,9 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let bootstrap_missing = !agents_md.is_file() || !vida_config.is_file() || runtime_home_missing;
     let docs_missing = !project_root_map.is_file()
         || !product_index.is_file()
-        || !product_spec_readme.is_file()
+        || !product_spec_index.is_file()
         || !feature_design_template.is_file()
-        || !process_readme.is_file()
+        || !process_index.is_file()
         || !codex_agent_guide.is_file()
         || !documentation_tooling_map.is_file()
         || !startup_bundle.is_file()
@@ -892,7 +892,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let execution_carrier_model = agent_extensions_summary.execution_carrier_model;
 
     let runtime_agent_extensions_missing = [
-        &runtime_agent_extensions_readme,
+        &runtime_agent_extensions_index,
         &runtime_agent_extension_roles,
         &runtime_agent_extension_skills,
         &runtime_agent_extension_profiles,
@@ -971,9 +971,9 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         "project_docs": {
             "project_root_map": project_root_map.is_file(),
             "product_index": product_index.is_file(),
-            "product_spec_readme": product_spec_readme.is_file(),
+            "product_spec_index": product_spec_index.is_file(),
             "feature_design_template": feature_design_template.is_file(),
-            "process_readme": process_readme.is_file(),
+            "process_index": process_index.is_file(),
             "agent_configuration_guide": codex_agent_guide.is_file(),
             "host_agent_configuration_guide": codex_agent_guide.is_file(),
             "codex_agent_configuration_guide": codex_agent_guide.is_file(),
@@ -988,7 +988,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         "agent_extensions": {
             "enabled": agent_extensions_enabled,
             "runtime_projection_root": runtime_agent_extensions.display().to_string(),
-            "runtime_readme": runtime_agent_extensions_readme.is_file(),
+            "runtime_index": runtime_agent_extensions_index.is_file(),
             "roles_registry": runtime_agent_extension_roles.is_file(),
             "skills_registry": runtime_agent_extension_skills.is_file(),
             "profiles_registry": runtime_agent_extension_profiles.is_file(),
@@ -1889,9 +1889,9 @@ fn apply_project_activation_answers(
             DEFAULT_PROJECT_PRODUCT_INDEX,
         ),
         (
-            project_root.join(DEFAULT_PROJECT_PRODUCT_SPEC_README),
-            super::init_surfaces::render_project_product_spec_readme(),
-            DEFAULT_PROJECT_PRODUCT_SPEC_README,
+            project_root.join(DEFAULT_PROJECT_PRODUCT_SPEC_INDEX),
+            super::init_surfaces::render_project_product_spec_index(),
+            DEFAULT_PROJECT_PRODUCT_SPEC_INDEX,
         ),
         (
             project_root.join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE),
@@ -1904,14 +1904,9 @@ fn apply_project_activation_answers(
             DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
         ),
         (
-            project_root.join(DEFAULT_PROJECT_ARCHITECTURE_DOC),
-            super::init_surfaces::render_project_architecture_doc(),
-            DEFAULT_PROJECT_ARCHITECTURE_DOC,
-        ),
-        (
-            project_root.join(DEFAULT_PROJECT_PROCESS_README),
-            super::init_surfaces::render_project_process_readme(),
-            DEFAULT_PROJECT_PROCESS_README,
+            project_root.join(DEFAULT_PROJECT_PROCESS_INDEX),
+            super::init_surfaces::render_project_process_index(),
+            DEFAULT_PROJECT_PROCESS_INDEX,
         ),
         (
             project_root.join(DEFAULT_PROJECT_DECISIONS_DOC),
@@ -1984,9 +1979,9 @@ fn apply_project_activation_answers(
             DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE,
         ),
         (
-            project_root.join(DEFAULT_PROJECT_RESEARCH_README),
-            super::init_surfaces::render_project_research_readme(),
-            DEFAULT_PROJECT_RESEARCH_README,
+            project_root.join(DEFAULT_PROJECT_RESEARCH_INDEX),
+            super::init_surfaces::render_project_research_index(),
+            DEFAULT_PROJECT_RESEARCH_INDEX,
         ),
     ];
 
@@ -2931,7 +2926,7 @@ host_environment:
         assert!(config.contains("documentation: ukrainian"));
         assert!(config.contains("cli_system: codex"));
         assert!(harness.path().join("docs/project-root-map.md").is_file());
-        assert!(harness.path().join("docs/product/spec/README.md").is_file());
+        assert!(harness.path().join("docs/product/spec/index.md").is_file());
         assert!(harness
             .path()
             .join("docs/product/spec/templates/feature-design-document.template.md")
@@ -3137,7 +3132,7 @@ host_environment:
         fs::create_dir_all(root.join("docs/product/spec/templates"))
             .expect("product spec template dir should exist");
         fs::write(
-            root.join("docs/product/spec/README.md"),
+            root.join("docs/product/spec/index.md"),
             "# product spec guide\n",
         )
         .expect("product spec guide should exist");
@@ -3146,8 +3141,8 @@ host_environment:
             "# feature design template\n",
         )
         .expect("feature design template should exist");
-        fs::write(root.join("docs/process/README.md"), "# process\n")
-            .expect("process readme should exist");
+        fs::write(root.join("docs/process/index.md"), "# process\n")
+            .expect("process index should exist");
         fs::write(
             root.join("docs/process/codex-agent-configuration-guide.md"),
             "# codex guide\n",
@@ -3179,10 +3174,10 @@ host_environment:
         )
         .expect("packet rendering capsule should exist");
         fs::write(
-            root.join(".vida/project/agent-extensions/README.md"),
+            root.join(".vida/project/agent-extensions/index.md"),
             "# runtime agent extensions\n",
         )
-        .expect("runtime readme should exist");
+        .expect("runtime index should exist");
         fs::write(
             root.join(".vida/project/agent-extensions/roles.yaml"),
             "version: 1\nroles: []\n",

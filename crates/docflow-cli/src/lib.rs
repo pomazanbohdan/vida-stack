@@ -2806,31 +2806,31 @@ fn project_doc_owning_maps(rel: &str) -> Vec<&'static str> {
     match rel {
         "docs/project-root-map.md" => vec![],
         "docs/product/index.md" => vec!["docs/project-root-map.md"],
-        "docs/product/spec/README.md" => vec!["docs/product/index.md"],
-        "docs/process/README.md" => vec!["docs/project-root-map.md"],
+        "docs/product/spec/index.md" => vec!["docs/product/index.md"],
+        "docs/process/index.md" => vec!["docs/project-root-map.md"],
         "docs/process/documentation-tooling-map.md" => {
-            vec!["docs/process/README.md", "AGENTS.sidecar.md"]
+            vec!["docs/process/index.md", "AGENTS.sidecar.md"]
         }
-        "docs/research/README.md" => vec!["docs/project-root-map.md"],
+        "docs/research/index.md" => vec!["docs/project-root-map.md"],
         _ if rel.starts_with("docs/product/spec/templates/") => vec![],
         _ if rel.starts_with("docs/product/spec/") => {
             vec![
-                "docs/product/spec/README.md",
+                "docs/product/spec/index.md",
                 "docs/product/spec/current-spec-map.md",
             ]
         }
-        "docs/product/research/README.md" => vec!["docs/product/index.md"],
+        "docs/product/research/index.md" => vec!["docs/product/index.md"],
         _ if rel.starts_with("docs/product/research/") => {
-            vec!["docs/product/research/README.md"]
+            vec!["docs/product/research/index.md"]
         }
         _ if rel.starts_with("docs/product/") => vec!["docs/product/index.md"],
         _ if rel.starts_with("docs/process/") => {
             vec![
-                "docs/process/README.md",
+                "docs/process/index.md",
                 "docs/process/documentation-tooling-map.md",
             ]
         }
-        _ if rel.starts_with("docs/research/") => vec!["docs/research/README.md"],
+        _ if rel.starts_with("docs/research/") => vec!["docs/research/index.md"],
         _ => vec![],
     }
 }
@@ -5708,7 +5708,7 @@ mod tests {
         .expect("sidecar should exist");
         fs::write(
             root.join("docs/project-root-map.md"),
-            "# Root Map\n\n- `docs/product/index.md`\n- `docs/process/README.md`\n",
+            "# Root Map\n\n- `docs/product/index.md`\n- `docs/process/index.md`\n",
         )
         .expect("root map should exist");
         fs::write(
@@ -5717,10 +5717,10 @@ mod tests {
         )
         .expect("documentation tooling map should exist");
         fs::write(
-            root.join("docs/product/spec/README.md"),
+            root.join("docs/product/spec/index.md"),
             "# Product Spec Guide\n\nActive design docs:\n\n",
         )
-        .expect("spec readme should exist");
+        .expect("spec index should exist");
         fs::write(
             root.join("docs/product/spec/flappy-bird-design.md"),
             "# Flappy Bird Design\n\n-----\nartifact_path: product/spec/flappy-bird-design\nartifact_type: product_spec\nartifact_version: 1\nartifact_revision: init\nsource_path: docs/product/spec/flappy-bird-design.md\nstatus: proposed\nchangelog_ref: flappy-bird-design.changelog.jsonl\ncreated_at: 2026-03-14T00:00:00Z\nupdated_at: 2026-03-14T00:00:00Z\n",
@@ -5753,7 +5753,7 @@ mod tests {
         .expect("sidecar should exist");
         fs::write(
             root.join("docs/project-root-map.md"),
-            "# Root Map\n\n- `docs/product/index.md`\n- `docs/process/README.md`\n",
+            "# Root Map\n\n- `docs/product/index.md`\n- `docs/process/index.md`\n",
         )
         .expect("root map should exist");
         fs::write(
@@ -5762,10 +5762,10 @@ mod tests {
         )
         .expect("documentation tooling map should exist");
         fs::write(
-            root.join("docs/product/spec/README.md"),
+            root.join("docs/product/spec/index.md"),
             "# Product Spec Guide\n\nActive design docs:\n\n- [Flappy](flappy-bird-design.md)\n",
         )
-        .expect("spec readme should exist");
+        .expect("spec index should exist");
         fs::write(
             root.join("docs/product/spec/flappy-bird-design.md"),
             "# Flappy Bird Design\n\n-----\nartifact_path: product/spec/flappy-bird-design\nartifact_type: product_spec\nartifact_version: 1\nartifact_revision: init\nsource_path: docs/product/spec/flappy-bird-design.md\nstatus: proposed\nchangelog_ref: flappy-bird-design.changelog.jsonl\ncreated_at: 2026-03-14T00:00:00Z\nupdated_at: 2026-03-14T00:00:00Z\n",
@@ -5796,10 +5796,10 @@ mod tests {
         )
         .expect("sidecar should exist");
         fs::write(
-            root.join("docs/process/README.md"),
+            root.join("docs/process/index.md"),
             "# Process Docs\n\n- `documentation-tooling-map.md`\n",
         )
-        .expect("process readme should exist");
+        .expect("process index should exist");
         fs::write(
             root.join("docs/process/documentation-tooling-map.md"),
             "# Documentation Tooling\n",

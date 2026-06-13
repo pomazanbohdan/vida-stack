@@ -208,6 +208,54 @@ function Invoke-DiffWhitespaceCheck {
     }
 }
 
+function Invoke-RootReadmeOnlyCheck {
+    $started = Get-Date
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $artifactRefs = @()
+    $violations = New-Object System.Collections.Generic.List[string]
+
+    $readmes = Get-ChildItem -LiteralPath $RootDir -Filter "README.md" -Recurse -Force -File |
+        Where-Object {
+            $relative = [System.IO.Path]::GetRelativePath($RootDir, $_.FullName).Replace("\", "/")
+            $relative -ne "README.md" -and
+                -not $relative.StartsWith(".git/") -and
+                -not $relative.StartsWith("target/") -and
+                -not $relative.StartsWith("vendor/") -and
+                -not $relative.StartsWith(".vida/cargo-target/")
+        }
+    foreach ($readme in $readmes) {
+        [void]$violations.Add(("{0}: nested README.md is not allowed; use index.md or a semantic document name." -f [System.IO.Path]::GetRelativePath($RootDir, $readme.FullName).Replace("\", "/")))
+    }
+
+    $sw.Stop()
+    if ($Json -and $violations.Count -gt 0) {
+        $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+        $logPath = Join-Path $logDir ("root-readme-only-check-{0:yyyyMMddHHmmssfff}.log" -f $started)
+        $violations | Set-Content -Path $logPath -Encoding utf8
+        $artifactRefs = @($logPath)
+    } elseif (-not $Json -and $violations.Count -gt 0) {
+        $violations | Write-Error
+    }
+
+    $Records.Add([pscustomobject]@{
+        operation_id = "root-readme-only-check"
+        command_or_surface = "repo-local README.md placement invariant"
+        cwd_or_context = $RootDir
+        started_at = $started.ToString("o")
+        duration_ms = [int64]$sw.ElapsedMilliseconds
+        exit_status = $(if ($violations.Count -eq 0) { "pass" } else { "fail" })
+        classification = $(if ($sw.ElapsedMilliseconds -le 2000) { "fast" } elseif ($sw.ElapsedMilliseconds -le 5000) { "watch" } else { "long_gate_expected" })
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_refs = $artifactRefs
+    })
+
+    if ($violations.Count -gt 0) {
+        exit 2
+    }
+}
+
 function Test-CommandExists {
     param([string]$Name)
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
@@ -268,6 +316,7 @@ try {
         })
     } elseif ($Mode -eq "script-check") {
         Invoke-DiffWhitespaceCheck
+        Invoke-RootReadmeOnlyCheck
         Invoke-Timed "powershell-dev-gate-parse" @(
             "pwsh",
             "-NoLogo",
