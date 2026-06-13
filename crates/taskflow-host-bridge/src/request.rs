@@ -87,6 +87,98 @@ impl HostBridgeRequest {
     }
 }
 
+pub fn host_bridge_request_string<'a>(request: &'a Value, field: &str) -> Option<&'a str> {
+    request
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+pub fn host_bridge_path_array(value: &Value, field: &str) -> Vec<PathBuf> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+pub fn host_bridge_request_owned_paths(request: &Value) -> Vec<PathBuf> {
+    let mut owned_paths = host_bridge_path_array(request, "owned_paths");
+    if owned_paths.is_empty() {
+        if let Some(implementation_isolation) = request.get("implementation_isolation") {
+            owned_paths = host_bridge_path_array(implementation_isolation, "owned_paths");
+        }
+    }
+    owned_paths
+}
+
+pub fn legacy_internal_subagents_host_bridge_request(request: &Value) -> bool {
+    host_bridge_request_string(request, "backend_id") == Some("internal_subagents")
+        && host_bridge_request_string(request, "dispatch_transport") == Some("host_tool_bridge")
+        && (host_bridge_request_string(request, "adapter_kind")
+            == Some("unconfigured_host_agent_adapter")
+            || host_bridge_request_string(request, "adapter_capability_id")
+                == Some("unconfigured_host_agent_capability")
+            || host_bridge_request_string(request, "invocation_mode")
+                == Some("configured_host_capability_required"))
+}
+
+pub fn effective_host_bridge_request(request: &Value) -> Value {
+    if !legacy_internal_subagents_host_bridge_request(request) {
+        return request.clone();
+    }
+    let mut effective = request.clone();
+    if let Some(object) = effective.as_object_mut() {
+        object.insert(
+            "adapter_kind".to_string(),
+            Value::String("codex_host_tools".to_string()),
+        );
+        object.insert(
+            "adapter_capability_id".to_string(),
+            Value::String("codex.multi_agent_v1".to_string()),
+        );
+        object.insert(
+            "invocation_mode".to_string(),
+            Value::String("parent_host_tool_api".to_string()),
+        );
+        object
+            .entry("receipt_mode".to_string())
+            .or_insert_with(|| Value::String("host_bridge_receipt".to_string()));
+        object.insert(
+            "adapter_contract_source".to_string(),
+            Value::String("legacy_internal_subagents_default".to_string()),
+        );
+        let adapter_params = object
+            .entry("adapter_params".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(params) = adapter_params.as_object_mut() {
+            params.insert(
+                "tool_family".to_string(),
+                Value::String("codex_multi_agent".to_string()),
+            );
+            params.insert(
+                "spawn_tool".to_string(),
+                Value::String("multi_agent_v1.spawn_agent".to_string()),
+            );
+            params.insert(
+                "wait_tool".to_string(),
+                Value::String("multi_agent_v1.wait_agent".to_string()),
+            );
+            params.insert(
+                "close_tool".to_string(),
+                Value::String("multi_agent_v1.close_agent".to_string()),
+            );
+        }
+    }
+    effective
+}
+
 pub fn read_host_bridge_request(
     path: &HostBridgeRequestPath,
 ) -> Result<HostBridgeRequest, HostBridgeError> {
@@ -184,6 +276,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("host-tool-bridge").join("requests")).unwrap();
         root
+    }
+
+    #[test]
+    fn request_string_trims_and_rejects_blank_values() {
+        let request = serde_json::json!({
+            "run_id": " run-1 ",
+            "blank": "   "
+        });
+
+        assert_eq!(
+            host_bridge_request_string(&request, "run_id"),
+            Some("run-1")
+        );
+        assert_eq!(host_bridge_request_string(&request, "blank"), None);
+    }
+
+    #[test]
+    fn request_owned_paths_falls_back_to_implementation_isolation() {
+        let request = serde_json::json!({
+            "implementation_isolation": {
+                "owned_paths": ["crates/vida", " "]
+            }
+        });
+
+        assert_eq!(
+            host_bridge_request_owned_paths(&request),
+            vec![PathBuf::from("crates/vida")]
+        );
+    }
+
+    #[test]
+    fn effective_request_materializes_legacy_internal_subagent_adapter_defaults() {
+        let request = serde_json::json!({
+            "backend_id": "internal_subagents",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "unconfigured_host_agent_adapter"
+        });
+
+        let effective = effective_host_bridge_request(&request);
+
+        assert_eq!(effective["adapter_kind"], "codex_host_tools");
+        assert_eq!(effective["adapter_capability_id"], "codex.multi_agent_v1");
+        assert_eq!(effective["invocation_mode"], "parent_host_tool_api");
+        assert_eq!(
+            effective["adapter_params"]["spawn_tool"],
+            "multi_agent_v1.spawn_agent"
+        );
     }
 
     #[test]

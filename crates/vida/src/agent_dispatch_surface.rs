@@ -19,13 +19,14 @@ use runtime_path_policy::{
     ArtifactPathKind, PathPolicyError, StateRoot,
 };
 use taskflow_host_bridge::{
-    build_host_bridge_normalized_implementation_artifact, host_bridge_artifact_file,
-    host_bridge_artifact_has_retryable_completion_blocker, host_bridge_changed_files_from_artifact,
-    host_bridge_completion_retryable_blocker, host_bridge_normalized_implementation_artifact_path,
+    build_host_bridge_normalized_implementation_artifact, effective_host_bridge_request,
+    host_bridge_artifact_file, host_bridge_artifact_has_retryable_completion_blocker,
+    host_bridge_changed_files_from_artifact, host_bridge_completion_retryable_blocker,
+    host_bridge_normalized_implementation_artifact_path,
     host_bridge_provenance_public_blocker_code, host_bridge_request_implementation_artifacts,
-    host_bridge_request_status_allows_parent_completion,
-    normalize_host_bridge_provenance_for_completion, normalized_host_bridge_attempt_id,
-    normalized_host_bridge_consolidation_receipt_id,
+    host_bridge_request_owned_paths, host_bridge_request_status_allows_parent_completion,
+    host_bridge_request_string, normalize_host_bridge_provenance_for_completion,
+    normalized_host_bridge_attempt_id, normalized_host_bridge_consolidation_receipt_id,
     push_unique_host_bridge_implementation_artifact,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
     validate_host_bridge_request_provenance, validate_implementation_artifact_scope,
@@ -143,29 +144,6 @@ fn read_host_bridge_request(
     read_canonical_host_bridge_json_artifact(path, "host bridge request")
 }
 
-fn host_bridge_path_array(value: &serde_json::Value, field: &str) -> Vec<PathBuf> {
-    value
-        .get(field)
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .collect()
-}
-
-fn host_bridge_request_owned_paths(request: &serde_json::Value) -> Vec<PathBuf> {
-    let mut owned_paths = host_bridge_path_array(request, "owned_paths");
-    if owned_paths.is_empty() {
-        if let Some(implementation_isolation) = request.get("implementation_isolation") {
-            owned_paths = host_bridge_path_array(implementation_isolation, "owned_paths");
-        }
-    }
-    owned_paths
-}
-
 fn host_bridge_task_or_request_owned_paths(
     task: &crate::state_store::TaskRecord,
     request: &serde_json::Value,
@@ -279,14 +257,6 @@ fn canonical_state_artifact_path(
         }
         Ok(path)
     }
-}
-
-fn host_bridge_request_string<'a>(request: &'a serde_json::Value, field: &str) -> Option<&'a str> {
-    request
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
 }
 
 async fn host_bridge_request_provenance_blockers(
@@ -639,84 +609,6 @@ fn host_bridge_operator_fields(
     );
     verdict.shared_fields["next_actions"] = serde_json::json!(shared_next_actions);
     (verdict.shared_fields, verdict.operator_contracts)
-}
-
-fn legacy_internal_subagents_host_bridge_request(request: &serde_json::Value) -> bool {
-    request
-        .get("backend_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        == Some("internal_subagents")
-        && request
-            .get("dispatch_transport")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            == Some("host_tool_bridge")
-        && (request
-            .get("adapter_kind")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            == Some("unconfigured_host_agent_adapter")
-            || request
-                .get("adapter_capability_id")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                == Some("unconfigured_host_agent_capability")
-            || request
-                .get("invocation_mode")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                == Some("configured_host_capability_required"))
-}
-
-fn effective_host_bridge_request(request: &serde_json::Value) -> serde_json::Value {
-    if !legacy_internal_subagents_host_bridge_request(request) {
-        return request.clone();
-    }
-    let mut effective = request.clone();
-    if let Some(object) = effective.as_object_mut() {
-        object.insert(
-            "adapter_kind".to_string(),
-            serde_json::json!("codex_host_tools"),
-        );
-        object.insert(
-            "adapter_capability_id".to_string(),
-            serde_json::json!("codex.multi_agent_v1"),
-        );
-        object.insert(
-            "invocation_mode".to_string(),
-            serde_json::json!("parent_host_tool_api"),
-        );
-        object
-            .entry("receipt_mode".to_string())
-            .or_insert_with(|| serde_json::json!("host_bridge_receipt"));
-        object.insert(
-            "adapter_contract_source".to_string(),
-            serde_json::json!("legacy_internal_subagents_default"),
-        );
-        let adapter_params = object
-            .entry("adapter_params".to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        if let Some(params) = adapter_params.as_object_mut() {
-            params.insert(
-                "tool_family".to_string(),
-                serde_json::json!("codex_multi_agent"),
-            );
-            params.insert(
-                "spawn_tool".to_string(),
-                serde_json::json!("multi_agent_v1.spawn_agent"),
-            );
-            params.insert(
-                "wait_tool".to_string(),
-                serde_json::json!("multi_agent_v1.wait_agent"),
-            );
-            params.insert(
-                "close_tool".to_string(),
-                serde_json::json!("multi_agent_v1.close_agent"),
-            );
-        }
-    }
-    effective
 }
 
 fn host_bridge_adapter_payload(

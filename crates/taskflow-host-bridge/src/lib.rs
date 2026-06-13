@@ -33,7 +33,11 @@ pub use provenance::{
 pub use receipt_binding::{
     DispatchReceiptBindingDecision, DispatchReceiptBindingInput, validate_dispatch_receipt_binding,
 };
-pub use request::{HostBridgeRequest, HostBridgeRequestPath, read_host_bridge_request};
+pub use request::{
+    HostBridgeRequest, HostBridgeRequestPath, effective_host_bridge_request,
+    host_bridge_path_array, host_bridge_request_owned_paths, host_bridge_request_string,
+    legacy_internal_subagents_host_bridge_request, read_host_bridge_request,
+};
 
 #[cfg(test)]
 pub(crate) mod tests {
