@@ -580,7 +580,6 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     let Some(run_id) = host_bridge_request_string(request, "run_id") else {
         return blockers;
     };
-    let request_target = host_bridge_request_string(request, "dispatch_target");
     if host_bridge_packet_is_empty_object(canonical_packet_path.as_deref()) {
         blockers.push("host_bridge_dispatch_receipt_missing".to_string());
         return blockers;
@@ -593,11 +592,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     {
         Ok(store) => store,
         Err(_) => {
-            if !host_bridge_packet_matches_reconciled_active_request(
-                canonical_packet_path.as_deref(),
-                request_target,
-            ) && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
-            {
+            if !retryable_host_bridge_completion_request_for_state_root(state_root, request) {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
             }
             return blockers;
@@ -629,10 +624,6 @@ async fn append_host_bridge_dispatch_receipt_blockers(
         Err(_) => {
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
-                && !host_bridge_packet_matches_reconciled_active_request(
-                    canonical_packet_path,
-                    request_target,
-                )
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
@@ -642,10 +633,6 @@ async fn append_host_bridge_dispatch_receipt_blockers(
         Ok(None) => {
             if !host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target)
                 .await
-                && !host_bridge_packet_matches_reconciled_active_request(
-                    canonical_packet_path,
-                    request_target,
-                )
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
                 blockers.push("host_bridge_dispatch_receipt_missing".to_string());
@@ -703,41 +690,6 @@ async fn host_bridge_request_matches_reconciled_blocked_status(
         || status.resume_target == format!("dispatch.{request_target}"))
         && (status.policy_gate == "host_tool_bridge_adapter_required"
             || status.lifecycle_stage == format!("{request_target}_blocked"))
-}
-
-fn host_bridge_packet_matches_reconciled_active_request(
-    canonical_packet_path: Option<&Path>,
-    request_target: Option<&str>,
-) -> bool {
-    let Some(request_target) = request_target else {
-        return false;
-    };
-    let Some(packet_path) = canonical_packet_path else {
-        return false;
-    };
-    let Ok(packet) = read_canonical_host_bridge_json_artifact(packet_path, "host bridge packet")
-    else {
-        return false;
-    };
-    let downstream_active_target = packet
-        .get("downstream_dispatch_active_target")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    let downstream_status = packet
-        .get("downstream_dispatch_status")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    let source_target = packet
-        .get("source_dispatch_target")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    let source_status = packet
-        .get("source_dispatch_status")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim);
-    (downstream_active_target == Some(request_target) && downstream_status == Some("blocked"))
-        || (source_target == Some(request_target)
-            && source_status == Some("bridge_request_pending"))
 }
 
 fn host_bridge_packet_is_empty_object(canonical_packet_path: Option<&Path>) -> bool {
@@ -3390,13 +3342,14 @@ async fn materialize_configured_agent_dispatch_lane(
     .with_owned_paths_override(owned_paths_override);
     let dispatch_packet_path = crate::write_runtime_dispatch_packet(&ctx)?;
     dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
-    if let Ok(store) = StateStore::open_existing(state_dir.to_path_buf()).await {
-        store
-            .record_run_graph_dispatch_receipt(&dispatch_receipt)
-            .await
-            .map_err(|error| format!("Failed to record dev-team dispatch receipt: {error}"))?;
-        store.close().await;
-    }
+    let store = StateStore::open_existing(state_dir.to_path_buf())
+        .await
+        .map_err(|error| format!("Failed to open state store to record dev-team dispatch receipt: {error}"))?;
+    store
+        .record_run_graph_dispatch_receipt(&dispatch_receipt)
+        .await
+        .map_err(|error| format!("Failed to record dev-team dispatch receipt: {error}"))?;
+    store.close().await;
     let packet = validate_materialized_agent_dispatch_packet(
         lane,
         expected_dispatch_target,
@@ -4690,7 +4643,7 @@ mod tests {
         dispatch_target_for_agent_dispatch_lane, host_bridge_adapter_payload,
         host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
         host_bridge_normalized_implementation_artifact_path,
-        host_bridge_packet_matches_reconciled_active_request,
+        materialize_configured_agent_dispatch_lane,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, read_canonical_host_bridge_json_artifact,
@@ -4887,6 +4840,38 @@ mod tests {
             .contains("expected `coach`"));
         }
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn configured_dev_team_materialization_fails_when_dispatch_receipt_cannot_be_recorded() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-dispatch-missing-store-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create temp state root without state store");
+        std::fs::write(root.join("datastore-payload-marker"), "existing state payload")
+            .expect("seed existing datastore payload marker");
+        std::fs::create_dir(root.join(".vida-authoritative-open.guard"))
+            .expect("block authoritative store guard file open");
+        let lane = coach_dispatch_lane_preview("coach_test_gate", "receipt-recording-proof");
+
+        let error = materialize_configured_agent_dispatch_lane(
+            &lane,
+            &root,
+            &activation_bundle_with_worker_selection_truth(),
+        )
+        .await
+        .expect_err("materialization must fail before claiming receipt-backed packet");
+
+        assert!(
+            error.contains("Failed to open state store to record dev-team dispatch receipt"),
+            "unexpected materialization error: {error}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -5193,10 +5178,6 @@ mod tests {
             read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet")
                 .expect_err("oversized packet should be rejected");
         assert!(packet_error.contains("exceeding"));
-        assert!(!host_bridge_packet_matches_reconciled_active_request(
-            Some(&packet_path),
-            Some("implementer"),
-        ));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -5361,7 +5342,17 @@ mod tests {
             std::fs::create_dir_all(path.parent().expect("artifact parent"))
                 .expect("create artifact parent");
         }
-        std::fs::write(&packet_path, b"{}").expect("packet");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "source_dispatch_target": "implementer",
+                "source_dispatch_status": "bridge_request_pending",
+                "downstream_dispatch_active_target": "implementer",
+                "downstream_dispatch_status": "blocked"
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet");
         std::fs::write(&result_path, b"{}").expect("result");
         std::fs::write(&receipt_path, b"{}").expect("receipt");
         let request = serde_json::json!({
