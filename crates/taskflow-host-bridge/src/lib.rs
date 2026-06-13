@@ -1,3 +1,4 @@
+pub mod adapter_payload;
 pub mod artifact_scope;
 pub mod completion;
 pub mod errors;
@@ -5,6 +6,9 @@ pub mod provenance;
 pub mod receipt_binding;
 pub mod request;
 
+pub use adapter_payload::{
+    HostBridgeAdapterPayloadInput, build_host_bridge_adapter_payload, host_bridge_operator_fields,
+};
 pub use artifact_scope::{
     HostBridgeImplementationArtifact, HostBridgeNormalizedImplementationArtifact,
     ImplementationArtifactScopeDecision, attach_host_bridge_implementation_artifact,
