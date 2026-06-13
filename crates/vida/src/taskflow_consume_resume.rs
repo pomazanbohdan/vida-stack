@@ -3082,7 +3082,7 @@ fn dispatch_packet_json_from_current_project(path: &str) -> Option<serde_json::V
 fn dispatch_packet_json_and_path_from_current_project(
     path: &str,
 ) -> Option<(serde_json::Value, std::path::PathBuf)> {
-    let project_root = std::env::current_dir().ok()?;
+    let project_root = crate::resolve_runtime_project_root().ok()?;
     crate::status_surface::dispatch_packet_json_and_path_from_project_path(&project_root, path)
 }
 
@@ -19335,6 +19335,20 @@ agent_system:
 
         let persisted = fs::read_to_string(&packet_path).expect("normalized packet should persist");
         assert!(persisted.contains("\"read_only_paths\""));
+
+        let original_dir = std::env::current_dir().expect("current dir");
+        let project_root = crate::resolve_runtime_project_root().expect("resolve project root");
+        let subdir = project_root.join("crates").join("vida");
+        std::env::set_current_dir(&subdir).expect("switch to repo subdir");
+        let subdir_packet =
+            read_dispatch_packet(packet_path.to_str().expect("packet path should be utf-8"))
+                .expect("in-project packet should validate from repo subdir");
+        std::env::set_current_dir(original_dir).expect("restore current dir");
+        assert_eq!(
+            subdir_packet["coach_review_packet"]["read_only_paths"],
+            serde_json::json!(DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS)
+        );
+
         let _ = fs::remove_file(packet_path);
     }
 
