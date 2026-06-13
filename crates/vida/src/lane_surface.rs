@@ -11645,7 +11645,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lane_complete_preserves_source_context_for_duplicate_lane_targets() {
+    async fn lane_complete_advances_duplication_reviewer_to_tester_without_reentry() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -11665,15 +11665,15 @@ mod tests {
             "implementation",
         );
         status.task_id = run_id.to_string();
-        status.active_node = "coach".to_string();
-        status.next_node = Some("coach".to_string());
+        status.active_node = "duplication_reviewer".to_string();
+        status.next_node = Some("duplication_reviewer".to_string());
         status.status = "ready".to_string();
-        status.lifecycle_stage = "coach_active".to_string();
+        status.lifecycle_stage = "duplication_reviewer_active".to_string();
         status.policy_gate = "single_task_scope_required".to_string();
-        status.handoff_state = "awaiting_coach".to_string();
+        status.handoff_state = "awaiting_duplication_reviewer".to_string();
         status.context_state = "sealed".to_string();
         status.checkpoint_kind = "execution_cursor".to_string();
-        status.resume_target = "dispatch.coach_lane".to_string();
+        status.resume_target = "dispatch.duplication_reviewer_lane".to_string();
         status.recovery_ready = true;
         store
             .record_run_graph_status(&status)
@@ -11683,12 +11683,54 @@ mod tests {
         let mut role_selection = lane_complete_role_selection(run_id);
         role_selection.execution_plan["development_flow"]["dispatch_contract"]
             ["execution_lane_sequence"] = serde_json::json!([
-            "test_author",
-            "coach",
-            "implementer",
-            "coach",
+            "developer",
+            "duplication_reviewer",
+            "tester",
+            "duplication_reviewer",
             "verification"
         ]);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
+            "developer": {
+                "dispatch_target": "developer",
+                "stage": "execution",
+                "task_class": "implementation",
+                "closure_class": "implementation",
+                "completion_blocker": "pending_implementation_evidence",
+                "packet_template_kind": "delivery_task_packet",
+                "activation_agent_type": "junior",
+                "activation_runtime_role": "worker"
+            },
+            "duplication_reviewer": {
+                "dispatch_target": "duplication_reviewer",
+                "stage": "execution",
+                "task_class": "review",
+                "closure_class": "review",
+                "completion_blocker": "pending_review_clean_evidence",
+                "packet_template_kind": "coach_review_packet",
+                "activation_agent_type": "middle",
+                "activation_runtime_role": "reviewer"
+            },
+            "tester": {
+                "dispatch_target": "tester",
+                "stage": "execution",
+                "task_class": "verification",
+                "closure_class": "verification",
+                "completion_blocker": "pending_verification_evidence",
+                "packet_template_kind": "verifier_proof_packet",
+                "activation_agent_type": "senior",
+                "activation_runtime_role": "verifier"
+            },
+            "verification": {
+                "dispatch_target": "verification",
+                "stage": "execution",
+                "task_class": "verification",
+                "closure_class": "verification",
+                "completion_blocker": "pending_verification_evidence",
+                "packet_template_kind": "verifier_proof_packet",
+                "activation_agent_type": "senior",
+                "activation_runtime_role": "verifier"
+            }
+        });
         let packet_path = root.join(
             "runtime-consumption/downstream-dispatch-packets/run-lane-complete-duplicate.json",
         );
@@ -11702,22 +11744,22 @@ mod tests {
             &packet_path,
             serde_json::json!({
                 "run_id": run_id,
-                "source_dispatch_target": "implementer",
-                "dispatch_target": "coach",
-                "activation_runtime_role": "coach",
+                "source_dispatch_target": "developer",
+                "dispatch_target": "duplication_reviewer",
+                "activation_runtime_role": "reviewer",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lane_surface.rs"],
                 "read_only_paths": [".vida/data/state/runtime-consumption"],
                 "delivery_task_packet": {
-                    "goal": "Complete the second coach lane evidence.",
-                    "scope_in": ["dispatch_target:coach"],
+                    "goal": "Complete the duplication reviewer lane evidence.",
+                    "scope_in": ["dispatch_target:duplication_reviewer"],
                     "handoff_task_class": "review",
-                    "handoff_runtime_role": "coach",
+                    "handoff_runtime_role": "reviewer",
                     "owned_paths": ["crates/vida/src/lane_surface.rs"],
                     "read_only_paths": [".vida/data/state/runtime-consumption"],
-                    "definition_of_done": ["second coach completion advances to verification"],
-                    "verification_command": "cargo test -p vida lane_complete_preserves_source_context_for_duplicate_lane_targets",
-                    "proof_target": "duplicate coach lane advances to verification",
+                    "definition_of_done": ["duplication reviewer completion advances to tester"],
+                    "verification_command": "cargo test -p vida lane_complete_advances_duplication_reviewer_to_tester_without_reentry",
+                    "proof_target": "duplication reviewer advances to tester without re-entry",
                     "stop_rules": ["stop if packet contract is invalid"],
                     "blocking_question": "none"
                 },
@@ -11725,8 +11767,8 @@ mod tests {
                 "run_graph_bootstrap": {
                     "run_id": run_id
                 },
-                "downstream_dispatch_target": "verification",
-                "downstream_dispatch_active_target": "coach",
+                "downstream_dispatch_target": "tester",
+                "downstream_dispatch_active_target": "duplication_reviewer",
                 "downstream_dispatch_ready": false,
                 "downstream_dispatch_blockers": ["pending_review_clean_evidence"],
                 "downstream_dispatch_status": "blocked",
@@ -11738,20 +11780,21 @@ mod tests {
 
         let mut receipt = sample_receipt("blocked");
         receipt.run_id = run_id.to_string();
-        receipt.dispatch_target = "coach".to_string();
+        receipt.dispatch_target = "duplication_reviewer".to_string();
         receipt.dispatch_kind = "agent_lane".to_string();
         receipt.dispatch_surface = Some("vida agent-init".to_string());
         receipt.dispatch_command = Some("vida agent-init".to_string());
         receipt.dispatch_packet_path = Some(packet_path.display().to_string());
-        receipt.downstream_dispatch_target = Some("verification".to_string());
+        receipt.downstream_dispatch_target = Some("tester".to_string());
         receipt.downstream_dispatch_command = Some("vida agent-init".to_string());
-        receipt.downstream_dispatch_note =
-            Some("after `coach` evidence is recorded, activate `verification`".to_string());
+        receipt.downstream_dispatch_note = Some(
+            "after `duplication_reviewer` evidence is recorded, activate `tester`".to_string(),
+        );
         receipt.downstream_dispatch_ready = false;
         receipt.downstream_dispatch_blockers = vec!["pending_review_clean_evidence".to_string()];
         receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
         receipt.downstream_dispatch_status = Some("blocked".to_string());
-        receipt.downstream_dispatch_active_target = Some("coach".to_string());
+        receipt.downstream_dispatch_active_target = Some("duplication_reviewer".to_string());
         store
             .record_run_graph_dispatch_receipt(&receipt)
             .await
@@ -11778,16 +11821,27 @@ mod tests {
             .await
             .expect("read receipt after")
             .expect("receipt should exist");
-        assert_eq!(
-            after.downstream_dispatch_target.as_deref(),
-            Some("verification")
-        );
+        assert_eq!(after.downstream_dispatch_target.as_deref(), Some("tester"));
         assert!(
             after
                 .downstream_dispatch_packet_path
                 .as_deref()
                 .is_some_and(|value| value.contains("downstream-dispatch-packets")),
             "lane completion should materialize a verification packet"
+        );
+        let downstream_packet_path = after
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .expect("downstream packet path should be recorded");
+        let downstream_packet: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(downstream_packet_path).expect("read downstream packet"),
+        )
+        .expect("downstream packet should parse");
+        assert_eq!(downstream_packet["dispatch_target"], "tester");
+        assert_eq!(downstream_packet["downstream_dispatch_target"], "tester");
+        assert_eq!(
+            downstream_packet["source_dispatch_target"],
+            "duplication_reviewer"
         );
 
         let _ = std::fs::remove_dir_all(&root);
