@@ -15,9 +15,10 @@ use crate::{
     AgentHostBridgeArgs, AgentSelectArgs, AgentStatusArgs,
 };
 use runtime_path_policy::atomic_write::write_json_replace;
+use runtime_path_policy::bounded_json::read_json_value_file;
 use runtime_path_policy::{
     existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
-    ArtifactPathKind, StateRoot,
+    ArtifactPathKind, PathPolicyError, StateRoot,
 };
 
 const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
@@ -140,59 +141,86 @@ fn read_host_bridge_request(
     read_canonical_host_bridge_json_artifact(path, "host bridge request")
 }
 
-fn write_host_bridge_request(path: &Path, request: &serde_json::Value) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "Failed to inspect host bridge request `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "Host bridge request `{}` is a symlink; refusing to write through it.",
-            path.display()
-        ));
-    }
-    let encoded = serde_json::to_string_pretty(request).map_err(|error| {
-        format!(
-            "Failed to encode host bridge request `{}` as JSON: {error}",
-            path.display()
-        )
-    })?;
-    std::fs::write(path, encoded).map_err(|error| {
-        format!(
-            "Failed to write host bridge request `{}`: {error}",
-            path.display()
-        )
-    })
+fn write_host_bridge_request(
+    state_root: &Path,
+    path: &Path,
+    request: &serde_json::Value,
+) -> Result<(), String> {
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    let request_file =
+        existing_regular_file_under_root(&state_root, path, ArtifactPathKind::HostBridgeRequest)
+            .map_err(|error| host_bridge_policy_error(error, "host bridge request"))?;
+    let output = new_output_path_under_root(
+        &state_root,
+        request_file.path(),
+        ArtifactPathKind::HostBridgeRequest,
+        true,
+    )
+    .map_err(|error| host_bridge_policy_error(error, "host bridge request"))?;
+    write_json_replace(&output, request)
+        .map_err(|error| host_bridge_policy_error(error, "host bridge request"))
 }
 
-fn host_bridge_artifact_file(path: &Path) -> Result<Option<serde_json::Value>, String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "Failed to inspect implementation artifact `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "Implementation artifact `{}` is a symlink; refusing to follow it.",
-            path.display()
-        ));
+fn host_bridge_artifact_file(
+    state_root: &Path,
+    path: &Path,
+) -> Result<Option<serde_json::Value>, String> {
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    let artifact =
+        existing_regular_file_under_root(&state_root, path, ArtifactPathKind::TaskAttemptArtifact)
+            .map_err(|error| host_bridge_policy_error(error, "implementation artifact"))?;
+    match read_json_value_file(&artifact, MAX_HOST_BRIDGE_ARTIFACT_BYTES) {
+        Ok(value) => Ok(Some(value)),
+        Err(PathPolicyError::Json { .. }) => Ok(None),
+        Err(error) => Err(host_bridge_policy_error(error, "implementation artifact")),
     }
-    if !metadata.is_file() {
-        return Err(format!(
-            "Implementation artifact `{}` is not a file.",
-            path.display()
-        ));
+}
+
+fn host_bridge_policy_error(error: PathPolicyError, label: &str) -> String {
+    match error {
+        PathPolicyError::DotSegment { path, .. } => {
+            format!("{label} path `{}` contains a dot segment", path.display())
+        }
+        PathPolicyError::Metadata { path, source, .. } => {
+            format!("Failed to inspect {label} `{}`: {source}", path.display())
+        }
+        PathPolicyError::Symlink { path, .. } => {
+            format!(
+                "{label} `{}` is a symlink; refusing to follow it.",
+                path.display()
+            )
+        }
+        PathPolicyError::NotRegularFile { path, .. } => {
+            format!("{label} `{}` is not a regular file.", path.display())
+        }
+        PathPolicyError::Canonicalize { path, source, .. } => {
+            format!(
+                "Failed to canonicalize {label} `{}`: {source}",
+                path.display()
+            )
+        }
+        PathPolicyError::OutsideStateRoot { path, root, .. } => format!(
+            "{label} `{}` is outside VIDA state root `{}`.",
+            path.display(),
+            root.display()
+        ),
+        PathPolicyError::TooLarge {
+            path, max_bytes, ..
+        } => format!("{label} `{}` exceeds {max_bytes} bytes.", path.display()),
+        PathPolicyError::Json { path, source, .. } => {
+            format!(
+                "Failed to encode {label} `{}` as JSON: {source}",
+                path.display()
+            )
+        }
+        PathPolicyError::Read { path, source, .. } => {
+            format!("Failed to read {label} `{}`: {source}", path.display())
+        }
+        PathPolicyError::Write { path, source, .. } => {
+            format!("Failed to write {label} `{}`: {source}", path.display())
+        }
+        other => other.to_string(),
     }
-    let raw = std::fs::read_to_string(path).map_err(|error| {
-        format!(
-            "Failed to read implementation artifact `{}`: {error}",
-            path.display()
-        )
-    })?;
-    Ok(serde_json::from_str::<serde_json::Value>(&raw).ok())
 }
 
 fn normalized_host_bridge_attempt_id(run_id: &str, value: Option<&str>) -> String {
@@ -1288,7 +1316,7 @@ async fn attach_host_bridge_implementation_artifacts(
     let mut artifact_refs = Vec::new();
     let mut source_artifact_refs = Vec::new();
     for (index, artifact_path) in command.attach_artifacts.iter().enumerate() {
-        let artifact_json = match host_bridge_artifact_file(artifact_path) {
+        let artifact_json = match host_bridge_artifact_file(store.root(), artifact_path) {
             Ok(json) => json,
             Err(error) => {
                 return emit_host_bridge_attach_blocked(
@@ -1421,7 +1449,7 @@ async fn attach_host_bridge_implementation_artifacts(
             serde_json::json!(source_artifact_refs),
         );
     }
-    if let Err(error) = write_host_bridge_request(&command.request, &request) {
+    if let Err(error) = write_host_bridge_request(store.root(), &command.request, &request) {
         return emit_host_bridge_attach_blocked(
             &command.request,
             command.json,
