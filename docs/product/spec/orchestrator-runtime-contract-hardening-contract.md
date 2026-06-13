@@ -1,12 +1,12 @@
 # Orchestrator Runtime Contract Hardening Contract
 
-Status: `implemented`
+Status: canonical implemented product contract
 
 ## Summary
 - Feature / change: harden VIDA orchestrator, agent-init, lane, and carrier-selection runtime contracts for Codex App agent lifecycle operation.
 - Owner layer: `mixed`
 - Runtime surface: `orchestrator-init | agent-init | agent dispatch-next | lane | status`
-- Status: implemented
+- Lifecycle state: implemented
 
 ## Current Context
 - `vida orchestrator-init --json` exposes activation and dev-team readiness, but does not summarize sticky execution intent, allowed topology, or the next lawful dispatch action as top-level machine-readable truth.
@@ -151,10 +151,10 @@ Will implement:
 artifact_path: product/spec/orchestrator-runtime-contract-hardening-contract
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-05-04'
+artifact_revision: '2026-06-13'
 schema_version: '1'
-status: implemented
+status: canonical
 source_path: docs/product/spec/orchestrator-runtime-contract-hardening-contract.md
 created_at: '2026-05-04T00:00:00+03:00'
-updated_at: '2026-05-04T00:00:00+03:00'
+updated_at: '2026-06-13T00:00:00+03:00'
 changelog_ref: orchestrator-runtime-contract-hardening-contract.changelog.jsonl

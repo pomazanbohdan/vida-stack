@@ -1,6 +1,6 @@
 # VIDA Service, TUI, And Wizard Execution Spec
 
-Status: accepted for staged implementation
+Status: canonical staged implementation spec
 
 Purpose: turn the approved service/TUI/wizard research Sets 1-22 into an execution-ready specification packet with scope, exclusions, operation families, first-wave task order, owned paths, proof targets, and approval evidence.
 
@@ -494,10 +494,10 @@ Session-scoped continuation and multisession ownership defects are tracked in th
 artifact_path: product/spec/vida-service-tui-wizard-execution-spec
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-05-26'
+artifact_revision: '2026-06-13'
 schema_version: '1'
-status: accepted
+status: canonical
 source_path: docs/product/spec/vida-service-tui-wizard-execution-spec.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-05-26T00:00:00+03:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: vida-service-tui-wizard-execution-spec.changelog.jsonl
