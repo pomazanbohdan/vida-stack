@@ -300,9 +300,9 @@ fn emit_agent_init_invalid_role(
     dev_team_readiness: &serde_json::Value,
 ) -> ExitCode {
     let blocker_code = if requested_role == "orchestrator" {
-        "agent_init_orchestrator_role_forbidden"
+        taskflow_contracts::BlockerCode::AgentInitOrchestratorRoleForbidden.as_str()
     } else {
-        "agent_init_role_unresolved"
+        taskflow_contracts::BlockerCode::AgentInitRoleUnresolved.as_str()
     };
     let blocker_codes = vec![blocker_code.to_string()];
     let next_actions = vec![
@@ -394,7 +394,8 @@ fn agent_init_execute_dispatch_should_handoff(
 }
 
 fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
-    let blocker_codes = vec!["taskflow_consume_bundle_timeout"];
+    let blocker_codes =
+        vec![taskflow_contracts::BlockerCode::TaskflowConsumeBundleTimeout.as_str()];
     let next_actions = vec![
         "Retry `vida orchestrator-init` after concurrent VIDA state readers finish.",
         "Run `vida status` and `vida taskflow recovery latest` to inspect current runtime state if the timeout repeats.",
@@ -448,7 +449,8 @@ fn emit_orchestrator_init_bundle_timeout(state_dir: &Path, as_json: bool) -> Exi
 }
 
 fn agent_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
-    let blocker_codes = vec!["taskflow_consume_bundle_timeout"];
+    let blocker_codes =
+        vec![taskflow_contracts::BlockerCode::TaskflowConsumeBundleTimeout.as_str()];
     let next_actions = vec![
         "Retry `vida agent-init` after concurrent VIDA state readers finish.",
         "Run `vida status` and `vida taskflow recovery latest` to inspect current runtime state if the timeout repeats.",
@@ -579,7 +581,13 @@ fn agent_init_dispatch_timeout_blocker_codes(result_json: &serde_json::Value) ->
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| vec![value.to_string()])
-        .unwrap_or_else(|| vec!["timeout_without_takeover_authority".to_string()])
+        .unwrap_or_else(|| {
+            vec![
+                taskflow_contracts::BlockerCode::TimeoutWithoutTakeoverAuthority
+                    .as_str()
+                    .to_string(),
+            ]
+        })
 }
 
 fn agent_init_dispatch_timeout_next_actions() -> Vec<String> {
@@ -648,7 +656,11 @@ fn agent_init_dispatch_timeout_fallback_payload(
     timeout_seconds: u64,
     error: Option<&str>,
 ) -> serde_json::Value {
-    let blocker_codes = vec!["timeout_without_takeover_authority"];
+    let blocker_codes = vec![
+        taskflow_contracts::BlockerCode::TimeoutWithoutTakeoverAuthority
+            .as_str()
+            .to_string(),
+    ];
     let next_actions = agent_init_dispatch_timeout_next_actions();
     let artifact_refs =
         agent_init_dispatch_timeout_artifact_refs(run_id, dispatch_result_path, timeout_seconds);
@@ -657,7 +669,7 @@ fn agent_init_dispatch_timeout_fallback_payload(
         "status": "blocked",
         "execution_state": "blocked",
         "dispatch_mode": dispatch_mode,
-        "blocker_code": "timeout_without_takeover_authority",
+        "blocker_code": taskflow_contracts::BlockerCode::TimeoutWithoutTakeoverAuthority.as_str(),
         "blocker_codes": blocker_codes,
         "provider_error": format!(
             "Timed out executing agent-init dispatch packet after {timeout_seconds}s total without receipt-backed completion"
@@ -1491,7 +1503,9 @@ fn agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
             "lane_execution_receipt_path".to_string(),
             serde_json::json!(dispatch_result_path),
         );
-        if receipt.blocker_code.as_deref() == Some("internal_codex_carrier_unavailable") {
+        if receipt.blocker_code.as_deref()
+            == Some(taskflow_contracts::BlockerCode::InternalCodexCarrierUnavailable.as_str())
+        {
             insert_stale_internal_carrier_receipt_repair(object, receipt, dispatch_result_path);
         }
         if let Some(artifact) = result_artifact {
@@ -1551,7 +1565,7 @@ fn insert_stale_internal_carrier_receipt_repair(
         "stale_internal_carrier_receipt_repair".to_string(),
         serde_json::json!({
             "status": "actionable",
-            "legacy_blocker_code": "internal_codex_carrier_unavailable",
+            "legacy_blocker_code": taskflow_contracts::BlockerCode::InternalCodexCarrierUnavailable.as_str(),
             "legacy_receipt_path": dispatch_result_path,
             "selected_backend": receipt.selected_backend,
             "repair_command": repair_command,
@@ -1999,7 +2013,8 @@ fn agent_init_dispatch_mode(
 fn agent_init_execute_dispatch_missing_packet_payload(
     dispatch_mode: &serde_json::Value,
 ) -> serde_json::Value {
-    let blocker_codes = vec!["agent_init_execute_dispatch_missing_packet"];
+    let blocker_codes =
+        vec![taskflow_contracts::BlockerCode::AgentInitExecuteDispatchMissingPacket.as_str()];
     let next_actions = vec![
         "Create or refresh a scheduler dispatch packet with `vida taskflow run-graph dispatch-init <task-id>`.",
         "Retry execution with `vida agent-init --dispatch-packet <path> --execute-dispatch` or `vida agent-init --downstream-packet <path> --execute-dispatch`.",
@@ -2016,7 +2031,7 @@ fn agent_init_execute_dispatch_missing_packet_payload(
         "execution_state": "blocked",
         "dispatch_mode": dispatch_mode,
         "error": AGENT_INIT_EXECUTE_DISPATCH_MISSING_PACKET_ERROR,
-        "blocker_code": "agent_init_execute_dispatch_missing_packet",
+        "blocker_code": taskflow_contracts::BlockerCode::AgentInitExecuteDispatchMissingPacket.as_str(),
         "blocker_codes": blocker_codes,
         "next_actions": next_actions,
         "artifact_refs": artifact_refs,

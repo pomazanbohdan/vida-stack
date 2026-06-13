@@ -2,9 +2,16 @@ use serde::{Deserialize, Serialize};
 use taskflow_core::{IssueType, TaskId, TaskStatus, Timestamp};
 
 pub mod artifact_kind;
+pub mod blocker_code;
 pub mod decision_table;
 
 pub use artifact_kind::{ArtifactKind, UnknownArtifactKind};
+pub use blocker_code::{
+    BlockerCode, UnknownBlockerCode, canonical_blocker_code_list, canonical_blocker_code_str,
+    canonical_blocker_code_value_from_str, is_selected_lane_assignment_guard_blocked,
+    is_selected_lane_runtime_assignment_truth_missing, selected_lane_assignment_guard_blocked,
+    selected_lane_runtime_assignment_truth_missing,
+};
 pub use decision_table::{
     DECISION_TABLE_SCHEMA_VERSION, DecisionTableCondition, DecisionTableEvaluationRequest,
     DecisionTableEvaluationResponse, DecisionTableEvaluationStatus, DecisionTableInput,

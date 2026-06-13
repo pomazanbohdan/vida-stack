@@ -1128,46 +1128,6 @@ pub(crate) enum BlockerCode {
     ContinuationBindingMismatch,
     ContinuationBindingNotResumeable,
     HostToolBridgeAdapterRequired,
-    HostBridgeRequestMissingFields,
-    HostBridgeRequestWrongTransport,
-    HostBridgeRequestNotPending,
-    HostToolCapabilityMissing,
-    HostAgentCapacityUnavailable,
-    HostAgentIdMissing,
-    HostBridgeCompletionArgsInvalid,
-    HostBridgeRequestUnreadable,
-    HostBridgeStateRootMissing,
-    HostBridgeRequestUntrustedPath,
-    HostBridgeRequestPathMissing,
-    HostBridgeRequestPathMismatch,
-    HostBridgePacketPathUnbounded,
-    HostBridgeResultPathUnbounded,
-    HostBridgeReceiptPathUnbounded,
-    HostBridgeDispatchReceiptMissing,
-    HostBridgeDispatchReceiptInactive,
-    HostBridgeDispatchReceiptMismatch,
-    ImplementationArtifactsMissing,
-    ImplementationArtifactAuthorityMissing,
-    ImplementationArtifactChangedFilesMissing,
-    ImplementationArtifactAuthorityInvalid,
-    ImplementationArtifactContractInvalid,
-    ImplementationArtifactReceiptMissing,
-    ImplementationArtifactReceiptUnverified,
-    ImplementationAttemptScopeGuardViolation,
-    AgentInitOrchestratorRoleForbidden,
-    AgentInitRoleUnresolved,
-    AgentInitExecuteDispatchMissingPacket,
-    TaskflowConsumeBundleTimeout,
-    InternalDispatchTimeoutWithoutReceipt,
-    InternalCodexCarrierUnavailable,
-    SelectedLaneAssignmentGuardRequired,
-    SelectedModelProfileOverBudget,
-    SelectedExternalBackendNotReady,
-    BlockedDispatch,
-    AutoDispatchPacketActiveUnitMissing,
-    AutoDispatchPacketActiveUnitMismatch,
-    AutoDispatchPacketActiveUnitAmbiguous,
-    AutoDispatchPacketActiveUnitUnavailable,
     MissingRunGraphDispatchReceipt,
     MissingRunGraphDispatchReceiptOperatorEvidence,
     ClosedTaskActiveRunProjectionMismatch,
@@ -1325,68 +1285,6 @@ impl BlockerCode {
             Self::ContinuationBindingMismatch => "continuation_binding_mismatch",
             Self::ContinuationBindingNotResumeable => "continuation_binding_not_resumeable",
             Self::HostToolBridgeAdapterRequired => "host_tool_bridge_adapter_required",
-            Self::HostBridgeRequestMissingFields => "host_bridge_request_missing_fields",
-            Self::HostBridgeRequestWrongTransport => "host_bridge_request_wrong_transport",
-            Self::HostBridgeRequestNotPending => "host_bridge_request_not_pending",
-            Self::HostToolCapabilityMissing => "host_tool_capability_missing",
-            Self::HostAgentCapacityUnavailable => "host_agent_capacity_unavailable",
-            Self::HostAgentIdMissing => "host_agent_id_missing",
-            Self::HostBridgeCompletionArgsInvalid => "host_bridge_completion_args_invalid",
-            Self::HostBridgeRequestUnreadable => "host_bridge_request_unreadable",
-            Self::HostBridgeStateRootMissing => "host_bridge_state_root_missing",
-            Self::HostBridgeRequestUntrustedPath => "host_bridge_request_untrusted_path",
-            Self::HostBridgeRequestPathMissing => "host_bridge_request_path_missing",
-            Self::HostBridgeRequestPathMismatch => "host_bridge_request_path_mismatch",
-            Self::HostBridgePacketPathUnbounded => "host_bridge_packet_path_unbounded",
-            Self::HostBridgeResultPathUnbounded => "host_bridge_result_path_unbounded",
-            Self::HostBridgeReceiptPathUnbounded => "host_bridge_receipt_path_unbounded",
-            Self::HostBridgeDispatchReceiptMissing => "host_bridge_dispatch_receipt_missing",
-            Self::HostBridgeDispatchReceiptInactive => "host_bridge_dispatch_receipt_inactive",
-            Self::HostBridgeDispatchReceiptMismatch => "host_bridge_dispatch_receipt_mismatch",
-            Self::ImplementationArtifactsMissing => "implementation_artifacts_missing",
-            Self::ImplementationArtifactAuthorityMissing => {
-                "implementation_artifact_authority_missing"
-            }
-            Self::ImplementationArtifactChangedFilesMissing => {
-                "implementation_artifact_changed_files_missing"
-            }
-            Self::ImplementationArtifactAuthorityInvalid => {
-                "implementation_artifact_authority_invalid"
-            }
-            Self::ImplementationArtifactContractInvalid => {
-                "implementation_artifact_contract_invalid"
-            }
-            Self::ImplementationArtifactReceiptMissing => "implementation_artifact_receipt_missing",
-            Self::ImplementationArtifactReceiptUnverified => {
-                "implementation_artifact_receipt_unverified"
-            }
-            Self::ImplementationAttemptScopeGuardViolation => {
-                "implementation_attempt_scope_guard_violation"
-            }
-            Self::AgentInitOrchestratorRoleForbidden => "agent_init_orchestrator_role_forbidden",
-            Self::AgentInitRoleUnresolved => "agent_init_role_unresolved",
-            Self::AgentInitExecuteDispatchMissingPacket => {
-                "agent_init_execute_dispatch_missing_packet"
-            }
-            Self::TaskflowConsumeBundleTimeout => "taskflow_consume_bundle_timeout",
-            Self::InternalDispatchTimeoutWithoutReceipt => {
-                "internal_dispatch_timeout_without_receipt"
-            }
-            Self::InternalCodexCarrierUnavailable => "internal_codex_carrier_unavailable",
-            Self::SelectedLaneAssignmentGuardRequired => "selected_lane_assignment_guard_required",
-            Self::SelectedModelProfileOverBudget => "selected_model_profile_over_budget",
-            Self::SelectedExternalBackendNotReady => "selected_external_backend_not_ready",
-            Self::BlockedDispatch => "blocked_dispatch",
-            Self::AutoDispatchPacketActiveUnitMissing => "auto_dispatch_packet_active_unit_missing",
-            Self::AutoDispatchPacketActiveUnitMismatch => {
-                "auto_dispatch_packet_active_unit_mismatch"
-            }
-            Self::AutoDispatchPacketActiveUnitAmbiguous => {
-                "auto_dispatch_packet_active_unit_ambiguous"
-            }
-            Self::AutoDispatchPacketActiveUnitUnavailable => {
-                "auto_dispatch_packet_active_unit_unavailable"
-            }
             Self::MissingRunGraphDispatchReceipt => "missing_run_graph_dispatch_receipt",
             Self::MissingRunGraphDispatchReceiptOperatorEvidence => {
                 "missing_run_graph_dispatch_receipt_operator_evidence"
@@ -1586,80 +1484,6 @@ impl BlockerCode {
             "continuation_binding_mismatch" => Some(Self::ContinuationBindingMismatch),
             "continuation_binding_not_resumeable" => Some(Self::ContinuationBindingNotResumeable),
             "host_tool_bridge_adapter_required" => Some(Self::HostToolBridgeAdapterRequired),
-            "host_bridge_request_missing_fields" => Some(Self::HostBridgeRequestMissingFields),
-            "host_bridge_request_wrong_transport" => Some(Self::HostBridgeRequestWrongTransport),
-            "host_bridge_request_not_pending" => Some(Self::HostBridgeRequestNotPending),
-            "host_tool_capability_missing" => Some(Self::HostToolCapabilityMissing),
-            "host_agent_capacity_unavailable" => Some(Self::HostAgentCapacityUnavailable),
-            "host_agent_id_missing" => Some(Self::HostAgentIdMissing),
-            "host_bridge_completion_args_invalid" => Some(Self::HostBridgeCompletionArgsInvalid),
-            "host_bridge_request_unreadable" => Some(Self::HostBridgeRequestUnreadable),
-            "host_bridge_state_root_missing" => Some(Self::HostBridgeStateRootMissing),
-            "host_bridge_request_untrusted_path" => Some(Self::HostBridgeRequestUntrustedPath),
-            "host_bridge_request_path_missing" => Some(Self::HostBridgeRequestPathMissing),
-            "host_bridge_request_path_mismatch" => Some(Self::HostBridgeRequestPathMismatch),
-            "host_bridge_packet_path_unbounded" => Some(Self::HostBridgePacketPathUnbounded),
-            "host_bridge_result_path_unbounded" => Some(Self::HostBridgeResultPathUnbounded),
-            "host_bridge_receipt_path_unbounded" => Some(Self::HostBridgeReceiptPathUnbounded),
-            "host_bridge_dispatch_receipt_missing" => Some(Self::HostBridgeDispatchReceiptMissing),
-            "host_bridge_dispatch_receipt_inactive" => {
-                Some(Self::HostBridgeDispatchReceiptInactive)
-            }
-            "host_bridge_dispatch_receipt_mismatch" => {
-                Some(Self::HostBridgeDispatchReceiptMismatch)
-            }
-            "implementation_artifacts_missing" => Some(Self::ImplementationArtifactsMissing),
-            "implementation_artifact_authority_missing" => {
-                Some(Self::ImplementationArtifactAuthorityMissing)
-            }
-            "implementation_artifact_changed_files_missing" => {
-                Some(Self::ImplementationArtifactChangedFilesMissing)
-            }
-            "implementation_artifact_authority_invalid" => {
-                Some(Self::ImplementationArtifactAuthorityInvalid)
-            }
-            "implementation_artifact_contract_invalid" => {
-                Some(Self::ImplementationArtifactContractInvalid)
-            }
-            "implementation_artifact_receipt_missing" => {
-                Some(Self::ImplementationArtifactReceiptMissing)
-            }
-            "implementation_artifact_receipt_unverified" => {
-                Some(Self::ImplementationArtifactReceiptUnverified)
-            }
-            "implementation_attempt_scope_guard_violation" => {
-                Some(Self::ImplementationAttemptScopeGuardViolation)
-            }
-            "agent_init_orchestrator_role_forbidden" => {
-                Some(Self::AgentInitOrchestratorRoleForbidden)
-            }
-            "agent_init_role_unresolved" => Some(Self::AgentInitRoleUnresolved),
-            "agent_init_execute_dispatch_missing_packet" => {
-                Some(Self::AgentInitExecuteDispatchMissingPacket)
-            }
-            "taskflow_consume_bundle_timeout" => Some(Self::TaskflowConsumeBundleTimeout),
-            "internal_dispatch_timeout_without_receipt" => {
-                Some(Self::InternalDispatchTimeoutWithoutReceipt)
-            }
-            "internal_codex_carrier_unavailable" => Some(Self::InternalCodexCarrierUnavailable),
-            "selected_lane_assignment_guard_required" => {
-                Some(Self::SelectedLaneAssignmentGuardRequired)
-            }
-            "selected_model_profile_over_budget" => Some(Self::SelectedModelProfileOverBudget),
-            "selected_external_backend_not_ready" => Some(Self::SelectedExternalBackendNotReady),
-            "blocked_dispatch" => Some(Self::BlockedDispatch),
-            "auto_dispatch_packet_active_unit_missing" => {
-                Some(Self::AutoDispatchPacketActiveUnitMissing)
-            }
-            "auto_dispatch_packet_active_unit_mismatch" => {
-                Some(Self::AutoDispatchPacketActiveUnitMismatch)
-            }
-            "auto_dispatch_packet_active_unit_ambiguous" => {
-                Some(Self::AutoDispatchPacketActiveUnitAmbiguous)
-            }
-            "auto_dispatch_packet_active_unit_unavailable" => {
-                Some(Self::AutoDispatchPacketActiveUnitUnavailable)
-            }
             "missing_run_graph_dispatch_receipt" => Some(Self::MissingRunGraphDispatchReceipt),
             "missing_run_graph_dispatch_receipt_operator_evidence" => {
                 Some(Self::MissingRunGraphDispatchReceiptOperatorEvidence)
@@ -1862,6 +1686,18 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
 
 pub(crate) fn canonical_blocker_code_str(value: &str) -> Option<&'static str> {
     let trimmed = value.trim();
+    taskflow_contracts::canonical_blocker_code_str(trimmed)
+        .or_else(|| BlockerCode::from_str(trimmed).map(BlockerCode::as_str))
+        .or_else(|| {
+            EXTENDED_BLOCKER_CODE_STRINGS
+                .iter()
+                .copied()
+                .find(|code| *code == trimmed)
+        })
+}
+
+pub(crate) fn local_blocker_code_str(value: &str) -> Option<&'static str> {
+    let trimmed = value.trim();
     BlockerCode::from_str(trimmed)
         .map(BlockerCode::as_str)
         .or_else(|| {
@@ -1937,11 +1773,6 @@ fn canonical_parametric_blocker_code_value(value: &str) -> Option<String> {
         || trimmed == "cache_registry_contract_missing_triggered_domain_binding"
         || trimmed == "missing_retrieval_only_optional_context_boundary"
         || trimmed == "missing_retrieval_trust_evidence"
-    {
-        return Some(trimmed.to_string());
-    }
-    if trimmed.starts_with("selected_lane_runtime_assignment_truth_missing:task=")
-        || trimmed.starts_with("selected_lane_assignment_guard_blocked:task=")
     {
         return Some(trimmed.to_string());
     }
@@ -2028,8 +1859,8 @@ fn canonical_parametric_blocker_code_with_suffix(
 
 pub(crate) fn canonical_blocker_code_value_from_str(value: &str) -> Option<String> {
     let trimmed = value.trim();
-    canonical_blocker_code_str(trimmed)
-        .map(str::to_string)
+    taskflow_contracts::canonical_blocker_code_value_from_str(trimmed)
+        .or_else(|| local_blocker_code_str(trimmed).map(str::to_string))
         .or_else(|| canonical_parametric_blocker_code_value(trimmed))
 }
 
@@ -2429,6 +2260,8 @@ mod tests {
             "host_bridge_request_missing_fields",
             "host_bridge_request_wrong_transport",
             "host_bridge_request_not_pending",
+            "host_bridge_receipt_mode_mismatch",
+            "host_bridge_request_identity_mismatch",
             "host_tool_capability_missing",
             "host_agent_capacity_unavailable",
             "host_agent_id_missing",
@@ -2457,6 +2290,7 @@ mod tests {
             "internal_dispatch_timeout_without_receipt",
             "internal_codex_carrier_unavailable",
             "selected_lane_assignment_guard_required",
+            "selected_lane_runtime_assignment_truth_required",
             "selected_model_profile_over_budget",
             "selected_external_backend_not_ready",
             "blocked_dispatch",
@@ -2468,12 +2302,21 @@ mod tests {
 
         for code in scoped_surface_literals {
             assert_eq!(
+                taskflow_contracts::canonical_blocker_code_str(code),
+                Some(code),
+                "taskflow-contracts blocker code `{code}` must back release-1 scoped surface emission"
+            );
+            assert_eq!(
                 super::canonical_blocker_code_str(code),
                 Some(code),
                 "blocker code `{code}` must be registry-backed before release-1 operator contract emission"
             );
         }
 
+        let shared_contract_set =
+            taskflow_contracts::canonical_blocker_code_list(scoped_surface_literals)
+                .into_iter()
+                .collect::<BTreeSet<_>>();
         let canonical_set = canonical_blocker_code_list(scoped_surface_literals)
             .into_iter()
             .collect::<BTreeSet<_>>();
@@ -2481,6 +2324,7 @@ mod tests {
             .into_iter()
             .map(str::to_string)
             .collect::<BTreeSet<_>>();
+        assert_eq!(shared_contract_set, expected_set);
         assert_eq!(canonical_set, expected_set);
 
         for code in [
@@ -2488,11 +2332,53 @@ mod tests {
             "selected_lane_assignment_guard_blocked:task=task-b",
         ] {
             assert_eq!(
+                taskflow_contracts::canonical_blocker_code_value_from_str(code),
+                Some(code.to_string()),
+                "dynamic blocker code `{code}` must be shared-contract canonicalized with its task suffix"
+            );
+            assert_eq!(
                 super::canonical_blocker_code_value_from_str(code),
                 Some(code.to_string()),
                 "dynamic blocker code `{code}` must remain canonicalized with its task suffix"
             );
         }
+    }
+
+    #[test]
+    fn scoped_blocker_code_production_emitters_use_shared_contract_boundary() {
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace root");
+        let files = [
+            "crates/vida/src/agent_dispatch_surface.rs",
+            "crates/vida/src/init_surfaces.rs",
+            "crates/taskflow-host-bridge/src/adapter_payload.rs",
+            "crates/taskflow-host-bridge/src/provenance.rs",
+            "crates/taskflow-host-bridge/src/completion.rs",
+        ];
+        let scoped_codes = taskflow_contracts::BlockerCode::all()
+            .iter()
+            .map(|code| code.as_str())
+            .collect::<Vec<_>>();
+        let mut raw_literals = Vec::new();
+
+        for file in files {
+            let path = workspace_root.join(file);
+            let source = std::fs::read_to_string(&path).expect("read source file");
+            let production_source = source.split("\n#[cfg(test)]").next().unwrap_or(&source);
+            for code in &scoped_codes {
+                let exact_literal = format!("\"{code}\"");
+                if production_source.contains(&exact_literal) {
+                    raw_literals.push(format!("{file}:{code}"));
+                }
+            }
+        }
+
+        assert!(
+            raw_literals.is_empty(),
+            "scoped blocker codes must be emitted through taskflow-contracts helpers: {raw_literals:?}"
+        );
     }
 
     #[test]

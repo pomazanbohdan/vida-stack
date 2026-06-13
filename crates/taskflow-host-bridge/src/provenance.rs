@@ -63,11 +63,17 @@ pub fn validate_host_bridge_request_provenance(
 #[must_use]
 pub fn host_bridge_provenance_public_blocker_code(blocker_code: &str) -> &str {
     match blocker_code {
-        "dispatch_transport_not_host_tool_bridge" => "host_bridge_request_wrong_transport",
-        "receipt_mode_not_host_bridge_receipt" => "host_bridge_receipt_mode_mismatch",
-        "request_status_not_admissible" => "host_bridge_request_not_pending",
+        "dispatch_transport_not_host_tool_bridge" => {
+            taskflow_contracts::BlockerCode::HostBridgeRequestWrongTransport.as_str()
+        }
+        "receipt_mode_not_host_bridge_receipt" => {
+            taskflow_contracts::BlockerCode::HostBridgeReceiptModeMismatch.as_str()
+        }
+        "request_status_not_admissible" => {
+            taskflow_contracts::BlockerCode::HostBridgeRequestNotPending.as_str()
+        }
         "run_id_mismatch" | "task_id_mismatch" | "dispatch_target_mismatch" => {
-            "host_bridge_request_identity_mismatch"
+            taskflow_contracts::BlockerCode::HostBridgeRequestIdentityMismatch.as_str()
         }
         code => code,
     }

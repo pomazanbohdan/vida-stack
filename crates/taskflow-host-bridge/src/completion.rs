@@ -72,14 +72,16 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
             | "coach_rework_required"
             | "closure_evidence_blocked"
             | "host_bridge_request_task_mismatch"
-            | "implementation_artifact_authority_missing"
-            | "implementation_artifact_changed_files_missing"
-            | "implementation_artifact_authority_invalid"
-            | "implementation_artifact_contract_invalid"
-            | "implementation_artifact_receipt_missing"
-            | "implementation_artifact_receipt_unverified"
-            | "implementation_artifacts_missing"
-            | "implementation_attempt_scope_guard_violation"
+    ) || matches!(
+        taskflow_contracts::BlockerCode::try_from(blocker_code),
+        Ok(taskflow_contracts::BlockerCode::ImplementationArtifactAuthorityMissing)
+            | Ok(taskflow_contracts::BlockerCode::ImplementationArtifactChangedFilesMissing)
+            | Ok(taskflow_contracts::BlockerCode::ImplementationArtifactAuthorityInvalid)
+            | Ok(taskflow_contracts::BlockerCode::ImplementationArtifactContractInvalid)
+            | Ok(taskflow_contracts::BlockerCode::ImplementationArtifactReceiptMissing)
+            | Ok(taskflow_contracts::BlockerCode::ImplementationArtifactReceiptUnverified)
+            | Ok(taskflow_contracts::BlockerCode::ImplementationArtifactsMissing)
+            | Ok(taskflow_contracts::BlockerCode::ImplementationAttemptScopeGuardViolation)
     )
 }
 

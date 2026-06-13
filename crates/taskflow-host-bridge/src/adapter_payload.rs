@@ -138,19 +138,35 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         .unwrap_or("request");
     let mut blocker_codes = input.provenance_blockers;
     if !missing.is_empty() {
-        blocker_codes.push("host_bridge_request_missing_fields".to_string());
+        blocker_codes.push(
+            taskflow_contracts::BlockerCode::HostBridgeRequestMissingFields
+                .as_str()
+                .to_string(),
+        );
     }
     if dispatch_transport != Some("host_tool_bridge") {
-        blocker_codes.push("host_bridge_request_wrong_transport".to_string());
+        blocker_codes.push(
+            taskflow_contracts::BlockerCode::HostBridgeRequestWrongTransport
+                .as_str()
+                .to_string(),
+        );
     }
     if !host_bridge_request_status_allows_parent_completion(
         request_status,
         input.retryable_completion_request,
     ) {
-        blocker_codes.push("host_bridge_request_not_pending".to_string());
+        blocker_codes.push(
+            taskflow_contracts::BlockerCode::HostBridgeRequestNotPending
+                .as_str()
+                .to_string(),
+        );
     }
     if adapter_capability_id != Some("codex.multi_agent_v1") {
-        blocker_codes.push("host_tool_capability_missing".to_string());
+        blocker_codes.push(
+            taskflow_contracts::BlockerCode::HostToolCapabilityMissing
+                .as_str()
+                .to_string(),
+        );
     }
     let status = if blocker_codes.is_empty() {
         "pass"
@@ -211,7 +227,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         "capacity_source": "parent_host_tool_runtime",
         "active_agents_count": Value::Null,
         "thread_limit_reached": Value::Null,
-        "blocked_result_code": "host_agent_capacity_unavailable",
+        "blocked_result_code": taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
         "next_actions": [
             "Invoke multi_agent_v1.spawn_agent from the parent host session when capacity is available.",
             "If the parent host tool reports thread or capacity exhaustion, close stale host agents or write a blocked host bridge result with blocker_code host_agent_capacity_unavailable."
@@ -275,8 +291,8 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             "blocked_result_contract": {
                 "execution_state": "blocked",
                 "allowed_blocker_codes": [
-                    "host_agent_capacity_unavailable",
-                    "host_tool_capability_missing",
+                    taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
+                    taskflow_contracts::BlockerCode::HostToolCapabilityMissing.as_str(),
                     "host_agent_execution_failed"
                 ]
             },

@@ -40,6 +40,10 @@ const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
 const HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(250);
 
+fn blocker_code_value(code: taskflow_contracts::BlockerCode) -> String {
+    code.as_str().to_string()
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct AgentDispatchLaneSelectionTruth {
     selected_carrier: String,
@@ -316,7 +320,9 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
 ) -> Vec<String> {
     let mut blockers = Vec::new();
     if std::fs::canonicalize(&state_root).is_err() {
-        blockers.push("host_bridge_state_root_missing".to_string());
+        blockers.push(blocker_code_value(
+            taskflow_contracts::BlockerCode::HostBridgeStateRootMissing,
+        ));
         return blockers;
     };
     let canonical_request_path =
@@ -324,20 +330,26 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         {
             Ok(path) => path,
             Err(_) => {
-                blockers.push("host_bridge_request_untrusted_path".to_string());
+                blockers.push(blocker_code_value(
+                    taskflow_contracts::BlockerCode::HostBridgeRequestUntrustedPath,
+                ));
                 return blockers;
             }
         };
     let declared_request_path = match host_bridge_request_string(request, "request_path") {
         Some(path) => path,
         None => {
-            blockers.push("host_bridge_request_path_missing".to_string());
+            blockers.push(blocker_code_value(
+                taskflow_contracts::BlockerCode::HostBridgeRequestPathMissing,
+            ));
             return blockers;
         }
     };
     match canonical_state_artifact_path(&state_root, declared_request_path, true) {
         Ok(path) if path == canonical_request_path => {}
-        _ => blockers.push("host_bridge_request_path_mismatch".to_string()),
+        _ => blockers.push(blocker_code_value(
+            taskflow_contracts::BlockerCode::HostBridgeRequestPathMismatch,
+        )),
     }
     let packet_path = host_bridge_request_string(request, "packet_path");
     let canonical_packet_path =
@@ -345,18 +357,26 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             |path| match canonical_state_artifact_path(&state_root, path, true) {
                 Ok(path) => Some(path),
                 Err(_) => {
-                    blockers.push("host_bridge_packet_path_unbounded".to_string());
+                    blockers.push(blocker_code_value(
+                        taskflow_contracts::BlockerCode::HostBridgePacketPathUnbounded,
+                    ));
                     None
                 }
             },
         );
     for (field, code) in [
-        ("result_path", "host_bridge_result_path_unbounded"),
-        ("receipt_path", "host_bridge_receipt_path_unbounded"),
+        (
+            "result_path",
+            taskflow_contracts::BlockerCode::HostBridgeResultPathUnbounded,
+        ),
+        (
+            "receipt_path",
+            taskflow_contracts::BlockerCode::HostBridgeReceiptPathUnbounded,
+        ),
     ] {
         if let Some(path) = host_bridge_request_string(request, field) {
             if canonical_state_artifact_path(&state_root, path, false).is_err() {
-                blockers.push(code.to_string());
+                blockers.push(blocker_code_value(code));
             }
         }
     }
@@ -384,7 +404,9 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         }
     }
     if host_bridge_packet_is_empty_object(canonical_packet_path.as_deref()) {
-        blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+        blockers.push(blocker_code_value(
+            taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing,
+        ));
         return blockers;
     }
     let store = match StateStore::open_existing_read_only_with_timeout(
@@ -396,7 +418,9 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         Ok(store) => store,
         Err(_) => {
             if !retryable_host_bridge_completion_request_for_state_root(state_root, request) {
-                blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+                blockers.push(blocker_code_value(
+                    taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing,
+                ));
             }
             return blockers;
         }
@@ -429,7 +453,9 @@ async fn append_host_bridge_dispatch_receipt_blockers(
                 .await
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
-                blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+                blockers.push(blocker_code_value(
+                    taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing,
+                ));
             }
             return;
         }
@@ -438,7 +464,9 @@ async fn append_host_bridge_dispatch_receipt_blockers(
                 .await
                 && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
             {
-                blockers.push("host_bridge_dispatch_receipt_missing".to_string());
+                blockers.push(blocker_code_value(
+                    taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing,
+                ));
             }
             return;
         }
@@ -464,7 +492,9 @@ async fn append_host_bridge_dispatch_receipt_blockers(
     ) && !retryable_blocked_receipt
         && !retryable_host_bridge_completion_request_for_state_root(state_root, request)
     {
-        blockers.push("host_bridge_dispatch_receipt_inactive".to_string());
+        blockers.push(blocker_code_value(
+            taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptInactive,
+        ));
     }
     if host_bridge_dispatch_receipt_target_mismatch(
         request,
@@ -480,7 +510,9 @@ async fn append_host_bridge_dispatch_receipt_blockers(
                     .map(|path| path.display().to_string())
             })
     {
-        blockers.push("host_bridge_dispatch_receipt_mismatch".to_string());
+        blockers.push(blocker_code_value(
+            taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMismatch,
+        ));
     }
 }
 
@@ -724,7 +756,11 @@ async fn attach_host_bridge_implementation_artifacts(
         return emit_host_bridge_attach_blocked(
             &command.request,
             command.json,
-            vec!["host_bridge_completion_args_invalid".to_string()],
+            vec![
+                taskflow_contracts::BlockerCode::HostBridgeCompletionArgsInvalid
+                    .as_str()
+                    .to_string(),
+            ],
             vec![
                 "run artifact attachment and lane completion as separate receipt-backed steps"
                     .to_string(),
@@ -745,7 +781,11 @@ async fn attach_host_bridge_implementation_artifacts(
             return emit_host_bridge_attach_blocked(
                 &command.request,
                 command.json,
-                vec!["host_bridge_request_missing_fields".to_string()],
+                vec![
+                    taskflow_contracts::BlockerCode::HostBridgeRequestMissingFields
+                        .as_str()
+                        .to_string(),
+                ],
                 vec![
                 "repair the host bridge request run_id before attaching implementation artifacts"
                     .to_string(),
@@ -762,7 +802,9 @@ async fn attach_host_bridge_implementation_artifacts(
         return emit_host_bridge_attach_blocked(
             &command.request,
             command.json,
-            vec!["implementation_artifact_contract_invalid".to_string()],
+            vec![blocker_code_value(
+                taskflow_contracts::BlockerCode::ImplementationArtifactContractInvalid,
+            )],
             vec![
                 "attach implementation artifacts only to implementer host bridge requests"
                     .to_string(),
@@ -783,7 +825,9 @@ async fn attach_host_bridge_implementation_artifacts(
             return emit_host_bridge_attach_blocked(
                 &command.request,
                 command.json,
-                vec!["host_bridge_state_root_missing".to_string()],
+                vec![blocker_code_value(
+                    taskflow_contracts::BlockerCode::HostBridgeStateRootMissing,
+                )],
                 vec![format!(
                     "open the TaskFlow state store before attaching artifacts: {error}"
                 )],
@@ -800,7 +844,9 @@ async fn attach_host_bridge_implementation_artifacts(
             return emit_host_bridge_attach_blocked(
                 &command.request,
                 command.json,
-                vec!["implementation_artifact_authority_missing".to_string()],
+                vec![blocker_code_value(
+                    taskflow_contracts::BlockerCode::ImplementationArtifactAuthorityMissing,
+                )],
                 vec![format!(
                     "repair the TaskFlow task binding before attaching artifacts: {error}"
                 )],
@@ -827,7 +873,9 @@ async fn attach_host_bridge_implementation_artifacts(
                 return emit_host_bridge_attach_blocked(
                     &command.request,
                     command.json,
-                    vec!["implementation_artifact_contract_invalid".to_string()],
+                    vec![blocker_code_value(
+                        taskflow_contracts::BlockerCode::ImplementationArtifactContractInvalid,
+                    )],
                     vec![error],
                     serde_json::json!({
                         "request_path": command.request.display().to_string(),
@@ -842,7 +890,9 @@ async fn attach_host_bridge_implementation_artifacts(
             return emit_host_bridge_attach_blocked(
                 &command.request,
                 command.json,
-                vec!["implementation_artifact_changed_files_missing".to_string()],
+                vec![blocker_code_value(
+                    taskflow_contracts::BlockerCode::ImplementationArtifactChangedFilesMissing,
+                )],
                 vec![
                     "provide --changed-file or attach a JSON artifact with changed_files before lane completion"
                         .to_string(),
@@ -895,7 +945,9 @@ async fn attach_host_bridge_implementation_artifacts(
             return emit_host_bridge_attach_blocked(
                 &command.request,
                 command.json,
-                vec!["implementation_artifact_contract_invalid".to_string()],
+                vec![blocker_code_value(
+                    taskflow_contracts::BlockerCode::ImplementationArtifactContractInvalid,
+                )],
                 vec![error],
                 serde_json::json!({
                     "request_path": command.request.display().to_string(),
@@ -935,7 +987,9 @@ async fn attach_host_bridge_implementation_artifacts(
         return emit_host_bridge_attach_blocked(
             &command.request,
             command.json,
-            vec!["implementation_artifact_authority_missing".to_string()],
+            vec![blocker_code_value(
+                taskflow_contracts::BlockerCode::ImplementationArtifactAuthorityMissing,
+            )],
             vec![format!(
                 "record TaskFlow implementation attempt authority before completion: {error}"
             )],
@@ -965,7 +1019,9 @@ async fn attach_host_bridge_implementation_artifacts(
         return emit_host_bridge_attach_blocked(
             &command.request,
             command.json,
-            vec!["host_bridge_request_unreadable".to_string()],
+            vec![blocker_code_value(
+                taskflow_contracts::BlockerCode::HostBridgeRequestUnreadable,
+            )],
             vec![error],
             serde_json::json!({ "request_path": command.request.display().to_string() }),
         );
@@ -1552,7 +1608,11 @@ fn selection_truth_for_task_with_role_and_class(
 fn selection_truth_guard_blockers(truth: &AgentDispatchLaneSelectionTruth) -> Vec<String> {
     let mut blockers = Vec::new();
     if truth.selected_over_budget && truth.budget_verdict == "over_budget" {
-        blockers.push("selected_model_profile_over_budget".to_string());
+        blockers.push(
+            taskflow_contracts::BlockerCode::SelectedModelProfileOverBudget
+                .as_str()
+                .to_string(),
+        );
     }
     if truth.selected_model_profile_readiness_status == "blocked" {
         blockers.push("selected_model_profile_not_ready".to_string());
@@ -1561,7 +1621,11 @@ fn selection_truth_guard_blockers(truth: &AgentDispatchLaneSelectionTruth) -> Ve
         truth.selected_external_backend_readiness_status.as_str(),
         "external_backend_dispatch_blocked" | "blocked"
     ) {
-        blockers.push("selected_external_backend_not_ready".to_string());
+        blockers.push(
+            taskflow_contracts::BlockerCode::SelectedExternalBackendNotReady
+                .as_str()
+                .to_string(),
+        );
     }
     blockers.sort();
     blockers.dedup();
@@ -1575,7 +1639,7 @@ fn agent_dispatch_host_bridge_capacity_guard() -> serde_json::Value {
         "capacity_source": "parent_host_tool_runtime",
         "active_agents_count": serde_json::Value::Null,
         "thread_limit_reached": serde_json::Value::Null,
-        "blocked_result_code": "host_agent_capacity_unavailable",
+        "blocked_result_code": taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
         "next_actions": [
             "Attempt the parent host bridge only after dispatch admission is otherwise clean.",
             "If the parent host tool reports thread or capacity exhaustion, close stale host agents or write a blocked host bridge result with blocker_code host_agent_capacity_unavailable."
@@ -1859,10 +1923,14 @@ fn build_agent_dispatch_next_preview_standard(
                 requires_user_approval: false,
                 approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
             }),
-            Err(reason) => blocker_codes.push(format!(
-                "selected_lane_runtime_assignment_truth_missing:task={}:{}",
-                primary.task.id, reason
-            )),
+            Err(reason) => {
+                blocker_codes.push(
+                    taskflow_contracts::selected_lane_runtime_assignment_truth_missing(
+                        &primary.task.id,
+                        &reason,
+                    ),
+                );
+            }
         }
     }
 
@@ -1895,10 +1963,14 @@ fn build_agent_dispatch_next_preview_standard(
                     });
                     remaining -= 1;
                 }
-                Err(reason) => blocker_codes.push(format!(
-                    "selected_lane_runtime_assignment_truth_missing:task={}:{}",
-                    candidate.task.id, reason
-                )),
+                Err(reason) => {
+                    blocker_codes.push(
+                        taskflow_contracts::selected_lane_runtime_assignment_truth_missing(
+                            &candidate.task.id,
+                            &reason,
+                        ),
+                    );
+                }
             }
             continue;
         }
@@ -1944,10 +2016,14 @@ fn build_agent_dispatch_next_preview_standard(
     }
     if blocker_codes
         .iter()
-        .any(|code| code.starts_with("selected_lane_runtime_assignment_truth_missing:"))
+        .any(|code| taskflow_contracts::is_selected_lane_runtime_assignment_truth_missing(code))
     {
         selected_lanes.clear();
-        blocker_codes.push("selected_lane_runtime_assignment_truth_required".to_string());
+        blocker_codes.push(
+            taskflow_contracts::BlockerCode::SelectedLaneRuntimeAssignmentTruthRequired
+                .as_str()
+                .to_string(),
+        );
         next_actions.push(
             "Selection truth is incomplete for at least one chosen lane; fix runtime assignment evidence before launching `vida agent-init`."
                 .to_string(),
@@ -1959,9 +2035,9 @@ fn build_agent_dispatch_next_preview_standard(
             selection_truth_guard_blockers(&lane.selection_truth)
                 .into_iter()
                 .map(move |blocker| {
-                    format!(
-                        "selected_lane_assignment_guard_blocked:task={}:{}",
-                        lane.task_id, blocker
+                    taskflow_contracts::selected_lane_assignment_guard_blocked(
+                        &lane.task_id,
+                        &blocker,
                     )
                 })
         })
@@ -1973,7 +2049,11 @@ fn build_agent_dispatch_next_preview_standard(
             }
         }
         selected_lanes.clear();
-        blocker_codes.push("selected_lane_assignment_guard_required".to_string());
+        blocker_codes.push(
+            taskflow_contracts::BlockerCode::SelectedLaneAssignmentGuardRequired
+                .as_str()
+                .to_string(),
+        );
         next_actions.push(
             "Selection truth has budget, readiness, or backend blockers; fix assignment guard evidence before launching `vida agent-init`."
                 .to_string(),
@@ -2274,10 +2354,14 @@ fn build_agent_dispatch_next_preview_dev_team(
                     },
                 }),
             }),
-            Err(reason) => blocker_codes.push(format!(
-                "selected_lane_runtime_assignment_truth_missing:task={}:{}",
-                candidate.task.id, reason
-            )),
+            Err(reason) => {
+                blocker_codes.push(
+                    taskflow_contracts::selected_lane_runtime_assignment_truth_missing(
+                        &candidate.task.id,
+                        &reason,
+                    ),
+                );
+            }
         }
     }
 
@@ -2311,10 +2395,14 @@ fn build_agent_dispatch_next_preview_dev_team(
     }
     if blocker_codes
         .iter()
-        .any(|code| code.starts_with("selected_lane_runtime_assignment_truth_missing:"))
+        .any(|code| taskflow_contracts::is_selected_lane_runtime_assignment_truth_missing(code))
     {
         selected_lanes.clear();
-        blocker_codes.push("selected_lane_runtime_assignment_truth_required".to_string());
+        blocker_codes.push(
+            taskflow_contracts::BlockerCode::SelectedLaneRuntimeAssignmentTruthRequired
+                .as_str()
+                .to_string(),
+        );
         next_actions.push(
             "Selection truth is incomplete for at least one configured dev-team step; fix runtime assignment evidence before launching `vida agent-init`."
                 .to_string(),
@@ -2467,22 +2555,30 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
                 requires_user_approval: false,
                 approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
             }),
-            Err(reason) => blocker_codes.push(format!(
-                "selected_lane_runtime_assignment_truth_missing:task={}:{}",
-                reservation.task_id, reason
-            )),
+            Err(reason) => {
+                blocker_codes.push(
+                    taskflow_contracts::selected_lane_runtime_assignment_truth_missing(
+                        &reservation.task_id,
+                        &reason,
+                    ),
+                );
+            }
         }
     }
 
     if blocker_codes
         .iter()
-        .any(|code| code.starts_with("selected_lane_runtime_assignment_truth_missing:"))
+        .any(|code| taskflow_contracts::is_selected_lane_runtime_assignment_truth_missing(code))
         || blocker_codes
             .iter()
             .any(|code| code.starts_with("selected_lane_task_record_missing:"))
     {
         selected_lanes.clear();
-        blocker_codes.push("selected_lane_runtime_assignment_truth_required".to_string());
+        blocker_codes.push(
+            taskflow_contracts::BlockerCode::SelectedLaneRuntimeAssignmentTruthRequired
+                .as_str()
+                .to_string(),
+        );
         next_actions.push(
             "Selection truth is incomplete for at least one scheduler-selected lane; fix runtime assignment evidence before launching `vida agent-init`."
                 .to_string(),
@@ -2494,9 +2590,9 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
             selection_truth_guard_blockers(&lane.selection_truth)
                 .into_iter()
                 .map(move |blocker| {
-                    format!(
-                        "selected_lane_assignment_guard_blocked:task={}:{}",
-                        lane.task_id, blocker
+                    taskflow_contracts::selected_lane_assignment_guard_blocked(
+                        &lane.task_id,
+                        &blocker,
                     )
                 })
         })
@@ -2508,7 +2604,11 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
             }
         }
         selected_lanes.clear();
-        blocker_codes.push("selected_lane_assignment_guard_required".to_string());
+        blocker_codes.push(
+            taskflow_contracts::BlockerCode::SelectedLaneAssignmentGuardRequired
+                .as_str()
+                .to_string(),
+        );
         next_actions.push(
             "Selection truth has budget, readiness, or backend blockers; fix assignment guard evidence before launching `vida agent-init`."
                 .to_string(),
@@ -3633,7 +3733,9 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
             .filter(|value| !value.is_empty())
             .is_none()
     {
-        let blocker_codes = vec!["host_agent_id_missing".to_string()];
+        let blocker_codes = vec![taskflow_contracts::BlockerCode::HostAgentIdMissing
+            .as_str()
+            .to_string()];
         let next_actions = vec![
             "provide --host-agent-id from the parent host adapter before completing the lane"
                 .to_string(),
@@ -3666,7 +3768,10 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
             )
             .await;
             if !command.attach_artifacts.is_empty() {
-                provenance_blockers.retain(|code| code != "host_bridge_dispatch_receipt_missing");
+                provenance_blockers.retain(|code| {
+                    code != taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing
+                        .as_str()
+                });
             }
             let payload = host_bridge_adapter_payload(
                 &command.request,
@@ -3688,7 +3793,9 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 else {
-                    let blocker_codes = vec!["host_agent_id_missing".to_string()];
+                    let blocker_codes = vec![taskflow_contracts::BlockerCode::HostAgentIdMissing
+                        .as_str()
+                        .to_string()];
                     let next_actions = vec![
                         "provide --host-agent-id from the parent host adapter before completing the lane"
                             .to_string(),
@@ -3731,7 +3838,11 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                 ) {
                     Ok(args) => args,
                     Err(error) => {
-                        let blocker_codes = vec!["host_bridge_completion_args_invalid".to_string()];
+                        let blocker_codes = vec![
+                            taskflow_contracts::BlockerCode::HostBridgeCompletionArgsInvalid
+                                .as_str()
+                                .to_string(),
+                        ];
                         let artifact_refs = serde_json::json!({
                             "request_path": command.request.display().to_string()
                         });
@@ -3761,9 +3872,9 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
                 || error.contains("escapes VIDA state root")
                 || error.contains("symlink");
             let blocker_codes = vec![if path_safety_error {
-                "host_bridge_request_untrusted_path".to_string()
+                blocker_code_value(taskflow_contracts::BlockerCode::HostBridgeRequestUntrustedPath)
             } else {
-                "host_bridge_request_unreadable".to_string()
+                blocker_code_value(taskflow_contracts::BlockerCode::HostBridgeRequestUnreadable)
             }];
             let next_actions = vec![if path_safety_error {
                 "provide a host_tool_bridge_request JSON artifact under the VIDA state root"
