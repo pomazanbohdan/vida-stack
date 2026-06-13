@@ -2,6 +2,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use runtime_path_policy::atomic_write::{write_json_new, write_json_replace};
+use runtime_path_policy::{
+    existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
+    ArtifactPathKind, PathPolicyError, StateRoot,
+};
 use serde::Serialize;
 use time::format_description::well_known::Rfc3339;
 
@@ -2683,19 +2688,18 @@ fn trusted_host_bridge_completion_request_context(
 }
 
 fn path_has_dot_segment(path: &Path) -> bool {
-    path.as_os_str()
-        .to_string_lossy()
-        .split(['/', '\\'])
-        .any(|segment| matches!(segment, "." | ".."))
+    path_contains_dot_segment(path)
 }
 
 fn canonical_state_root(state_root: &Path) -> Result<PathBuf, String> {
-    std::fs::canonicalize(state_root).map_err(|error| {
-        format!(
-            "Failed to canonicalize VIDA state root `{}`: {error}",
-            state_root.display()
-        )
-    })
+    StateRoot::open(state_root)
+        .map(|root| root.canonical().to_path_buf())
+        .map_err(|error| {
+            format!(
+                "Failed to canonicalize VIDA state root `{}`: {error}",
+                state_root.display()
+            )
+        })
 }
 
 fn canonicalize_existing_state_path(
@@ -2703,27 +2707,10 @@ fn canonicalize_existing_state_path(
     path: &Path,
     label: &str,
 ) -> Result<PathBuf, String> {
-    if path_has_dot_segment(path) {
-        return Err(format!(
-            "Host bridge {label} path `{}` contains inadmissible dot-segment traversal.",
-            path.display()
-        ));
-    }
-    let canonical_path = std::fs::canonicalize(path).map_err(|error| {
-        format!(
-            "Failed to canonicalize host bridge {label} path `{}`: {error}",
-            path.display()
-        )
-    })?;
-    let canonical_root = canonical_state_root(state_root)?;
-    if !canonical_path.starts_with(&canonical_root) {
-        return Err(format!(
-            "Host bridge {label} path `{}` is outside VIDA state root `{}`.",
-            canonical_path.display(),
-            canonical_root.display()
-        ));
-    }
-    Ok(canonical_path)
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    existing_regular_file_under_root(&state_root, path, host_bridge_artifact_kind(label))
+        .map(|file| file.path().to_path_buf())
+        .map_err(|error| host_bridge_path_policy_error(error, label))
 }
 
 fn canonicalize_existing_regular_state_path(
@@ -2751,47 +2738,10 @@ fn validate_new_state_artifact_path(
     path: &Path,
     label: &str,
 ) -> Result<PathBuf, String> {
-    if path_has_dot_segment(path) {
-        return Err(format!(
-            "Host bridge {label} path `{}` contains inadmissible dot-segment traversal.",
-            path.display()
-        ));
-    }
-    if std::fs::symlink_metadata(path).is_ok() {
-        return Err(format!(
-            "Host bridge {label} path `{}` already exists; refusing to overwrite it.",
-            path.display()
-        ));
-    }
-    let parent = path.parent().ok_or_else(|| {
-        format!(
-            "Host bridge {label} path `{}` has no parent directory.",
-            path.display()
-        )
-    })?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("Failed to create host bridge {label} directory: {error}"))?;
-    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
-        format!(
-            "Failed to canonicalize host bridge {label} directory `{}`: {error}",
-            parent.display()
-        )
-    })?;
-    let canonical_root = canonical_state_root(state_root)?;
-    if !canonical_parent.starts_with(&canonical_root) {
-        return Err(format!(
-            "Host bridge {label} directory `{}` is outside VIDA state root `{}`.",
-            canonical_parent.display(),
-            canonical_root.display()
-        ));
-    }
-    let _file_name = path.file_name().ok_or_else(|| {
-        format!(
-            "Host bridge {label} path `{}` has no file name.",
-            path.display()
-        )
-    })?;
-    Ok(path.to_path_buf())
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    new_output_path_under_root(&state_root, path, host_bridge_artifact_kind(label), false)
+        .map(|output| output.path().to_path_buf())
+        .map_err(|error| host_bridge_path_policy_error(error, label))
 }
 
 fn validate_state_artifact_path_for_host_bridge_write(
@@ -2800,10 +2750,15 @@ fn validate_state_artifact_path_for_host_bridge_write(
     label: &str,
     replace_existing: bool,
 ) -> Result<PathBuf, String> {
-    if replace_existing && std::fs::symlink_metadata(path).is_ok() {
-        return canonicalize_existing_state_path(state_root, path, label);
-    }
-    validate_new_state_artifact_path(state_root, path, label)
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    new_output_path_under_root(
+        &state_root,
+        path,
+        host_bridge_artifact_kind(label),
+        replace_existing,
+    )
+    .map(|output| output.path().to_path_buf())
+    .map_err(|error| host_bridge_path_policy_error(error, label))
 }
 
 fn host_bridge_request_object(result: &serde_json::Value) -> Option<&serde_json::Value> {
@@ -2950,37 +2905,106 @@ fn validated_host_bridge_paths_from_receipt(
 }
 
 fn write_json_artifact_new(
+    state_root: &Path,
     path: &Path,
     value: &serde_json::Value,
     label: &str,
 ) -> Result<(), String> {
-    let encoded = serde_json::to_string_pretty(value)
-        .map_err(|error| format!("Failed to encode {label}: {error}"))?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| format!("Failed to create {label} `{}`: {error}", path.display()))?;
-    use std::io::Write;
-    file.write_all(encoded.as_bytes())
-        .map_err(|error| format!("Failed to write {label} `{}`: {error}", path.display()))
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    let output =
+        new_output_path_under_root(&state_root, path, host_bridge_artifact_kind(label), false)
+            .map_err(|error| host_bridge_path_policy_error(error, label))?;
+    write_json_new(&output, value).map_err(|error| host_bridge_write_policy_error(error, label))
 }
 
 fn write_json_artifact_replace_existing(
+    state_root: &Path,
     path: &Path,
     value: &serde_json::Value,
     label: &str,
 ) -> Result<(), String> {
-    let encoded = serde_json::to_string_pretty(value)
-        .map_err(|error| format!("Failed to encode {label}: {error}"))?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(path)
-        .map_err(|error| format!("Failed to open {label} `{}`: {error}", path.display()))?;
-    use std::io::Write;
-    file.write_all(encoded.as_bytes())
-        .map_err(|error| format!("Failed to write {label} `{}`: {error}", path.display()))
+    let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
+    let output =
+        new_output_path_under_root(&state_root, path, host_bridge_artifact_kind(label), true)
+            .map_err(|error| host_bridge_path_policy_error(error, label))?;
+    write_json_replace(&output, value).map_err(|error| host_bridge_write_policy_error(error, label))
+}
+
+fn host_bridge_artifact_kind(label: &str) -> ArtifactPathKind {
+    match label {
+        "request" | "host bridge request" => ArtifactPathKind::HostBridgeRequest,
+        "packet" | "host bridge packet" => ArtifactPathKind::HostBridgePacket,
+        "result" | "host bridge result" | "dispatch result" => ArtifactPathKind::HostBridgeResult,
+        "receipt" | "host bridge receipt" => ArtifactPathKind::HostBridgeReceipt,
+        _ => ArtifactPathKind::GenericJson,
+    }
+}
+
+fn host_bridge_path_policy_error(error: PathPolicyError, label: &str) -> String {
+    match error {
+        PathPolicyError::DotSegment { path, .. } => format!(
+            "Host bridge {label} path `{}` contains inadmissible dot-segment traversal.",
+            path.display()
+        ),
+        PathPolicyError::Metadata { path, source, .. } => format!(
+            "Failed to inspect host bridge {label} path `{}`: {source}",
+            path.display()
+        ),
+        PathPolicyError::Symlink { path, .. } | PathPolicyError::NotRegularFile { path, .. } => {
+            format!(
+                "Host bridge {label} path `{}` is not a regular file.",
+                path.display()
+            )
+        }
+        PathPolicyError::Canonicalize { path, source, .. } => format!(
+            "Failed to canonicalize host bridge {label} path `{}`: {source}",
+            path.display()
+        ),
+        PathPolicyError::OutsideStateRoot { path, root, .. } => format!(
+            "Host bridge {label} path `{}` is outside VIDA state root `{}`.",
+            path.display(),
+            root.display()
+        ),
+        PathPolicyError::ParentCreate { source, .. } => {
+            format!("Failed to create host bridge {label} directory: {source}")
+        }
+        PathPolicyError::AlreadyExists { path, .. } => format!(
+            "Host bridge {label} path `{}` already exists; refusing to overwrite it.",
+            path.display()
+        ),
+        PathPolicyError::MissingParent { path, .. } => format!(
+            "Host bridge {label} path `{}` has no parent directory.",
+            path.display()
+        ),
+        PathPolicyError::TooLarge {
+            path, max_bytes, ..
+        } => format!(
+            "Host bridge {label} path `{}` exceeds {max_bytes} bytes.",
+            path.display()
+        ),
+        PathPolicyError::Json { path, source, .. } => format!(
+            "Failed to decode host bridge {label} `{}` as JSON: {source}",
+            path.display()
+        ),
+        PathPolicyError::Read { path, source, .. } => format!(
+            "Failed to read host bridge {label} `{}`: {source}",
+            path.display()
+        ),
+        PathPolicyError::Write { path, source, .. } => {
+            format!("Failed to write {label} `{}`: {source}", path.display())
+        }
+        other => other.to_string(),
+    }
+}
+
+fn host_bridge_write_policy_error(error: PathPolicyError, label: &str) -> String {
+    match error {
+        PathPolicyError::Json { source, .. } => format!("Failed to encode {label}: {source}"),
+        PathPolicyError::Write { path, source, .. } => {
+            format!("Failed to write {label} `{}`: {source}", path.display())
+        }
+        other => host_bridge_path_policy_error(other, label),
+    }
 }
 
 fn host_bridge_implementation_artifacts(
@@ -3576,14 +3600,24 @@ fn materialize_host_bridge_completion_evidence(
         "recorded_at": recorded_at,
     });
     if replace_existing_evidence && result_path.exists() {
-        write_json_artifact_replace_existing(&result_path, &result, "host bridge result")?;
+        write_json_artifact_replace_existing(
+            state_root,
+            &result_path,
+            &result,
+            "host bridge result",
+        )?;
     } else {
-        write_json_artifact_new(&result_path, &result, "host bridge result")?;
+        write_json_artifact_new(state_root, &result_path, &result, "host bridge result")?;
     }
     if replace_existing_evidence && receipt_path.exists() {
-        write_json_artifact_replace_existing(&receipt_path, &receipt, "host bridge receipt")?;
+        write_json_artifact_replace_existing(
+            state_root,
+            &receipt_path,
+            &receipt,
+            "host bridge receipt",
+        )?;
     } else {
-        write_json_artifact_new(&receipt_path, &receipt, "host bridge receipt")?;
+        write_json_artifact_new(state_root, &receipt_path, &receipt, "host bridge receipt")?;
     }
     let request_status = if status == "blocked"
         && blocker_codes
@@ -3616,7 +3650,12 @@ fn materialize_host_bridge_completion_evidence(
                 .unwrap_or(serde_json::Value::Null),
         );
     }
-    write_json_artifact_replace_existing(&canonical_request_path, &request, "host bridge request")?;
+    write_json_artifact_replace_existing(
+        state_root,
+        &canonical_request_path,
+        &request,
+        "host bridge request",
+    )?;
     Ok(HostBridgeCompletionEvidence {
         result_path: result_path.display().to_string(),
         receipt_path: receipt_path.display().to_string(),

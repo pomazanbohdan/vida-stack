@@ -164,9 +164,14 @@ pub enum PathPolicyError {
 }
 
 pub fn path_contains_dot_segment(path: impl AsRef<Path>) -> bool {
-    path.as_ref()
-        .components()
+    let path = path.as_ref();
+    path.components()
         .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+        || path
+            .as_os_str()
+            .to_string_lossy()
+            .split(['/', '\\'])
+            .any(|segment| matches!(segment, "." | ".."))
 }
 
 pub fn existing_regular_file_under_root(
@@ -315,6 +320,12 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, PathPolicyError::DotSegment { .. }));
+    }
+
+    #[test]
+    fn path_contains_dot_segment_rejects_middle_current_dir_segment() {
+        assert!(path_contains_dot_segment("requests/./request.json"));
+        assert!(path_contains_dot_segment("requests\\..\\request.json"));
     }
 
     #[test]
