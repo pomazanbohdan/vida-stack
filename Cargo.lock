@@ -6445,6 +6445,7 @@ dependencies = [
  "futures",
  "interprocess",
  "libc",
+ "operator-output",
  "ratatui 0.30.0",
  "runtime-path-policy",
  "serde",
