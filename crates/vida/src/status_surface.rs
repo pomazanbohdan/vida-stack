@@ -1674,6 +1674,7 @@ fn refresh_cached_project_activation_projection(
             continue;
         };
         remove_string_from_json_array(current, "activation_pending");
+        remove_string_from_json_array(current, "project_activation_unknown");
     }
 
     for path in [
@@ -3201,14 +3202,14 @@ mod tests {
         let mut payload = serde_json::json!({
             "surface": "vida status",
             "status": "blocked",
-            "blocker_codes": ["activation_pending"],
+            "blocker_codes": ["activation_pending", "project_activation_unknown"],
             "next_actions": [
                 "run `vida init` in the project root to materialize bootstrap carriers",
                 "continue `vida taskflow consume continue --run-id run-live`"
             ],
             "shared_fields": {
                 "status": "blocked",
-                "blocker_codes": ["activation_pending"],
+                "blocker_codes": ["activation_pending", "project_activation_unknown"],
                 "next_actions": [
                     "run `vida init` in the project root to materialize bootstrap carriers",
                     "continue `vida taskflow consume continue --run-id run-live`"
@@ -3216,7 +3217,7 @@ mod tests {
             },
             "operator_contracts": {
                 "status": "blocked",
-                "blocker_codes": ["activation_pending"],
+                "blocker_codes": ["activation_pending", "project_activation_unknown"],
                 "next_actions": [
                     "run `vida init` in the project root to materialize bootstrap carriers",
                     "continue `vida taskflow consume continue --run-id run-live`"
