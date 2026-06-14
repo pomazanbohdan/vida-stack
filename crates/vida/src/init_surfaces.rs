@@ -90,6 +90,10 @@ fn emit_agent_init_invalid_role(
     ExitCode::from(2)
 }
 
+fn selected_role_allowed_for_agent_init(selected_role: &str) -> bool {
+    !selected_role.trim().eq_ignore_ascii_case("orchestrator")
+}
+
 fn agent_init_execute_dispatch_timeout_seconds(dispatch_handoff_timeout_seconds: u64) -> u64 {
     dispatch_handoff_timeout_seconds
         .saturating_add(AGENT_INIT_EXECUTE_DISPATCH_RECONCILIATION_GRACE_SECONDS)
@@ -6262,11 +6266,22 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         &dev_team_readiness,
                     );
                 };
-                agent_init_explicit_role_selection(
+                let selection = agent_init_explicit_role_selection(
                     &resolved_role,
                     &role,
                     args.request_text.clone().unwrap_or_default(),
-                )
+                );
+                if !selected_role_allowed_for_agent_init(
+                    selection["selected_role"].as_str().unwrap_or_default(),
+                ) {
+                    return emit_agent_init_invalid_role(
+                        &args,
+                        &role,
+                        compiled_bundle,
+                        &dev_team_readiness,
+                    );
+                }
+                selection
             } else {
                 let request = match args.request_text.as_deref() {
                     Some(request) if !request.trim().is_empty() => request,
@@ -6279,7 +6294,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 };
                 match build_runtime_lane_selection_with_store(&store, request).await {
                     Ok(selection) => {
-                        if selection.selected_role == "orchestrator" {
+                        if !selected_role_allowed_for_agent_init(&selection.selected_role) {
                             eprintln!(
                                 "Agent init resolved to orchestrator posture; provide a non-orchestrator `--role` or a bounded worker request."
                             );
@@ -6684,7 +6699,7 @@ fn agent_init_packet_selection(
         })
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
-    if selected_role == "orchestrator" || selected_role == "unknown" {
+    if !selected_role_allowed_for_agent_init(&selected_role) || selected_role == "unknown" {
         return Err(
             "Packet activation requires a non-orchestrator runtime role in the dispatch packet."
                 .to_string(),
@@ -7702,6 +7717,30 @@ mod agent_init_surface_tests {
             builder.mapping_source,
             Some("dev_team.flows.steps.runtime_role")
         );
+    }
+
+    #[test]
+    fn agent_init_selected_role_guard_rejects_orchestrator_variants() {
+        assert!(!selected_role_allowed_for_agent_init("orchestrator"));
+        assert!(!selected_role_allowed_for_agent_init(" Orchestrator "));
+        assert!(selected_role_allowed_for_agent_init("worker"));
+        assert!(selected_role_allowed_for_agent_init("verifier"));
+    }
+
+    #[test]
+    fn agent_init_packet_selection_rejects_orchestrator_runtime_role_variants() {
+        let packet = serde_json::json!({
+            "packet_kind": "runtime_dispatch_packet",
+            "packet_template_kind": "delivery_task_packet",
+            "activation_runtime_role": " Orchestrator ",
+            "dispatch_target": "developer",
+            "request_text": "repair"
+        });
+
+        let error = agent_init_packet_selection("packet.json", packet, false)
+            .expect_err("packet-selected orchestrator variants must be rejected");
+
+        assert!(error.contains("non-orchestrator runtime role"));
     }
 
     #[test]
