@@ -19,7 +19,7 @@ Usage:
   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode <mode> [-Json] [-Jobs <n>] [-TestFilter <filter>]
 
 Modes:
-  script-check      No-Cargo proof for diffs and script syntax.
+  script-check      No-Cargo proof for diffs, runtime boundaries, and script syntax.
   quick             Debug source proof: git diff check, cargo fmt, cargo check.
   focused-nextest   Focused vida package test proof; requires -TestFilter.
   package-nextest   Full vida package test proof with the default nextest profile.
@@ -67,6 +67,36 @@ $CargoTargetDirState = Resolve-CargoTargetDirPolicy
 $env:CARGO_TARGET_DIR = $CargoTargetDirState.effective_cargo_target_dir
 $DebugVidaPath = Join-Path $CargoTargetDirState.effective_cargo_target_dir "debug\vida.exe"
 $ReleaseVidaPath = Join-Path $CargoTargetDirState.effective_cargo_target_dir "release\vida.exe"
+
+function Resolve-CommandPath {
+    param(
+        [string]$Name,
+        [string[]]$Candidates = @()
+    )
+
+    $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    foreach ($candidate in $Candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return $candidate
+        }
+    }
+
+    return $Name
+}
+
+$GitPath = Resolve-CommandPath "git" @("C:\Program Files\Git\cmd\git.exe")
+$PwshPath = Resolve-CommandPath "pwsh" @(
+    "C:\Program Files\PowerShell\7\pwsh.exe",
+    "$env:ProgramFiles\PowerShell\7\pwsh.exe"
+)
+$BashPath = Resolve-CommandPath "bash" @(
+    "C:\Program Files\Git\bin\bash.exe",
+    "$env:ProgramFiles\Git\bin\bash.exe"
+)
 
 function Invoke-Timed {
     param(
@@ -156,7 +186,7 @@ function Invoke-DiffWhitespaceCheck {
     foreach ($diffMode in @(@(), @("--cached"))) {
         $currentFile = ""
         $newLine = 0
-        $diffOutput = & git diff @diffMode --unified=0 --no-ext-diff --
+        $diffOutput = & $GitPath diff @diffMode --unified=0 --no-ext-diff --
         foreach ($line in $diffOutput) {
             if ($line.StartsWith("+++ b/")) {
                 $currentFile = $line.Substring(6)
@@ -264,7 +294,7 @@ function Test-CommandExists {
 function Get-ChangedBashScripts {
     $paths = New-Object System.Collections.Generic.SortedSet[string]
     foreach ($diffMode in @(@(), @("--cached"))) {
-        $changed = & git diff @diffMode --name-only -- "scripts/*.sh" "install/*.sh"
+        $changed = & $GitPath diff @diffMode --name-only -- "scripts/*.sh" "install/*.sh"
         foreach ($path in $changed) {
             if (-not [string]::IsNullOrWhiteSpace($path)) {
                 [void]$paths.Add($path)
@@ -318,21 +348,21 @@ try {
         Invoke-DiffWhitespaceCheck
         Invoke-RootReadmeOnlyCheck
         Invoke-Timed "powershell-dev-gate-parse" @(
-            "pwsh",
+            $PwshPath,
             "-NoLogo",
             "-NoProfile",
             "-Command",
             '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/vida-dev-gate.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
         )
         Invoke-Timed "powershell-evaluation-log-linter-parse" @(
-            "pwsh",
+            $PwshPath,
             "-NoLogo",
             "-NoProfile",
             "-Command",
             '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/check-agent-evaluation-log.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
         )
         Invoke-Timed "agent-evaluation-log-fixture-lint" @(
-            "pwsh",
+            $PwshPath,
             "-NoLogo",
             "-NoProfile",
             "-ExecutionPolicy",
@@ -342,20 +372,30 @@ try {
             "-Path",
             "tests/fixtures/agent-evaluation-log/pass.md"
         )
+        Invoke-Timed "runtime-boundary-lint" @(
+            $PwshPath,
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/check-runtime-boundaries.ps1",
+            "-Json"
+        )
         [string[]]$changedBashScripts = @(Get-ChangedBashScripts)
         if ($changedBashScripts.Count -eq 0) {
             Add-SkippedRecord "bash-script-parse" "no changed Bash scripts"
-        } elseif (Test-CommandExists "bash") {
+        } elseif (Test-CommandExists $BashPath) {
             if ($changedBashScripts.Count -eq 1) {
-                Invoke-Timed "bash-script-parse" @("bash", "-n", $changedBashScripts[0])
+                Invoke-Timed "bash-script-parse" @($BashPath, "-n", $changedBashScripts[0])
             } else {
-                Invoke-Timed "bash-script-parse" (@("bash", "-n", "-c", 'for f in "$@"; do source "$f"; done', "_") + $changedBashScripts)
+                Invoke-Timed "bash-script-parse" (@($BashPath, "-n", "-c", 'for f in "$@"; do source "$f"; done', "_") + $changedBashScripts)
             }
         } else {
             Add-SkippedRecord "bash-script-parse" "bash not found; skipped Bash script syntax checks"
         }
     } elseif ($Mode -eq "quick") {
-        Invoke-Timed "git-diff-check" @("git", "diff", "--check")
+        Invoke-Timed "git-diff-check" @($GitPath, "diff", "--check")
         Invoke-Timed "cargo-fmt-check" @("cargo", "fmt", "-p", "vida", "--", "--check")
         Invoke-Timed "cargo-check-vida" @("cargo", "check", "--locked", "-p", "vida")
     } elseif ($Mode -eq "focused-nextest") {
@@ -378,11 +418,11 @@ try {
         Invoke-Timed "cargo-build-debug" @("cargo", "build", "--locked", "-p", "vida")
         Invoke-Timed "debug-vida-status" @($DebugVidaPath, "status", "--json")
     } elseif ($Mode -eq "release-package") {
-        if (-not (Test-CommandExists "bash")) {
+        if (-not (Test-CommandExists $BashPath)) {
             Write-Error "-Mode release-package requires bash."
             exit 2
         }
-        Invoke-Timed "release-package" @("bash", "scripts/build-release.sh")
+        Invoke-Timed "release-package" @($BashPath, "scripts/build-release.sh")
     } elseif ($Mode -eq "release-install") {
         Invoke-Timed "cargo-build-release-vida" @("cargo", "build", "--locked", "-p", "vida", "--release")
         Invoke-Timed "vida-release-install" @($ReleaseVidaPath, "release", "install", "--skip-build", "--source-binary", $ReleaseVidaPath, "--json")
