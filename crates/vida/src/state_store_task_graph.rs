@@ -7,6 +7,25 @@ use crate::state_store::state_store_task_models::{
 const TASK_TREE_MAX_DEPTH: usize = 64;
 const TASK_TREE_MAX_NODE_VISITS: usize = 10_000;
 
+fn task_progress_row_from_record(
+    task: &TaskRecord,
+) -> taskflow_core::task::progress::TaskProgressRow {
+    taskflow_core::task::progress::TaskProgressRow {
+        id: task.id.clone(),
+        title: task.title.clone(),
+        status: task.status.clone(),
+        issue_type: task.issue_type.clone(),
+        priority: task.priority,
+        labels: task.labels.clone(),
+        proof_targets: task.planner_metadata.proof_targets.clone(),
+        parent_id: task
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.edge_type == "parent-child")
+            .map(|dependency| dependency.depends_on_id.clone()),
+    }
+}
+
 impl StateStore {
     fn parent_child_reverse_index(rows: &[TaskRecord]) -> BTreeMap<String, Vec<String>> {
         let mut children = BTreeMap::<String, Vec<String>>::new();
@@ -376,211 +395,49 @@ impl StateStore {
         rows: &[TaskRecord],
         task_id: &str,
     ) -> Result<TaskProgressSummary, StateStoreError> {
+        let core_rows = rows
+            .iter()
+            .map(task_progress_row_from_record)
+            .collect::<Vec<_>>();
+        let core = taskflow_core::task::progress::task_progress_summary_from_rows(
+            &core_rows,
+            task_id,
+            taskflow_core::task::progress::TaskProgressBasis::DescendantsExcludingRoot,
+            shell_quote,
+            crate::operator_command_text::human_command,
+        )
+        .map_err(|_| StateStoreError::MissingTask {
+            task_id: task_id.to_string(),
+        })?;
         let root_task = rows
             .iter()
-            .find(|task| task.id == task_id)
+            .find(|task| task.id == core.root_task.id)
             .cloned()
             .ok_or_else(|| StateStoreError::MissingTask {
-                task_id: task_id.to_string(),
+                task_id: core.root_task.id.clone(),
             })?;
-        let children_by_parent = Self::parent_child_reverse_index(&rows);
-        let scope_ids = Self::ready_scope_ids_from_rows(&rows, task_id)?;
-        let descendant_ids = scope_ids
-            .into_iter()
-            .filter(|candidate| candidate != task_id)
-            .collect::<BTreeSet<_>>();
-
-        let mut status_counts = BTreeMap::<String, usize>::new();
-        let mut open_count = 0usize;
-        let mut in_progress_count = 0usize;
-        let mut closed_count = 0usize;
-        let mut epic_count = 0usize;
-
-        for task in rows.iter().filter(|task| descendant_ids.contains(&task.id)) {
-            *status_counts.entry(task.status.clone()).or_insert(0) += 1;
-            match task.status.as_str() {
-                "open" => open_count += 1,
-                "in_progress" => in_progress_count += 1,
-                "closed" => closed_count += 1,
-                _ => {}
-            }
-            if work_item_is_program_container(&task.issue_type) {
-                epic_count += 1;
-            }
-        }
-
-        let descendant_count = descendant_ids.len();
-        let percent_closed = if descendant_count == 0 {
-            0.0
-        } else {
-            (closed_count as f64 / descendant_count as f64) * 100.0
-        };
-        let all_descendants_closed_like = rows
-            .iter()
-            .filter(|task| descendant_ids.contains(&task.id))
-            .all(|task| Self::task_status_is_closed_like(&task.status));
-        let is_container = work_item_is_program_container(&root_task.issue_type);
-        let root_closed = Self::task_status_is_closed_like(&root_task.status);
-        let is_non_container_work_item = !is_container;
-        let non_container_descendants_clear = descendant_count == 0 || all_descendants_closed_like;
-        let proof_blocked_by_runtime = !root_closed
-            && is_non_container_work_item
-            && non_container_descendants_clear
-            && !root_task.planner_metadata.proof_targets.is_empty()
-            && root_task.labels.iter().any(|label| {
-                label == "proof-blocked-by-runtime" || label == "runtime-proof-blocked"
-            });
-        let blocked_by_runtime = proof_blocked_by_runtime
-            || (!root_closed
-                && is_non_container_work_item
-                && (root_task.status == "blocked"
-                    || root_task
-                        .labels
-                        .iter()
-                        .any(|label| label == "runtime-blocked" || label == "blocked-by-runtime")));
-        let missing_proof = !root_closed
-            && is_non_container_work_item
-            && non_container_descendants_clear
-            && !root_task.planner_metadata.proof_targets.is_empty()
-            && !proof_blocked_by_runtime;
-        let leaf_ready_for_close = !root_closed
-            && is_non_container_work_item
-            && non_container_descendants_clear
-            && !missing_proof
-            && !blocked_by_runtime
-            && matches!(
-                root_task.status.as_str(),
-                "in_progress" | "review" | "verified" | "ready_for_close"
-            );
-        let closure_candidate =
-            is_container && !root_closed && descendant_count > 0 && all_descendants_closed_like;
-        let (
-            closure_candidate_state,
-            closure_candidate_reason,
-            recommended_next_action,
-            canonical_commands,
-            next_required_command,
-        ) = if closure_candidate {
-            let quoted_root_task_id = shell_quote(&root_task.id);
-            let close_command = crate::operator_command_text::human_command(&format!(
-                "vida task close {} --reason \"all descendants closed\" --json",
-                quoted_root_task_id
-            ));
-            (
-                "ready_to_close".to_string(),
-                Some("root container is open while all descendants are closed-like".to_string()),
-                format!("Close container with `{}`.", close_command),
-                vec![close_command.clone()],
-                Some(close_command),
-            )
-        } else if root_closed {
-            (
-                "already_closed".to_string(),
-                Some("root task is already closed-like".to_string()),
-                "No action; task is already closed.".to_string(),
-                Vec::new(),
-                None,
-            )
-        } else if is_non_container_work_item {
-            let child_work_remaining = descendant_count > 0 && !all_descendants_closed_like;
-            let next_required_command = if child_work_remaining {
-                Some(
-                    "Close or complete child work before closing the parent work item.".to_string(),
-                )
-            } else if missing_proof {
-                Some(
-                    "Run declared proof targets, then close the leaf task with explicit evidence."
-                        .to_string(),
-                )
-            } else if proof_blocked_by_runtime {
-                Some(
-                    "Record or resolve the runtime proof blocker before closing the leaf task."
-                        .to_string(),
-                )
-            } else if blocked_by_runtime {
-                Some(
-                    "Record or resolve the runtime blocker before closing the leaf task."
-                        .to_string(),
-                )
-            } else if leaf_ready_for_close {
-                let close_command = crate::operator_command_text::human_command(&format!(
-                    "vida task close {} --reason \"verified\" --json",
-                    shell_quote(&root_task.id)
-                ));
-                Some(close_command)
-            } else {
-                Some("Continue the leaf task until verification evidence is available.".to_string())
-            };
-            let closure_candidate_state = if child_work_remaining {
-                "work_item_child_work_remaining"
-            } else if missing_proof {
-                "leaf_missing_proof"
-            } else if proof_blocked_by_runtime {
-                "leaf_proof_blocked_by_runtime"
-            } else if blocked_by_runtime {
-                "leaf_blocked_by_runtime"
-            } else if leaf_ready_for_close {
-                "leaf_ready_for_close"
-            } else {
-                "leaf_in_progress"
-            };
-            let closure_candidate_reason = if descendant_count == 0 {
-                "leaf task uses proof readiness instead of container closure semantics"
-            } else {
-                "non-container work item uses proof readiness instead of container closure semantics"
-            };
-            (
-                closure_candidate_state.to_string(),
-                Some(closure_candidate_reason.to_string()),
-                next_required_command
-                    .clone()
-                    .unwrap_or_else(|| "Continue normal leaf task execution.".to_string()),
-                Vec::new(),
-                next_required_command,
-            )
-        } else if descendant_count == 0 {
-            (
-                "container_without_descendants".to_string(),
-                Some("container has no descendants to prove closure readiness".to_string()),
-                "Add child work items or close with an explicit operator reason.".to_string(),
-                Vec::new(),
-                Some("Add child work items or close with an explicit operator reason.".to_string()),
-            )
-        } else {
-            (
-                "active_descendants_remaining".to_string(),
-                Some("one or more descendants are not closed-like".to_string()),
-                "Continue or close remaining descendant work before closing the container."
-                    .to_string(),
-                Vec::new(),
-                Some(
-                    "Continue or close remaining descendant work before closing the container."
-                        .to_string(),
-                ),
-            )
-        };
 
         Ok(TaskProgressSummary {
             root_task,
-            progress_basis: "descendants_excluding_root".to_string(),
-            direct_child_count: children_by_parent.get(task_id).map(Vec::len).unwrap_or(0),
-            descendant_count,
-            open_count,
-            in_progress_count,
-            closed_count,
-            epic_count,
-            status_counts,
-            percent_closed,
-            closure_candidate,
-            closure_candidate_state,
-            closure_candidate_reason,
-            ready_for_close: closure_candidate || leaf_ready_for_close,
-            missing_proof,
-            proof_blocked_by_runtime,
-            blocked_by_runtime,
-            next_required_command,
-            recommended_next_action,
-            canonical_commands,
+            progress_basis: core.progress_basis,
+            direct_child_count: core.direct_child_count,
+            descendant_count: core.descendant_count,
+            open_count: core.open_count,
+            in_progress_count: core.in_progress_count,
+            closed_count: core.closed_count,
+            epic_count: core.epic_count,
+            status_counts: core.status_counts,
+            percent_closed: core.percent_closed,
+            closure_candidate: core.closure_candidate,
+            closure_candidate_state: core.closure_candidate_state,
+            closure_candidate_reason: core.closure_candidate_reason,
+            ready_for_close: core.ready_for_close,
+            missing_proof: core.missing_proof,
+            proof_blocked_by_runtime: core.proof_blocked_by_runtime,
+            blocked_by_runtime: core.blocked_by_runtime,
+            next_required_command: core.next_required_command,
+            recommended_next_action: core.recommended_next_action,
+            canonical_commands: core.canonical_commands,
         })
     }
 

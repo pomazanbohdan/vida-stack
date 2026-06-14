@@ -7505,6 +7505,102 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
 }
 
 #[test]
+fn task_progress_and_closure_ready_direct_children_json_contract() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    run_command_json(
+        &[
+            "task",
+            "create",
+            "direct-parent",
+            "Direct parent",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    for child_id in ["direct-child-a", "direct-child-b"] {
+        run_command_json(
+            &[
+                "task",
+                "create",
+                child_id,
+                child_id,
+                "--type",
+                "task",
+                "--status",
+                "open",
+                "--parent-id",
+                "direct-parent",
+                "--json",
+            ],
+            &state_dir,
+        );
+    }
+    run_command_json(
+        &[
+            "task",
+            "close",
+            "direct-child-a",
+            "--reason",
+            "direct child proof complete",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let progress = run_command_json(
+        &[
+            "task",
+            "progress",
+            "direct-parent",
+            "--basis",
+            "direct-children",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(progress["status"], "pass");
+    assert_eq!(progress["progress"]["progress_basis"], "direct_children");
+    assert_eq!(progress["progress"]["direct_child_count"], 2);
+    assert_eq!(progress["progress"]["descendant_count"], 2);
+    assert_eq!(progress["progress"]["open_count"], 1);
+    assert_eq!(progress["progress"]["closed_count"], 1);
+    assert_eq!(progress["progress"]["closure_candidate"], false);
+    assert_eq!(progress["progress"]["ready_for_close"], false);
+    assert_eq!(
+        progress["progress"]["next_required_command"],
+        "Continue or close remaining direct children before closing the parent."
+    );
+
+    let closure_ready = run_command_json(
+        &[
+            "task",
+            "closure-ready",
+            "direct-parent",
+            "--basis",
+            "direct-children",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closure_ready["status"], "pass");
+    assert_eq!(closure_ready["ready_for_close"], false);
+    assert_eq!(
+        closure_ready["progress"]["closure_candidate_state"],
+        "direct_children_remaining"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_defect_batch_rehome_cli_dry_run_and_persist_preserve_graph() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

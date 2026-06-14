@@ -1833,7 +1833,7 @@ mod tests {
         );
         assert_eq!(
             payload["progress"]["canonical_commands"][0],
-            "vida task close epic-ready --reason \"all descendants closed\" --json"
+            "vida task close epic-ready --reason \"all descendants closed\""
         );
         assert_eq!(payload["progress"]["ready_for_close"], true);
         assert_eq!(payload["progress"]["missing_proof"], false);
@@ -1841,7 +1841,7 @@ mod tests {
         assert_eq!(payload["progress"]["blocked_by_runtime"], false);
         assert_eq!(
             payload["progress"]["next_required_command"],
-            "vida task close epic-ready --reason \"all descendants closed\" --json"
+            "vida task close epic-ready --reason \"all descendants closed\""
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
 

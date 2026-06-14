@@ -14,6 +14,11 @@ use taskflow_core::task::import_export::{
     task_import_jsonl_success_fields, task_replace_jsonl_success_fields, TaskImportJsonlSummary,
     TaskReplaceJsonlSummary,
 };
+use taskflow_core::task::progress::{
+    parse_task_progress_basis,
+    task_progress_summary_from_rows as core_task_progress_summary_from_rows, TaskProgressRow,
+    TaskProgressSummary as CoreTaskProgressSummary,
+};
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub(crate) struct TaskReadMetadata {
@@ -1942,13 +1947,7 @@ fn task_epic_progress_summary(
 }
 
 fn task_progress_basis_arg(value: &str) -> Result<&'static str, String> {
-    match value.trim() {
-        "" | "descendants" | "descendants_excluding_root" => Ok("descendants_excluding_root"),
-        "direct-children" | "direct_children" | "children" => Ok("direct_children"),
-        other => Err(format!(
-            "unsupported progress basis `{other}`; expected descendants or direct-children"
-        )),
-    }
+    Ok(parse_task_progress_basis(value)?.as_str())
 }
 
 fn task_progress_summary_for_basis(
@@ -1956,10 +1955,23 @@ fn task_progress_summary_for_basis(
     task_id: &str,
     basis: &str,
 ) -> Result<state_store::TaskProgressSummary, state_store::StateStoreError> {
-    match basis {
-        "direct_children" => task_direct_child_progress_summary_from_rows(rows, task_id),
-        _ => StateStore::task_progress_summary_from_rows(rows, task_id),
-    }
+    let progress_basis = parse_task_progress_basis(basis)
+        .map_err(|reason| state_store::StateStoreError::InvalidTaskRecord { reason })?;
+    let core_rows = rows
+        .iter()
+        .map(task_progress_row_from_record)
+        .collect::<Vec<_>>();
+    let core_summary = core_task_progress_summary_from_rows(
+        &core_rows,
+        task_id,
+        progress_basis,
+        crate::launcher_task_commands::shell_quote,
+        crate::operator_command_text::human_command,
+    )
+    .map_err(|_| state_store::StateStoreError::MissingTask {
+        task_id: task_id.to_string(),
+    })?;
+    task_progress_summary_from_core(rows, core_summary)
 }
 
 async fn task_stage_ensemble_operator_summary(
@@ -2080,96 +2092,51 @@ fn task_stage_ensemble_next_command(
     }
 }
 
-fn task_direct_child_progress_summary_from_rows(
+fn task_progress_row_from_record(task: &state_store::TaskRecord) -> TaskProgressRow {
+    TaskProgressRow {
+        id: task.id.clone(),
+        title: task.title.clone(),
+        status: task.status.clone(),
+        issue_type: task.issue_type.clone(),
+        priority: task.priority,
+        labels: task.labels.clone(),
+        proof_targets: task.planner_metadata.proof_targets.clone(),
+        parent_id: task_parent_id(task),
+    }
+}
+
+fn task_progress_summary_from_core(
     rows: &[state_store::TaskRecord],
-    task_id: &str,
+    core: CoreTaskProgressSummary,
 ) -> Result<state_store::TaskProgressSummary, state_store::StateStoreError> {
     let root_task = rows
         .iter()
-        .find(|task| task.id == task_id)
+        .find(|task| task.id == core.root_task.id)
         .cloned()
         .ok_or_else(|| state_store::StateStoreError::MissingTask {
-            task_id: task_id.to_string(),
+            task_id: core.root_task.id.clone(),
         })?;
-    let children = rows
-        .iter()
-        .filter(|task| task_parent_id(task).as_deref() == Some(task_id))
-        .collect::<Vec<_>>();
-    let mut status_counts = std::collections::BTreeMap::<String, usize>::new();
-    let mut open_count = 0usize;
-    let mut in_progress_count = 0usize;
-    let mut closed_count = 0usize;
-    let mut epic_count = 0usize;
-
-    for task in &children {
-        *status_counts.entry(task.status.clone()).or_insert(0) += 1;
-        match task.status.as_str() {
-            "open" => open_count += 1,
-            "in_progress" => in_progress_count += 1,
-            "closed" => closed_count += 1,
-            _ => {}
-        }
-        if task.issue_type == "epic" {
-            epic_count += 1;
-        }
-    }
-
-    let descendant_count = children.len();
-    let percent_closed = if descendant_count == 0 {
-        0.0
-    } else {
-        (closed_count as f64 / descendant_count as f64) * 100.0
-    };
-    let root_closed = StateStore::task_status_is_closed_like(&root_task.status);
-    let all_children_closed_like = children
-        .iter()
-        .all(|task| StateStore::task_status_is_closed_like(&task.status));
-    let closure_candidate = !root_closed && descendant_count > 0 && all_children_closed_like;
-    let next_required_command = if closure_candidate {
-        Some(format!(
-            "vida task close {} --reason \"direct children closed\"",
-            crate::launcher_task_commands::shell_quote(&root_task.id)
-        ))
-    } else if descendant_count == 0 {
-        Some("Add child work items or close with an explicit operator reason.".to_string())
-    } else if !all_children_closed_like {
-        Some("Continue or close remaining direct children before closing the parent.".to_string())
-    } else {
-        None
-    };
-    let recommended_next_action = next_required_command.clone().unwrap_or_else(|| {
-        "No action; task is already closed or has no direct-child blocker.".to_string()
-    });
-
     Ok(state_store::TaskProgressSummary {
         root_task,
-        progress_basis: "direct_children".to_string(),
-        direct_child_count: descendant_count,
-        descendant_count,
-        open_count,
-        in_progress_count,
-        closed_count,
-        epic_count,
-        status_counts,
-        percent_closed,
-        closure_candidate,
-        closure_candidate_state: if closure_candidate {
-            "ready_to_close".to_string()
-        } else if root_closed {
-            "already_closed".to_string()
-        } else if descendant_count == 0 {
-            "container_without_direct_children".to_string()
-        } else {
-            "direct_children_remaining".to_string()
-        },
-        closure_candidate_reason: Some("direct-child basis selected by operator".to_string()),
-        ready_for_close: closure_candidate,
-        missing_proof: false,
-        proof_blocked_by_runtime: false,
-        blocked_by_runtime: false,
-        next_required_command,
-        recommended_next_action,
-        canonical_commands: Vec::new(),
+        progress_basis: core.progress_basis,
+        direct_child_count: core.direct_child_count,
+        descendant_count: core.descendant_count,
+        open_count: core.open_count,
+        in_progress_count: core.in_progress_count,
+        closed_count: core.closed_count,
+        epic_count: core.epic_count,
+        status_counts: core.status_counts,
+        percent_closed: core.percent_closed,
+        closure_candidate: core.closure_candidate,
+        closure_candidate_state: core.closure_candidate_state,
+        closure_candidate_reason: core.closure_candidate_reason,
+        ready_for_close: core.ready_for_close,
+        missing_proof: core.missing_proof,
+        proof_blocked_by_runtime: core.proof_blocked_by_runtime,
+        blocked_by_runtime: core.blocked_by_runtime,
+        next_required_command: core.next_required_command,
+        recommended_next_action: core.recommended_next_action,
+        canonical_commands: core.canonical_commands,
     })
 }
 
