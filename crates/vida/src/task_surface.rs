@@ -7,6 +7,7 @@ use crate::task_cli_render::{
 };
 use crate::taskflow_proxy::paths_intersect;
 use std::collections::BTreeSet;
+use taskflow_core::task::block::{append_task_block_note, normalize_task_block_list};
 use taskflow_core::task::dependencies::{
     parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
 };
@@ -18,6 +19,10 @@ use taskflow_core::task::progress::{
     parse_task_progress_basis,
     task_progress_summary_from_rows as core_task_progress_summary_from_rows, TaskProgressRow,
     TaskProgressSummary as CoreTaskProgressSummary,
+};
+use taskflow_core::task::verify::{
+    append_task_verify_note, normalized_task_verify_evidence, task_reports_runtime_proof_blocker,
+    task_verify_labels,
 };
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -500,24 +505,6 @@ fn proof_target_has_close_reason_evidence(task: &state_store::TaskRecord, target
             .contains(&target.to_ascii_lowercase())
 }
 
-fn task_close_reason_reports_runtime_proof_blocker(task: &state_store::TaskRecord) -> bool {
-    let Some(reason) = task.close_reason.as_deref() else {
-        return false;
-    };
-    let normalized = reason.to_ascii_lowercase();
-    normalized.contains("proof blocked by runtime")
-        || normalized.contains("runtime proof blocker")
-        || normalized.contains("runtime blocker")
-}
-
-fn task_reports_runtime_proof_blocker(task: &state_store::TaskRecord) -> bool {
-    task_close_reason_reports_runtime_proof_blocker(task)
-        || task
-            .labels
-            .iter()
-            .any(|label| label == "proof-blocked-by-runtime" || label == "runtime-proof-blocked")
-}
-
 fn normalize_browser_proof_result(result: &str) -> Result<String, String> {
     let result = result.trim().to_ascii_lowercase();
     match result.as_str() {
@@ -596,7 +583,8 @@ fn browser_proof_record_satisfies_target(
 
 fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
     let target = target.trim().to_string();
-    let runtime_blocked = task_reports_runtime_proof_blocker(task);
+    let runtime_blocked =
+        task_reports_runtime_proof_blocker(&task.labels, task.close_reason.as_deref());
     if proof_target_has_close_reason_evidence(task, &target) {
         return TaskProofTargetStatus {
             target,
@@ -1045,47 +1033,6 @@ fn print_task_takeover_status(render: RenderMode, receipt: &TaskTakeoverStatusRe
     }
 }
 
-fn normalize_task_block_list(values: &[String]) -> Vec<String> {
-    parse_label_values(values)
-}
-
-fn append_task_block_note(
-    existing_notes: Option<&str>,
-    reason: &str,
-    evidence: Option<&str>,
-    blocker_codes: &[String],
-    next_actions: &[String],
-) -> String {
-    let mut note = format!(
-        "task_block:\n  recorded_at_unix_nanos: {}\n  reason: {}",
-        time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
-        reason.trim()
-    );
-    if let Some(evidence) = evidence.map(str::trim).filter(|value| !value.is_empty()) {
-        note.push_str("\n  evidence: ");
-        note.push_str(evidence);
-    }
-    if !blocker_codes.is_empty() {
-        note.push_str("\n  blocker_codes: ");
-        note.push_str(&blocker_codes.join(", "));
-    }
-    if !next_actions.is_empty() {
-        note.push_str("\n  next_actions:");
-        for action in next_actions {
-            note.push_str("\n    - ");
-            note.push_str(action.trim());
-        }
-    }
-
-    match existing_notes
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(existing) => format!("{existing}\n\n{note}"),
-        None => note,
-    }
-}
-
 fn print_task_block_receipt(render: RenderMode, receipt: &TaskBlockReceipt, as_json: bool) {
     if as_json {
         let payload =
@@ -1101,68 +1048,6 @@ fn print_task_block_receipt(render: RenderMode, receipt: &TaskBlockReceipt, as_j
     if !receipt.next_actions.is_empty() {
         print_surface_line(render, "next actions", &receipt.next_actions.join(" | "));
     }
-}
-
-fn normalized_task_verify_evidence(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn append_task_verify_note(
-    existing_notes: Option<&str>,
-    source_fixed: bool,
-    tests_green: bool,
-    proof_blocked: bool,
-    proof_blocker: Option<&str>,
-    evidence: &[String],
-) -> String {
-    let mut note = format!(
-        "task_partial_verification:\n  recorded_at_unix_nanos: {}\n  source_fixed: {}\n  tests_green: {}\n  proof_blocked: {}",
-        time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
-        source_fixed,
-        tests_green,
-        proof_blocked
-    );
-    if let Some(proof_blocker) = proof_blocker
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        note.push_str("\n  proof_blocker: ");
-        note.push_str(proof_blocker);
-    }
-    if !evidence.is_empty() {
-        note.push_str("\n  evidence:");
-        for item in evidence {
-            note.push_str("\n    - ");
-            note.push_str(item);
-        }
-    }
-
-    match existing_notes
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(existing) => format!("{existing}\n\n{note}"),
-        None => note,
-    }
-}
-
-fn task_verify_labels(source_fixed: bool, tests_green: bool, proof_blocked: bool) -> Vec<String> {
-    let mut labels = Vec::new();
-    if source_fixed {
-        labels.push("source-fixed".to_string());
-    }
-    if tests_green {
-        labels.push("tests-green".to_string());
-    }
-    if proof_blocked {
-        labels.push("proof-blocked-by-runtime".to_string());
-    }
-    labels
 }
 
 fn task_verify_planner_metadata(
@@ -9235,8 +9120,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             {
                                 return code;
                             }
-                            let proof_blocked_by_runtime =
-                                command.proof_blocked && task_reports_runtime_proof_blocker(&task);
+                            let proof_blocked_by_runtime = command.proof_blocked
+                                && task_reports_runtime_proof_blocker(
+                                    &task.labels,
+                                    task.close_reason.as_deref(),
+                                );
                             let receipt = TaskVerifyReceipt {
                                 surface: "vida task verify",
                                 status: task_json_success_status(),
