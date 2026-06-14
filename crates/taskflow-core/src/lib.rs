@@ -3,6 +3,13 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+/// TaskFlow consume/resume skeletons for future core extraction.
+pub mod consume;
+/// TaskFlow run-graph skeletons for future core extraction.
+pub mod run_graph;
+/// TaskFlow scheduling skeletons for future core extraction.
+pub mod scheduling;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(pub String);
 

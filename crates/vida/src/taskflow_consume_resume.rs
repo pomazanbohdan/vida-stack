@@ -3284,6 +3284,71 @@ fn dispatch_packet_json_and_path_from_current_project(
 ) -> Option<(serde_json::Value, std::path::PathBuf)> {
     let project_root = crate::resolve_runtime_project_root().ok()?;
     crate::status_surface::dispatch_packet_json_and_path_from_project_path(&project_root, path)
+        .or_else(|| dispatch_packet_json_and_path_from_state_dir_absolute_path(path))
+}
+
+fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
+    path: &str,
+) -> Option<(serde_json::Value, std::path::PathBuf)> {
+    const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
+
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let candidate = std::path::Path::new(path);
+    if !candidate.is_absolute()
+        || candidate.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+        || !is_runtime_consumption_dispatch_packet_path(candidate)
+    {
+        return None;
+    }
+    let Ok(metadata) = std::fs::symlink_metadata(candidate) else {
+        return None;
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > DISPATCH_PACKET_REF_READ_LIMIT_BYTES
+    {
+        return None;
+    }
+    let Ok(candidate) = candidate.canonicalize() else {
+        return None;
+    };
+    let Ok(file) = std::fs::File::open(&candidate) else {
+        return None;
+    };
+    let mut raw = String::new();
+    let mut limited = std::io::Read::take(file, DISPATCH_PACKET_REF_READ_LIMIT_BYTES + 1);
+    if std::io::Read::read_to_string(&mut limited, &mut raw).is_err()
+        || raw.len() as u64 > DISPATCH_PACKET_REF_READ_LIMIT_BYTES
+    {
+        return None;
+    }
+    serde_json::from_str(&raw)
+        .ok()
+        .map(|packet| (packet, candidate))
+}
+
+fn is_runtime_consumption_dispatch_packet_path(path: &std::path::Path) -> bool {
+    let parts = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    parts
+        .windows(2)
+        .any(|window| window == ["runtime-consumption", "dispatch-packets"])
+        || parts
+            .windows(2)
+            .any(|window| window == ["runtime-consumption", "downstream-dispatch-packets"])
 }
 
 fn persist_normalized_dispatch_packet(
@@ -7771,6 +7836,20 @@ mod tests {
             })
             .await
             .expect("create TaskFlow authority");
+    }
+
+    #[test]
+    fn taskflow_consume_resume_receipt() {
+        let mut receipt = taskflow_consume_resume_test_receipt("agent_lane", "routed");
+        receipt.lane_status = "lane_running".to_string();
+        receipt.downstream_dispatch_target = Some("specification".to_string());
+        receipt.downstream_dispatch_ready = false;
+
+        assert_eq!(
+            taskflow_consume_resume_receipt::blocker_codes(&receipt),
+            vec!["open_delegated_cycle".to_string()],
+            "documented proof target must exercise the resume receipt blocker contract"
+        );
     }
 
     #[test]
