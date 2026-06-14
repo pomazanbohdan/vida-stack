@@ -6430,7 +6430,9 @@ async fn run_task_attempt_collect(command: TaskAttemptCollectArgs) -> ExitCode {
                 }
             };
             let artifact_refs =
-                if normalize_artifact_refs_for_attempt(&command.artifact_refs).is_empty() {
+                if taskflow_core::task::attempts::normalize_artifact_refs(&command.artifact_refs)
+                    .is_empty()
+                {
                     existing_attempt.artifact_refs.clone()
                 } else {
                     command.artifact_refs.clone()
@@ -6622,22 +6624,6 @@ async fn latest_task_stage_attempt_id(
     })
 }
 
-fn validate_attempt_artifact_refs(values: &[String]) -> Result<Vec<String>, String> {
-    let refs = normalize_artifact_refs_for_attempt(values);
-    if refs.is_empty() {
-        return Err("attempt_artifact_refs_missing".to_string());
-    }
-    for value in &refs {
-        if value.contains('/') || value.contains('\\') {
-            let path = std::path::Path::new(value);
-            if path.is_absolute() && !path.exists() {
-                return Err(format!("attempt artifact ref does not exist: {value}"));
-            }
-        }
-    }
-    Ok(refs)
-}
-
 #[derive(Default)]
 struct TaskAttemptArtifactConsolidation {
     artifact_refs: Vec<String>,
@@ -6669,18 +6655,24 @@ async fn task_attempt_consolidation_for_command(
             .map_err(|reason| state_store::StateStoreError::InvalidTaskRecord {
                 reason: format!("attempt_artifact_validation_failed: {reason}"),
             })?;
-    merge_repeated_values(&mut consolidated.facts, &command.facts);
-    merge_repeated_values(&mut consolidated.hypotheses, &command.hypotheses);
-    merge_repeated_values(&mut consolidated.conflicts, &command.conflicts);
-    merge_repeated_values(
+    taskflow_core::task::attempts::merge_repeated_values(&mut consolidated.facts, &command.facts);
+    taskflow_core::task::attempts::merge_repeated_values(
+        &mut consolidated.hypotheses,
+        &command.hypotheses,
+    );
+    taskflow_core::task::attempts::merge_repeated_values(
+        &mut consolidated.conflicts,
+        &command.conflicts,
+    );
+    taskflow_core::task::attempts::merge_repeated_values(
         &mut consolidated.partial_attempt_ids,
         &command.partial_attempt_ids,
     );
-    merge_repeated_values(
+    taskflow_core::task::attempts::merge_repeated_values(
         &mut consolidated.timeout_attempt_ids,
         &command.timeout_attempt_ids,
     );
-    merge_repeated_values(
+    taskflow_core::task::attempts::merge_repeated_values(
         &mut consolidated.cap_limited_attempt_ids,
         &command.cap_limited_attempt_ids,
     );
@@ -6720,9 +6712,21 @@ fn consolidate_attempt_artifacts(
             if !consolidated.artifact_refs.contains(&artifact_ref) {
                 consolidated.artifact_refs.push(artifact_ref.clone());
             }
-            append_json_string_array(&json, &["observed_facts", "facts"], &mut consolidated.facts);
-            append_json_string_array(&json, &["hypotheses"], &mut consolidated.hypotheses);
-            append_json_string_array(&json, &["conflicts"], &mut consolidated.conflicts);
+            taskflow_core::task::attempts::append_json_string_array(
+                &json,
+                &["observed_facts", "facts"],
+                &mut consolidated.facts,
+            );
+            taskflow_core::task::attempts::append_json_string_array(
+                &json,
+                &["hypotheses"],
+                &mut consolidated.hypotheses,
+            );
+            taskflow_core::task::attempts::append_json_string_array(
+                &json,
+                &["conflicts"],
+                &mut consolidated.conflicts,
+            );
             let result_status = json["result_status"]
                 .as_str()
                 .or_else(|| json["status"].as_str())
@@ -6730,13 +6734,19 @@ fn consolidate_attempt_artifacts(
             if attempt.status == "partially_accepted"
                 || matches!(result_status, "partial" | "partially_accepted")
             {
-                push_unique(&mut consolidated.partial_attempt_ids, &attempt.attempt_id);
+                taskflow_core::task::attempts::push_unique(
+                    &mut consolidated.partial_attempt_ids,
+                    &attempt.attempt_id,
+                );
             }
             if json["timeout"].as_bool() == Some(true) || result_status == "timeout" {
-                push_unique(&mut consolidated.timeout_attempt_ids, &attempt.attempt_id);
+                taskflow_core::task::attempts::push_unique(
+                    &mut consolidated.timeout_attempt_ids,
+                    &attempt.attempt_id,
+                );
             }
             if json["cap_limited"].as_bool() == Some(true) || result_status == "cap_limited" {
-                push_unique(
+                taskflow_core::task::attempts::push_unique(
                     &mut consolidated.cap_limited_attempt_ids,
                     &attempt.attempt_id,
                 );
@@ -6776,7 +6786,7 @@ fn validate_attempt_artifacts(
     owned_paths: &[String],
     state_root: &std::path::Path,
 ) -> Result<Vec<(String, serde_json::Value)>, String> {
-    let refs = validate_attempt_artifact_refs(values)?;
+    let refs = taskflow_core::task::attempts::validate_attempt_artifact_refs(values)?;
     refs.into_iter()
         .map(|artifact_ref| {
             let path = crate::runtime_dispatch_packets::validate_attempt_artifact_ref(
@@ -6789,138 +6799,21 @@ fn validate_attempt_artifacts(
             let json: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
                 format!("attempt artifact `{artifact_ref}` is not valid JSON: {error}")
             })?;
-            validate_stage_attempt_artifact_identity(&json, attempt, &artifact_ref)?;
-            validate_attempt_artifact_changed_files_scope(&json, &artifact_ref, owned_paths)?;
+            taskflow_core::task::attempts::validate_stage_attempt_artifact_identity(
+                &json,
+                &attempt.attempt_id,
+                &attempt.task_id,
+                &attempt.stage_id,
+                &artifact_ref,
+            )?;
+            taskflow_core::task::attempts::validate_attempt_artifact_changed_files_scope(
+                &json,
+                &artifact_ref,
+                owned_paths,
+            )?;
             Ok((artifact_ref, json))
         })
         .collect()
-}
-
-fn validate_stage_attempt_artifact_identity(
-    json: &serde_json::Value,
-    attempt: &state_store::TaskAttemptRecord,
-    artifact_ref: &str,
-) -> Result<(), String> {
-    for (field, expected) in [
-        ("schema_version", "stage-attempt-v1"),
-        ("attempt_id", attempt.attempt_id.as_str()),
-        ("task_id", attempt.task_id.as_str()),
-        ("stage_id", attempt.stage_id.as_str()),
-    ] {
-        let actual = json[field].as_str().unwrap_or("");
-        if actual != expected {
-            return Err(format!(
-                "attempt artifact `{artifact_ref}` field `{field}` expected `{expected}`, got `{actual}`"
-            ));
-        }
-    }
-    let has_fact_array =
-        json["observed_facts"].as_array().is_some() || json["facts"].as_array().is_some();
-    if !has_fact_array {
-        return Err(format!(
-            "attempt artifact `{artifact_ref}` must include observed_facts or facts array"
-        ));
-    }
-    for field in [
-        "observed_facts",
-        "facts",
-        "hypotheses",
-        "proof_results",
-        "risks",
-        "limitations",
-        "conflicts",
-    ] {
-        if !json[field].is_null() && !json[field].is_array() {
-            return Err(format!(
-                "attempt artifact `{artifact_ref}` field `{field}` must be an array"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_attempt_artifact_changed_files_scope(
-    json: &serde_json::Value,
-    artifact_ref: &str,
-    owned_paths: &[String],
-) -> Result<(), String> {
-    let Some(changed_files) = json["changed_files"].as_array() else {
-        return Ok(());
-    };
-    let normalized_owned_paths = owned_paths
-        .iter()
-        .filter_map(|path| normalize_attempt_artifact_repo_path(path))
-        .collect::<Vec<_>>();
-    if normalized_owned_paths.is_empty() && !changed_files.is_empty() {
-        return Err(format!(
-            "attempt artifact `{artifact_ref}` changed_files require task owned_paths"
-        ));
-    }
-    for changed_file in changed_files {
-        let Some(changed_file) = changed_file.as_str() else {
-            return Err(format!(
-                "attempt artifact `{artifact_ref}` changed_files entries must be strings"
-            ));
-        };
-        let Some(changed_file) = normalize_attempt_artifact_repo_path(changed_file) else {
-            return Err(format!(
-                "attempt artifact `{artifact_ref}` changed_files entry `{changed_file}` must be a relative repository path without parent traversal"
-            ));
-        };
-        if !normalized_owned_paths
-            .iter()
-            .any(|owned_path| attempt_artifact_path_is_owned(&changed_file, owned_path))
-        {
-            return Err(format!(
-                "attempt artifact `{artifact_ref}` changed file `{changed_file}` is outside task owned_paths"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn normalize_attempt_artifact_repo_path(path: &str) -> Option<String> {
-    let normalized = path.trim().replace('\\', "/");
-    let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);
-    if normalized.is_empty()
-        || normalized.starts_with('/')
-        || normalized
-            .split('/')
-            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-    {
-        return None;
-    }
-    Some(normalized.to_string())
-}
-
-fn attempt_artifact_path_is_owned(changed_file: &str, owned_path: &str) -> bool {
-    changed_file == owned_path || changed_file.starts_with(&format!("{owned_path}/"))
-}
-
-fn merge_repeated_values(target: &mut Vec<String>, values: &[String]) {
-    for value in normalize_artifact_refs_for_attempt(values) {
-        push_unique(target, &value);
-    }
-}
-
-fn append_json_string_array(json: &serde_json::Value, keys: &[&str], values: &mut Vec<String>) {
-    for key in keys {
-        for value in json[*key].as_array().into_iter().flatten() {
-            if let Some(value) = value
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                push_unique(values, value);
-            }
-        }
-    }
-}
-
-fn push_unique(values: &mut Vec<String>, value: &str) {
-    if !values.iter().any(|existing| existing == value) {
-        values.push(value.to_string());
-    }
 }
 
 async fn task_stage_status_payload_for_command(
@@ -7094,17 +6987,6 @@ fn json_string_field(value: &serde_json::Value, keys: &[&str]) -> Option<String>
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     })
-}
-
-fn normalize_artifact_refs_for_attempt(values: &[String]) -> Vec<String> {
-    let mut refs = Vec::new();
-    for value in values {
-        let value = value.trim();
-        if !value.is_empty() && !refs.iter().any(|existing| existing == value) {
-            refs.push(value.to_string());
-        }
-    }
-    refs
 }
 
 fn task_attempt_policy_attempt_id(task_id: &str, stage_id: &str, attempt_id: &str) -> String {

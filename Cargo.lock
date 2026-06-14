@@ -5634,6 +5634,7 @@ name = "taskflow-core"
 version = "0.9.7"
 dependencies = [
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "time",
  "uuid",
