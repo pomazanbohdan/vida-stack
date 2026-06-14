@@ -734,16 +734,6 @@ fn print_task_proof_status(
     );
 }
 
-fn exception_takeover_state_label(
-    state: crate::release1_contracts::ExceptionTakeoverState,
-) -> &'static str {
-    match state {
-        crate::release1_contracts::ExceptionTakeoverState::NotRecorded => "not_recorded",
-        crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded => "receipt_recorded",
-        crate::release1_contracts::ExceptionTakeoverState::ActiveTakeover => "active",
-    }
-}
-
 async fn task_takeover_status_receipt(
     store: &StateStore,
     task: &state_store::TaskRecord,
@@ -835,7 +825,13 @@ async fn task_takeover_status_receipt(
         ),
     };
     let task_matches_lane = status.task_id.trim() == task.id.trim();
-    let state_label = exception_takeover_state_label(takeover_state).to_string();
+    let receipt_recorded =
+        takeover_state == crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded;
+    let state_label = taskflow_core::task::takeover::exception_takeover_state_label(
+        takeover_state.is_active(),
+        receipt_recorded,
+    )
+    .to_string();
     let metadata_paths = summary
         .as_ref()
         .filter(|_| takeover_state.is_active())
@@ -971,18 +967,14 @@ async fn task_takeover_status_receipt(
             .map(|path| path.display().to_string()),
         "recovery_gate": recovery_gate,
     });
-    let takeover_ready_state = if allowed {
-        "active"
-    } else if takeover_state == crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded {
-        "supersession_required"
-    } else if task_matches_lane {
-        "not_ready"
-    } else {
-        "stale_task_blocked"
-    }
+    let takeover_ready_state = taskflow_core::task::takeover::takeover_ready_state(
+        allowed,
+        receipt_recorded,
+        task_matches_lane,
+    )
     .to_string();
     let root_write_guard = serde_json::json!({
-        "status": if root_local_write_allowed { "exception_takeover_active" } else { "blocked_by_default" },
+        "status": taskflow_core::task::takeover::root_write_guard_status(root_local_write_allowed),
         "root_local_write_allowed": root_local_write_allowed,
         "root_local_write_allowed_for_only_these_paths": if root_local_write_allowed { paths.clone() } else { Vec::<String>::new() },
         "local_exception_takeover_state": state_label.clone(),
@@ -10258,10 +10250,10 @@ mod tests {
         build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
         build_split_mutation_preview, canonical_json_string_array_entries,
         classify_task_close_git_stage_failure, ensure_existing_task_mismatch_reason,
-        exception_takeover_state_label, load_adaptive_preview_finding_json,
-        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
-        parse_label_values, parse_optional_label_value, parse_proof_target_values,
-        parse_split_child_specs, pass_completed_lane_task_next_lawful_receipt,
+        load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
+        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
+        parse_proof_target_values, parse_split_child_specs,
+        pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
@@ -10456,21 +10448,15 @@ mod tests {
     #[test]
     fn task_takeover_status_labels_release_takeover_states() {
         assert_eq!(
-            exception_takeover_state_label(
-                crate::release1_contracts::ExceptionTakeoverState::NotRecorded
-            ),
+            taskflow_core::task::takeover::exception_takeover_state_label(false, false),
             "not_recorded"
         );
         assert_eq!(
-            exception_takeover_state_label(
-                crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded
-            ),
+            taskflow_core::task::takeover::exception_takeover_state_label(false, true),
             "receipt_recorded"
         );
         assert_eq!(
-            exception_takeover_state_label(
-                crate::release1_contracts::ExceptionTakeoverState::ActiveTakeover
-            ),
+            taskflow_core::task::takeover::exception_takeover_state_label(true, true),
             "active"
         );
     }
