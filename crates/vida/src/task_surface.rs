@@ -10,6 +10,10 @@ use std::collections::BTreeSet;
 use taskflow_core::task::dependencies::{
     parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
 };
+use taskflow_core::task::import_export::{
+    task_import_jsonl_success_fields, task_replace_jsonl_success_fields, TaskImportJsonlSummary,
+    TaskReplaceJsonlSummary,
+};
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub(crate) struct TaskReadMetadata {
@@ -7527,13 +7531,15 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return code;
                         }
                         if command.json {
-                            let mut summary_json = serde_json::json!({
-                                "status": task_json_success_status(),
-                                "source_path": summary.source_path,
-                                "imported_count": summary.imported_count,
-                                "unchanged_count": summary.unchanged_count,
-                                "updated_count": summary.updated_count,
-                            });
+                            let mut summary_json = task_import_jsonl_success_fields(
+                                task_json_success_status(),
+                                &TaskImportJsonlSummary {
+                                    source_path: summary.source_path,
+                                    imported_count: summary.imported_count,
+                                    unchanged_count: summary.unchanged_count,
+                                    updated_count: summary.updated_count,
+                                },
+                            );
                             if let Err(error) =
                                 normalize_task_json_contract_arrays(&mut summary_json)
                             {
@@ -7600,11 +7606,12 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                         let source_path = command.path.display().to_string();
                         if command.json {
-                            crate::print_json_pretty(&serde_json::json!({
-                                "status": task_json_success_status(),
-                                "operation": "replace_snapshot",
-                                "source_path": source_path,
-                            }));
+                            crate::print_json_pretty(&task_replace_jsonl_success_fields(
+                                task_json_success_status(),
+                                &TaskReplaceJsonlSummary {
+                                    source_path: source_path.clone(),
+                                },
+                            ));
                         } else {
                             print_surface_header(command.render, "vida task replace-jsonl");
                             print_surface_line(command.render, "status", "pass");

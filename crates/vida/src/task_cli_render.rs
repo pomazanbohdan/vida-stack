@@ -6,6 +6,9 @@ use crate::state_store::{
     TaskProgressSummary, TaskRecord,
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
+use taskflow_core::task::import_export::{
+    task_export_jsonl_success_fields, TaskExportJsonlSummary,
+};
 
 pub(crate) fn task_read_metadata_value(
     metadata: Option<&crate::task_surface::TaskReadMetadata>,
@@ -706,9 +709,9 @@ pub(crate) fn print_task_export_summary(
 ) {
     let payload = build_pass_operator_surface_payload(
         "vida task export-jsonl",
-        serde_json::json!({
-            "exported_count": exported_count,
-            "target_path": target_path,
+        task_export_jsonl_success_fields(&TaskExportJsonlSummary {
+            exported_count,
+            target_path: target_path.to_string(),
         }),
     );
     if crate::surface_render::print_surface_json(
