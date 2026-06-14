@@ -9,11 +9,11 @@ use crate::dev_team_sequence_contract::{
     DevTeamSequenceStep,
 };
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
-use crate::operator_command_text::human_command;
 use crate::{
     state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
     AgentHostBridgeArgs, AgentSelectArgs, AgentStatusArgs,
 };
+use operator_output::command_text::human_command;
 use runtime_path_policy::{
     existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
     ArtifactPathKind, PathPolicyError, StateRoot,
@@ -684,33 +684,33 @@ fn emit_host_bridge_payload(payload: &serde_json::Value, as_json: bool) -> ExitC
                 .expect("host bridge adapter payload should render")
         );
     } else {
-        let mut fields = vec![crate::operator_toon_report::OperatorToonField::text(
+        let mut fields = vec![operator_output::toon_report::OperatorToonField::text(
             "status",
             payload["status"].as_str().unwrap_or("unknown"),
         )];
         if payload["status"].as_str() == Some(release1_pass_status()) {
             if let Some(command) = payload["host_bridge"]["artifact_attach_command"].as_str() {
-                fields.push(crate::operator_toon_report::OperatorToonField::text(
+                fields.push(operator_output::toon_report::OperatorToonField::text(
                     "attach_artifact",
-                    crate::operator_command_text::human_command(command),
+                    operator_output::command_text::human_command(command),
                 ));
             }
             if let Some(command) = payload["host_bridge"]["completion_command"].as_str() {
-                fields.push(crate::operator_toon_report::OperatorToonField::text(
+                fields.push(operator_output::toon_report::OperatorToonField::text(
                     "completion",
-                    crate::operator_command_text::human_command(command),
+                    operator_output::command_text::human_command(command),
                 ));
             }
         }
         if let Some(blockers) = payload["blocker_codes"].as_array() {
             if !blockers.is_empty() {
-                fields.push(crate::operator_toon_report::OperatorToonField::value(
+                fields.push(operator_output::toon_report::OperatorToonField::value(
                     "blocker_codes",
                     serde_json::Value::Array(blockers.clone()),
                 ));
             }
         }
-        crate::operator_toon_report::print("vida agent host-bridge", fields);
+        operator_output::toon_report::print("vida agent host-bridge", fields);
     }
     if payload["status"].as_str() == Some(release1_pass_status()) {
         ExitCode::SUCCESS
@@ -3662,7 +3662,7 @@ fn agent_status_payload(
     artifact_refs: serde_json::Value,
     extra_fields: serde_json::Value,
 ) -> serde_json::Value {
-    crate::operator_contracts::build_release1_operator_output_payload(
+    crate::release1_operator_output::build_release1_operator_output_payload(
         "vida agent status",
         blocker_codes,
         next_actions,
@@ -3694,34 +3694,34 @@ fn print_agent_status_payload(payload: &serde_json::Value, json: bool) {
         crate::print_json_pretty(payload);
         return;
     }
-    crate::operator_toon_report::print(
+    operator_output::toon_report::print(
         "vida agent status",
         vec![
-            crate::operator_toon_report::OperatorToonField::value(
+            operator_output::toon_report::OperatorToonField::value(
                 "status",
                 payload["status"].clone(),
             ),
-            crate::operator_toon_report::OperatorToonField::value(
+            operator_output::toon_report::OperatorToonField::value(
                 "active_agents_count",
                 payload["active_agents_count"].clone(),
             ),
-            crate::operator_toon_report::OperatorToonField::value(
+            operator_output::toon_report::OperatorToonField::value(
                 "active_lanes_count",
                 payload["active_lanes_count"].clone(),
             ),
-            crate::operator_toon_report::OperatorToonField::value(
+            operator_output::toon_report::OperatorToonField::value(
                 "handoff_pending_count",
                 payload["handoff_pending_count"].clone(),
             ),
-            crate::operator_toon_report::OperatorToonField::value(
+            operator_output::toon_report::OperatorToonField::value(
                 "blocked_dispatch_count",
                 payload["blocked_dispatch_count"].clone(),
             ),
-            crate::operator_toon_report::OperatorToonField::value(
+            operator_output::toon_report::OperatorToonField::value(
                 "reclaimable_lanes",
                 payload["reclaimable_lanes"].clone(),
             ),
-            crate::operator_toon_report::OperatorToonField::value(
+            operator_output::toon_report::OperatorToonField::value(
                 "next_recovery_command",
                 payload["next_recovery_command"].clone(),
             ),

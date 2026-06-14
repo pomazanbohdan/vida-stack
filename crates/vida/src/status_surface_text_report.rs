@@ -123,7 +123,7 @@ fn format_run_graph_dispatch_compact_summary(
     let next_action = summary.recommended_command.as_ref().map(|command| {
         format!(
             "{} ({})",
-            crate::operator_command_text::human_command(command),
+            operator_output::command_text::human_command(command),
             summary.recommended_surface.as_deref().unwrap_or("unknown")
         )
     });
@@ -571,12 +571,12 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
 
 fn emit_status_toon_report(inputs: &StatusTextReportInputs<'_>) {
     let mut fields = vec![
-        crate::operator_toon_report::OperatorToonField::text("backend", inputs.backend_summary),
-        crate::operator_toon_report::OperatorToonField::text(
+        operator_output::toon_report::OperatorToonField::text("backend", inputs.backend_summary),
+        operator_output::toon_report::OperatorToonField::text(
             "state_dir",
             inputs.state_dir.display().to_string(),
         ),
-        crate::operator_toon_report::OperatorToonField::text(
+        operator_output::toon_report::OperatorToonField::text(
             "state_spine",
             format!(
                 "initialized state-v{} surfaces={} mutation_root={}",
@@ -585,21 +585,21 @@ fn emit_status_toon_report(inputs: &StatusTextReportInputs<'_>) {
                 inputs.state_spine.authoritative_mutation_root
             ),
         ),
-        crate::operator_toon_report::OperatorToonField::text(
+        operator_output::toon_report::OperatorToonField::text(
             "operator_session_projection",
             crate::operator_session_projection::projection_plain_summary(
                 inputs.operator_session_projection,
             ),
         ),
-        crate::operator_toon_report::OperatorToonField::text(
+        operator_output::toon_report::OperatorToonField::text(
             "runtime_consumption",
             inputs.runtime_consumption.as_display(),
         ),
-        crate::operator_toon_report::OperatorToonField::text(
+        operator_output::toon_report::OperatorToonField::text(
             "protocol_binding",
             inputs.protocol_binding.as_display(),
         ),
-        crate::operator_toon_report::OperatorToonField::text(
+        operator_output::toon_report::OperatorToonField::text(
             "continuation_binding",
             format!(
                 "status={} primary_path={} posture={}",
@@ -615,7 +615,7 @@ fn emit_status_toon_report(inputs: &StatusTextReportInputs<'_>) {
             ),
         ),
     ];
-    fields.push(crate::operator_toon_report::OperatorToonField::text(
+    fields.push(operator_output::toon_report::OperatorToonField::text(
         "project_activation",
         if inputs.activation_truth.is_some() {
             format!(
@@ -627,21 +627,21 @@ fn emit_status_toon_report(inputs: &StatusTextReportInputs<'_>) {
             "unknown fail_closed=true activation_pending=true".to_string()
         },
     ));
-    fields.push(crate::operator_toon_report::OperatorToonField::text(
+    fields.push(operator_output::toon_report::OperatorToonField::text(
         "latest_run_graph_status",
         inputs
             .latest_run_graph_status
             .map(|status| status.as_display())
             .unwrap_or_else(|| "none".to_string()),
     ));
-    fields.push(crate::operator_toon_report::OperatorToonField::text(
+    fields.push(operator_output::toon_report::OperatorToonField::text(
         "latest_run_graph_recovery",
         inputs
             .latest_run_graph_recovery
             .map(|summary| summary.as_display())
             .unwrap_or_else(|| "none".to_string()),
     ));
-    fields.push(crate::operator_toon_report::OperatorToonField::text(
+    fields.push(operator_output::toon_report::OperatorToonField::text(
         "latest_run_graph_dispatch_receipt",
         inputs
             .latest_run_graph_dispatch_receipt
@@ -671,20 +671,20 @@ fn emit_status_toon_report(inputs: &StatusTextReportInputs<'_>) {
     if let Some(summary) = compact_summary.as_ref() {
         let (route_truth, downstream_preview, next_action) =
             format_run_graph_dispatch_compact_summary(summary);
-        fields.push(crate::operator_toon_report::OperatorToonField::text(
+        fields.push(operator_output::toon_report::OperatorToonField::text(
             "latest_dispatch_route_truth",
             route_truth,
         ));
-        fields.push(crate::operator_toon_report::OperatorToonField::text(
+        fields.push(operator_output::toon_report::OperatorToonField::text(
             "latest_downstream_dispatch_preview",
             downstream_preview,
         ));
-        fields.push(crate::operator_toon_report::OperatorToonField::text(
+        fields.push(operator_output::toon_report::OperatorToonField::text(
             "latest_dispatch_projection_reason",
             summary.route_truth.projection_reason.clone(),
         ));
         if let Some(next_action) = next_action {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "latest_dispatch_next_action",
                 next_action,
             ));
@@ -695,12 +695,12 @@ fn emit_status_toon_report(inputs: &StatusTextReportInputs<'_>) {
         .and_then(|steps| steps.first())
         .and_then(serde_json::Value::as_str)
     {
-        fields.push(crate::operator_toon_report::OperatorToonField::text(
+        fields.push(operator_output::toon_report::OperatorToonField::text(
             "continuation_binding_next_action",
             step,
         ));
     }
-    crate::operator_toon_report::print("vida status", fields);
+    operator_output::toon_report::print("vida status", fields);
 }
 
 #[cfg(test)]

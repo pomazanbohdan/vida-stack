@@ -3,7 +3,7 @@ use std::process::{Command, ExitCode};
 
 use serde::Serialize;
 
-use crate::operator_contracts::{
+use crate::release1_operator_output::{
     finalize_operator_surface_verdict, RELEASE1_OPERATOR_CONTRACT_SPEC,
 };
 use crate::state_store::{work_item_is_program_container, StateStore, StateStoreError, TaskRecord};
@@ -389,13 +389,13 @@ fn blocked_payload(since: Option<String>, blocker_code: &str, reason: String) ->
 
 fn print_receipt_pack_payload<T: Serialize>(payload: T, json: bool, fields: Option<&str>) {
     let payload = serde_json::to_value(payload).expect("receipt pack payload should serialize");
-    let payload = crate::operator_toon_report::select_fields(payload, fields);
+    let payload = operator_output::toon_report::select_fields(payload, fields);
     if json {
         crate::print_json_pretty(&payload);
     } else {
         println!(
             "{}",
-            crate::operator_toon_report::render_value("vida taskflow receipt-pack", payload)
+            operator_output::toon_report::render_value("vida taskflow receipt-pack", payload)
         );
     }
 }

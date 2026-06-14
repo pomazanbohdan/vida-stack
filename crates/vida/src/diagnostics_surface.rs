@@ -225,7 +225,7 @@ fn render_diagnostics_gate_payload(
         "evidence_refs": evidence_refs,
         "affected_paths": affected_paths,
     });
-    let vida_gate_result = crate::operator_contracts::render_vida_gate_result_with_status(
+    let vida_gate_result = crate::release1_operator_output::render_vida_gate_result_with_status(
         gate_id,
         gate_status,
         blocker_codes.clone(),

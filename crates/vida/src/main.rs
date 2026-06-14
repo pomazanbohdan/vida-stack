@@ -41,11 +41,8 @@ mod launcher_activation_snapshot;
 mod launcher_task_commands;
 mod memory_surface;
 mod model_profile_contract;
-mod operator_command_text;
-mod operator_contracts;
 mod operator_projection_cache;
 mod operator_session_projection;
-mod operator_toon_report;
 mod orchestrator_session_surface;
 mod project_activator_activation_summary;
 mod project_activator_agent_extensions_summary;
@@ -60,6 +57,7 @@ mod protocol_surface;
 mod quality_surface;
 mod registry_projection_utils;
 mod release1_contracts;
+mod release1_operator_output;
 mod release_contract_adapters;
 mod release_surface;
 mod root_command_router;
@@ -79,6 +77,75 @@ mod runtime_dispatch_packets;
 mod runtime_dispatch_receipt_helpers;
 mod runtime_dispatch_result_evidence;
 mod runtime_dispatch_state;
+pub(crate) use runtime_dispatch_state::{
+    active_downstream_dispatch_target, admissible_selected_backend_for_dispatch_target,
+    agent_init_command_for_packet_path, agent_init_execute_command_for_packet_path,
+    apply_dispatch_execution_timeout_to_receipt,
+    apply_dispatch_handoff_timeout_to_receipt_for_state_root,
+    apply_existing_executed_dispatch_result_to_receipt,
+    apply_first_handoff_execution_to_run_graph_status,
+    apply_internal_activation_timeout_to_receipt, apply_internal_activation_view_only_to_receipt,
+    apply_owned_paths, apply_owned_paths_if_missing, backend_is_admissible_for_dispatch_target,
+    backend_is_admissible_or_runtime_selected_carrier_for_dispatch_target,
+    backend_policy_dispatch_target_for_resolution, build_downstream_dispatch_receipt,
+    build_runtime_closure_admission, build_taskflow_handoff_plan,
+    canonical_selected_backend_for_receipt, clear_runtime_consumption_fallback_owned_paths,
+    configured_dispatch_backend_class, configured_external_activation_parts,
+    configured_external_activation_stdin_payload, configured_external_backend_dispatch_blocker,
+    configured_external_backend_entry, configured_external_backend_entry_any,
+    current_project_model_profile_catalog_for_root, derive_downstream_dispatch_preview,
+    dispatch_activation_evidence_summary, dispatch_execution_route_summary,
+    dispatch_execution_started_stale_after_seconds,
+    dispatch_handoff_timeout_seconds_for_state_root,
+    dispatch_handoff_uses_internal_host_for_state_root,
+    dispatch_receipt_has_closure_execution_evidence, dispatch_receipt_has_execution_evidence,
+    dispatch_result_stale_after_seconds, dispatch_surface_truth_from_packet_path,
+    dispatch_target_runtime_assignment, downstream_activation_fields,
+    downstream_dispatch_ready_blocker_parity_error, downstream_selected_backend,
+    effective_execution_posture_summary, execute_and_record_dispatch_receipt,
+    execute_downstream_dispatch_chain, execute_runtime_dispatch_handoff,
+    execution_plan_route_for_dispatch_target, external_backend_profile_projection,
+    fallback_backend_for_blocked_primary_dispatch_receipt,
+    first_runtime_dispatch_target_after_dev_pack, implementation_owned_paths_for_dispatch_context,
+    implementation_owned_paths_for_role_selection, internal_host_activation_view_only_blocker_code,
+    internal_host_activation_view_only_requires_terminal_blocker,
+    internal_host_dispatch_requires_prelaunch_blocker, internal_host_runtime_window_seconds,
+    maybe_bridge_closed_implementer_task_into_latest_receipt,
+    maybe_bridge_closed_implementer_task_into_receipt,
+    maybe_bridge_closed_implementer_task_into_receipt_with_context,
+    maybe_bridge_closed_specification_task_into_latest_receipt,
+    maybe_bridge_closed_specification_task_into_receipt,
+    maybe_reconcile_blocked_verification_timeout_with_receipt_evidence,
+    maybe_reconcile_blocked_verification_timeout_with_receipt_evidence_with_admission,
+    model_profile_catalog_from_overlay, normalize_activation_view_only_receipt_truth,
+    normalize_persisted_runtime_path, normalize_stale_in_flight_dispatch_receipt,
+    planner_metadata_owned_paths_from_role_selection, planner_metadata_owned_paths_from_task,
+    policy_dispatch_target_for_admissibility, preferred_selected_backend_for_receipt,
+    preferred_selected_model_profile_for_dispatch_target, preview_downstream_dispatch_receipt,
+    receipt_waiting_on_specification_evidence,
+    reconcile_executed_dispatch_result_state_best_effort, record_dispatch_execution_started,
+    refresh_downstream_dispatch_preview, refresh_downstream_dispatch_preview_with_owned_paths,
+    render_command_display, resolve_runtime_dispatch_target, resolved_tracked_design_doc_path,
+    resolved_tracked_flow_bootstrap_for_scope, route_assignment_catalog_drift_payload,
+    route_selected_model_profile_for_backend, runtime_agent_lane_dispatch_for_root,
+    runtime_consumption_run_id, runtime_dispatch_command_for_target,
+    runtime_dispatch_execution_started_result, runtime_dispatch_packet_has_concrete_owned_paths,
+    runtime_dispatch_packet_kind, runtime_dispatch_packet_preview,
+    runtime_dispatch_project_root_from_state_root,
+    runtime_host_execution_contract_allows_automatic_dispatch_execution,
+    runtime_host_execution_contract_for_root, runtime_packet_handoff_task_class,
+    runtime_packet_handoff_task_class_for_plan, selected_external_backend_for_system,
+    selected_host_cli_system_for_runtime_dispatch, selected_profile_requires_owned_path_guard,
+    spec_first_dev_handoff_gate_from_taskflow,
+    stale_in_flight_dispatch_timeout_seconds_for_receipt,
+    sync_receipt_configured_activation_assignment, sync_receipt_dispatch_handoff_surface,
+    try_bridge_bounded_implementer_completion_to_downstream_receipt,
+    try_bridge_bounded_specification_completion_to_downstream_receipt,
+    validate_runtime_dispatch_packet_contract, write_runtime_dispatch_packet,
+    write_runtime_dispatch_result, ModelProfileCatalog, RuntimeAgentLaneDispatch,
+    RuntimeDispatchPacketContext, RuntimeDispatchTargetResolution,
+    INTERNAL_CODEX_CARRIER_UNAVAILABLE, INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT,
+};
 mod runtime_dispatch_status;
 mod runtime_lane_summary;
 mod runtime_web_surface;
@@ -157,8 +224,8 @@ pub(crate) use cli::*;
 pub(crate) use compiled_agent_extension_bundle::build_compiled_agent_extension_bundle_for_root;
 pub(crate) use config_value_utils::{
     csv_json_string_list, json_bool, json_lookup, json_string, json_string_list,
-    load_project_overlay_yaml, load_project_overlay_yaml_for_root, split_csv_like, yaml_bool,
-    yaml_lookup, yaml_string, yaml_string_list,
+    load_project_overlay_yaml, split_csv_like, yaml_bool, yaml_lookup, yaml_string,
+    yaml_string_list,
 };
 #[allow(unused_imports)]
 pub(crate) use consume_final_operator_surface::{
@@ -249,7 +316,6 @@ pub(crate) use runtime_consumption_surface::{
     RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence, TaskflowConsumeBundleCheck,
     TaskflowConsumeBundlePayload, TaskflowDirectConsumptionPayload,
 };
-pub(crate) use runtime_dispatch_state::*;
 pub(crate) use runtime_lane_summary::role_exists_in_lane_bundle;
 pub(crate) use shell_runtime_helpers::{
     block_on_state_store, print_json_pretty, repo_runtime_root,

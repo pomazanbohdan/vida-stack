@@ -339,7 +339,7 @@ pub(crate) fn build_status_operator_contracts(
             inputs.operator_session_projection
         ),
     });
-    let finalized = crate::operator_contracts::finalize_release1_operator_truth(
+    let finalized = crate::release1_operator_output::finalize_release1_operator_truth(
         operator_blocker_codes,
         operator_next_actions,
         operator_artifact_refs,

@@ -189,7 +189,7 @@ pub(crate) fn degraded_read_lock_payload(
         "state_dir": state_dir.display().to_string(),
         "read_fallback": "lock_contention_degraded_response",
     });
-    crate::operator_contracts::build_release1_operator_output_payload(
+    crate::release1_operator_output::build_release1_operator_output_payload(
         surface,
         vec!["state_store_read_lock_contention".to_string()],
         vec![
@@ -280,21 +280,21 @@ pub(crate) fn state_store_lock_present(state_dir: &std::path::Path) -> bool {
 }
 
 pub(crate) fn degraded_read_lock_toon_text(surface: &str, payload: &serde_json::Value) -> String {
-    crate::operator_toon_report::render(
+    operator_output::toon_report::render(
         surface,
         vec![
-            crate::operator_toon_report::OperatorToonField::text("status", "blocked"),
-            crate::operator_toon_report::OperatorToonField::text(
+            operator_output::toon_report::OperatorToonField::text("status", "blocked"),
+            operator_output::toon_report::OperatorToonField::text(
                 "state_access",
                 "degraded_lock_contention",
             ),
-            crate::operator_toon_report::OperatorToonField::text(
+            operator_output::toon_report::OperatorToonField::text(
                 "state_dir",
                 payload["state_access"]["state_dir"]
                     .as_str()
                     .unwrap_or_default(),
             ),
-            crate::operator_toon_report::OperatorToonField::value(
+            operator_output::toon_report::OperatorToonField::value(
                 "blocker_codes",
                 payload["blocker_codes"].clone(),
             ),
@@ -1310,7 +1310,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     if !summary_only && !as_json {
                         compact_status_projection_for_fast_operator_render(&mut summary_json);
                     }
-                    let rendered_json = crate::operator_toon_report::select_fields(
+                    let rendered_json = operator_output::toon_report::select_fields(
                         summary_json.clone(),
                         field_selection,
                     );
@@ -1325,7 +1325,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     } else {
                         println!(
                             "{}",
-                            crate::operator_toon_report::render_value("vida status", rendered_json)
+                            operator_output::toon_report::render_value(
+                                "vida status",
+                                rendered_json
+                            )
                         );
                     }
                     if !selected_output {
@@ -2430,7 +2433,7 @@ mod tests {
 
     use crate::activation_status::canonical_activation_status;
     use crate::contract_profile_adapter::operator_contracts_consistency_error;
-    use crate::operator_contracts::shared_operator_output_contract_parity_error;
+    use crate::release1_operator_output::shared_operator_output_contract_parity_error;
     use crate::status_surface_external_cli::external_cli_preflight_summary;
     use crate::status_surface_host_cli_summary::host_cli_system_entry_summary;
     use crate::status_surface_host_cli_system::selected_host_cli_system_entry;

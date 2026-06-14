@@ -41,8 +41,8 @@ fn canonical_root_session_write_guard_defaults() -> serde_json::Value {
 pub(crate) fn root_session_write_guard_required_exception_evidence() -> String {
     format!(
         "Run `{}` and `{}` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
-        crate::operator_command_text::human_command("vida taskflow recovery latest --json"),
-        crate::operator_command_text::human_command("vida taskflow consume continue --json")
+        operator_output::command_text::human_command("vida taskflow recovery latest --json"),
+        operator_output::command_text::human_command("vida taskflow consume continue --json")
     )
 }
 
@@ -50,11 +50,11 @@ fn normalize_root_session_required_exception_evidence(value: &str) -> String {
     value
         .replace(
             "vida taskflow recovery latest --json",
-            &crate::operator_command_text::human_command("vida taskflow recovery latest --json"),
+            &operator_output::command_text::human_command("vida taskflow recovery latest --json"),
         )
         .replace(
             "vida taskflow consume continue --json",
-            &crate::operator_command_text::human_command("vida taskflow consume continue --json"),
+            &operator_output::command_text::human_command("vida taskflow consume continue --json"),
         )
 }
 

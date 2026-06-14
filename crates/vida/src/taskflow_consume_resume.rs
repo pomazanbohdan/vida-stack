@@ -1,3 +1,4 @@
+use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
 use crate::taskflow_run_graph::{
     status_with_active_exception_dispatch_replay, validate_run_graph_resume_gate,
 };
@@ -4204,7 +4205,7 @@ fn dispatch_receipt_internal_retry_eligible(
     ) {
         return false;
     }
-    let overlay = match super::load_project_overlay_yaml_for_root(project_root) {
+    let overlay = match load_project_overlay_yaml_for_root(project_root) {
         Ok(overlay) => overlay,
         Err(_) => return false,
     };
@@ -4292,7 +4293,7 @@ fn primary_backend_for_dispatch_receipt(
         &role_selection.execution_plan,
         route,
     )?;
-    let overlay = super::load_project_overlay_yaml_for_root(project_root).ok()?;
+    let overlay = load_project_overlay_yaml_for_root(project_root).ok()?;
     let (selected_cli_system, selected_cli_entry) =
         super::selected_host_cli_system_for_runtime_dispatch(&overlay);
     let preflight = crate::status_surface_external_cli::external_cli_preflight_summary(
@@ -12910,7 +12911,7 @@ agent_system:
                 snapshot_json["operator_contracts"]["risk_tier"]
             );
             assert_eq!(
-                crate::operator_contracts::shared_operator_output_contract_parity_error(
+                crate::release1_operator_output::shared_operator_output_contract_parity_error(
                     &snapshot_json
                 ),
                 None

@@ -5,7 +5,7 @@ pub(crate) use crate::release1_contracts::{
 };
 
 use crate::contract_profile_registry::{selected_contract_profile_id, ContractProfileId};
-use crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC;
+use crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC;
 
 pub(crate) fn blocker_code(code: BlockerCode) -> Option<String> {
     match selected_contract_profile_id() {
@@ -91,7 +91,7 @@ pub(crate) fn render_operator_contract_envelope(
 ) -> Value {
     match selected_contract_profile_id() {
         ContractProfileId::OperatorContracts => {
-            crate::operator_contracts::render_operator_contract_envelope(
+            crate::release1_operator_output::render_operator_contract_envelope(
                 &RELEASE1_OPERATOR_CONTRACT_SPEC,
                 status,
                 blocker_codes,
@@ -105,7 +105,7 @@ pub(crate) fn render_operator_contract_envelope(
 pub(crate) fn operator_contract_status_is_blocked(value: &Value) -> bool {
     match selected_contract_profile_id() {
         ContractProfileId::OperatorContracts => {
-            crate::operator_contracts::operator_contract_status_is_blocked(
+            crate::release1_operator_output::operator_contract_status_is_blocked(
                 &RELEASE1_OPERATOR_CONTRACT_SPEC,
                 value,
             )
@@ -136,7 +136,7 @@ pub(crate) fn operator_contracts_consistency_error(
 ) -> Option<String> {
     match selected_contract_profile_id() {
         ContractProfileId::OperatorContracts => {
-            crate::operator_contracts::release1_operator_contracts_consistency_error(
+            crate::release1_operator_output::release1_operator_contracts_consistency_error(
                 status,
                 blocker_codes,
                 next_actions,
@@ -150,7 +150,9 @@ pub(crate) fn shared_operator_output_contract_parity_error(
 ) -> Option<&'static str> {
     match selected_contract_profile_id() {
         ContractProfileId::OperatorContracts => {
-            crate::operator_contracts::shared_operator_output_contract_parity_error(summary_json)
+            crate::release1_operator_output::shared_operator_output_contract_parity_error(
+                summary_json,
+            )
         }
     }
 }

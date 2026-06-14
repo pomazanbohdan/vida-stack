@@ -191,7 +191,7 @@ fn active_exception_takeover_next_actions(
     status: &crate::state_store::RunGraphStatus,
 ) -> Vec<String> {
     if exception_takeover_continuation_resumable(status) {
-        let command = crate::operator_command_text::human_command(&format!(
+        let command = operator_output::command_text::human_command(&format!(
             "vida taskflow consume continue --run-id {} --json",
             status.run_id
         ));
@@ -200,7 +200,7 @@ fn active_exception_takeover_next_actions(
         )];
     }
     if status.resume_target == "none" || !status.resume_target.starts_with("dispatch.") {
-        let recovery_command = crate::operator_command_text::human_command(&format!(
+        let recovery_command = operator_output::command_text::human_command(&format!(
             "vida taskflow recovery status {} --json",
             status.run_id
         ));
@@ -214,11 +214,11 @@ fn active_exception_takeover_next_actions(
             ),
         ];
     }
-    let lane_command = crate::operator_command_text::human_command(&format!(
+    let lane_command = operator_output::command_text::human_command(&format!(
         "vida lane show {} --json",
         status.run_id
     ));
-    let continue_command = crate::operator_command_text::human_command(&format!(
+    let continue_command = operator_output::command_text::human_command(&format!(
         "vida taskflow consume continue --run-id {} --json",
         status.run_id
     ));
@@ -350,17 +350,17 @@ fn continuation_next_actions_for_run(
         if let Some(command) =
             latest_run_graph_dispatch_receipt.and_then(downstream_dispatch_command_for_summary)
         {
-            let command = crate::operator_command_text::human_command(&command);
+            let command = operator_output::command_text::human_command(&command);
             next_actions.push(format!("Continue the downstream handoff with `{command}`."));
         } else {
-            let command = crate::operator_command_text::human_command(&format!(
+            let command = operator_output::command_text::human_command(&format!(
                 "vida lane show {run_id} --json"
             ));
             next_actions.push(format!(
                 "Inspect the active delegated lane with `{command}`."
             ));
         }
-        let recovery_command = crate::operator_command_text::human_command(&format!(
+        let recovery_command = operator_output::command_text::human_command(&format!(
             "vida taskflow recovery status {run_id} --json"
         ));
         next_actions.push(format!(
@@ -373,12 +373,13 @@ fn continuation_next_actions_for_run(
             receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some()
         })
     {
-        let lane_command =
-            crate::operator_command_text::human_command(&format!("vida lane show {run_id} --json"));
+        let lane_command = operator_output::command_text::human_command(&format!(
+            "vida lane show {run_id} --json"
+        ));
         next_actions.push(format!(
             "Inspect the exception-backed lane with `{lane_command}` and close or settle the run before continuing."
         ));
-        let continue_command = crate::operator_command_text::human_command(&format!(
+        let continue_command = operator_output::command_text::human_command(&format!(
             "vida taskflow consume continue --run-id {run_id} --json"
         ));
         next_actions.push(format!(
@@ -386,13 +387,13 @@ fn continuation_next_actions_for_run(
         ));
         return next_actions;
     }
-    let continue_command = crate::operator_command_text::human_command(&format!(
+    let continue_command = operator_output::command_text::human_command(&format!(
         "vida taskflow consume continue --run-id {run_id} --json"
     ));
     next_actions.push(format!(
         "Continue the active bounded unit with `{continue_command}`."
     ));
-    let recovery_command = crate::operator_command_text::human_command(&format!(
+    let recovery_command = operator_output::command_text::human_command(&format!(
         "vida taskflow recovery status {run_id} --json"
     ));
     next_actions.push(format!(

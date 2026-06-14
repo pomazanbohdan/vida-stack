@@ -122,6 +122,6 @@ pub(crate) fn next_actions(
                 .to_string(),
         );
     }
-    crate::operator_contracts::canonical_next_action_entries(&serde_json::json!(next_actions))
+    crate::release1_operator_output::canonical_next_action_entries(&serde_json::json!(next_actions))
         .unwrap_or_else(|| next_actions.to_vec())
 }

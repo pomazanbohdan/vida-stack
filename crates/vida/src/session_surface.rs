@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::operator_contracts::build_release1_operator_output_payload;
-use crate::operator_toon_report::OperatorToonField;
 use crate::release1_contracts::{blocker_code_str, BlockerCode};
+use crate::release1_operator_output::build_release1_operator_output_payload;
 use crate::state_store::{StateStore, TaskRecord};
 use crate::surface_render::print_surface_json;
 use crate::{SessionArgs, SessionCommand, SessionTriageArgs};
+use operator_output::toon_report::OperatorToonField;
 
 const SESSION_TRIAGE_SURFACE: &str = "vida session triage";
 
@@ -283,7 +283,7 @@ fn blocked_session_triage_payload(
 }
 
 fn print_session_triage_toon(payload: &Value) {
-    crate::operator_toon_report::print(
+    operator_output::toon_report::print(
         SESSION_TRIAGE_SURFACE,
         vec![
             OperatorToonField::value("status", payload["status"].clone()),

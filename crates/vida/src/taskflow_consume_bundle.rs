@@ -335,7 +335,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                 "surface": "vida taskflow consume bundle check"
             });
             let operator_output =
-                match crate::operator_contracts::build_release1_operator_output_payload(
+                match crate::release1_operator_output::build_release1_operator_output_payload(
                     "vida taskflow consume bundle check",
                     blocker_codes,
                     next_actions,
@@ -539,7 +539,7 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
 }
 
 fn normalize_consume_bundle_blocker_codes(blockers: &[String]) -> Vec<String> {
-    crate::operator_contracts::normalize_blocker_codes(
+    crate::release1_operator_output::normalize_blocker_codes(
         blockers,
         crate::release_contract_adapters::canonical_blocker_codes,
         crate::release_contract_adapters::blocker_code(
@@ -549,8 +549,8 @@ fn normalize_consume_bundle_blocker_codes(blockers: &[String]) -> Vec<String> {
 }
 
 fn consume_bundle_operator_contract_status(blockers: &[String]) -> &'static str {
-    crate::operator_contracts::operator_contract_status_for_blockers(
-        &crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC,
+    crate::release1_operator_output::operator_contract_status_for_blockers(
+        &crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC,
         blockers,
     )
 }
@@ -560,8 +560,8 @@ fn bundle_check_operator_contracts_consistency_error(
     blocker_codes: &[String],
     next_actions: &[String],
 ) -> Option<String> {
-    crate::operator_contracts::operator_contracts_consistency_error(
-        &crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC,
+    crate::release1_operator_output::operator_contracts_consistency_error(
+        &crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC,
         status,
         blocker_codes,
         next_actions,

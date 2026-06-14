@@ -261,7 +261,7 @@ pub(crate) fn build_status_json_report(
     }
 
     if let Some(error) =
-        crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
+        crate::release1_operator_output::shared_operator_output_contract_parity_error(&summary_json)
     {
         return Err(error.to_string());
     }

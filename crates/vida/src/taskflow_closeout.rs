@@ -3,8 +3,8 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
-use crate::operator_toon_report::OperatorToonField;
 use crate::state_store::{work_item_is_program_container, StateStore, StateStoreError, TaskRecord};
+use operator_output::toon_report::OperatorToonField;
 
 #[derive(Debug, Clone)]
 struct TaskflowCloseoutCommand {
@@ -89,7 +89,7 @@ pub(crate) async fn run_taskflow_closeout(args: &[String]) -> ExitCode {
             if command.json {
                 crate::print_json_pretty(&payload);
             } else {
-                crate::operator_toon_report::print(
+                operator_output::toon_report::print(
                     "vida taskflow closeout",
                     vec![
                         OperatorToonField::text("status", "blocked"),
@@ -128,7 +128,7 @@ pub(crate) async fn run_taskflow_closeout(args: &[String]) -> ExitCode {
             if command.json {
                 crate::print_json_pretty(&payload);
             } else {
-                crate::operator_toon_report::print(
+                operator_output::toon_report::print(
                     "vida taskflow closeout",
                     vec![
                         OperatorToonField::text("status", "blocked"),
@@ -510,7 +510,7 @@ fn print_taskflow_closeout_payload(
     fields: Option<&str>,
 ) {
     let payload = serde_json::to_value(payload).expect("closeout payload should serialize");
-    let payload = crate::operator_toon_report::select_fields(payload, fields);
+    let payload = operator_output::toon_report::select_fields(payload, fields);
     if json {
         crate::print_json_pretty(&payload);
         return;
@@ -518,6 +518,6 @@ fn print_taskflow_closeout_payload(
 
     println!(
         "{}",
-        crate::operator_toon_report::render_value("vida taskflow closeout", payload)
+        operator_output::toon_report::render_value("vida taskflow closeout", payload)
     );
 }

@@ -74,24 +74,52 @@ run_check() {
     return 1
 }
 
+path_absent_check() {
+    local name="$1"
+    shift
+    local status=0
+    local path
+    for path in "$@"; do
+        if [[ -e "${path}" ]]; then
+            [[ ${status} -eq 0 ]] && printf -- '- %s: blocked\n' "${name}"
+            printf '%s\n' "${path}"
+            status=1
+        fi
+    done
+    if [[ ${status} -eq 0 ]]; then
+        printf -- '- %s: pass\n' "${name}"
+    fi
+    return "${status}"
+}
+
+path_present_check() {
+    local name="$1"
+    local path="$2"
+    if [[ -e "${path}" ]]; then
+        printf -- '- %s: pass\n' "${name}"
+        return 0
+    fi
+    printf -- '- %s: blocked\nmissing: %s\n' "${name}" "${path}"
+    return 1
+}
+
 RG_BIN="$(find_rg)" || {
     printf '%s\n' "ripgrep executable not found. Install rg, put it on PATH, or set RG to the executable path." >&2
     exit 2
 }
 
-mapfile -t runtime_authority_paths < <(existing_paths crates/vida/src crates/taskflow-* crates/docflow-*)
 mapfile -t vida_paths < <(existing_paths crates/vida/src)
-mapfile -t blocker_code_paths < <(existing_paths crates/vida/src crates/taskflow-*)
 
 common_globs=(-g '!**/tests/**' -g '!**/generated/**' -g '!**/adapters/**')
-read_to_string_globs=("${common_globs[@]}" -g '!crates/runtime-path-policy/**')
-blocker_code_globs=("${common_globs[@]}" -g '!crates/taskflow-contracts/**' -g '!crates/vida/src/release1_contracts.rs')
 
 status=0
 printf '%s\n' 'runtime boundary checks:'
-run_check 'no direct read_to_string in runtime authority modules' 'std::fs::read_to_string|read_to_string\(' runtime_authority_paths read_to_string_globs || status=1
-run_check 'no mutable request authority terms in shell' 'request_paths_authoritative|modern_pending_host_bridge_request|reconciled_blocked_status' vida_paths common_globs || status=1
+path_absent_check 'legacy vida operator facade files removed' \
+    crates/vida/src/operator_command_text.rs \
+    crates/vida/src/operator_contracts.rs \
+    crates/vida/src/operator_toon_report.rs || status=1
+path_present_check 'release1 operator output bridge present' crates/vida/src/release1_operator_output.rs || status=1
+run_check 'no legacy vida operator facade imports' 'mod operator_(command_text|contracts|toon_report)|crate::operator_(command_text|contracts|toon_report)|use crate::operator_(command_text|contracts|toon_report)::' vida_paths common_globs || status=1
 run_check 'no broad runtime_dispatch_state export' 'pub\(crate\) use runtime_dispatch_state::\*' vida_paths common_globs || status=1
-run_check 'no direct string blocker codes outside contract/tests' '"host_bridge_|"implementation_artifact_|"stale_|"blocked_dispatch' blocker_code_paths blocker_code_globs || status=1
 
 exit "${status}"

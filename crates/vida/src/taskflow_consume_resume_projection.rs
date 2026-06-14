@@ -35,7 +35,7 @@ pub(crate) fn build_operator_projection_payload(
     extra_fields: serde_json::Value,
     parity_context: &str,
 ) -> Result<serde_json::Value, String> {
-    let payload = crate::operator_contracts::build_release1_operator_output_payload(
+    let payload = crate::release1_operator_output::build_release1_operator_output_payload(
         surface_name,
         blocker_codes,
         next_actions,
@@ -51,7 +51,7 @@ pub(crate) fn validate_operator_projection_payload(
     parity_context: &str,
 ) -> Result<(), String> {
     if let Some(error) =
-        crate::operator_contracts::shared_operator_output_contract_parity_error(payload)
+        crate::release1_operator_output::shared_operator_output_contract_parity_error(payload)
     {
         return Err(format!(
             "Failed to preserve {parity_context} operator-contract parity: {error}"

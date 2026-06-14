@@ -87,9 +87,9 @@ fn parse_approval_args<'a>(args: &'a [String]) -> Result<ApprovalCommand<'a>, St
 
 fn emit_blocked_approval_envelope(as_json: bool, reason: String) -> ExitCode {
     let latest_command =
-        crate::operator_command_text::human_command("vida approval show --latest --json");
+        operator_output::command_text::human_command("vida approval show --latest --json");
     let run_command =
-        crate::operator_command_text::human_command("vida approval show <run-id> --json");
+        operator_output::command_text::human_command("vida approval show <run-id> --json");
     let next_actions = vec![format!(
         "Use `{latest_command}` or `{run_command}` once approval evidence exists."
     )];
@@ -303,11 +303,11 @@ fn build_approval_envelope(
         ],
         "approved" => vec![format!(
             "Use `{}` to continue the active run after approval.",
-            crate::operator_command_text::human_command("vida taskflow consume continue --json")
+            operator_output::command_text::human_command("vida taskflow consume continue --json")
         )],
         _ => vec![format!(
             "Use `{}` to inspect a specific run.",
-            crate::operator_command_text::human_command("vida approval show <run-id> --json")
+            operator_output::command_text::human_command("vida approval show <run-id> --json")
         )],
     };
     if principal_delegation

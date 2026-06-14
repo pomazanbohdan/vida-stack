@@ -404,7 +404,7 @@ impl StateStore {
             task_id,
             taskflow_core::task::progress::TaskProgressBasis::DescendantsExcludingRoot,
             shell_quote,
-            crate::operator_command_text::human_command,
+            operator_output::command_text::human_command,
         )
         .map_err(|_| StateStoreError::MissingTask {
             task_id: task_id.to_string(),

@@ -765,7 +765,7 @@ pub(crate) fn release_admission_operator_evidence_incomplete(
     let summary_json = serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
         format!("Failed to parse runtime-consumption snapshot `{snapshot_path}`: {error}")
     })?;
-    if crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
+    if crate::release1_operator_output::shared_operator_output_contract_parity_error(&summary_json)
         .is_some()
     {
         return Ok(true);
@@ -815,7 +815,7 @@ pub(crate) fn release_admission_operator_evidence_complete_for_run(
     let summary_json = serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
         format!("Failed to parse runtime-consumption snapshot `{snapshot_path}`: {error}")
     })?;
-    if crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
+    if crate::release1_operator_output::shared_operator_output_contract_parity_error(&summary_json)
         .is_some()
     {
         return Ok(false);
@@ -851,7 +851,7 @@ pub(crate) fn release_admission_operator_evidence_incomplete_from_latest_snapsho
     {
         return Ok(true);
     }
-    if crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
+    if crate::release1_operator_output::shared_operator_output_contract_parity_error(&summary_json)
         .is_some()
     {
         return Ok(true);

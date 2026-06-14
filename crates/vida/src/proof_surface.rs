@@ -2,10 +2,10 @@ use std::process::ExitCode;
 
 use serde_json::Value;
 
-use crate::operator_contracts::{
+use crate::release1_contracts::{blocker_code_str, BlockerCode};
+use crate::release1_operator_output::{
     finalize_release1_operator_truth, shared_operator_output_contract_parity_error,
 };
-use crate::release1_contracts::{blocker_code_str, BlockerCode};
 use crate::surface_render::print_surface_json;
 use crate::{print_surface_header, print_surface_line, ProofArgs, ProofCommand};
 

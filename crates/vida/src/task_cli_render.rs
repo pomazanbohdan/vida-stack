@@ -1,4 +1,4 @@
-use crate::operator_contracts::build_release1_operator_output_payload;
+use crate::release1_operator_output::build_release1_operator_output_payload;
 use crate::state_store::{
     BlockedTaskRecord, TaskBulkReparentResult, TaskCriticalPath, TaskDefectBatchRehomeResult,
     TaskDependencyBulkAddResult, TaskDependencyRecord, TaskDependencyStatus,
@@ -128,7 +128,7 @@ pub(crate) fn print_task_update_graph_blocked(issue: &TaskGraphIssue, as_json: b
         "open_parent_has_no_open_child" => vec![format!(
             "Repair emptied parent `{}` with `{}`, then rerun the original task update.",
             issue.issue_id,
-            crate::operator_command_text::human_command(&format!(
+            operator_output::command_text::human_command(&format!(
                 "vida task update {} --status closed --json",
                 quoted_issue_id
             ))
@@ -324,7 +324,7 @@ pub(crate) fn print_task_list(
 }
 
 fn apply_json_field_selector(value: serde_json::Value, fields: Option<&str>) -> serde_json::Value {
-    crate::operator_toon_report::select_fields(value, fields)
+    operator_output::toon_report::select_fields(value, fields)
 }
 
 pub(crate) fn print_task_ready(
@@ -1284,7 +1284,7 @@ fn build_task_graph_issues_payload(issues: &[TaskGraphIssue]) -> serde_json::Val
     } else {
         vec![format!(
             "Resolve task graph validation issues and rerun `{}`.",
-            crate::operator_command_text::human_command("vida task validate-graph --json")
+            operator_output::command_text::human_command("vida task validate-graph --json")
         )]
     };
     build_operator_surface_payload(
@@ -1362,7 +1362,7 @@ pub(crate) fn print_task_dependency_bulk_add_result_for_surface(
                     && !edge.edge_type.trim().is_empty()
             })
             .map(|edge| {
-                crate::operator_command_text::human_command(&format!(
+                operator_output::command_text::human_command(&format!(
                     "{} {} {} {} --json",
                     surface,
                     crate::shell_quote(edge.issue_id.trim()),
@@ -1533,7 +1533,7 @@ mod tests {
         task_children_toon_text, task_mutation_payload, task_progress_payload,
         task_progress_toon_text, task_record_list_toon_text,
     };
-    use crate::operator_contracts::shared_operator_output_contract_parity_error;
+    use crate::release1_operator_output::shared_operator_output_contract_parity_error;
     use crate::state_store::{
         TaskCriticalPathNode, TaskDependencyTreeChild, TaskDependencyTreeNode,
         TaskExecutionSemantics, TaskGraphIssue, TaskProgressSummary, TaskRecord,

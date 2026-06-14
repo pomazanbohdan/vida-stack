@@ -235,7 +235,7 @@ fn print_consume_advance_help() {
 }
 
 fn consume_final_operator_command_text(command: &str) -> String {
-    crate::operator_command_text::human_command(command)
+    operator_output::command_text::human_command(command)
 }
 
 fn consume_final_toon_line(label: &str, value: &str) -> String {

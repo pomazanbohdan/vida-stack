@@ -2,7 +2,7 @@ use crate::contract_profile_adapter::{
     blocker_code, canonical_blocker_code_list, operator_contract_status_is_blocked,
     render_operator_contract_envelope, BlockerCode,
 };
-use crate::operator_contracts::{
+use crate::release1_operator_output::{
     build_release1_operator_output_payload, render_vida_gate_result_from_operator_contracts,
     replace_release1_operator_output_artifact_refs,
 };
@@ -247,7 +247,7 @@ fn docflow_verdict_vida_gate_result(docflow_verdict: &serde_json::Value) -> serd
     let next_actions = crate::docflow_runtime_verdict_next_actions(
         docflow_verdict["status"].as_str().unwrap_or_default(),
     );
-    crate::operator_contracts::render_vida_gate_result_with_status(
+    crate::release1_operator_output::render_vida_gate_result_with_status(
         "docflow.runtime_verdict",
         if status_is_blocked { "blocked" } else { "pass" },
         blockers
@@ -313,7 +313,7 @@ fn consume_final_operator_next_actions(payload: &serde_json::Value) -> Vec<Strin
     if operator_contract_status_is_blocked(&payload["closure_admission"]["status"]) {
         next_actions.push(format!(
             "Run `{}` and resolve closure blockers.",
-            crate::operator_command_text::human_command(
+            operator_output::command_text::human_command(
                 "vida taskflow consume bundle check --json"
             )
         ));

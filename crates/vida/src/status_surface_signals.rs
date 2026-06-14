@@ -308,7 +308,7 @@ pub(crate) fn final_snapshot_missing_release_admission_evidence(snapshot_path: &
         Ok(json) => json,
         Err(_) => return true,
     };
-    if crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
+    if crate::release1_operator_output::shared_operator_output_contract_parity_error(&summary_json)
         .is_some()
     {
         return true;

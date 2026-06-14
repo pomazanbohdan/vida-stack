@@ -88,7 +88,7 @@ pub(crate) fn consume_resume_error_payload(error: &str, surface_name: &str) -> s
             serde_json::json!(decision.kind.blocker_code()),
         );
     }
-    crate::operator_contracts::build_release1_operator_output_payload(
+    crate::release1_operator_output::build_release1_operator_output_payload(
         surface_name,
         vec![blocker_code],
         decision.next_actions,
@@ -254,7 +254,7 @@ fn consume_resume_next_actions(
                     )
                 }
                 (Some(run_id), None) => {
-                    let inspect_command = crate::operator_command_text::human_command(&format!(
+                    let inspect_command = operator_output::command_text::human_command(&format!(
                         "vida taskflow run-graph status {} --json",
                         crate::shell_quote(run_id)
                     ));

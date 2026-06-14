@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 
 use time::format_description::well_known::Rfc3339;
 
+use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
 use crate::state_store::LauncherActivationSnapshot;
 use crate::{
     build_compiled_agent_extension_bundle_for_root, config_file_path, config_file_path_for_root,
-    load_project_overlay_yaml, load_project_overlay_yaml_for_root, split_csv_like, yaml_lookup,
-    yaml_string, StateStore, StateStoreError,
+    load_project_overlay_yaml, split_csv_like, yaml_lookup, yaml_string, StateStore,
+    StateStoreError,
 };
 
 pub(crate) fn pack_router_keywords_json(config: &serde_yaml::Value) -> serde_json::Value {

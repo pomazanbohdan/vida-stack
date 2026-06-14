@@ -366,13 +366,13 @@ fn with_artifact_operator_contract(
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    let finalized = crate::operator_contracts::finalize_release1_operator_truth(
+    let finalized = crate::release1_operator_output::finalize_release1_operator_truth(
         blocker_codes,
         next_actions,
         artifact_refs,
     )
     .unwrap_or_else(|_| {
-        crate::operator_contracts::finalize_release1_operator_truth(
+        crate::release1_operator_output::finalize_release1_operator_truth(
             vec![crate::release1_contracts::BlockerCode::Unsupported
                 .as_str()
                 .to_string()],

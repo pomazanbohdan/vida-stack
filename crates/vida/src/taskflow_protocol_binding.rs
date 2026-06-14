@@ -7,7 +7,7 @@ use crate::contract_profile_adapter::{
     blocker_code, canonical_blocker_code_list, evaluate_policy_gate_protocol_binding,
     release_contract_status, BlockerCode,
 };
-use crate::operator_contracts::shared_operator_output_contract_parity_error;
+use crate::release1_operator_output::shared_operator_output_contract_parity_error;
 
 pub(crate) const TASKFLOW_PROTOCOL_BINDING_SCENARIO: &str = "v0.2.2-taskflow-wave1-primary";
 pub(crate) const TASKFLOW_PROTOCOL_BINDING_AUTHORITY: &str = "taskflow_state_store";

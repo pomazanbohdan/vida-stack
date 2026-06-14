@@ -4,7 +4,7 @@ use std::process::{Command, ExitCode};
 
 use serde_json::Value;
 
-use crate::operator_contracts::{
+use crate::release1_operator_output::{
     finalize_operator_surface_verdict, RELEASE1_OPERATOR_CONTRACT_SPEC,
 };
 use crate::QualityCommand;
@@ -43,7 +43,7 @@ fn run_quality_gate(command: crate::QualityGateArgs) -> ExitCode {
     } else {
         println!(
             "{}",
-            crate::operator_toon_report::render_value(
+            operator_output::toon_report::render_value(
                 QUALITY_GATE_SURFACE,
                 quality_gate_toon_payload(&payload),
             )

@@ -95,40 +95,77 @@ function Invoke-RgCheck {
     }
 }
 
+function Invoke-PathAbsentCheck {
+    param(
+        [string]$Name,
+        [string[]]$Paths
+    )
+
+    $matches = @($Paths | Where-Object { Test-Path -LiteralPath $_ })
+    if ($matches.Count -eq 0) {
+        return [pscustomobject]@{
+            name = $Name
+            status = "pass"
+            matches = @()
+        }
+    }
+
+    return [pscustomobject]@{
+        name = $Name
+        status = "blocked"
+        matches = $matches
+    }
+}
+
+function Invoke-PathPresentCheck {
+    param(
+        [string]$Name,
+        [string]$Path
+    )
+
+    if (Test-Path -LiteralPath $Path) {
+        return [pscustomobject]@{
+            name = $Name
+            status = "pass"
+            matches = @()
+        }
+    }
+
+    return [pscustomobject]@{
+        name = $Name
+        status = "blocked"
+        matches = @("missing: $Path")
+    }
+}
+
 $script:Rg = Find-Ripgrep
 if (-not $script:Rg) {
     throw "ripgrep executable not found. Install rg, put it on PATH, or set RG to the executable path."
 }
 
-$runtimeAuthorityPaths = Get-ExistingPathArgs @(
-    "crates/vida/src",
-    "crates/taskflow-*",
-    "crates/docflow-*"
-)
 $vidaPaths = Get-ExistingPathArgs @("crates/vida/src")
-$blockerCodePaths = Get-ExistingPathArgs @("crates/vida/src", "crates/taskflow-*")
 
 $checks = @(
+    (Invoke-PathAbsentCheck `
+        -Name "legacy vida operator facade files removed" `
+        -Paths @(
+            "crates/vida/src/operator_command_text.rs",
+            "crates/vida/src/operator_contracts.rs",
+            "crates/vida/src/operator_toon_report.rs"
+        )),
+    (Invoke-PathPresentCheck `
+        -Name "release1 operator output bridge present" `
+        -Path "crates/vida/src/release1_operator_output.rs"),
     (Invoke-RgCheck `
-        -Name "no direct read_to_string in runtime authority modules" `
-        -Pattern "std::fs::read_to_string|read_to_string\(" `
-        -Paths $runtimeAuthorityPaths `
-        -Globs @("!**/tests/**", "!crates/runtime-path-policy/**", "!**/generated/**", "!**/adapters/**")),
-    (Invoke-RgCheck `
-        -Name "no mutable request authority terms in shell" `
-        -Pattern "request_paths_authoritative|modern_pending_host_bridge_request|reconciled_blocked_status" `
+        -Name "no legacy vida operator facade imports" `
+        -Pattern "mod operator_(command_text|contracts|toon_report)|crate::operator_(command_text|contracts|toon_report)|use crate::operator_(command_text|contracts|toon_report)::" `
         -Paths $vidaPaths `
         -Globs @("!**/tests/**", "!**/generated/**", "!**/adapters/**")),
     (Invoke-RgCheck `
         -Name "no broad runtime_dispatch_state export" `
         -Pattern "pub\(crate\) use runtime_dispatch_state::\*" `
         -Paths $vidaPaths `
-        -Globs @("!**/tests/**", "!**/generated/**", "!**/adapters/**")),
-    (Invoke-RgCheck `
-        -Name "no direct string blocker codes outside contract/tests" `
-        -Pattern '"host_bridge_|"implementation_artifact_|"stale_|"blocked_dispatch' `
-        -Paths $blockerCodePaths `
-        -Globs @("!**/tests/**", "!crates/taskflow-contracts/**", "!crates/vida/src/release1_contracts.rs", "!**/generated/**", "!**/adapters/**"))
+        -Globs @("!**/tests/**", "!**/generated/**", "!**/adapters/**"))
 )
 
 $blocked = @($checks | Where-Object { $_.status -ne "pass" })

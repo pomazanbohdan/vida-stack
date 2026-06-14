@@ -561,7 +561,8 @@ fn cached_taskflow_graph_summary_projection_admissible(cached: &str) -> bool {
                         .is_some()
                     && payload["operator_contracts"]["contract_id"].as_str()
                         == Some(
-                            crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id,
+                            crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC
+                                .contract_id,
                         ))
         })
 }
@@ -958,7 +959,7 @@ fn extend_graph_summary_next_actions(
                 .as_ref()
                 .map(|action| action.command.as_str())
                 .or(decision.recommended_command.as_deref())
-                .map(crate::operator_command_text::human_command)
+                .map(operator_output::command_text::human_command)
                 .unwrap_or_else(crate::status_surface_signals::recovery_latest_command);
             next_actions.push(format!(
                 "Treat the ready-head candidate `{}` as diagnostic only until `{}` clears the active continuation gate.",
@@ -968,7 +969,7 @@ fn extend_graph_summary_next_actions(
     } else if decision.primary_ready_task.is_some() {
         if let Some(task_id) = ready_task_id {
             let task_id = shell_quote_arg(task_id);
-            let show_command = crate::operator_command_text::human_command(&format!(
+            let show_command = operator_output::command_text::human_command(&format!(
                 "vida task show {task_id} --json"
             ));
             next_actions.push(format!(
@@ -978,7 +979,7 @@ fn extend_graph_summary_next_actions(
     }
     if let Some(task_id) = blocked_task_id {
         let task_id = shell_quote_arg(task_id);
-        let deps_command = crate::operator_command_text::human_command(&format!(
+        let deps_command = operator_output::command_text::human_command(&format!(
             "vida task deps {task_id} --json"
         ));
         next_actions.push(format!(
@@ -987,7 +988,7 @@ fn extend_graph_summary_next_actions(
     }
     if critical_path_length > 0 {
         let critical_path_command =
-            crate::operator_command_text::human_command("vida task critical-path --json");
+            operator_output::command_text::human_command("vida task critical-path --json");
         next_actions.push(format!(
             "Inspect the current graph bottleneck with `{critical_path_command}` before parallelizing additional work."
         ));
@@ -1037,10 +1038,10 @@ fn apply_closed_task_active_run_projection_mismatch_to_graph_summary(
         blocker_codes.push(code);
     }
     next_actions.clear();
-    let reconcile_command = crate::operator_command_text::human_command(
+    let reconcile_command = operator_output::command_text::human_command(
         "vida task reconcile-closed-runs --limit 25 --json",
     );
-    let inspect_command = crate::operator_command_text::human_command(
+    let inspect_command = operator_output::command_text::human_command(
         "vida taskflow run-graph status <run-id> --json",
     );
     next_actions.push(format!(
@@ -1364,21 +1365,21 @@ fn apply_scheduler_execute_runtime_gate_blockers(
     }
     if signals.open_delegated_cycle {
         let recovery_latest =
-            crate::operator_command_text::human_command("vida taskflow recovery latest --json");
+            operator_output::command_text::human_command("vida taskflow recovery latest --json");
         plan.next_actions.push(format!(
             "Resolve the open delegated-cycle gate before scheduler execute by inspecting `{recovery_latest}` and the active continuation state."
         ));
     }
     if signals.active_reservation {
         let consume_continue =
-            crate::operator_command_text::human_command("vida taskflow consume continue --json");
+            operator_output::command_text::human_command("vida taskflow consume continue --json");
         plan.next_actions.push(format!(
             "An active scheduler reservation is already running; resume or close it with `{consume_continue}` before creating new execution reservations."
         ));
     }
     if !signals.open_delegated_cycle && !signals.active_reservation {
         let recovery_latest =
-            crate::operator_command_text::human_command("vida taskflow recovery latest --json");
+            operator_output::command_text::human_command("vida taskflow recovery latest --json");
         plan.next_actions.push(format!(
             "Resolve scheduler dispatch blockers and retry after `{recovery_latest}` reports a clear gate."
         ));
@@ -2633,7 +2634,7 @@ fn build_taskflow_scheduler_dispatch_plan(
         }
         next_actions.push(format!(
             "Inspect `{}` before attempting scheduler dispatch.",
-            crate::operator_command_text::human_command("vida taskflow graph-summary --json")
+            operator_output::command_text::human_command("vida taskflow graph-summary --json")
         ));
     }
     let execute_requested_with_selection = execute_requested && selected_primary_task.is_some();
@@ -2641,7 +2642,7 @@ fn build_taskflow_scheduler_dispatch_plan(
         let task_id = shell_quote_arg(&task.id);
         next_actions.push(format!(
             "Inspect the selected primary task with `{}` before delegated launch.",
-            crate::operator_command_text::human_command(&format!(
+            operator_output::command_text::human_command(&format!(
                 "vida task show {} --json",
                 task_id
             ))
@@ -2651,7 +2652,7 @@ fn build_taskflow_scheduler_dispatch_plan(
         next_actions.push(format!(
             "Verify co-scheduling safety for `{}` with `{}` before parallel launch.",
             task.id,
-            crate::operator_command_text::human_command("vida taskflow graph-summary --json")
+            operator_output::command_text::human_command("vida taskflow graph-summary --json")
         ));
     }
 
@@ -3551,7 +3552,7 @@ fn build_taskflow_next_decision(
             let run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
             let task_id = latest_run_graph_status.map(|status| status.task_id.as_str());
             let retire_command = run_id.map(|run_id| {
-                crate::operator_command_text::human_command(&format!(
+                operator_output::command_text::human_command(&format!(
                     "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json",
                     shell_quote_arg(run_id),
                     shell_quote_arg(run_id)
@@ -3560,7 +3561,7 @@ fn build_taskflow_next_decision(
             let next_action = TaskflowNextAction {
                 command: retire_command
                     .clone()
-                    .unwrap_or_else(|| crate::operator_command_text::human_command("vida taskflow recovery latest --json")),
+                    .unwrap_or_else(|| operator_output::command_text::human_command("vida taskflow recovery latest --json")),
                 surface: if retire_command.is_some() {
                     "vida lane retire".to_string()
                 } else {
@@ -3629,7 +3630,7 @@ fn build_taskflow_next_decision(
                     });
                 next_actions.push(format!(
                     "Inspect the active delegated lane with `{}` before attempting consume continuation.",
-                    crate::operator_command_text::human_command(&next_action.command)
+                    operator_output::command_text::human_command(&next_action.command)
                 ));
                 (
                     Some(next_action.command.clone()),
@@ -3677,7 +3678,7 @@ fn build_taskflow_next_decision(
                 };
                 next_actions.push(format!(
                     "Inspect the active bound recovery state with `{}` before considering backlog ready-head work.",
-                    crate::operator_command_text::human_command(&next_action.command)
+                    operator_output::command_text::human_command(&next_action.command)
                 ));
                 (
                     Some(next_action.command.clone()),
@@ -3836,7 +3837,7 @@ fn build_taskflow_next_decision(
             )
         } else if let Some(task) = ready_head.clone() {
             let task_id = shell_quote_arg(&task.id);
-            let task_show_command = crate::operator_command_text::human_command(&format!(
+            let task_show_command = operator_output::command_text::human_command(&format!(
                 "vida task show {task_id} --json"
             ));
             let next_action = TaskflowNextAction {
@@ -3863,7 +3864,7 @@ fn build_taskflow_next_decision(
             };
             next_actions.push(format!(
                 "Continue the latest lawful delegated chain with `{}`.",
-                crate::operator_command_text::human_command(&next_action.command)
+                operator_output::command_text::human_command(&next_action.command)
             ));
             (
                 Some(next_action.command.clone()),
@@ -3975,14 +3976,14 @@ fn taskflow_next_operator_contracts(
         "dispatch_run_id": dispatch.map(|summary| summary.run_id.as_str()),
     });
     let next_actions = if decision.status
-        == crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
+        == crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
     {
         Vec::new()
     } else {
         decision.next_actions.clone()
     };
     let verdict =
-        crate::operator_contracts::finalize_release1_operator_surface_verdict_with_status(
+        crate::release1_operator_output::finalize_release1_operator_surface_verdict_with_status(
             &decision.status,
             decision.blocker_codes.clone(),
             next_actions,
@@ -4011,13 +4012,13 @@ fn taskflow_graph_summary_operator_contracts(
         "dispatch_run_id": dispatch.map(|summary| summary.run_id.as_str()),
     });
     let next_actions =
-        if status == crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status {
+        if status == crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status {
             Vec::new()
         } else {
             next_actions.to_vec()
         };
     let verdict =
-        crate::operator_contracts::finalize_release1_operator_surface_verdict_with_status(
+        crate::release1_operator_output::finalize_release1_operator_surface_verdict_with_status(
             status,
             blocker_codes.to_vec(),
             next_actions,
@@ -4042,7 +4043,7 @@ fn taskflow_graph_summary_blocked_payload(error_stage: &str, error: &str) -> ser
     ];
     let (shared_fields, operator_contracts, artifact_refs) =
         taskflow_graph_summary_operator_contracts(
-            crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
+            crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
             &blocker_codes,
             &next_actions,
             None,
@@ -4050,7 +4051,7 @@ fn taskflow_graph_summary_blocked_payload(error_stage: &str, error: &str) -> ser
             None,
         );
     serde_json::json!({
-        "status": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
+        "status": crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
         "surface": "vida taskflow graph-summary",
         "trace_id": serde_json::Value::Null,
         "workflow_class": serde_json::Value::Null,
@@ -5044,22 +5045,22 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             );
         }
     } else {
-        let mut fields = vec![crate::operator_toon_report::OperatorToonField::text(
+        let mut fields = vec![operator_output::toon_report::OperatorToonField::text(
             "status",
             decision.status.clone(),
         )];
         if !decision.blocker_codes.is_empty() {
-            fields.push(crate::operator_toon_report::OperatorToonField::value(
+            fields.push(operator_output::toon_report::OperatorToonField::value(
                 "blocker_codes",
                 serde_json::json!(decision.blocker_codes),
             ));
         }
-        fields.push(crate::operator_toon_report::OperatorToonField::text(
+        fields.push(operator_output::toon_report::OperatorToonField::text(
             "ready_count",
             ready_tasks.len().to_string(),
         ));
         if let Some(task_id) = scope_task_id {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "scope_task_id",
                 task_id,
             ));
@@ -5069,7 +5070,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             .and_then(|value| value.get("id"))
             .and_then(serde_json::Value::as_str)
         {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "primary_ready_task",
                 task,
             ));
@@ -5078,12 +5079,12 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
                 .and_then(|value| value.get("title"))
                 .and_then(serde_json::Value::as_str)
             {
-                fields.push(crate::operator_toon_report::OperatorToonField::text(
+                fields.push(operator_output::toon_report::OperatorToonField::text(
                     "title", title,
                 ));
             }
         } else {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "primary_ready_task",
                 "none",
             ));
@@ -5094,7 +5095,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             .and_then(|value| value.get("id"))
             .and_then(serde_json::Value::as_str)
         {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "candidate_ready_task",
                 task,
             ));
@@ -5104,7 +5105,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             .and_then(|value| value.get("admissibility_gate"))
             .and_then(serde_json::Value::as_str)
         {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "admissibility_gate",
                 gate,
             ));
@@ -5114,19 +5115,19 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             .and_then(|value| value.get("summary"))
             .and_then(serde_json::Value::as_str)
         {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "why_not_now",
                 summary,
             ));
         }
         if let Some(command) = payload["recommended_command"].as_str() {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "recommended_command",
-                crate::operator_command_text::human_command(command),
+                operator_output::command_text::human_command(command),
             ));
         }
         if let Some(surface) = payload["recommended_surface"].as_str() {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "recommended_surface",
                 surface,
             ));
@@ -5136,12 +5137,12 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             .and_then(|value| value.get("reason"))
             .and_then(serde_json::Value::as_str)
         {
-            fields.push(crate::operator_toon_report::OperatorToonField::text(
+            fields.push(operator_output::toon_report::OperatorToonField::text(
                 "next_action",
                 next_action,
             ));
         }
-        crate::operator_toon_report::print("vida taskflow next", fields);
+        operator_output::toon_report::print("vida taskflow next", fields);
     }
 
     if decision.status == "pass" {
@@ -5714,8 +5715,10 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     let next_actions = if status == "pass" {
         Vec::new()
     } else {
-        crate::operator_contracts::canonical_next_action_entries(&serde_json::json!(next_actions))
-            .unwrap_or(next_actions)
+        crate::release1_operator_output::canonical_next_action_entries(&serde_json::json!(
+            next_actions
+        ))
+        .unwrap_or(next_actions)
     };
     let (shared_fields, operator_contracts, artifact_refs) =
         taskflow_graph_summary_operator_contracts(
@@ -6203,10 +6206,10 @@ async fn build_taskflow_scheduling_actualize_plan(
     } else if apply {
         vec![format!(
             "Re-run `{}` to inspect refreshed scheduling projection.",
-            crate::operator_command_text::human_command("vida taskflow graph-summary --json")
+            operator_output::command_text::human_command("vida taskflow graph-summary --json")
         )]
     } else {
-        let apply_command = crate::operator_command_text::human_command(&format!(
+        let apply_command = operator_output::command_text::human_command(&format!(
             "vida taskflow scheduling actualize --scope {} --apply --json",
             shell_quote_arg(scope)
         ));
@@ -7215,7 +7218,7 @@ pub(crate) fn normalize_taskflow_diagnostic_operator_contract_payload(
     fallback_blocked_next_action: &str,
 ) -> Result<serde_json::Value, String> {
     let blocker_codes = string_array_from_payload(&payload["blocker_codes"]);
-    let blocker_codes = crate::operator_contracts::normalize_blocker_codes(
+    let blocker_codes = crate::release1_operator_output::normalize_blocker_codes(
         &blocker_codes,
         crate::release_contract_adapters::canonical_blocker_codes,
         crate::contract_profile_adapter::blocker_code(
@@ -7235,7 +7238,7 @@ pub(crate) fn normalize_taskflow_diagnostic_operator_contract_payload(
         .get("artifact_refs")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
-    let finalized = crate::operator_contracts::finalize_release1_operator_truth(
+    let finalized = crate::release1_operator_output::finalize_release1_operator_truth(
         blocker_codes,
         next_actions,
         artifact_refs,
@@ -7361,14 +7364,14 @@ fn route_assignment_reseed_next_actions(run_id: &str, task_id: &str) -> Vec<Stri
     vec![
         format!(
             "Refresh the stale route assignment by reseeding dispatch context with `{}`.",
-            crate::operator_command_text::human_command(&format!(
+            operator_output::command_text::human_command(&format!(
                 "vida taskflow run-graph dispatch-init {} --json",
                 crate::shell_quote(task_id)
             ))
         ),
         format!(
             "Re-check the active route with `{}`.",
-            crate::operator_command_text::human_command(&format!(
+            operator_output::command_text::human_command(&format!(
                 "vida taskflow route explain --run-id {} --json",
                 crate::shell_quote(run_id)
             ))
@@ -13642,7 +13645,7 @@ agent_system:
         });
 
         assert_eq!(
-            crate::operator_contracts::shared_operator_output_contract_parity_error(&payload),
+            crate::release1_operator_output::shared_operator_output_contract_parity_error(&payload),
             None
         );
         assert_eq!(

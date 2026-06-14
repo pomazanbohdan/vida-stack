@@ -1072,45 +1072,45 @@ fn agent_init_execute_dispatch_resume_error_next_actions(
         ("run_graph_recovery_not_ready", Some(run_id)) => vec![
             format!(
                 "Inspect the blocked run with `{}`.",
-                crate::operator_command_text::human_command(&format!(
+                operator_output::command_text::human_command(&format!(
                     "vida taskflow recovery status {} --json",
                     crate::shell_quote(run_id)
                 ))
             ),
             format!(
                 "Inspect run-graph gate fields with `{}` and make recovery_ready=true through the canonical recovery/continue path before retrying execute-dispatch.",
-                crate::operator_command_text::human_command(&format!(
+                operator_output::command_text::human_command(&format!(
                     "vida taskflow run-graph status {} --json",
                     crate::shell_quote(run_id)
                 ))
             ),
             format!(
                 "Inspect route freshness with `{}`; if it reports model_not_pinned or catalog drift, refresh or reseed the route assignment before creating another packet.",
-                crate::operator_command_text::human_command("vida taskflow route explain --json")
+                operator_output::command_text::human_command("vida taskflow route explain --json")
             ),
         ],
         ("run_graph_recovery_not_ready", None) => vec![
             format!(
                 "Inspect the blocked run with `{}`.",
-                crate::operator_command_text::human_command(
+                operator_output::command_text::human_command(
                     "vida taskflow recovery latest --json"
                 )
             ),
             format!(
                 "Inspect run-graph gate fields with `{}` and make recovery_ready=true through the canonical recovery/continue path before retrying execute-dispatch.",
-                crate::operator_command_text::human_command(
+                operator_output::command_text::human_command(
                     "vida taskflow run-graph status <run-id> --json"
                 )
             ),
             format!(
                 "Inspect route freshness with `{}`; if it reports model_not_pinned or catalog drift, refresh or reseed the route assignment before creating another packet.",
-                crate::operator_command_text::human_command("vida taskflow route explain --json")
+                operator_output::command_text::human_command("vida taskflow route explain --json")
             ),
         ],
         ("stale_missing_task_run_graph", Some(run_id)) => vec![
             format!(
                 "Retire the stale missing-task run with `{}`.",
-                crate::operator_command_text::human_command(&format!(
+                operator_output::command_text::human_command(&format!(
                     "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json",
                     crate::shell_quote(run_id),
                     crate::shell_quote(run_id)
@@ -1118,14 +1118,14 @@ fn agent_init_execute_dispatch_resume_error_next_actions(
             ),
             format!(
                 "Refresh continuation evidence with `{}` and `{}` before retrying execute-dispatch.",
-                crate::operator_command_text::human_command("vida status --json"),
-                crate::operator_command_text::human_command("vida taskflow recovery latest --json")
+                operator_output::command_text::human_command("vida status --json"),
+                operator_output::command_text::human_command("vida taskflow recovery latest --json")
             ),
         ],
         ("missing_run_graph_dispatch_receipt", Some(run_id)) => vec![
             format!(
                 "Inspect recovery for missing receipt repair with `{}`.",
-                crate::operator_command_text::human_command(&format!(
+                operator_output::command_text::human_command(&format!(
                     "vida taskflow recovery status {} --json",
                     crate::shell_quote(run_id)
                 ))
@@ -1135,32 +1135,32 @@ fn agent_init_execute_dispatch_resume_error_next_actions(
         (_, Some(run_id)) => vec![
             format!(
                 "Inspect continuation evidence with `{}`.",
-                crate::operator_command_text::human_command(&format!(
+                operator_output::command_text::human_command(&format!(
                     "vida taskflow recovery status {} --json",
                     crate::shell_quote(run_id)
                 ))
             ),
             format!(
                 "Refresh the blocked run through the taskflow surface with `{}`; `vida agent-init` does not accept `--run-id`.",
-                crate::operator_command_text::human_command(&format!(
+                operator_output::command_text::human_command(&format!(
                     "vida taskflow consume continue --run-id {} --json",
                     crate::shell_quote(run_id)
                 ))
             ),
             format!(
                 "Do not retry `{}` until the recovery surface reports recovery_ready=true and a dispatch resume target.",
-                crate::operator_command_text::human_command("vida agent-init --execute-dispatch --json")
+                operator_output::command_text::human_command("vida agent-init --execute-dispatch --json")
             ),
         ],
         _ => vec![
             format!(
                 "Inspect continuation evidence with `{}` and `{}`.",
-                crate::operator_command_text::human_command("vida status --json"),
-                crate::operator_command_text::human_command("vida taskflow recovery latest --json")
+                operator_output::command_text::human_command("vida status --json"),
+                operator_output::command_text::human_command("vida taskflow recovery latest --json")
             ),
             format!(
                 "Do not retry `{}` until the recovery surface reports recovery_ready=true and a dispatch resume target.",
-                crate::operator_command_text::human_command("vida agent-init --execute-dispatch --json")
+                operator_output::command_text::human_command("vida agent-init --execute-dispatch --json")
             ),
         ],
     }
@@ -4741,7 +4741,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                             )
                         };
                         let selected_payload =
-                            crate::operator_toon_report::select_fields(payload.clone(), field_selection);
+                            operator_output::toon_report::select_fields(payload.clone(), field_selection);
                         if args.json {
                             println!(
                                 "{}",
@@ -4751,7 +4751,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                         } else {
                             println!(
                                 "{}",
-                                crate::operator_toon_report::render_value(
+                                operator_output::toon_report::render_value(
                                     "vida orchestrator-init",
                                     selected_payload,
                                 )

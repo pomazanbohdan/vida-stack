@@ -1,10 +1,10 @@
 use crate::{
     build_runtime_execution_plan_from_snapshot, dispatch_contract_execution_lane_sequence,
-    operator_contracts::{
+    print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
+    release1_operator_output::{
         canonical_release1_blocker_code_entries, finalize_release1_operator_truth,
         shared_operator_output_contract_parity_error,
     },
-    print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     shell_quote,
     state_store::{
         RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
@@ -260,7 +260,7 @@ fn normalize_run_graph_blocker_codes(
     {
         return vec!["internal_activation_view_only".to_string()];
     }
-    let normalized = crate::operator_contracts::normalize_blocker_codes(
+    let normalized = crate::release1_operator_output::normalize_blocker_codes(
         blocker_codes,
         crate::release_contract_adapters::canonical_blocker_codes,
         None,
@@ -1622,7 +1622,7 @@ fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida lane supersede") {
         return "vida lane supersede".to_string();
     }
-    crate::operator_command_text::human_command(command)
+    operator_output::command_text::human_command(command)
         .split_whitespace()
         .take(4)
         .collect::<Vec<_>>()
@@ -4967,13 +4967,13 @@ fn run_graph_status_missing_run_id_json_payload() -> serde_json::Value {
         "next_actions": [
             format!(
                 "Run `{}` with the concrete run id.",
-                crate::operator_command_text::human_command(
+                operator_output::command_text::human_command(
                     "vida taskflow run-graph status <run-id> --json"
                 )
             ),
             format!(
                 "Use `{}` to inspect the latest run when the run id is unknown.",
-                crate::operator_command_text::human_command("vida taskflow run-graph latest --json")
+                operator_output::command_text::human_command("vida taskflow run-graph latest --json")
             )
         ],
     })
@@ -5051,7 +5051,7 @@ fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Val
     }
     if error.contains("recovery_ready is false") {
         let run_id = run_graph_resume_gate_error_run_id(error)?;
-        let command = crate::operator_command_text::human_command(&format!(
+        let command = operator_output::command_text::human_command(&format!(
             "vida lane show {} --json",
             shell_quote(&run_id)
         ));
@@ -5064,7 +5064,7 @@ fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Val
             next_action.reason.clone(),
             format!(
                 "Inspect recovery details with `{}`.",
-                crate::operator_command_text::human_command(&format!(
+                operator_output::command_text::human_command(&format!(
                     "vida taskflow recovery status {} --json",
                     shell_quote(&run_id)
                 ))

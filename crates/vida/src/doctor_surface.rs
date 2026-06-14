@@ -1270,17 +1270,18 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         &operator_session_projection
                     ),
                 });
-                let finalized = match crate::operator_contracts::finalize_release1_operator_truth(
-                    operator_blocker_codes,
-                    operator_next_actions,
-                    operator_artifact_refs,
-                ) {
-                    Ok(finalized) => finalized,
-                    Err(error) => {
-                        eprintln!("doctor json contract: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                };
+                let finalized =
+                    match crate::release1_operator_output::finalize_release1_operator_truth(
+                        operator_blocker_codes,
+                        operator_next_actions,
+                        operator_artifact_refs,
+                    ) {
+                        Ok(finalized) => finalized,
+                        Err(error) => {
+                            eprintln!("doctor json contract: failed ({error})");
+                            return ExitCode::from(1);
+                        }
+                    };
                 let operator_contracts = finalized.operator_contracts;
                 let mut summary_json = if summary_only {
                     serde_json::json!({
@@ -1664,7 +1665,7 @@ mod tests {
     use crate::contract_profile_adapter::{
         operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
     };
-    use crate::operator_contracts::canonical_release1_operator_contract_status;
+    use crate::release1_operator_output::canonical_release1_operator_contract_status;
     use std::fs;
 
     #[test]

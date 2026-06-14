@@ -1936,8 +1936,9 @@ fn emit_lane_takeover_ready_envelope(
 
 fn emit_blocked_lane_envelope(as_json: bool) -> ExitCode {
     let latest_command =
-        crate::operator_command_text::human_command("vida lane show --latest --json");
-    let run_command = crate::operator_command_text::human_command("vida lane show <run-id> --json");
+        operator_output::command_text::human_command("vida lane show --latest --json");
+    let run_command =
+        operator_output::command_text::human_command("vida lane show <run-id> --json");
     let next_actions = vec![
         format!(
             "Use `{latest_command}` or `{run_command}` to inspect the current lane envelope, then record exception-path evidence with `vida lane exception-takeover` or explicit supersession with `vida lane supersede` as needed."
@@ -2015,8 +2016,8 @@ fn emit_missing_lane_receipt_envelope(
     let next_actions = vec![
         format!(
             "Run `{}` and `{}` to confirm the active bounded unit.",
-            crate::operator_command_text::human_command("vida status --json"),
-            crate::operator_command_text::human_command("vida task next-lawful --json")
+            operator_output::command_text::human_command("vida status --json"),
+            operator_output::command_text::human_command("vida task next-lawful --json")
         ),
         "Create or refresh a dispatch packet before inspecting lane takeover readiness."
             .to_string(),
@@ -2235,7 +2236,7 @@ fn lane_mutation_status_guard(
         return Err(format!(
             "Lane `{run_id}` is no longer active for mutation because run-graph status is terminal (`{}` / `{}`). Inspect `{}` for the persisted lane envelope and continuation evidence. {next_action}",
             status.status, status.lifecycle_stage,
-            crate::operator_command_text::human_command(&format!("vida lane show {run_id} --json")),
+            operator_output::command_text::human_command(&format!("vida lane show {run_id} --json")),
         ));
     }
     Ok(())

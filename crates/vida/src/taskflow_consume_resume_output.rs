@@ -1,5 +1,5 @@
 pub(crate) fn command_text(command: &str) -> String {
-    crate::operator_command_text::human_command(command)
+    operator_output::command_text::human_command(command)
 }
 
 fn action_text(action: &str) -> String {
