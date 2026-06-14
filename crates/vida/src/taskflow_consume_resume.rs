@@ -316,9 +316,7 @@ fn diagnostic_dispatch_receipt_from_packet_path(
     let packet_path = packet_path
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    let packet_path = canonical_runtime_packet_identity(packet_path).ok()?;
-    let packet_body = std::fs::read_to_string(packet_path).ok()?;
-    let packet = serde_json::from_str::<serde_json::Value>(&packet_body).ok()?;
+    let packet = dispatch_packet_json_from_current_project(packet_path)?;
     let dispatch_target = packet
         .get("downstream_dispatch_target")
         .and_then(serde_json::Value::as_str)
@@ -3281,10 +3279,11 @@ fn dispatch_packet_json_and_path_from_current_project(
 ) -> Option<(serde_json::Value, std::path::PathBuf)> {
     let project_root = crate::resolve_runtime_project_root().ok()?;
     crate::status_surface::dispatch_packet_json_and_path_from_project_path(&project_root, path)
-        .or_else(|| dispatch_packet_json_and_path_from_state_dir_absolute_path(path))
+        .or_else(|| dispatch_packet_json_and_path_from_state_dir_absolute_path(&project_root, path))
 }
 
 fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
+    project_root: &std::path::Path,
     path: &str,
 ) -> Option<(serde_json::Value, std::path::PathBuf)> {
     const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
@@ -3317,6 +3316,19 @@ fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
     let Ok(candidate) = candidate.canonicalize() else {
         return None;
     };
+    let dispatch_packets_root = project_root
+        .canonicalize()
+        .ok()?
+        .join(".vida")
+        .join("data")
+        .join("state")
+        .join("runtime-consumption")
+        .join("dispatch-packets")
+        .canonicalize()
+        .ok()?;
+    if !candidate.starts_with(dispatch_packets_root) {
+        return None;
+    }
     let Ok(file) = std::fs::File::open(&candidate) else {
         return None;
     };
@@ -7691,9 +7703,9 @@ mod tests {
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
         consume_continue_dispatch_handoff_timeout, consume_continue_handoff_with_timeout,
         consume_continue_should_defer_agent_handoff, consume_continue_state_access_blocker_payload,
-        dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
-        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
-        enforce_consume_continue_execution_preparation_gate,
+        diagnostic_dispatch_receipt_from_packet_path, dispatch_receipt_internal_retry_eligible,
+        dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
+        emit_runtime_consumption_resume_json, enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout,
         latest_stale_run_graph_task_authority_error, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
@@ -7724,7 +7736,29 @@ mod tests {
     use crate::{RuntimeConsumptionLaneSelection, StateStore};
     use std::fs;
     use std::process::ExitCode;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn unique_consume_packet_test_root(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    fn create_consume_packet_test_project_root(root: &std::path::Path) {
+        fs::create_dir_all(root.join(".vida/config")).expect("create project config dir");
+        fs::create_dir_all(root.join(".vida/db")).expect("create project db dir");
+        fs::create_dir_all(root.join(".vida/project")).expect("create project metadata dir");
+        fs::write(root.join("AGENTS.md"), "# test\n").expect("write agents marker");
+        fs::write(root.join("vida.config.yaml"), "project: test\n").expect("write project marker");
+    }
 
     async fn create_test_task_authority(
         store: &StateStore,
@@ -8040,6 +8074,191 @@ mod tests {
             payload["operator_contracts"]["schema_version"],
             "release-1-v1"
         );
+    }
+
+    #[test]
+    fn diagnostic_dispatch_receipt_reads_project_packet_from_subdirectory() {
+        let _guard = env_lock().lock().expect("env lock");
+        let original_dir = std::env::current_dir().expect("current dir");
+        let root = unique_consume_packet_test_root("vida-consume-diagnostic-subdir");
+        let subdir = root.join("nested/workdir");
+        let packet_path =
+            root.join(".vida/data/state/runtime-consumption/dispatch-packets/run-1.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet dir");
+        fs::create_dir_all(&subdir).expect("create subdir");
+        create_consume_packet_test_project_root(&root);
+        fs::write(
+            &packet_path,
+            serde_json::to_vec(&serde_json::json!({
+                "downstream_dispatch_target": "implementation",
+                "downstream_dispatch_status": "blocked"
+            }))
+            .expect("encode packet"),
+        )
+        .expect("write packet");
+
+        std::env::set_current_dir(&subdir).expect("enter subdir");
+        let receipt = diagnostic_dispatch_receipt_from_packet_path(Some(
+            ".vida/data/state/runtime-consumption/dispatch-packets/run-1.json",
+        ));
+        std::env::set_current_dir(&original_dir).expect("restore dir");
+
+        let receipt = receipt.expect("subdirectory packet should read through project root");
+        assert_eq!(receipt["dispatch_target"], "implementation");
+        assert_eq!(receipt["dispatch_status"], "blocked");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn diagnostic_dispatch_receipt_rejects_unsafe_packet_paths() {
+        let _guard = env_lock().lock().expect("env lock");
+        let original_dir = std::env::current_dir().expect("current dir");
+        let root = unique_consume_packet_test_root("vida-consume-diagnostic-rejects");
+        let packet_dir = root.join(".vida/data/state/runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        create_consume_packet_test_project_root(&root);
+        let outside = root.parent().expect("root parent").join(format!(
+            "outside-consume-packet-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &outside,
+            serde_json::to_vec(&serde_json::json!({
+                "downstream_dispatch_target": "outside",
+                "downstream_dispatch_status": "blocked"
+            }))
+            .expect("encode outside"),
+        )
+        .expect("write outside");
+        let outside_runtime_packet = root
+            .parent()
+            .expect("root parent")
+            .join(format!(
+                "outside-consume-runtime-packet-{}",
+                std::process::id()
+            ))
+            .join("runtime-consumption/dispatch-packets/run-1.json");
+        fs::create_dir_all(
+            outside_runtime_packet
+                .parent()
+                .expect("outside runtime parent"),
+        )
+        .expect("create outside runtime packet dir");
+        fs::write(
+            &outside_runtime_packet,
+            serde_json::to_vec(&serde_json::json!({
+                "downstream_dispatch_target": "outside-runtime",
+                "downstream_dispatch_status": "blocked"
+            }))
+            .expect("encode outside runtime packet"),
+        )
+        .expect("write outside runtime packet");
+        let directory_path = packet_dir.join("directory-packet.json");
+        fs::create_dir_all(&directory_path).expect("create non-regular packet path");
+        let oversized = packet_dir.join("oversized.json");
+        fs::write(&oversized, "x".repeat(1024 * 1024 + 1)).expect("write oversized");
+
+        std::env::set_current_dir(&root).expect("enter root");
+        assert!(
+            diagnostic_dispatch_receipt_from_packet_path(Some(&outside.display().to_string()))
+                .is_none()
+        );
+        assert!(diagnostic_dispatch_receipt_from_packet_path(Some(
+            &outside_runtime_packet.display().to_string()
+        ))
+        .is_none());
+        assert!(diagnostic_dispatch_receipt_from_packet_path(Some("../outside.json")).is_none());
+        assert!(diagnostic_dispatch_receipt_from_packet_path(Some(
+            ".vida/data/state/runtime-consumption/dispatch-packets/directory-packet.json"
+        ))
+        .is_none());
+        assert!(diagnostic_dispatch_receipt_from_packet_path(Some(
+            ".vida/data/state/runtime-consumption/dispatch-packets/oversized.json"
+        ))
+        .is_none());
+        std::env::set_current_dir(&original_dir).expect("restore dir");
+
+        let _ = fs::remove_file(outside);
+        let _ = fs::remove_dir_all(
+            outside_runtime_packet
+                .ancestors()
+                .nth(3)
+                .expect("outside runtime root"),
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostic_dispatch_receipt_rejects_symlinked_packet() {
+        let _guard = env_lock().lock().expect("env lock");
+        let original_dir = std::env::current_dir().expect("current dir");
+        let root = unique_consume_packet_test_root("vida-consume-diagnostic-symlink");
+        let packet_dir = root.join(".vida/data/state/runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        create_consume_packet_test_project_root(&root);
+        let target = packet_dir.join("target.json");
+        let link = packet_dir.join("link.json");
+        fs::write(
+            &target,
+            serde_json::to_vec(&serde_json::json!({
+                "downstream_dispatch_target": "symlink",
+                "downstream_dispatch_status": "blocked"
+            }))
+            .expect("encode target"),
+        )
+        .expect("write target");
+        std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+        std::env::set_current_dir(&root).expect("enter root");
+        assert!(diagnostic_dispatch_receipt_from_packet_path(Some(
+            ".vida/data/state/runtime-consumption/dispatch-packets/link.json"
+        ))
+        .is_none());
+        std::env::set_current_dir(&original_dir).expect("restore dir");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn diagnostic_dispatch_receipt_rejects_windows_symlinked_packet() {
+        let _guard = env_lock().lock().expect("env lock");
+        let original_dir = std::env::current_dir().expect("current dir");
+        let root = unique_consume_packet_test_root("vida-consume-diagnostic-windows-symlink");
+        let packet_dir = root.join(".vida/data/state/runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        create_consume_packet_test_project_root(&root);
+        let target = packet_dir.join("target.json");
+        let link = packet_dir.join("link.json");
+        fs::write(
+            &target,
+            serde_json::to_vec(&serde_json::json!({
+                "downstream_dispatch_target": "symlink",
+                "downstream_dispatch_status": "blocked"
+            }))
+            .expect("encode target"),
+        )
+        .expect("write target");
+        match std::os::windows::fs::symlink_file(&target, &link) {
+            Ok(()) => {}
+            Err(error) if matches!(error.raw_os_error(), Some(1314) | Some(5)) => {
+                eprintln!("skipping Windows symlink packet path test: {error}");
+                let _ = fs::remove_dir_all(root);
+                return;
+            }
+            Err(error) => panic!("create packet symlink: {error}"),
+        }
+
+        std::env::set_current_dir(&root).expect("enter root");
+        assert!(diagnostic_dispatch_receipt_from_packet_path(Some(
+            ".vida/data/state/runtime-consumption/dispatch-packets/link.json"
+        ))
+        .is_none());
+        std::env::set_current_dir(&original_dir).expect("restore dir");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(windows)]
