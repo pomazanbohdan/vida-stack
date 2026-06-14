@@ -17,6 +17,9 @@ use crate::{
 use clap::{CommandFactory, Parser};
 use serde::Serialize;
 use taskflow_cli::Cli as TaskflowCli;
+use taskflow_core::scheduling::scheduler_dispatch::{
+    self, FanoutRejectedCandidate, ReadyTaskSelection,
+};
 
 const TASKFLOW_SCHEDULER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
@@ -1059,12 +1062,7 @@ pub(crate) fn runtime_project_config_activation_bundle() -> Result<serde_json::V
 }
 
 fn scheduler_effective_parallel_limit(configured: u64, requested: Option<u64>) -> u64 {
-    let configured = configured.max(1);
-    requested
-        .filter(|value| *value > 0)
-        .map(|value| configured.min(value))
-        .unwrap_or(configured)
-        .max(1)
+    scheduler_dispatch::effective_parallel_limit(configured, requested)
 }
 
 fn taskflow_scheduler_fanout_guard_json(
@@ -1076,47 +1074,37 @@ fn taskflow_scheduler_fanout_guard_json(
     scheduling: &crate::state_store::TaskSchedulingProjection,
     blocker_codes: &[String],
 ) -> serde_json::Value {
-    let ready_parallel_safe_count = scheduling
+    let ready_parallel_flags = scheduling
         .ready
         .iter()
-        .filter(|candidate| candidate.ready_now && candidate.ready_parallel_safe)
-        .count();
-    let cap_limited_rejected_count = rejected_candidates
+        .map(|candidate| candidate.ready_now && candidate.ready_parallel_safe)
+        .collect::<Vec<_>>();
+    let rejected_candidate_refs = rejected_candidates
         .iter()
-        .filter(|candidate| {
-            candidate.reasons.iter().any(|reason| {
-                reason == "max_parallel_agents_cap_reached"
-                    || reason == "effective_max_parallel_agents_cap_reached"
-            })
+        .map(|candidate| FanoutRejectedCandidate {
+            ready_now: candidate.ready_now,
+            parallel_blockers: &candidate.parallel_blockers,
+            reasons: &candidate.reasons,
         })
-        .count();
-    let conflict_rejected_count = rejected_candidates
-        .iter()
-        .filter(|candidate| {
-            candidate.reasons.iter().any(|reason| {
-                reason.starts_with("conflict_domain_already_selected:")
-                    || reason.starts_with("owned_path_already_selected:")
-                    || reason.starts_with("active_scheduler_reservation_")
-                    || reason.starts_with("active_orchestrator_claim_")
-            })
-        })
-        .count();
-    let unsafe_ready_rejected_count = rejected_candidates
-        .iter()
-        .filter(|candidate| candidate.ready_now && !candidate.parallel_blockers.is_empty())
-        .count();
+        .collect::<Vec<_>>();
+    let summary = scheduler_dispatch::fanout_guard_summary(
+        &ready_parallel_flags,
+        selected_task_ids.len(),
+        &rejected_candidate_refs,
+        blocker_codes,
+    );
     serde_json::json!({
-        "status": if blocker_codes.is_empty() { "pass" } else { "blocked" },
+        "status": summary.status,
         "configured_max_parallel_agents": configured_max_parallel_agents,
         "requested_parallel_limit": requested_parallel_limit,
         "effective_max_parallel_agents": max_parallel_agents,
-        "ready_parallel_safe_count": ready_parallel_safe_count,
-        "lanes_selected": selected_task_ids.len(),
+        "ready_parallel_safe_count": summary.ready_parallel_safe_count,
+        "lanes_selected": summary.lanes_selected,
         "selected_task_ids": selected_task_ids,
-        "cap_limited_rejected_count": cap_limited_rejected_count,
-        "conflict_rejected_count": conflict_rejected_count,
-        "unsafe_ready_rejected_count": unsafe_ready_rejected_count,
-        "rejected_candidate_count": rejected_candidates.len(),
+        "cap_limited_rejected_count": summary.cap_limited_rejected_count,
+        "conflict_rejected_count": summary.conflict_rejected_count,
+        "unsafe_ready_rejected_count": summary.unsafe_ready_rejected_count,
+        "rejected_candidate_count": summary.rejected_candidate_count,
         "blocker_codes": blocker_codes,
         "partial_outcomes_visible": true,
         "host_bridge_capacity": {
@@ -2521,45 +2509,25 @@ fn build_taskflow_scheduler_dispatch_plan(
         configured_max_parallel_agents,
         requested_parallel_limit,
     );
-    let selected_current_candidate = if let Some(task_id) = requested_current_task_id {
-        scheduling
-            .ready
-            .iter()
-            .find(|candidate| candidate.task.id == task_id)
-    } else if let Some(task_id) = explicit_bound_current_task_id {
-        scheduling
-            .ready
-            .iter()
-            .find(|candidate| candidate.task.id == task_id)
-    } else {
-        scheduling
-            .ready
-            .iter()
-            .find(|candidate| candidate.active_critical_path)
-            .or_else(|| scheduling.ready.first())
-    };
+    let ready_selection_candidates = scheduling
+        .ready
+        .iter()
+        .map(|candidate| ReadyTaskSelection {
+            task_id: candidate.task.id.as_str(),
+            active_critical_path: candidate.active_critical_path,
+        })
+        .collect::<Vec<_>>();
+    let primary_selection = scheduler_dispatch::select_primary_ready_task(
+        &ready_selection_candidates,
+        requested_current_task_id,
+        explicit_bound_current_task_id,
+    );
+    let selected_current_candidate = primary_selection
+        .index
+        .and_then(|index| scheduling.ready.get(index));
     let selected_current_task_id =
         selected_current_candidate.map(|candidate| candidate.task.id.clone());
-    let selection_source = if requested_current_task_id.is_some() {
-        if selected_current_task_id.is_some() {
-            "requested_current_task"
-        } else {
-            "requested_current_task_not_ready"
-        }
-    } else if explicit_bound_current_task_id.is_some() {
-        if selected_current_task_id.is_some() {
-            "explicit_run_graph_continuation_binding"
-        } else {
-            "explicit_run_graph_continuation_binding_not_ready"
-        }
-    } else if selected_current_candidate.is_some_and(|candidate| candidate.active_critical_path) {
-        "critical_path_ready_head"
-    } else if selected_current_candidate.is_some() {
-        "ready_head_fallback"
-    } else {
-        "no_ready_primary"
-    }
-    .to_string();
+    let selection_source = primary_selection.source.as_str().to_string();
 
     let selected_primary_task =
         selected_current_candidate.map(|candidate| graph_summary_task_ref(&candidate.task));
