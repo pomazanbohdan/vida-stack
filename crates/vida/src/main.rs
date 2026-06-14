@@ -34,6 +34,7 @@ mod hook_template_registry_projection;
 mod host_agent_state;
 mod host_runtime_materialization;
 mod host_runtime_registry;
+mod init;
 mod init_surfaces;
 mod lane_surface;
 mod launcher_activation_snapshot;
