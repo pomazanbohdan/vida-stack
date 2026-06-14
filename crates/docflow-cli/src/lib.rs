@@ -1806,44 +1806,10 @@ fn changed_markdown_paths(root: Option<&str>) -> Result<Vec<String>, String> {
     let root_path = root
         .map(std::path::PathBuf::from)
         .unwrap_or_else(runtime_root);
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&root_path)
-        .args([
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "core.untrackedCache=false",
-        ])
-        .args(["status", "--short", "--", ":(glob)**/*.md"])
-        .output()
-        .map_err(|error| format!("git_status_failed:{error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git_status_failed:{}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let mut paths = BTreeSet::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if line.len() < 4 {
-            continue;
-        }
-        let status = &line[..2];
-        if status == " D" || status == "D " || status == "DD" {
-            continue;
-        }
-        let path = line[3..]
-            .rsplit(" -> ")
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .trim_matches('"');
-        if path.ends_with(".md") && !path.is_empty() {
-            paths.insert(path.replace('\\', "/"));
-        }
-    }
-    Ok(paths.into_iter().collect())
+    docflow_core::git_status::changed_markdown_paths(
+        docflow_core::git_status::SafeGitStatusInput::markdown(root_path),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn task_closeout_verdict(
