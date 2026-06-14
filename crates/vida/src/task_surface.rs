@@ -5018,35 +5018,15 @@ fn task_close_commit_file_strings(
     command: &TaskCloseArgs,
     task: Option<&state_store::TaskRecord>,
 ) -> Vec<String> {
-    if !command.commit_files.is_empty() {
-        let files: Vec<String> = command
+    taskflow_core::task::close::task_close_commit_file_strings(
+        command
             .commit_files
             .iter()
             .map(|path| path.display().to_string())
-            .collect();
-        return canonical_owned_paths(files);
-    }
-
-    if command.stage_owned {
-        if let Some(task) = task {
-            return canonical_owned_paths(task.planner_metadata.owned_paths.clone());
-        }
-    }
-    Vec::new()
-}
-
-fn canonical_owned_paths(paths: Vec<String>) -> Vec<String> {
-    let mut canonical = Vec::new();
-    for path in paths {
-        let trimmed = path.trim().trim_end_matches('/').to_string();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if !canonical.contains(&trimmed) {
-            canonical.push(trimmed);
-        }
-    }
-    canonical
+            .collect(),
+        command.stage_owned,
+        task.map(|task| task.planner_metadata.owned_paths.clone()),
+    )
 }
 
 fn task_owned_status_receipt(
@@ -5055,8 +5035,9 @@ fn task_owned_status_receipt(
     override_files: Vec<String>,
     dirty_files: Vec<String>,
 ) -> TaskOwnedStatusReceipt {
-    let override_files = canonical_owned_paths(override_files);
-    let metadata_owned_paths = canonical_owned_paths(metadata_owned_paths);
+    let override_files = taskflow_core::task::close::canonical_owned_paths(override_files);
+    let metadata_owned_paths =
+        taskflow_core::task::close::canonical_owned_paths(metadata_owned_paths);
     let (owned_paths, ownership_source) = if !override_files.is_empty() {
         (override_files, "explicit_file_overrides".to_string())
     } else if !metadata_owned_paths.is_empty() {
@@ -5168,23 +5149,6 @@ fn task_handoff_receipt_root(
     )
 }
 
-fn sanitize_task_handoff_receipt_component(value: &str) -> String {
-    let mut sanitized = String::new();
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-            sanitized.push(ch);
-        } else {
-            sanitized.push('-');
-        }
-    }
-    let trimmed = sanitized.trim_matches('-');
-    if trimmed.is_empty() {
-        "task".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 fn task_handoff_receipt_path(
     receipt_root: &std::path::Path,
     task_id: &str,
@@ -5192,23 +5156,9 @@ fn task_handoff_receipt_path(
 ) -> std::path::PathBuf {
     task_handoff_receipt_dir(receipt_root).join(format!(
         "{}-{}.json",
-        sanitize_task_handoff_receipt_component(task_id),
+        taskflow_core::task::handoff::sanitize_task_handoff_receipt_component(task_id),
         filename_timestamp
     ))
-}
-
-fn canonical_nonempty_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
-    let mut canonical = Vec::new();
-    for value in values {
-        let trimmed = value.trim().to_string();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if !canonical.contains(&trimmed) {
-            canonical.push(trimmed);
-        }
-    }
-    canonical
 }
 
 fn blocked_task_handoff_accept_receipt(
@@ -5239,16 +5189,19 @@ fn task_handoff_accept_receipt(
     isolation: &str,
     accepted_at: String,
 ) -> TaskHandoffAcceptReceipt {
-    let changed_files = canonical_owned_paths(
+    let changed_files = taskflow_core::task::close::canonical_owned_paths(
         command
             .files
             .iter()
             .map(|path| path.display().to_string())
             .collect(),
     );
-    let proof_commands = canonical_nonempty_strings(command.proofs.clone());
-    let blocker_codes = canonical_nonempty_strings(command.blockers.clone());
-    let next_actions = canonical_nonempty_strings(command.next_actions.clone());
+    let proof_commands =
+        taskflow_core::task::handoff::canonical_nonempty_strings(command.proofs.clone());
+    let blocker_codes =
+        taskflow_core::task::handoff::canonical_nonempty_strings(command.blockers.clone());
+    let next_actions =
+        taskflow_core::task::handoff::canonical_nonempty_strings(command.next_actions.clone());
     TaskHandoffAcceptReceipt {
         status: command.status.as_str().to_string(),
         task_id: command.task_id.trim().to_string(),
