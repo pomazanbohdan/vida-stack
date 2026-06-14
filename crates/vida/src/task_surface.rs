@@ -2071,19 +2071,24 @@ fn task_stage_ensemble_next_command(
     let quoted_task_id = crate::launcher_task_commands::shell_quote(task_id);
     let stage = active_stage.unwrap_or("implementation");
     let quoted_stage = crate::launcher_task_commands::shell_quote(stage);
-    if no_attempts {
-        return format!("vida task attempt dispatch {quoted_task_id} --stage {quoted_stage}");
-    }
-    if matches!(
+    match taskflow_core::task::attempts::attempt_stage_next_action(
         latest_attempt_status,
-        Some("submitted" | "running" | "produced" | "validating")
+        latest_consolidation_receipt_id.is_some(),
+        no_attempts,
     ) {
-        return format!("vida task attempt collect {quoted_task_id} --stage {quoted_stage}");
+        taskflow_core::task::attempts::AttemptStageNextAction::Dispatch => {
+            format!("vida task attempt dispatch {quoted_task_id} --stage {quoted_stage}")
+        }
+        taskflow_core::task::attempts::AttemptStageNextAction::Collect => {
+            format!("vida task attempt collect {quoted_task_id} --stage {quoted_stage}")
+        }
+        taskflow_core::task::attempts::AttemptStageNextAction::Consolidate => {
+            format!("vida task attempt consolidate {quoted_task_id} --stage {quoted_stage}")
+        }
+        taskflow_core::task::attempts::AttemptStageNextAction::Status => {
+            format!("vida task stage status {quoted_task_id} --stage {quoted_stage}")
+        }
     }
-    if latest_consolidation_receipt_id.is_none() {
-        return format!("vida task attempt consolidate {quoted_task_id} --stage {quoted_stage}");
-    }
-    format!("vida task stage status {quoted_task_id} --stage {quoted_stage}")
 }
 
 fn task_direct_child_progress_summary_from_rows(

@@ -2,6 +2,35 @@
 
 pub const STAGE_ATTEMPT_SCHEMA_VERSION: &str = "stage-attempt-v1";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttemptStageNextAction {
+    Dispatch,
+    Collect,
+    Consolidate,
+    Status,
+}
+
+#[must_use]
+pub fn attempt_stage_next_action(
+    latest_attempt_status: Option<&str>,
+    has_consolidation_receipt: bool,
+    no_attempts: bool,
+) -> AttemptStageNextAction {
+    if no_attempts {
+        return AttemptStageNextAction::Dispatch;
+    }
+    if matches!(
+        latest_attempt_status,
+        Some("submitted" | "running" | "produced" | "validating")
+    ) {
+        return AttemptStageNextAction::Collect;
+    }
+    if !has_consolidation_receipt {
+        return AttemptStageNextAction::Consolidate;
+    }
+    AttemptStageNextAction::Status
+}
+
 #[must_use]
 pub fn normalize_artifact_refs(values: &[String]) -> Vec<String> {
     let mut refs = Vec::new();
@@ -159,10 +188,31 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        append_json_string_array, normalize_artifact_refs, normalize_attempt_artifact_repo_path,
-        push_unique, validate_attempt_artifact_changed_files_scope, validate_attempt_artifact_refs,
+        AttemptStageNextAction, append_json_string_array, attempt_stage_next_action,
+        normalize_artifact_refs, normalize_attempt_artifact_repo_path, push_unique,
+        validate_attempt_artifact_changed_files_scope, validate_attempt_artifact_refs,
         validate_stage_attempt_artifact_identity,
     };
+
+    #[test]
+    fn attempt_stage_next_action_selects_dispatch_collect_consolidate_or_status() {
+        assert_eq!(
+            attempt_stage_next_action(None, false, true),
+            AttemptStageNextAction::Dispatch
+        );
+        assert_eq!(
+            attempt_stage_next_action(Some("running"), false, false),
+            AttemptStageNextAction::Collect
+        );
+        assert_eq!(
+            attempt_stage_next_action(Some("accepted"), false, false),
+            AttemptStageNextAction::Consolidate
+        );
+        assert_eq!(
+            attempt_stage_next_action(Some("accepted"), true, false),
+            AttemptStageNextAction::Status
+        );
+    }
 
     #[test]
     fn attempt_artifact_refs_are_trimmed_deduped_and_required() {
