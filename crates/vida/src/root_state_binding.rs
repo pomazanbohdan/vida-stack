@@ -1,6 +1,34 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct RootCommandTrace {
+    pub(crate) command: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) cwd: Option<String>,
+    pub(crate) vida_state_dir: Option<String>,
+    pub(crate) vida_root: Option<String>,
+}
+
+#[allow(dead_code)]
+impl RootCommandTrace {
+    pub(crate) fn capture(
+        command: impl Into<String>,
+        args: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            command: command.into(),
+            args: args.into_iter().collect(),
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|path| path.display().to_string()),
+            vida_state_dir: std::env::var_os("VIDA_STATE_DIR").map(os_string_to_display_string),
+            vida_root: std::env::var_os("VIDA_ROOT").map(os_string_to_display_string),
+        }
+    }
+}
+
 pub(crate) struct RuntimeStateDirGuard {
     previous: Option<OsString>,
     active: bool,
@@ -33,6 +61,10 @@ impl Drop for RuntimeStateDirGuard {
             }
         }
     }
+}
+
+fn os_string_to_display_string(value: OsString) -> String {
+    PathBuf::from(value).display().to_string()
 }
 
 pub(crate) fn bind_runtime_state_dir_for_project_bound_command(
