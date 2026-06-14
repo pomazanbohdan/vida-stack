@@ -7,6 +7,9 @@ use crate::task_cli_render::{
 };
 use crate::taskflow_proxy::paths_intersect;
 use std::collections::BTreeSet;
+use taskflow_core::task::dependencies::{
+    parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
+};
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub(crate) struct TaskReadMetadata {
@@ -1579,20 +1582,14 @@ pub(crate) async fn task_dependency_tree_read_only(
     }
 }
 
-fn parse_task_dependency_bulk_edge(
-    raw: &str,
-) -> Result<state_store::TaskDependencyBulkAddInput, String> {
-    let parts = raw.split(':').map(str::trim).collect::<Vec<_>>();
-    if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
-        return Err(format!(
-            "invalid bulk dependency edge `{raw}`; expected issue_id:depends_on_id:edge_type"
-        ));
+fn task_dependency_bulk_edge_input(
+    edge: TaskDependencyBulkEdge,
+) -> state_store::TaskDependencyBulkAddInput {
+    state_store::TaskDependencyBulkAddInput {
+        issue_id: edge.issue_id,
+        depends_on_id: edge.depends_on_id,
+        edge_type: edge.edge_type,
     }
-    Ok(state_store::TaskDependencyBulkAddInput {
-        issue_id: parts[0].to_string(),
-        depends_on_id: parts[1].to_string(),
-        edge_type: parts[2].to_string(),
-    })
 }
 
 fn task_dependency_bulk_edge_inputs(
@@ -1607,21 +1604,17 @@ fn task_dependency_bulk_edge_inputs(
                 path.display()
             )
         })?;
-        raw_edges.extend(
-            content
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .map(ToOwned::to_owned),
-        );
+        raw_edges.extend(task_dependency_bulk_edge_lines(content.lines()));
     }
     if raw_edges.is_empty() {
         return Err("at least one --edge or --edge-file entry is required".to_string());
     }
-    raw_edges
-        .iter()
-        .map(|edge| parse_task_dependency_bulk_edge(edge))
-        .collect()
+    parse_task_dependency_bulk_edges(raw_edges.iter().map(String::as_str)).map(|edges| {
+        edges
+            .into_iter()
+            .map(task_dependency_bulk_edge_input)
+            .collect()
+    })
 }
 
 async fn task_list_authoritative_first(
