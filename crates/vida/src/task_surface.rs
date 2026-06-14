@@ -2876,12 +2876,6 @@ struct TaskMutationResult {
     graph_mutation_receipt: TaskGraphMutationValidationReceipt,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedSplitChildSpec {
-    task_id: String,
-    title: String,
-}
-
 fn task_mutation_validation_summary(
     issues: Vec<state_store::TaskGraphIssue>,
 ) -> TaskMutationValidationSummary {
@@ -3353,44 +3347,10 @@ fn blocker_execution_semantics(
     }
 }
 
-fn parse_split_child_specs(values: &[String]) -> Result<Vec<ParsedSplitChildSpec>, String> {
-    if values.len() < 2 {
-        return Err(
-            "Use at least two `--child <task-id>:<title>` entries for `vida task split`."
-                .to_string(),
-        );
-    }
-
-    let mut seen = std::collections::BTreeSet::new();
-    let mut parsed = Vec::with_capacity(values.len());
-    for value in values {
-        let Some((task_id, title)) = value.split_once(':') else {
-            return Err(format!(
-                "Invalid `--child` value `{value}`. Expected `<task-id>:<title>`."
-            ));
-        };
-        let task_id = task_id.trim();
-        let title = title.trim();
-        if task_id.is_empty() || title.is_empty() {
-            return Err(format!(
-                "Invalid `--child` value `{value}`. Both task id and title are required."
-            ));
-        }
-        if !seen.insert(task_id.to_string()) {
-            return Err(format!("Duplicate split child task id `{task_id}`."));
-        }
-        parsed.push(ParsedSplitChildSpec {
-            task_id: task_id.to_string(),
-            title: title.to_string(),
-        });
-    }
-    Ok(parsed)
-}
-
 fn build_split_mutation_preview(
     rows: &[state_store::TaskRecord],
     source: &state_store::TaskRecord,
-    child_specs: &[ParsedSplitChildSpec],
+    child_specs: &[taskflow_core::task::split::ParsedSplitChildSpec],
     reason: &str,
     surface: &str,
     dry_run: bool,
@@ -3630,16 +3590,17 @@ fn build_spawn_blocker_preview(
         ));
     }
 
-    let mut blocker_labels = source.labels.clone();
-    blocker_labels.extend(parse_label_values(&command.labels));
-    blocker_labels.sort();
-    blocker_labels.dedup();
-
-    let blocker_priority = command.priority.unwrap_or(source.priority);
-    let blocker_description = command
-        .description
-        .clone()
-        .unwrap_or_else(|| format!("Blocker for `{}`: {}", source.id, command.reason));
+    let blocker_labels = taskflow_core::task::spawn_blocker::merged_blocker_labels(
+        &source.labels,
+        &parse_label_values(&command.labels),
+    );
+    let blocker_priority =
+        taskflow_core::task::spawn_blocker::blocker_priority(source.priority, command.priority);
+    let blocker_description = taskflow_core::task::spawn_blocker::blocker_description(
+        &source.id,
+        &command.reason,
+        command.description.as_deref(),
+    );
     let blocker_parent_id = task_parent_id(source);
     let blocker_semantics = blocker_execution_semantics(source);
 
@@ -3820,7 +3781,7 @@ async fn run_task_split_like(command: TaskSplitArgs, surface: &str) -> ExitCode 
         .state_dir
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
-    let child_specs = match parse_split_child_specs(&command.children) {
+    let child_specs = match taskflow_core::task::split::parse_split_child_specs(&command.children) {
         Ok(specs) => specs,
         Err(error) => {
             eprintln!("{error}");
@@ -9538,18 +9499,13 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         }
         TaskCommand::Reconcile(command) => {
             if !command.epics {
-                let payload = serde_json::json!({
-                    "surface": "vida task reconcile",
-                    "status": "blocked",
-                    "scope": serde_json::Value::Null,
-                    "dry_run": command.dry_run,
-                    "close_if_complete": command.close_if_complete,
-                    "closed_epics": [],
-                    "blocked_epics": [],
-                    "missing_children": [],
-                    "blocker_codes": ["scope_required"],
-                    "next_actions": ["Run vida task reconcile --epics to inspect open epics."],
-                });
+                let payload =
+                    serde_json::to_value(taskflow_core::task::reconcile::scope_required_payload(
+                        "vida task reconcile",
+                        command.dry_run,
+                        command.close_if_complete,
+                    ))
+                    .expect("task reconcile scope-required payload should serialize");
                 if command.json {
                     crate::print_json_pretty(&payload);
                 } else if matches!(command.render, crate::RenderMode::Plain) {
@@ -10219,8 +10175,7 @@ mod tests {
         classify_task_close_git_stage_failure, ensure_existing_task_mismatch_reason,
         load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
         parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
-        parse_proof_target_values, parse_split_child_specs,
-        pass_completed_lane_task_next_lawful_receipt,
+        parse_proof_target_values, pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
@@ -14857,7 +14812,7 @@ mod tests {
                 .await
                 .expect("source task should load");
             let rows = store.all_tasks().await.expect("task rows should load");
-            let child_specs = parse_split_child_specs(&[
+            let child_specs = taskflow_core::task::split::parse_split_child_specs(&[
                 "source-task-a:First slice".to_string(),
                 "source-task-b:Second slice".to_string(),
             ])

@@ -4413,7 +4413,9 @@ async fn run_taskflow_replan_surface(args: &[String]) -> ExitCode {
 
     match super::Cli::try_parse_from(argv) {
         Ok(cli) => match cli.command {
-            Some(Command::Task(task_args)) => crate::task_surface::run_task(task_args).await,
+            Some(Command::Task(task_args)) => {
+                Box::pin(crate::task_surface::run_task(task_args)).await
+            }
             _ => {
                 eprintln!(
                     "Unsupported `vida taskflow replan` arguments. This preview surface must map to canonical `vida task` mutation commands."
@@ -4451,7 +4453,7 @@ async fn route_taskflow_task(args: &[String]) -> ExitCode {
         Ok(cli) => match cli.command {
             Some(Command::Task(task_args)) => match task_args.command {
                 TaskCommand::Ready(command) => route_taskflow_ready(command).await,
-                _ => crate::task_surface::run_task(task_args).await,
+                _ => Box::pin(crate::task_surface::run_task(task_args)).await,
             },
             _ => {
                 eprintln!(
