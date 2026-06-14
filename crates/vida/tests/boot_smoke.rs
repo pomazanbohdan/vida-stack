@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -983,15 +984,39 @@ fn bounded_command_output(mut command: Command, timeout_args: &[&str]) -> std::i
         let timeout = parse_timeout_args(timeout_args);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command.spawn()?;
+        let mut stdout = child.stdout.take().expect("child stdout should be piped");
+        let mut stderr = child.stderr.take().expect("child stderr should be piped");
+        let stdout_reader = thread::spawn(move || {
+            let mut output = Vec::new();
+            let _ = stdout.read_to_end(&mut output);
+            output
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut output = Vec::new();
+            let _ = stderr.read_to_end(&mut output);
+            output
+        });
         let started = std::time::Instant::now();
         loop {
-            if child.try_wait()?.is_some() {
-                return child.wait_with_output();
+            if let Some(status) = child.try_wait()? {
+                let stdout = stdout_reader.join().unwrap_or_default();
+                let stderr = stderr_reader.join().unwrap_or_default();
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
             }
             if started.elapsed() >= timeout {
                 let _ = child.kill();
-                let mut output = child.wait_with_output()?;
-                output.status = timeout_exit_status();
+                let _ = child.wait();
+                let stdout = stdout_reader.join().unwrap_or_default();
+                let stderr = stderr_reader.join().unwrap_or_default();
+                let mut output = Output {
+                    status: timeout_exit_status(),
+                    stdout,
+                    stderr,
+                };
                 output.stderr.extend_from_slice(
                     b"\ncommand timed out while waiting for bounded VIDA command\n",
                 );
@@ -5047,13 +5072,14 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         resumed_json["dispatch_receipt"]["dispatch_target"],
         expected_resume_target
     );
-    let expected_resume_status = resumed_json["dispatch_receipt"]["dispatch_status"]
-        .as_str()
-        .expect("resumed dispatch status should be present");
-    let expected_lifecycle_stage = match expected_resume_status {
-        "blocked" => format!("{expected_resume_target}_blocked"),
-        _ => format!("{expected_resume_target}_active"),
+    let expected_run_graph_target = match expected_resume_target.as_str() {
+        "business_analyst" | "pm" => "specification",
+        "verifier" | "prover" => "verification",
+        "worker" | "implementation" => "implementer",
+        "solution_architect" | "architecture" | "escalation" => "execution_preparation",
+        other => other,
     };
+    let expected_recovery_lifecycle_stage = format!("{expected_run_graph_target}_complete");
 
     let run_graph_latest = taskflow_run_graph_latest_with_timeout(&state_dir, true);
     assert!(run_graph_latest.status.success());
@@ -5062,17 +5088,25 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     assert_eq!(run_graph_latest_json["run_graph_status"]["run_id"], run_id);
     assert_eq!(
         run_graph_latest_json["run_graph_status"]["active_node"],
-        expected_resume_target
+        expected_run_graph_target
     );
 
     let recovery_status = taskflow_recovery_status_with_timeout(&state_dir, run_id, true);
-    assert!(recovery_status.status.success());
+    assert!(
+        !recovery_status.status.success(),
+        "missing TaskFlow task recovery must fail closed while rendering operator evidence"
+    );
     let recovery_status_json: serde_json::Value =
         serde_json::from_slice(&recovery_status.stdout).expect("recovery status should parse");
+    assert_eq!(recovery_status_json["status"], "blocked");
     assert_eq!(recovery_status_json["recovery"]["run_id"], run_id);
     assert_eq!(
         recovery_status_json["recovery"]["lifecycle_stage"],
-        expected_lifecycle_stage
+        expected_recovery_lifecycle_stage
+    );
+    assert_eq!(
+        recovery_status_json["recovery"]["resume_node"],
+        expected_resume_target
     );
 
     let status = status_or_doctor_with_timeout(&state_dir, &["status", "--json"]);
@@ -9049,7 +9083,8 @@ fn taskflow_consume_final_plain_prefers_bootstrap_spec_over_manual_design_steps(
     assert!(stdout.contains("\n  execution_mode: delegated_orchestration_cycle"));
     assert!(stdout.contains("\n  first_step: publish a concise execution plan"));
     assert!(stdout.contains("\n  next_tracked_command: vida taskflow bootstrap-spec "));
-    assert!(stdout.contains("\n  delegated_lanes: specification, implementer"));
+    assert!(stdout
+        .contains("\n  delegated_lanes: junior, middle, senior, architect, internal subagents"));
     assert!(!stdout.trim_start().starts_with('{'));
     assert!(!stdout.contains("--json"));
     assert!(!stdout.contains("next epic command:"));
@@ -9152,9 +9187,9 @@ fn taskflow_bootstrap_spec_creates_epic_spec_task_and_design_doc() {
     assert!(std::path::Path::new(&project_root)
         .join(design_doc_rel)
         .is_file());
-    let spec_readme = fs::read_to_string(format!("{project_root}/docs/product/spec/README.md"))
-        .expect("spec readme should exist");
-    assert!(spec_readme.contains(design_doc_rel));
+    let spec_index = fs::read_to_string(format!("{project_root}/docs/product/spec/index.md"))
+        .expect("spec index should exist");
+    assert!(spec_index.contains(design_doc_rel));
     let receipt_rel = parsed["receipt_path"]
         .as_str()
         .expect("receipt path should exist");
@@ -9273,7 +9308,7 @@ fn taskflow_bootstrap_spec_plain_reports_orchestrated_follow_up_commands() {
 }
 
 #[test]
-fn taskflow_bootstrap_spec_self_heals_missing_product_spec_readme() {
+fn taskflow_bootstrap_spec_self_heals_missing_product_spec_index() {
     let project_root = unique_state_dir();
     fs::create_dir_all(&project_root).expect("project root should exist");
     let state_dir = format!("{project_root}/.vida/data/state");
@@ -9315,8 +9350,8 @@ fn taskflow_bootstrap_spec_self_heals_missing_product_spec_readme() {
         String::from_utf8_lossy(&activator.stderr)
     );
 
-    fs::remove_file(format!("{project_root}/docs/product/spec/README.md"))
-        .expect("spec readme should be removable for self-heal proof");
+    fs::remove_file(format!("{project_root}/docs/product/spec/index.md"))
+        .expect("spec index should be removable for self-heal proof");
 
     let boot = vida()
         .arg("boot")
@@ -9348,10 +9383,10 @@ fn taskflow_bootstrap_spec_self_heals_missing_product_spec_readme() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let spec_readme = fs::read_to_string(format!("{project_root}/docs/product/spec/README.md"))
-        .expect("spec readme should be recreated");
-    assert!(spec_readme.contains("# Product Spec Guide"));
-    assert!(spec_readme.contains("flappy-bird"));
+    let spec_index = fs::read_to_string(format!("{project_root}/docs/product/spec/index.md"))
+        .expect("spec index should be recreated");
+    assert!(spec_index.contains("# Product Spec Index"));
+    assert!(spec_index.contains("flappy-bird"));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }

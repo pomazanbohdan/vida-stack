@@ -352,6 +352,32 @@ fn ensure_product_spec_index(project_root: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
+fn ensure_product_spec_index_entry(
+    project_root: &Path,
+    design_doc_path: &str,
+    feature_slug: &str,
+) -> Result<bool, String> {
+    let index_path = project_root.join(crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX);
+    let mut content = fs::read_to_string(&index_path)
+        .map_err(|error| format!("Failed to read {}: {error}", index_path.display()))?;
+    if content.contains(design_doc_path) {
+        return Ok(false);
+    }
+    if !content.contains("## Generated Feature Design Docs") {
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str("\n## Generated Feature Design Docs\n");
+    }
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&format!("- `{design_doc_path}` ({feature_slug})\n"));
+    fs::write(&index_path, content)
+        .map_err(|error| format!("Failed to write {}: {error}", index_path.display()))?;
+    Ok(true)
+}
+
 fn ensure_project_docs_sidecar_pointers(project_root: &Path) -> Result<bool, String> {
     let sidecar_path = project_root.join("AGENTS.sidecar.md");
     if !sidecar_path.is_file() {
@@ -617,6 +643,17 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
     match ensure_product_spec_index(project_root) {
         Ok(true) => changed_files.push(crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX.to_string()),
         Ok(false) => {}
+        Err(error) => return Err(error),
+    }
+    match ensure_product_spec_index_entry(project_root, design_doc_path, feature_slug) {
+        Ok(true)
+            if !changed_files
+                .iter()
+                .any(|path| path == crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX) =>
+        {
+            changed_files.push(crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX.to_string());
+        }
+        Ok(_) => {}
         Err(error) => return Err(error),
     }
 
