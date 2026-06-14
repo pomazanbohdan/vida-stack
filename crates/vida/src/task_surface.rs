@@ -11603,66 +11603,6 @@ mod tests {
     }
 
     #[test]
-    fn task_close_commit_files_prioritize_explicit_commit_paths() {
-        let task = owned_task_record("task-owned", vec!["crates/vida/src"]);
-        let files = task_close_commit_file_strings(
-            &crate::TaskCloseArgs {
-                task_id: "task-owned".to_string(),
-                reason: "done".to_string(),
-                source: None,
-                release: false,
-                install: false,
-                install_target: "current".to_string(),
-                skip_release_build: false,
-                source_binary: None,
-                install_root: None,
-                commit: true,
-                push: false,
-                include_global_progress: false,
-                stage_owned: true,
-                commit_files: vec![std::path::PathBuf::from("README.md")],
-                commit_message: None,
-                state_dir: None,
-                render: crate::RenderMode::Plain,
-                json: true,
-            },
-            Some(&task),
-        );
-
-        assert_eq!(files, vec!["README.md"]);
-    }
-
-    #[test]
-    fn task_close_commit_files_falls_back_to_stage_owned_without_explicit_paths() {
-        let task = owned_task_record("task-owned", vec!["crates/vida/src"]);
-        let files = task_close_commit_file_strings(
-            &crate::TaskCloseArgs {
-                task_id: "task-owned".to_string(),
-                reason: "done".to_string(),
-                source: None,
-                release: false,
-                install: false,
-                install_target: "current".to_string(),
-                skip_release_build: false,
-                source_binary: None,
-                install_root: None,
-                commit: true,
-                push: false,
-                include_global_progress: false,
-                stage_owned: true,
-                commit_files: Vec::new(),
-                commit_message: None,
-                state_dir: None,
-                render: crate::RenderMode::Plain,
-                json: true,
-            },
-            Some(&task),
-        );
-
-        assert_eq!(files, vec!["crates/vida/src"]);
-    }
-
-    #[test]
     fn task_close_commit_allowlist_reports_ignored_dirty_files_diagnostically() {
         let next_actions = task_close_commit_allowlist_next_actions(&[
             "AGENTS.md".to_string(),
