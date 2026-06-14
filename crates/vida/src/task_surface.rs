@@ -6793,10 +6793,22 @@ fn validate_attempt_artifacts(
                 &artifact_ref,
                 state_root,
             )?;
-            let raw = std::fs::read_to_string(&path).map_err(|error| {
-                format!("failed to read attempt artifact `{artifact_ref}`: {error}")
+            let state_root = runtime_path_policy::StateRoot::open(state_root).map_err(|error| {
+                format!("failed to open attempt artifact root for `{artifact_ref}`: {error}")
             })?;
-            let json: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+            let file = runtime_path_policy::existing_regular_file_under_root(
+                &state_root,
+                &path,
+                runtime_path_policy::ArtifactPathKind::TaskAttemptArtifact,
+            )
+            .map_err(|error| {
+                format!("attempt artifact `{artifact_ref}` is not readable: {error}")
+            })?;
+            let json = runtime_path_policy::bounded_json::read_json_value_file(
+                &file,
+                runtime_path_policy::bounded_json::TASK_ATTEMPT_ARTIFACT_LIMIT,
+            )
+            .map_err(|error| {
                 format!("attempt artifact `{artifact_ref}` is not valid JSON: {error}")
             })?;
             taskflow_core::task::attempts::validate_stage_attempt_artifact_identity(
