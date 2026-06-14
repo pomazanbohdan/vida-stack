@@ -533,6 +533,15 @@ fn closeout_changed_outputs_default_toon_and_explicit_json() {
 
 #[test]
 fn closeout_changed_ignores_repo_local_fsmonitor_helper() {
+    assert_closeout_changed_ignores_repo_local_fsmonitor_helper();
+}
+
+#[test]
+fn closeout_changed_disables_repo_local_fsmonitor_helper() {
+    assert_closeout_changed_ignores_repo_local_fsmonitor_helper();
+}
+
+fn assert_closeout_changed_ignores_repo_local_fsmonitor_helper() {
     let context = vida_test_support::CommandContext::empty();
     let root = unique_docflow_root("closeout-fsmonitor");
     write_task_doc(&root, "TASK-FSMON");
