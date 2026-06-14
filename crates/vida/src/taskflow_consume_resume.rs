@@ -5,6 +5,9 @@ use fs2::FileExt;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, UNIX_EPOCH};
+use taskflow_core::consume::continue_use_case::{
+    self, DeferredAgentHandoffInput, StateAccessErrorKind,
+};
 
 const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
     ".vida/data/state/runtime-consumption",
@@ -173,19 +176,11 @@ fn io_error_is_lock_contention(error: &std::io::Error) -> bool {
 }
 
 fn consume_continue_state_access_error_kind(error: &str) -> &'static str {
-    let normalized = error.to_ascii_lowercase();
-    if normalized.contains("lock") {
-        "lock_contention"
-    } else {
-        "open_failed"
-    }
+    continue_use_case::classify_state_access_error(error).as_str()
 }
 
 fn consume_continue_state_access_blocker_code(error: &str) -> &'static str {
-    match consume_continue_state_access_error_kind(error) {
-        "lock_contention" => "authoritative_state_store_locked",
-        _ => "authoritative_state_store_open_failed",
-    }
+    continue_use_case::state_access_blocker_code(error)
 }
 
 fn consume_continue_lock_diagnostics(state_root: &Path) -> serde_json::Value {
@@ -221,7 +216,9 @@ fn consume_continue_state_access_blocker_payload(
 ) -> serde_json::Value {
     let error_kind = consume_continue_state_access_error_kind(error);
     let blocker_code = consume_continue_state_access_blocker_code(error);
-    let next_actions = if error_kind == "lock_contention" {
+    let next_actions = if continue_use_case::classify_state_access_error(error)
+        == StateAccessErrorKind::LockContention
+    {
         serde_json::json!([
             "Wait for the authoritative VIDA state-store holder to finish, then retry `vida taskflow consume continue`.",
             "Inspect read-only continuation context with `vida task ready`, `vida taskflow graph-summary`, or `vida status` while the lock is held.",
@@ -6455,14 +6452,13 @@ fn consume_continue_should_defer_agent_handoff(
     surface_name: &str,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    surface_name == "vida taskflow consume continue"
-        && receipt.dispatch_kind == "agent_lane"
-        && (receipt.dispatch_status == "routed"
-            || (receipt.downstream_dispatch_ready
-                && receipt
-                    .downstream_dispatch_packet_path
-                    .as_deref()
-                    .is_some_and(|path| !path.trim().is_empty())))
+    continue_use_case::should_defer_agent_handoff(DeferredAgentHandoffInput {
+        surface_name,
+        dispatch_kind: &receipt.dispatch_kind,
+        dispatch_status: &receipt.dispatch_status,
+        downstream_dispatch_ready: receipt.downstream_dispatch_ready,
+        downstream_dispatch_packet_path: receipt.downstream_dispatch_packet_path.as_deref(),
+    })
 }
 
 async fn persist_and_emit_deferred_agent_handoff(
