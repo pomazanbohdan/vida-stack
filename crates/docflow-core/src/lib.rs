@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 
+pub mod git_status;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ArtifactPath(pub String);
 
@@ -27,6 +29,12 @@ impl CheckedAt {
 pub enum DocflowCoreError {
     #[error("artifact path is empty")]
     EmptyArtifactPath,
+    #[error("git status failed: {0}")]
+    GitStatusFailed(String),
+    #[error("git status I/O failed: {0}")]
+    GitStatusIo(String),
+    #[error("git status timed out")]
+    GitStatusTimedOut,
 }
 
 #[must_use]
