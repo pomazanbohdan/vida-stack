@@ -9,6 +9,8 @@ pub mod consume;
 pub mod run_graph;
 /// TaskFlow scheduling skeletons for future core extraction.
 pub mod scheduling;
+/// TaskFlow task command skeletons for future core extraction.
+pub mod task;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(pub String);
