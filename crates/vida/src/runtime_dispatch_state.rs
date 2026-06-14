@@ -7311,6 +7311,25 @@ fn packet_string_array_contract(
         .map(Some)
 }
 
+fn normalize_packet_scope_path_for_mirror(value: &str) -> String {
+    let mut normalized = value.trim().replace('\\', "/");
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
+}
+
+fn packet_scope_paths_mirror(top_level: &[String], active: &[String]) -> bool {
+    top_level.len() == active.len()
+        && top_level
+            .iter()
+            .zip(active.iter())
+            .all(|(top_level_path, active_path)| {
+                normalize_packet_scope_path_for_mirror(top_level_path)
+                    == normalize_packet_scope_path_for_mirror(active_path)
+            })
+}
+
 fn packet_has_owned_or_read_only_paths(packet: &serde_json::Value) -> bool {
     packet_nonempty_string_array(packet, "owned_paths")
         || packet_nonempty_string_array(packet, "read_only_paths")
@@ -7684,7 +7703,7 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
             "active packet body",
         )?;
         if let (Some(top_level), Some(active)) = (top_level, active) {
-            if top_level != active {
+            if !packet_scope_paths_mirror(&top_level, &active) {
                 return Err(format!(
                     "{packet_label} `{packet_template_kind}` top-level {key} must mirror the active packet body; expected {:?}, got {:?}",
                     active, top_level
@@ -10800,6 +10819,31 @@ host_environment:
         let error = validate_runtime_dispatch_packet_contract(&packet, "test packet")
             .expect_err("top-level owned_paths drift should fail closed");
         assert!(error.contains("top-level owned_paths must mirror"));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_allows_path_trailing_slash_mirror() {
+        let packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["crates/taskflow-core/src/task/"],
+            "read_only_paths": [".vida/data/state/runtime-consumption/"],
+            "delivery_task_packet": {
+                "packet_id": "run-1::test_author::delivery",
+                "goal": "Execute bounded test handoff",
+                "scope_in": ["dispatch_target:test_author"],
+                "owned_paths": ["crates/taskflow-core/src/task"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "definition_of_done": ["done"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "proof",
+                "stop_rules": ["stop"],
+                "blocking_question": "what next?",
+                "handoff_task_class": "verification"
+            }
+        });
+
+        validate_runtime_dispatch_packet_contract(&packet, "test packet")
+            .expect("trailing slash path mirrors should remain equivalent");
     }
 
     #[test]
