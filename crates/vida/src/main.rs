@@ -63,6 +63,7 @@ mod release1_contracts;
 mod release_contract_adapters;
 mod release_surface;
 mod root_command_router;
+mod root_state_binding;
 mod runtime_assignment_builder;
 mod runtime_assignment_policy;
 mod runtime_assignment_projection_utils;

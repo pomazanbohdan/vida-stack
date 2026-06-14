@@ -4,10 +4,15 @@ use super::{
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
     orchestrator_session_surface, print_root_help, project_activator_surface, proof_surface,
-    protocol_surface, quality_surface, release_surface, resolve_runtime_project_root,
-    run_taskflow_proxy, runtime_web_surface, service_client_cli, session_surface, state_store,
-    status_surface, task_surface, AgentArgs, AgentCommand, Cli, CoderCommand, Command,
-    ReleaseCommand, SessionArgs, SessionCommand, TaskArgs, TaskCommand,
+    protocol_surface, quality_surface, release_surface, run_taskflow_proxy, runtime_web_surface,
+    service_client_cli, session_surface, status_surface, task_surface, AgentArgs, AgentCommand,
+    Cli, CoderCommand, Command, ReleaseCommand, SessionArgs, SessionCommand, TaskArgs, TaskCommand,
+};
+use crate::root_state_binding::{
+    bind_runtime_state_dir_for_project_bound_command,
+    bind_runtime_state_dir_override_for_project_bound_command,
+    normalize_runtime_state_dir_env_for_parse, preserve_runtime_state_dir_env_for_parse_only,
+    preserve_runtime_state_dir_env_for_project_bound_command, RuntimeStateDirGuard,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -304,40 +309,6 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
     }
 }
 
-pub(crate) struct RuntimeStateDirGuard {
-    previous: Option<std::ffi::OsString>,
-    active: bool,
-    previous_root: Option<std::ffi::OsString>,
-    root_active: bool,
-    previous_cwd: Option<std::path::PathBuf>,
-    cwd_active: bool,
-}
-
-impl Drop for RuntimeStateDirGuard {
-    fn drop(&mut self) {
-        if self.active {
-            if let Some(previous) = &self.previous {
-                std::env::set_var("VIDA_STATE_DIR", previous);
-            } else {
-                std::env::remove_var("VIDA_STATE_DIR");
-            }
-        }
-        if !self.root_active {
-            return;
-        }
-        if let Some(previous_root) = &self.previous_root {
-            std::env::set_var("VIDA_ROOT", previous_root);
-        } else {
-            std::env::remove_var("VIDA_ROOT");
-        }
-        if self.cwd_active {
-            if let Some(previous_cwd) = &self.previous_cwd {
-                let _ = std::env::set_current_dir(previous_cwd);
-            }
-        }
-    }
-}
-
 pub(crate) fn prepare_runtime_state_dir_for_parse(
     args: &[OsString],
 ) -> Result<Option<RuntimeStateDirGuard>, String> {
@@ -443,81 +414,6 @@ fn command_preserves_explicit_env_state_dir(command: &Option<Command>) -> bool {
 
 fn command_preserves_parse_only_env_state_dir(command: &Option<Command>) -> bool {
     matches!(command, Some(Command::AgentInit(_)))
-}
-
-fn bind_runtime_state_dir_for_project_bound_command() -> Result<Option<RuntimeStateDirGuard>, String>
-{
-    match bind_runtime_state_dir_to_current_project() {
-        Ok(guard) => Ok(guard),
-        Err(error) => {
-            if std::env::var_os("VIDA_STATE_DIR").is_some() {
-                return Ok(preserve_runtime_state_dir_env_for_project_bound_command());
-            }
-            Err(error)
-        }
-    }
-}
-
-fn bind_runtime_state_dir_override_for_project_bound_command(
-    state_dir: &std::path::Path,
-) -> Result<Option<RuntimeStateDirGuard>, String> {
-    let normalized =
-        normalize_runtime_state_dir_override(state_dir).unwrap_or_else(|| state_dir.to_path_buf());
-    let previous = std::env::var_os("VIDA_STATE_DIR");
-    std::env::set_var("VIDA_STATE_DIR", &normalized);
-    let mut guard = RuntimeStateDirGuard {
-        previous,
-        active: true,
-        previous_root: None,
-        root_active: false,
-        previous_cwd: None,
-        cwd_active: false,
-    };
-    if let Some(project_root) =
-        crate::taskflow_task_bridge::infer_project_root_from_state_root(&normalized)
-    {
-        let previous_root = std::env::var_os("VIDA_ROOT");
-        let root_already_bound = previous_root
-            .as_ref()
-            .map(std::path::PathBuf::from)
-            .as_ref()
-            == Some(&project_root);
-        if !root_already_bound {
-            std::env::set_var("VIDA_ROOT", &project_root);
-            guard.previous_root = previous_root;
-            guard.root_active = true;
-        }
-        if let Ok(current_dir) = std::env::current_dir() {
-            if !current_dir.starts_with(&project_root)
-                && std::env::set_current_dir(&project_root).is_ok()
-            {
-                guard.previous_cwd = Some(current_dir);
-                guard.cwd_active = true;
-            }
-        }
-    }
-    Ok(Some(guard))
-}
-
-fn bind_runtime_state_dir_to_current_project() -> Result<Option<RuntimeStateDirGuard>, String> {
-    match resolve_runtime_project_root() {
-        Ok(project_root) => {
-            let previous = std::env::var_os("VIDA_STATE_DIR");
-            std::env::set_var(
-                "VIDA_STATE_DIR",
-                project_root.join(state_store::default_state_dir()),
-            );
-            Ok(Some(RuntimeStateDirGuard {
-                previous,
-                active: true,
-                previous_root: None,
-                root_active: false,
-                previous_cwd: None,
-                cwd_active: false,
-            }))
-        }
-        Err(error) => Err(error),
-    }
 }
 
 fn raw_args_need_project_root_state_dir(args: &[OsString]) -> bool {
@@ -656,83 +552,6 @@ fn raw_args_explicit_state_dir(args: &[OsString]) -> Option<std::path::PathBuf> 
         }
     }
     None
-}
-
-pub(crate) fn normalize_runtime_state_dir_env_for_parse() -> Option<RuntimeStateDirGuard> {
-    let existing = std::env::var_os("VIDA_STATE_DIR")?;
-    let existing_path = std::path::PathBuf::from(&existing);
-    let normalized = normalize_runtime_state_dir_override(&existing_path)?;
-    if normalized == existing_path {
-        return None;
-    }
-    std::env::set_var("VIDA_STATE_DIR", normalized);
-    Some(RuntimeStateDirGuard {
-        previous: Some(existing),
-        active: true,
-        previous_root: None,
-        root_active: false,
-        previous_cwd: None,
-        cwd_active: false,
-    })
-}
-
-fn preserve_runtime_state_dir_env_for_parse_only() -> Option<RuntimeStateDirGuard> {
-    let previous = std::env::var_os("VIDA_STATE_DIR")?;
-    if let Some(normalized) =
-        normalize_runtime_state_dir_override(&std::path::PathBuf::from(&previous))
-    {
-        std::env::set_var("VIDA_STATE_DIR", normalized);
-    }
-    Some(RuntimeStateDirGuard {
-        previous: Some(previous),
-        active: true,
-        previous_root: None,
-        root_active: false,
-        previous_cwd: None,
-        cwd_active: false,
-    })
-}
-
-fn preserve_runtime_state_dir_env_for_project_bound_command() -> Option<RuntimeStateDirGuard> {
-    let mut guard = normalize_runtime_state_dir_env_for_parse().unwrap_or(RuntimeStateDirGuard {
-        previous: None,
-        active: false,
-        previous_root: None,
-        root_active: false,
-        previous_cwd: None,
-        cwd_active: false,
-    });
-    let state_dir = std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from)?;
-    let project_root = crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_dir)?;
-    let previous_root = std::env::var_os("VIDA_ROOT");
-    let root_already_bound = previous_root
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .as_ref()
-        == Some(&project_root);
-    if !root_already_bound {
-        std::env::set_var("VIDA_ROOT", &project_root);
-        guard.previous_root = previous_root;
-        guard.root_active = true;
-    }
-    if let Ok(current_dir) = std::env::current_dir() {
-        if !current_dir.starts_with(&project_root)
-            && std::env::set_current_dir(&project_root).is_ok()
-        {
-            guard.previous_cwd = Some(current_dir);
-            guard.cwd_active = true;
-        }
-    }
-    Some(guard)
-}
-
-fn normalize_runtime_state_dir_override(path: &std::path::Path) -> Option<std::path::PathBuf> {
-    let file_name = path.file_name().and_then(|value| value.to_str())?;
-    if file_name != ".vida" {
-        return None;
-    }
-    let canonical_state = path.join("data").join("state");
-    canonical_state.is_dir().then_some(canonical_state)
 }
 
 #[cfg(test)]

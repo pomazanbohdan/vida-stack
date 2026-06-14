@@ -134,7 +134,8 @@ pub(crate) fn preserve_runtime_state_dir_env_for_parse_only() -> Option<RuntimeS
 
 pub(crate) fn preserve_runtime_state_dir_env_for_project_bound_command(
 ) -> Option<RuntimeStateDirGuard> {
-    let mut guard = normalize_runtime_state_dir_env_for_parse().unwrap_or(RuntimeStateDirGuard {
+    let normalized_guard = normalize_runtime_state_dir_env_for_parse();
+    let mut guard = normalized_guard.unwrap_or(RuntimeStateDirGuard {
         previous: None,
         active: false,
         previous_root: None,
@@ -143,7 +144,9 @@ pub(crate) fn preserve_runtime_state_dir_env_for_project_bound_command(
         cwd_active: false,
     });
     let state_dir = std::env::var_os("VIDA_STATE_DIR").map(PathBuf::from)?;
-    bind_project_root_for_state_dir(&state_dir, &mut guard);
+    if !bind_project_root_for_state_dir(&state_dir, &mut guard) && !guard.active {
+        return None;
+    }
     Some(guard)
 }
 
@@ -177,11 +180,11 @@ fn bind_runtime_state_dir_to_current_project() -> Result<Option<RuntimeStateDirG
     }
 }
 
-fn bind_project_root_for_state_dir(state_dir: &Path, guard: &mut RuntimeStateDirGuard) {
+fn bind_project_root_for_state_dir(state_dir: &Path, guard: &mut RuntimeStateDirGuard) -> bool {
     let Some(project_root) =
         crate::taskflow_task_bridge::infer_project_root_from_state_root(state_dir)
     else {
-        return;
+        return false;
     };
     let previous_root = std::env::var_os("VIDA_ROOT");
     let root_already_bound =
@@ -199,4 +202,5 @@ fn bind_project_root_for_state_dir(state_dir: &Path, guard: &mut RuntimeStateDir
             guard.cwd_active = true;
         }
     }
+    true
 }
