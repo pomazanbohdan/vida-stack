@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use std::path::Path;
 
 use time::format_description::well_known::Rfc3339;
@@ -71,6 +72,7 @@ pub(crate) fn normalize_persisted_runtime_path(path: &str) -> std::path::PathBuf
     std::path::PathBuf::from(trimmed)
 }
 
+const DISPATCH_PACKET_PROBE_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 const DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS: u64 = 10;
 const DEFAULT_INTERNAL_HOST_HANDOFF_TIMEOUT_SECONDS: u64 = 240;
@@ -20022,6 +20024,28 @@ host_environment:
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_packet_declares_downstream_dispatch_rejects_fifo_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-downstream-packet-fifo-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let fifo_path = root.join("receipt-controlled-dispatch-packet");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status()
+            .expect("mkfifo should be available on unix test hosts");
+        assert!(status.success(), "mkfifo should create the fifo");
+
+        assert!(!dispatch_packet_declares_downstream_dispatch(
+            fifo_path.to_str().expect("fifo path should be utf-8")
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn execute_and_record_dispatch_receipt_blocks_internal_activation_view_only_packet_without_launch(
     ) {
@@ -24873,9 +24897,28 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
     false
 }
 
+fn read_dispatch_packet_probe_json(dispatch_packet_path: &str) -> Option<serde_json::Value> {
+    let packet_path = normalize_persisted_runtime_path(dispatch_packet_path);
+    let metadata = std::fs::symlink_metadata(&packet_path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return None;
+    }
+    if metadata.len() > DISPATCH_PACKET_PROBE_READ_LIMIT_BYTES {
+        return None;
+    }
+    let file = std::fs::File::open(&packet_path).ok()?;
+    let mut body = String::new();
+    file.take(DISPATCH_PACKET_PROBE_READ_LIMIT_BYTES + 1)
+        .read_to_string(&mut body)
+        .ok()?;
+    if body.len() as u64 > DISPATCH_PACKET_PROBE_READ_LIMIT_BYTES {
+        return None;
+    }
+    serde_json::from_str(&body).ok()
+}
+
 fn dispatch_packet_declares_downstream_dispatch(dispatch_packet_path: &str) -> bool {
-    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(dispatch_packet_path))
-    else {
+    let Some(packet) = read_dispatch_packet_probe_json(dispatch_packet_path) else {
         return false;
     };
     packet["packet_kind"].as_str() == Some("runtime_downstream_dispatch_packet")
