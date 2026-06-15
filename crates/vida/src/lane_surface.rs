@@ -2700,6 +2700,7 @@ fn trusted_host_bridge_completion_request_context(
             }
         } else if retryable_completion_context
             && receipt.dispatch_status != "bridge_request_pending"
+            && !host_bridge_packet_confirms_active_request(&packet_path, run_id, dispatch_target)
         {
             return Err(
                 "Retryable host bridge request is missing persisted dispatch packet evidence."
@@ -4231,16 +4232,26 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         .filter(|value| !value.is_empty())
                         .map(str::to_string);
                     if let Some(packet_template_kind) = packet_template_kind {
-                        if let Some(active_packet) = packet.get_mut(&packet_template_kind) {
-                            if crate::runtime_dispatch_state::apply_owned_paths(
-                                active_packet,
-                                &metadata.owned_write_scope,
-                            ) {
-                                if let Some(object) = packet.as_object_mut() {
-                                    object.insert(
-                                        "owned_paths".to_string(),
-                                        serde_json::json!(metadata.owned_write_scope),
-                                    );
+                        let specification_delivery_packet = packet_template_kind
+                            == "delivery_task_packet"
+                            && packet
+                                .get(&packet_template_kind)
+                                .and_then(|value| value.get("handoff_task_class"))
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::trim)
+                                == Some("specification");
+                        if !specification_delivery_packet {
+                            if let Some(active_packet) = packet.get_mut(&packet_template_kind) {
+                                if crate::runtime_dispatch_state::apply_owned_paths(
+                                    active_packet,
+                                    &metadata.owned_write_scope,
+                                ) {
+                                    if let Some(object) = packet.as_object_mut() {
+                                        object.insert(
+                                            "owned_paths".to_string(),
+                                            serde_json::json!(metadata.owned_write_scope),
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -10334,6 +10345,86 @@ mod tests {
         )
         .expect("pending bridge receipt should not require downstream packet evidence")
         .expect("pending bridge request should return completion context");
+
+        assert_eq!(context.dispatch_target, "implementer");
+        assert_eq!(
+            context.packet_path,
+            canonicalize_existing_regular_state_path(&root, &packet_path, "packet")
+                .expect("canonical packet")
+                .display()
+                .to_string()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn retryable_host_bridge_completion_allows_active_request_packet_without_downstream_packet() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-retryable-original-packet-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let packet_path =
+            root.join("runtime-consumption/dispatch-packets/retryable-original-packet.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-host-bridge-retryable-original-packet",
+                "dispatch_target": "implementer",
+                "downstream_dispatch_active_target": "implementer",
+                "downstream_dispatch_status": "blocked"
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        let request_path = root.join("host-tool-bridge/requests/retryable-original.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "retryable_blocked",
+                "request_id": "retryable-original",
+                "run_id": "run-host-bridge-retryable-original-packet",
+                "task_id": "run-host-bridge-retryable-original-packet",
+                "dispatch_target": "implementer",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge"
+            })
+            .to_string(),
+        )
+        .expect("write request");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-host-bridge-retryable-original-packet",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "implementer".to_string();
+        status.status = "blocked".to_string();
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = "run-host-bridge-retryable-original-packet".to_string();
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.downstream_dispatch_packet_path = None;
+
+        let context = trusted_host_bridge_completion_request_context(
+            &root,
+            "run-host-bridge-retryable-original-packet",
+            &request_path.display().to_string(),
+            Some(&status),
+            &receipt,
+        )
+        .expect("retryable blocked request may use active request packet evidence")
+        .expect("retryable bridge request should return completion context");
 
         assert_eq!(context.dispatch_target, "implementer");
         assert_eq!(

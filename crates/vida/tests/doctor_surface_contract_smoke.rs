@@ -2261,12 +2261,33 @@ fn host_bridge_public_cli_blocks_on_negative_coach_decision_summary() {
     .expect("completion result should parse");
     assert_eq!(completion_result["status"], "blocked");
     assert_eq!(completion_result["execution_state"], "blocked");
+    assert_eq!(completion_result["decision"], "rework_required");
+    assert_eq!(completion_result["verdict"], "rework_required");
     assert_eq!(completion_result["completion_verdict"], "rework_required");
+    assert_eq!(completion_result["rework_target"], "developer");
+    assert_eq!(completion_result["allowed_next_node"], "developer_rework");
     assert_eq!(
         completion_result["blocker_code"], "coach_rework_required",
         "completion result should preserve coach blocker: {completion_result}"
     );
     assert_eq!(completion_result["closure_ready"], false);
+
+    let bridge_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
+    )
+    .expect("bridge result should parse");
+    assert_eq!(bridge_result["status"], "blocked");
+    assert_eq!(bridge_result["execution_state"], "blocked");
+    assert_eq!(bridge_result["decision"], "rework_required");
+    assert_eq!(bridge_result["verdict"], "rework_required");
+    assert_eq!(
+        bridge_result["execution_evidence"]["receipt_backed"], true,
+        "receipt-backed execution must not imply pass verdict: {bridge_result}"
+    );
+    assert_eq!(
+        bridge_result["execution_evidence"]["completion_verdict"],
+        "rework_required"
+    );
 }
 
 #[test]

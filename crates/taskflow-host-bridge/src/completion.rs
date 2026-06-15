@@ -631,6 +631,9 @@ mod tests {
         let rework_result = serde_json::json!({
             "status": "blocked",
             "execution_state": "blocked",
+            "execution_evidence": {
+                "receipt_backed": true
+            },
             "decision": rework_fields.decision,
             "verdict": rework_fields.verdict,
             "blocker_codes": rework_fields.blocker_codes,
@@ -644,6 +647,75 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn result_verdict_contract_rejects_malformed_mismatch_states() {
+        let required_fields = crate::request::default_host_bridge_required_result_fields();
+        let cases = [
+            (
+                serde_json::json!({
+                    "status": "pass",
+                    "execution_state": "executed",
+                    "decision": "rework_required",
+                    "verdict": "pass",
+                    "blocker_codes": [],
+                    "rework_target": null,
+                    "allowed_next_node": "next"
+                }),
+                "host_bridge_result_decision_verdict_mismatch",
+            ),
+            (
+                serde_json::json!({
+                    "status": "pass",
+                    "execution_state": "executed",
+                    "decision": "approve",
+                    "verdict": "pass",
+                    "blocker_codes": ["coach_rework_required"],
+                    "rework_target": null,
+                    "allowed_next_node": "next"
+                }),
+                "host_bridge_result_blocker_codes_mismatch",
+            ),
+            (
+                serde_json::json!({
+                    "status": "blocked",
+                    "execution_state": "blocked",
+                    "execution_evidence": {
+                        "receipt_backed": true
+                    },
+                    "decision": "rework_required",
+                    "verdict": "rework_required",
+                    "blocker_codes": [],
+                    "rework_target": "developer",
+                    "allowed_next_node": "developer_rework"
+                }),
+                "host_bridge_result_blocker_codes_missing",
+            ),
+            (
+                serde_json::json!({
+                    "status": "blocked",
+                    "execution_state": "blocked",
+                    "execution_evidence": {
+                        "receipt_backed": true
+                    },
+                    "decision": "rework_required",
+                    "verdict": "rework_required",
+                    "blocker_codes": ["coach_rework_required"],
+                    "rework_target": null,
+                    "allowed_next_node": "developer_rework"
+                }),
+                "host_bridge_result_rework_target_missing",
+            ),
+        ];
+
+        for (result, expected_blocker) in cases {
+            let blockers = host_bridge_result_verdict_contract_blockers(&result, &required_fields);
+            assert!(
+                blockers.iter().any(|blocker| blocker == expected_blocker),
+                "expected blocker `{expected_blocker}` for result {result}, got {blockers:?}"
+            );
+        }
     }
 
     #[test]
