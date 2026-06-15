@@ -9391,6 +9391,93 @@ fn taskflow_bootstrap_spec_self_heals_missing_product_spec_index() {
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
+#[cfg(unix)]
+#[test]
+fn taskflow_bootstrap_spec_rejects_product_spec_index_symlink() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    let state_dir = format!("{project_root}/.vida/data/state");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "flappy-symlink-test",
+            "--project-name",
+            "Flappy Symlink Test",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("project activator should run");
+    assert!(
+        activator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activator.stderr)
+    );
+
+    let boot = vida()
+        .arg("boot")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    sync_protocol_binding(&state_dir);
+
+    let index_path = format!("{project_root}/docs/product/spec/index.md");
+    let outside_index = format!("{project_root}/outside-product-spec-index.md");
+    fs::write(&outside_index, "# Outside\n").expect("outside index should write");
+    fs::remove_file(&index_path).expect("spec index should be removable");
+    std::os::unix::fs::symlink(&outside_index, &index_path)
+        .expect("spec index symlink should create");
+
+    let request = "Create a single-page HTML file containing a Flappy Bird game. Research the game mechanics, create detailed specifications, develop an implementation plan, and write the full code.";
+    let output = vida()
+        .args(["taskflow", "bootstrap-spec", request, "--json"])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("bootstrap-spec should run");
+
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("Refusing to use product spec index symlink"));
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
 #[test]
 fn project_activator_fails_closed_when_authoritative_state_store_cannot_open() {
     let project_root = unique_state_dir();

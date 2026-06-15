@@ -624,6 +624,14 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 } else {
                     latest_run_graph_dispatch_receipt
                 };
+                let latest_run_graph_effective_run_id = latest_run_graph_status
+                    .as_ref()
+                    .map(|status| status.run_id.as_str())
+                    .or_else(|| {
+                        latest_run_graph_dispatch_receipt
+                            .as_ref()
+                            .map(|receipt| receipt.run_id.as_str())
+                    });
                 let latest_run_graph_recovery = if latest_run_graph_recovery.is_none() {
                     match latest_run_graph_dispatch_receipt.as_ref() {
                         Some(receipt) => {
@@ -666,9 +674,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let latest_run_graph_snapshot_inconsistent =
                     !latest_run_graph_dispatch_receipt_checkpoint_leakage
                         && !state_store::latest_run_graph_evidence_snapshot_is_consistent(
-                            latest_run_graph_status
-                                .as_ref()
-                                .map(|status| status.run_id.as_str()),
+                            latest_run_graph_effective_run_id,
                             latest_run_graph_recovery
                                 .as_ref()
                                 .map(|summary| summary.run_id.as_str()),
@@ -1899,11 +1905,17 @@ async fn refresh_cached_status_projection_runtime_fields(
     } else {
         latest_run_graph_dispatch_receipt
     };
+    let latest_run_graph_effective_run_id = latest_run_graph_status
+        .as_ref()
+        .map(|status| status.run_id.as_str())
+        .or_else(|| {
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str())
+        });
     let latest_run_graph_snapshot_inconsistent = !dispatch_receipt_checkpoint_leakage
         && !state_store::latest_run_graph_evidence_snapshot_is_consistent(
-            latest_run_graph_status
-                .as_ref()
-                .map(|status| status.run_id.as_str()),
+            latest_run_graph_effective_run_id,
             latest_run_graph_recovery
                 .as_ref()
                 .map(|summary| summary.run_id.as_str()),
@@ -4364,6 +4376,19 @@ host_environment:
                 Some("run-vida-a"),
                 Some("run-vida-b"),
                 Some("run-vida-a")
+            )
+        );
+    }
+
+    #[test]
+    fn latest_run_graph_evidence_snapshot_is_consistent_accepts_effective_receipt_run_id() {
+        assert!(
+            state_store::latest_run_graph_evidence_snapshot_is_consistent(
+                Some("run-effective"),
+                Some("run-effective"),
+                Some("run-effective"),
+                Some("run-effective"),
+                Some("run-effective")
             )
         );
     }

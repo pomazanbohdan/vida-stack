@@ -160,6 +160,19 @@ fn read_host_bridge_request(
     read_canonical_host_bridge_json_artifact(path, "host bridge request")
 }
 
+fn canonical_host_bridge_request_path(
+    path: &Path,
+    state_root: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let inferred_state_root = state_root
+        .map(Path::to_path_buf)
+        .or_else(|| infer_host_bridge_state_root_from_request_path(path));
+    if let Some(state_root) = inferred_state_root {
+        return canonical_state_artifact_path(&state_root, &path.display().to_string(), true);
+    }
+    Ok(path.to_path_buf())
+}
+
 fn host_bridge_task_or_request_owned_paths(
     task: &crate::state_store::TaskRecord,
     request: &serde_json::Value,
@@ -3729,7 +3742,7 @@ fn print_agent_status_payload(payload: &serde_json::Value, json: bool) {
     );
 }
 
-async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
+async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
     if command.complete
         && command
             .host_agent_id
@@ -3766,6 +3779,11 @@ async fn run_agent_host_bridge(command: AgentHostBridgeArgs) -> ExitCode {
     }
     match read_host_bridge_request(&command.request, command.state_dir.as_deref()) {
         Ok(request) => {
+            if let Ok(canonical_request_path) =
+                canonical_host_bridge_request_path(&command.request, command.state_dir.as_deref())
+            {
+                command.request = canonical_request_path;
+            }
             let mut provenance_blockers = host_bridge_request_provenance_blockers(
                 &command.request,
                 &request,
@@ -4316,19 +4334,19 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 mod tests {
     use super::{
         agent_status_runtime_task_stale_code, apply_continuation_dispatch_gate_to_preview,
-        build_agent_dispatch_next_preview, configured_dev_team_first_step_for_task,
-        dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
-        dispatch_target_for_agent_dispatch_lane, host_bridge_adapter_payload,
-        host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
-        host_bridge_normalized_implementation_artifact_path,
+        build_agent_dispatch_next_preview, canonical_host_bridge_request_path,
+        configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
+        dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
+        host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
+        host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, materialize_configured_agent_dispatch_lane,
         read_canonical_host_bridge_json_artifact, read_host_bridge_request,
         resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
         single_in_progress_task_id_from_rows, state_store,
-        validate_materialized_agent_dispatch_packet, AgentDispatchLanePreview,
-        AgentDispatchLaneSelectionTruth, MAX_HOST_BRIDGE_ARTIFACT_BYTES,
+        validate_materialized_agent_dispatch_packet, write_host_bridge_request,
+        AgentDispatchLanePreview, AgentDispatchLaneSelectionTruth, MAX_HOST_BRIDGE_ARTIFACT_BYTES,
     };
     use crate::state_store::{
         CreateTaskRequest, RunGraphDispatchReceipt, TaskExecutionSemantics, TaskRecord,
@@ -4860,6 +4878,40 @@ mod tests {
         let oversized_error = read_host_bridge_request(&oversized_request_path, Some(&state_root))
             .expect_err("oversized request should be rejected");
         assert!(oversized_error.contains("exceeding"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_request_relative_path_canonicalizes_before_state_write() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-relative-request-write-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_rel = std::path::PathBuf::from("host-tool-bridge/requests/request.json");
+        let request_path = state_root.join(&request_rel);
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should create");
+        std::fs::write(&request_path, b"{\"status\":\"pending\"}").expect("request should write");
+
+        let canonical =
+            canonical_host_bridge_request_path(&request_rel, Some(&state_root)).unwrap();
+        assert_eq!(canonical, request_path.canonicalize().unwrap());
+        write_host_bridge_request(
+            &state_root,
+            &canonical,
+            &serde_json::json!({ "status": "updated" }),
+        )
+        .expect("canonical request path should write under state root");
+
+        let rewritten: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&request_path).unwrap()).unwrap();
+        assert_eq!(rewritten["status"], "updated");
 
         let _ = std::fs::remove_dir_all(&root);
     }

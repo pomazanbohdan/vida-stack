@@ -99,7 +99,7 @@ pub fn task_progress_summary_from_rows(
         match task.status.as_str() {
             "open" => open_count += 1,
             "in_progress" => in_progress_count += 1,
-            "closed" => closed_count += 1,
+            status if task_status_is_closed_like(status) => closed_count += 1,
             _ => {}
         }
         if task_is_program_container(task) {
@@ -432,11 +432,11 @@ fn non_container_progress_state(
 }
 
 fn task_status_is_closed_like(status: &str) -> bool {
-    matches!(status, "closed" | "done" | "cancelled")
+    matches!(status.trim(), "closed" | "completed")
 }
 
 fn task_is_program_container(task: &TaskProgressRow) -> bool {
-    matches!(task.issue_type.as_str(), "epic" | "program" | "milestone")
+    task.issue_type.trim().eq_ignore_ascii_case("epic")
 }
 
 #[cfg(test)]
@@ -461,7 +461,7 @@ mod tests {
         let rows = vec![
             row("parent", "open", "task", None),
             row("child-a", "closed", "task", Some("parent")),
-            row("child-b", "done", "task", Some("parent")),
+            row("child-b", "completed", "task", Some("parent")),
         ];
 
         let summary = task_progress_summary_from_rows(
@@ -476,8 +476,73 @@ mod tests {
         assert!(summary.closure_candidate);
         assert!(summary.ready_for_close);
         assert_eq!(summary.closure_candidate_state, "ready_to_close");
-        assert_eq!(summary.closed_count, 1);
+        assert_eq!(summary.closed_count, 2);
         assert_eq!(summary.descendant_count, 2);
+        assert_eq!(summary.percent_closed, 100.0);
+    }
+
+    #[test]
+    fn direct_child_progress_rejects_done_and_cancelled_as_open_work() {
+        let rows = vec![
+            row("parent", "open", "task", None),
+            row("child-a", "done", "task", Some("parent")),
+            row("child-b", "cancelled", "task", Some("parent")),
+        ];
+
+        let summary = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DirectChildren,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert!(!summary.closure_candidate);
+        assert!(!summary.ready_for_close);
+        assert_eq!(summary.closure_candidate_state, "direct_children_remaining");
+        assert_eq!(summary.closed_count, 0);
+        assert_eq!(summary.percent_closed, 0.0);
+    }
+
+    #[test]
+    fn descendant_progress_uses_normalized_epic_as_container_taxonomy() {
+        let rows = vec![
+            row("parent", "open", "EPIC", None),
+            row("child", "closed", "ePiC", Some("parent")),
+        ];
+
+        let summary = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(summary.epic_count, 1);
+        assert!(summary.ready_for_close);
+        assert_eq!(summary.closure_candidate_state, "ready_to_close");
+    }
+
+    #[test]
+    fn descendant_progress_does_not_treat_program_or_milestone_as_containers() {
+        for issue_type in ["program", "milestone"] {
+            let rows = vec![row("parent", "open", issue_type, None)];
+
+            let summary = task_progress_summary_from_rows(
+                &rows,
+                "parent",
+                TaskProgressBasis::DescendantsExcludingRoot,
+                |value| value.to_string(),
+                |value| value.to_string(),
+            )
+            .unwrap();
+
+            assert!(!summary.ready_for_close);
+            assert_eq!(summary.closure_candidate_state, "leaf_in_progress");
+        }
     }
 
     #[test]

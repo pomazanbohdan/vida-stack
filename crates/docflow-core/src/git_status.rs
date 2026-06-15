@@ -39,20 +39,21 @@ pub fn changed_markdown_paths(input: SafeGitStatusInput) -> Result<Vec<String>, 
 
 fn markdown_paths_from_status_stdout(stdout: &[u8]) -> Vec<String> {
     let mut paths = BTreeSet::new();
-    for line in String::from_utf8_lossy(stdout).lines() {
-        if line.len() < 4 {
+    let mut records = stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty());
+    while let Some(record) = records.next() {
+        if record.len() < 4 {
             continue;
         }
-        let status = &line[..2];
-        if status == " D" || status == "D " || status == "DD" {
+        let status = &record[..2];
+        if status == b" D" || status == b"D " || status == b"DD" {
             continue;
         }
-        let path = line[3..]
-            .rsplit(" -> ")
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .trim_matches('"');
+        let path = String::from_utf8_lossy(&record[3..]).into_owned();
+        if matches!(status[0], b'R' | b'C') || matches!(status[1], b'R' | b'C') {
+            let _ = records.next();
+        }
         if path.ends_with(".md") && !path.is_empty() {
             paths.insert(path.replace('\\', "/"));
         }
@@ -90,7 +91,7 @@ fn run_git_status_with_timeout(input: SafeGitStatusInput) -> Result<Output, Docf
             "-c",
             "core.untrackedCache=false",
         ])
-        .args(["status", "--short", "--"])
+        .args(["status", "--porcelain=v1", "-z", "--"])
         .args(pathspecs);
     bounded_command_output(command, timeout)
 }
@@ -166,10 +167,20 @@ mod tests {
 
     #[test]
     fn git_status_parser_returns_changed_markdown_only() {
-        let stdout = b" M docs/a.md\n D docs/removed.md\nR  docs/old.md -> docs/new.md\n?? notes.txt\n?? docs/new.md\n";
+        let stdout =
+            b" M docs/a.md\0 D docs/removed.md\0R  docs/new.md\0docs/old.md\0?? notes.txt\0?? docs/new.md\0";
         assert_eq!(
             markdown_paths_from_status_stdout(stdout),
             vec!["docs/a.md".to_string(), "docs/new.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn git_status_parser_preserves_raw_markdown_path_spacing() {
+        let stdout = b"??  lead.md\0";
+        assert_eq!(
+            markdown_paths_from_status_stdout(stdout),
+            vec![" lead.md".to_string()]
         );
     }
 

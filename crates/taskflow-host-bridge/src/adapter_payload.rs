@@ -13,6 +13,7 @@ use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 use crate::completion::host_bridge_request_status_allows_parent_completion;
 use crate::request::{
     HostBridgeRequest, effective_host_bridge_request, host_bridge_request_string,
+    legacy_internal_subagents_host_bridge_request,
 };
 
 pub struct HostBridgeAdapterPayloadInput<'a> {
@@ -50,10 +51,36 @@ pub fn host_bridge_operator_fields(
     (verdict.shared_fields, verdict.operator_contracts)
 }
 
+fn push_missing_field(missing: &mut Vec<String>, field: &str) {
+    if !missing.iter().any(|value| value == field) {
+        missing.push(field.to_string());
+    }
+}
+
+fn raw_host_bridge_request_missing_fields(request: &Value) -> Vec<String> {
+    let mut missing = Vec::new();
+    if legacy_internal_subagents_host_bridge_request(request) {
+        for (field, sentinel) in [
+            ("adapter_kind", "unconfigured_host_agent_adapter"),
+            (
+                "adapter_capability_id",
+                "unconfigured_host_agent_capability",
+            ),
+            ("invocation_mode", "configured_host_capability_required"),
+        ] {
+            if host_bridge_request_string(request, field) == Some(sentinel) {
+                push_missing_field(&mut missing, field);
+            }
+        }
+    }
+    missing
+}
+
 pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_>) -> Value {
+    let raw_missing = raw_host_bridge_request_missing_fields(input.request);
     let effective_request = effective_host_bridge_request(input.request);
     let request = &effective_request;
-    let mut missing = Vec::new();
+    let mut missing = raw_missing;
     let typed_request = HostBridgeRequest::from_value(request.clone());
     if typed_request.is_err() {
         for field in [
@@ -401,6 +428,27 @@ mod tests {
                 "repair the host bridge request or selected host adapter capability before invoking parent host tools"
             ])
         );
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_blocks_raw_unconfigured_host_agent_sentinels() {
+        let mut request = request();
+        request["adapter_kind"] = json!("unconfigured_host_agent_adapter");
+        request["adapter_capability_id"] = json!("unconfigured_host_agent_capability");
+        request["invocation_mode"] = json!("configured_host_capability_required");
+
+        let payload = payload_for(&request);
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            json!(["host_bridge_request_missing_fields"])
+        );
+        assert_eq!(
+            payload["host_bridge"]["missing_fields"],
+            json!(["adapter_kind", "adapter_capability_id", "invocation_mode"])
+        );
+        assert_eq!(payload["host_bridge"]["host_tool_calls"], json!([]));
     }
 
     #[test]

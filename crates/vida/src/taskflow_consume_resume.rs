@@ -3319,18 +3319,22 @@ fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
     let state_root = crate::taskflow_task_bridge::proxy_state_dir()
         .canonicalize()
         .ok()?;
-    let trusted_packet_roots = [
-        state_root
-            .join("runtime-consumption")
-            .join("dispatch-packets"),
-        state_root
-            .join("runtime-consumption")
-            .join("downstream-dispatch-packets"),
-    ];
-    if !trusted_packet_roots
-        .iter()
-        .any(|root| candidate.starts_with(root))
-    {
+    let runtime_consumption_root = state_root.join("runtime-consumption").canonicalize().ok()?;
+    let dispatch_packets_root = runtime_consumption_root
+        .join("dispatch-packets")
+        .canonicalize()
+        .ok();
+    let downstream_dispatch_packets_root = runtime_consumption_root
+        .join("downstream-dispatch-packets")
+        .canonicalize()
+        .ok();
+    let trusted_dispatch_root = dispatch_packets_root
+        .as_deref()
+        .is_some_and(|root| candidate.starts_with(root))
+        || downstream_dispatch_packets_root
+            .as_deref()
+            .is_some_and(|root| candidate.starts_with(root));
+    if !trusted_dispatch_root {
         return None;
     }
     let Ok(file) = std::fs::File::open(&candidate) else {
@@ -3983,14 +3987,12 @@ fn retry_backend_for_dispatch_receipt(
             })
             .is_some()
         {
-            if let Some(next_review_backend) = route.and_then(|route| {
-                crate::taskflow_routing::fanout_executor_backends_from_route(route)
-                    .into_iter()
-                    .map(|backend| backend.trim().to_string())
-                    .find(|backend| {
-                        !backend.is_empty() && Some(backend.as_str()) != current_backend
-                    })
-            }) {
+            if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
+                &role_selection.execution_plan,
+                &dispatch_receipt.dispatch_target,
+                route,
+                current_backend,
+            ) {
                 return Some(next_review_backend);
             }
         }
@@ -4060,15 +4062,13 @@ fn retry_backend_from_dispatch_packet(
         .or_else(|| dispatch_packet_json_from_current_project(packet_path))?;
     let execution_plan = &packet["role_selection_full"]["execution_plan"];
     let route = super::execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
-    if packet["packet_kind"].as_str() == Some("runtime_dispatch_packet")
-        && dispatch_target == "coach"
-    {
-        if let Some(next_review_backend) = route.and_then(|route| {
-            crate::taskflow_routing::fanout_executor_backends_from_route(route)
-                .into_iter()
-                .map(|backend| backend.trim().to_string())
-                .find(|backend| !backend.is_empty() && Some(backend.as_str()) != current_backend)
-        }) {
+    if packet["packet_kind"].as_str() == Some("runtime_dispatch_packet") {
+        if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
+            execution_plan,
+            dispatch_target,
+            route,
+            current_backend,
+        ) {
             return Some(next_review_backend);
         }
     }
@@ -4097,9 +4097,6 @@ fn distinct_review_retry_backend_from_route(
     route: Option<&serde_json::Value>,
     current_backend: Option<&str>,
 ) -> Option<String> {
-    if dispatch_target != "coach" {
-        return None;
-    }
     let route = route?;
     crate::taskflow_routing::fanout_executor_backends_from_route(route)
         .into_iter()
@@ -7707,9 +7704,11 @@ mod tests {
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
         consume_continue_dispatch_handoff_timeout, consume_continue_handoff_with_timeout,
         consume_continue_should_defer_agent_handoff, consume_continue_state_access_blocker_payload,
-        diagnostic_dispatch_receipt_from_packet_path, dispatch_receipt_internal_retry_eligible,
-        dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
-        emit_runtime_consumption_resume_json, enforce_consume_continue_execution_preparation_gate,
+        diagnostic_dispatch_receipt_from_packet_path,
+        dispatch_packet_json_and_path_from_state_dir_absolute_path,
+        dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
+        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
+        enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout,
         latest_stale_run_graph_task_authority_error, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
@@ -21254,6 +21253,116 @@ agent_system:
             Some("timeout_without_takeover_authority"),
             "retry heuristic must preserve blocker_code until a lawful transition exists"
         );
+    }
+
+    #[test]
+    fn retry_backend_for_dispatch_receipt_accepts_review_lane_fanout_target() {
+        let root = unique_consume_packet_test_root("review-lane-fanout-retry");
+        fs::create_dir_all(&root).expect("test root should create");
+        let packet_path = root.join("review-b-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({ "packet_kind": "runtime_dispatch_packet" }).to_string(),
+        )
+        .expect("packet should write");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "review implementation evidence".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-task".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["review".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "review_b": {
+                        "executor_backend": "codex_cli",
+                        "fanout_executor_backends": ["codex_cli", "gemini_cli"],
+                        "fallback_executor_backend": "fallback_cli"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-review-b".to_string(),
+            dispatch_target: "review_b".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("codex_cli".to_string()),
+            recorded_at: "2026-06-15T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            retry_backend_for_dispatch_receipt(&role_selection, &receipt).as_deref(),
+            Some("gemini_cli")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dispatch_packet_absolute_path_probe_accepts_proxy_state_downstream_packets() {
+        let _guard = env_lock().lock().expect("env lock should be acquired");
+        let root = unique_consume_packet_test_root("state-dir-downstream-packet-probe");
+        let state_root = root.join(".vida").join("data").join("state");
+        let downstream_root = state_root
+            .join("runtime-consumption")
+            .join("downstream-dispatch-packets");
+        fs::create_dir_all(&downstream_root).expect("downstream packet root should create");
+        let packet_path = downstream_root.join("verification-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "downstream_dispatch_target": "verification"
+            })
+            .to_string(),
+        )
+        .expect("packet should write");
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(state_root.clone()));
+
+        let loaded = dispatch_packet_json_and_path_from_state_dir_absolute_path(
+            packet_path.to_str().expect("packet path should be utf8"),
+        );
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        let loaded = loaded.expect("proxy state downstream packet should load");
+
+        assert_eq!(
+            loaded.0["packet_kind"],
+            "runtime_downstream_dispatch_packet"
+        );
+        assert_eq!(loaded.1, packet_path.canonicalize().unwrap());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

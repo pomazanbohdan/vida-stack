@@ -223,6 +223,7 @@ pub fn new_output_path_under_root(
             kind,
             path: path.clone(),
         })?;
+    ensure_parent_safe_to_create(root, parent, kind)?;
     std::fs::create_dir_all(parent).map_err(|source| PathPolicyError::ParentCreate {
         kind,
         path: parent.to_path_buf(),
@@ -249,6 +250,51 @@ pub fn new_output_path_under_root(
         }
     }
     Ok(NewStateOutputPath { path, kind })
+}
+
+fn ensure_parent_safe_to_create(
+    root: &StateRoot,
+    parent: &Path,
+    kind: ArtifactPathKind,
+) -> Result<(), PathPolicyError> {
+    let mut existing_ancestor = parent;
+    while !existing_ancestor.exists() {
+        existing_ancestor =
+            existing_ancestor
+                .parent()
+                .ok_or_else(|| PathPolicyError::MissingParent {
+                    kind,
+                    path: parent.to_path_buf(),
+                })?;
+    }
+    let metadata = std::fs::symlink_metadata(existing_ancestor).map_err(|source| {
+        PathPolicyError::Metadata {
+            kind,
+            path: existing_ancestor.to_path_buf(),
+            source,
+        }
+    })?;
+    if is_symlink(&metadata) {
+        return Err(PathPolicyError::Symlink {
+            kind,
+            path: existing_ancestor.to_path_buf(),
+        });
+    }
+    if !metadata.is_dir() {
+        return Err(PathPolicyError::NotRegularFile {
+            kind,
+            path: existing_ancestor.to_path_buf(),
+        });
+    }
+    let canonical =
+        existing_ancestor
+            .canonicalize()
+            .map_err(|source| PathPolicyError::Canonicalize {
+                kind,
+                path: existing_ancestor.to_path_buf(),
+                source,
+            })?;
+    ensure_under_root(root, &canonical, kind)
 }
 
 fn reject_dot_segment(path: &Path, kind: ArtifactPathKind) -> Result<(), PathPolicyError> {
@@ -345,5 +391,62 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, PathPolicyError::AlreadyExists { .. }));
+    }
+
+    #[test]
+    fn new_output_path_rejects_outside_parent_before_create() {
+        let root_dir = temp_root("new-output-outside-parent");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let outside_root = root_dir.with_file_name(format!(
+            "{}-outside",
+            root_dir.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&outside_root);
+        std::fs::create_dir_all(&outside_root).unwrap();
+        let outside_child = outside_root.join("created-by-bug");
+        let target = outside_child.join("result.json");
+
+        let err = new_output_path_under_root(
+            &state_root,
+            &target,
+            ArtifactPathKind::HostBridgeResult,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, PathPolicyError::OutsideStateRoot { .. }));
+        assert!(
+            !outside_child.exists(),
+            "outside parent must not be created before state-root validation"
+        );
+        let _ = std::fs::remove_dir_all(&root_dir);
+        let _ = std::fs::remove_dir_all(&outside_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_output_path_rejects_symlink_parent_before_create() {
+        let root_dir = temp_root("new-output-symlink-parent");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let outside_root = root_dir.with_file_name(format!(
+            "{}-outside",
+            root_dir.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&outside_root);
+        std::fs::create_dir_all(&outside_root).unwrap();
+        let link_parent = root_dir.join("linked-parent");
+        std::os::unix::fs::symlink(&outside_root, &link_parent).unwrap();
+
+        let err = new_output_path_under_root(
+            &state_root,
+            link_parent.join("result.json"),
+            ArtifactPathKind::HostBridgeResult,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, PathPolicyError::Symlink { .. }));
+        let _ = std::fs::remove_dir_all(&root_dir);
+        let _ = std::fs::remove_dir_all(&outside_root);
     }
 }

@@ -895,9 +895,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             let latest_run_graph_snapshot_inconsistent =
                 !current_session_run_graph_dispatch_receipt_checkpoint_leakage
                     && !crate::state_store::latest_run_graph_evidence_snapshot_is_consistent(
-                        current_session_run_graph_status
-                            .as_ref()
-                            .map(|status| status.run_id.as_str()),
+                        current_session_effective_run_graph_run_id,
                         current_session_run_graph_recovery
                             .as_ref()
                             .map(|summary| summary.run_id.as_str()),

@@ -52,7 +52,7 @@ function Get-ProofFieldValue {
     )
 
     $escapedFieldName = [regex]::Escape($FieldName)
-    $pattern = "(?ms)^-\s*$escapedFieldName\s*:\s*(?<value>.*?)(?=^-\s+\S|\z)"
+    $pattern = "(?ms)^(?<indent>\s*)-\s*$escapedFieldName\s*:\s*(?<value>.*?)(?=^\k<indent>-\s+\S[^:\r\n]*\s*:|\z)"
     $match = [regex]::Match($ProofBlock, $pattern)
     if (-not $match.Success) {
         return $null

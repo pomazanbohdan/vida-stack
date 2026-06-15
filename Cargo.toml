@@ -29,6 +29,7 @@ members = [
     "crates/operator-output",
     "crates/vida-contracts",
     "crates/vida-test-support",
+    "crates/vida-coder",
     "crates/vida-pi-agent",
     "crates/vida",
 ]

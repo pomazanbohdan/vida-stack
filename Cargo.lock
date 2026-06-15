@@ -6494,6 +6494,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vida-coder"
+version = "0.9.7"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "vida-runtime-tools",
+]
+
+[[package]]
 name = "vida-contracts"
 version = "0.9.7"
 dependencies = [
@@ -6507,6 +6517,14 @@ version = "0.9.7"
 dependencies = [
  "clap",
  "serde_json",
+]
+
+[[package]]
+name = "vida-runtime-tools"
+version = "0.9.7"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

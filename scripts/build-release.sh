@@ -105,11 +105,13 @@ if [[ "$WINDOWS_RELEASE" == "yes" ]]; then
   TASKFLOW_BIN="$STAGE_DIR/bin/taskflow.exe"
   DOCFLOW_BIN="$STAGE_DIR/bin/docflow.exe"
   PI_AGENT_BIN="$STAGE_DIR/bin/vida-pi-agent.exe"
+  VIDA_CODER_BIN="$STAGE_DIR/bin/vida-coder.exe"
 else
   VIDA_BIN="$STAGE_DIR/bin/vida"
   TASKFLOW_BIN="$STAGE_DIR/bin/taskflow"
   DOCFLOW_BIN="$STAGE_DIR/bin/docflow"
   PI_AGENT_BIN="$STAGE_DIR/bin/vida-pi-agent"
+  VIDA_CODER_BIN="$STAGE_DIR/bin/vida-coder"
 fi
 INSTALL_ASSETS_DIR="$STAGE_DIR/install/assets"
 INSTALLER_ASSET="$DIST_DIR/vida-install.sh"
@@ -140,7 +142,7 @@ find "$STAGE_DIR" -type f -name '*.pyc' -delete
 if skip_build_enabled; then
     printf '[release-build] Using existing release binaries from %s\n' "$RELEASE_BIN_DIR"
 else
-    cargo build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
+    cargo build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
 fi
 copy_runtime_binary() {
   local binary_name="$1"
@@ -189,14 +191,18 @@ copy_runtime_binary vida "$VIDA_BIN"
 copy_runtime_binary taskflow "$TASKFLOW_BIN"
 copy_runtime_binary docflow "$DOCFLOW_BIN"
 copy_runtime_binary vida-pi-agent "$PI_AGENT_BIN"
+copy_runtime_binary vida-coder "$VIDA_CODER_BIN"
 verify_runtime_binary_version vida "$VIDA_BIN"
 verify_runtime_binary_version taskflow "$TASKFLOW_BIN"
 verify_runtime_binary_version docflow "$DOCFLOW_BIN"
+verify_runtime_binary_version vida-coder "$VIDA_CODER_BIN"
 VIDA_VERSION_LINE="$(runtime_binary_version_line "$VIDA_BIN")"
 TASKFLOW_VERSION_LINE="$(runtime_binary_version_line "$TASKFLOW_BIN")"
 DOCFLOW_VERSION_LINE="$(runtime_binary_version_line "$DOCFLOW_BIN")"
+VIDA_CODER_VERSION_LINE="$(runtime_binary_version_line "$VIDA_CODER_BIN")"
 "$PI_AGENT_BIN" --help >/dev/null 2>&1 || fail "Packaged vida-pi-agent help check failed: $PI_AGENT_BIN"
-rm -f "${VIDA_BIN}.version" "${TASKFLOW_BIN}.version" "${DOCFLOW_BIN}.version" "${PI_AGENT_BIN}.version"
+"$VIDA_CODER_BIN" provider-check --json >/dev/null 2>&1 || fail "Packaged vida-coder provider readiness check failed: $VIDA_CODER_BIN"
+rm -f "${VIDA_BIN}.version" "${TASKFLOW_BIN}.version" "${DOCFLOW_BIN}.version" "${PI_AGENT_BIN}.version" "${VIDA_CODER_BIN}.version"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
 cp "$ROOT_DIR/docs/product/spec/templates/feature-design-document.template.md" "$INSTALL_ASSETS_DIR/feature-design-document.template.md"
 
@@ -206,7 +212,7 @@ PY_DIST_DIR="$(normalize_path_for_python "$DIST_DIR")"
 PY_INSTALLER_ASSET="$(normalize_path_for_python "$INSTALLER_ASSET")"
 PY_WINDOWS_INSTALLER_ASSET="$(normalize_path_for_python "$WINDOWS_INSTALLER_ASSET")"
 
-MANIFEST_OUT="$PY_MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" WINDOWS_RELEASE="$WINDOWS_RELEASE" VIDA_VERSION_LINE="$VIDA_VERSION_LINE" TASKFLOW_VERSION_LINE="$TASKFLOW_VERSION_LINE" DOCFLOW_VERSION_LINE="$DOCFLOW_VERSION_LINE" "$PYTHON_BIN" - <<'PY'
+MANIFEST_OUT="$PY_MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" WINDOWS_RELEASE="$WINDOWS_RELEASE" VIDA_VERSION_LINE="$VIDA_VERSION_LINE" TASKFLOW_VERSION_LINE="$TASKFLOW_VERSION_LINE" DOCFLOW_VERSION_LINE="$DOCFLOW_VERSION_LINE" VIDA_CODER_VERSION_LINE="$VIDA_CODER_VERSION_LINE" "$PYTHON_BIN" - <<'PY'
 import json
 import os
 import re
@@ -218,7 +224,7 @@ archive_base = os.environ["ARCHIVE_BASE"]
 version = os.environ["VERSION"]
 expected_version = version.removeprefix("v")
 windows_release = os.environ["WINDOWS_RELEASE"] == "yes"
-binary_roots = ["bin/vida.exe", "bin/taskflow.exe", "bin/docflow.exe", "bin/vida-pi-agent.exe"] if windows_release else ["bin/vida", "bin/taskflow", "bin/docflow", "bin/vida-pi-agent"]
+binary_roots = ["bin/vida.exe", "bin/taskflow.exe", "bin/docflow.exe", "bin/vida-pi-agent.exe", "bin/vida-coder.exe"] if windows_release else ["bin/vida", "bin/taskflow", "bin/docflow", "bin/vida-pi-agent", "bin/vida-coder"]
 
 def binary_version_record(label: str, path: str, line: str) -> dict:
     match = re.fullmatch(rf"{re.escape(label)}\s+(\S+)(?:\s+\(built\s+([^)]+)\))?", line)
@@ -251,6 +257,7 @@ manifest = {
         "taskflow",
         "docflow",
         "vida-pi-agent",
+        "vida-coder",
         "vida docflow",
         "vida taskflow",
     ],
@@ -259,12 +266,14 @@ manifest = {
         "vida": binary_version_record("vida", binary_roots[0], os.environ["VIDA_VERSION_LINE"]),
         "taskflow": binary_version_record("taskflow", binary_roots[1], os.environ["TASKFLOW_VERSION_LINE"]),
         "docflow": binary_version_record("docflow", binary_roots[2], os.environ["DOCFLOW_VERSION_LINE"]),
+        "vida-coder": binary_version_record("vida-coder", binary_roots[4], os.environ["VIDA_CODER_VERSION_LINE"]),
     },
     "installer_managed_runtimes": [
         "vida",
         "taskflow",
         "docflow",
         "vida-pi-agent",
+        "vida-coder",
     ],
     "launcher_contracts": {
         "taskflow": "vida taskflow",

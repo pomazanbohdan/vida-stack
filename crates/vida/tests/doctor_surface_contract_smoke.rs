@@ -1592,7 +1592,20 @@ fn persist_host_bridge_lane_receipt_with_helper(
     dispatch_packet_path: &str,
     downstream_packet_path: &str,
     activation_result_path: &str,
+    dispatch_target: &str,
 ) {
+    let downstream_target = if dispatch_target == "coach" {
+        "tester"
+    } else {
+        "coach"
+    };
+    let task_class = if dispatch_target == "coach" {
+        "coach"
+    } else {
+        "implementation"
+    };
+    let lifecycle_stage = format!("{dispatch_target}_blocked");
+    let resume_target = format!("dispatch.{dispatch_target}");
     let helper = std::env::current_exe().expect("current test binary should resolve");
     let output = Command::new(helper)
         .args([
@@ -1605,7 +1618,7 @@ fn persist_host_bridge_lane_receipt_with_helper(
         .env(runtime_consumption::RECEIPT_HELPER_RUN_ID_ENV, run_id)
         .env(
             runtime_consumption::RECEIPT_HELPER_DISPATCH_TARGET_ENV,
-            "implementer",
+            dispatch_target,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DISPATCH_PACKET_PATH_ENV,
@@ -1613,7 +1626,7 @@ fn persist_host_bridge_lane_receipt_with_helper(
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_TARGET_ENV,
-            "coach",
+            downstream_target,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_PACKET_PATH_ENV,
@@ -1649,11 +1662,11 @@ fn persist_host_bridge_lane_receipt_with_helper(
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_TASK_CLASS_ENV,
-            "implementation",
+            task_class,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_LIFECYCLE_STAGE_ENV,
-            "implementer_blocked",
+            &lifecycle_stage,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_HANDOFF_STATE_ENV,
@@ -1661,7 +1674,7 @@ fn persist_host_bridge_lane_receipt_with_helper(
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_RESUME_TARGET_ENV,
-            "dispatch.implementer",
+            &resume_target,
         )
         .output()
         .expect("runtime receipt helper process should run");
@@ -1863,6 +1876,14 @@ fn delete_run_graph_row_with_helper(state_dir: &str, table: &str, run_id: &str) 
 }
 
 fn create_host_bridge_lane_fixture(test_name: &str, changed_file: &str) -> HostBridgeLaneFixture {
+    create_host_bridge_lane_fixture_for_target(test_name, changed_file, "implementer")
+}
+
+fn create_host_bridge_lane_fixture_for_target(
+    test_name: &str,
+    changed_file: &str,
+    dispatch_target: &str,
+) -> HostBridgeLaneFixture {
     let state_dir = unique_state_dir();
     let boot = vida()
         .arg("boot")
@@ -1967,21 +1988,31 @@ fn create_host_bridge_lane_fixture(test_name: &str, changed_file: &str) -> HostB
     let result_path = format!("{bridge_dir}/{test_name}-result.json");
     let bridge_receipt_path = format!("{bridge_dir}/{test_name}-receipt.json");
     let activation_result_path = format!("{activation_dir}/{test_name}-activation.json");
+    let task_class = if dispatch_target == "coach" {
+        "coach"
+    } else {
+        "implementation"
+    };
+    let runtime_role = if dispatch_target == "coach" {
+        "coach"
+    } else {
+        "worker"
+    };
 
     std::fs::write(
         &packet_path,
         serde_json::json!({
             "run_id": run_id,
-            "dispatch_target": "implementer",
-            "activation_runtime_role": "worker",
+            "dispatch_target": dispatch_target,
+            "activation_runtime_role": runtime_role,
             "packet_template_kind": "delivery_task_packet",
             "owned_paths": ["crates/vida/src/lib.rs"],
             "read_only_paths": ["crates/vida/src"],
             "delivery_task_packet": {
                 "goal": "Complete host bridge lane evidence.",
-                "scope_in": ["dispatch_target:implementer"],
-                "handoff_task_class": "implementation",
-                "handoff_runtime_role": "worker",
+                "scope_in": [format!("dispatch_target:{dispatch_target}")],
+                "handoff_task_class": task_class,
+                "handoff_runtime_role": runtime_role,
                 "owned_paths": ["crates/vida/src/lib.rs"],
                 "read_only_paths": ["crates/vida/src"],
                 "definition_of_done": ["host bridge completion is receipt-backed"],
@@ -2009,7 +2040,7 @@ fn create_host_bridge_lane_fixture(test_name: &str, changed_file: &str) -> HostB
             "request_id": test_name,
             "run_id": run_id,
             "task_id": run_id,
-            "dispatch_target": "implementer",
+            "dispatch_target": dispatch_target,
             "packet_path": packet_path,
             "backend_id": "internal_subagents",
             "carrier_id": "middle",
@@ -2050,6 +2081,7 @@ fn create_host_bridge_lane_fixture(test_name: &str, changed_file: &str) -> HostB
         &packet_path,
         &packet_path,
         &activation_result_path,
+        dispatch_target,
     );
 
     HostBridgeLaneFixture {
@@ -2170,6 +2202,71 @@ fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
         "pass"
     );
     assert_eq!(bridge_result["blocker_codes"], serde_json::json!([]));
+}
+
+#[test]
+fn host_bridge_public_cli_blocks_on_negative_coach_decision_summary() {
+    let fixture = create_host_bridge_lane_fixture_for_target(
+        "host-bridge-coach-blocked-summary",
+        "crates/vida/src/lib.rs",
+        "coach",
+    );
+
+    let output = vida()
+        .args([
+            "lane",
+            "complete",
+            &fixture.run_id,
+            "--receipt-id",
+            "host-bridge-coach-blocked-summary-receipt",
+            "--host-bridge-request",
+            &fixture.request_path,
+            "--host-agent-id",
+            "agent-coach-proof",
+            "--host-bridge-summary",
+            "coach decision=blocked; scheduledAt missing for non-all-day meeting",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("coach lane complete should run");
+    assert_failure(
+        &output,
+        "lane complete should block on negative coach verdict",
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "lane complete blocked json should parse: {error}; stdout={}; stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(payload["dispatch_status"], "blocked");
+    assert!(!payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be an array")
+        .is_empty());
+    assert_eq!(payload["lane_id"], "coach_lane");
+
+    let completion_result_path = payload["artifact_refs"]["downstream_dispatch_result_path"]
+        .as_str()
+        .expect("completion result path should be present");
+    let completion_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(completion_result_path).expect("completion result should exist"),
+    )
+    .expect("completion result should parse");
+    assert_eq!(completion_result["status"], "blocked");
+    assert_eq!(completion_result["execution_state"], "blocked");
+    assert_eq!(completion_result["completion_verdict"], "rework_required");
+    assert_eq!(
+        completion_result["blocker_code"], "coach_rework_required",
+        "completion result should preserve coach blocker: {completion_result}"
+    );
+    assert_eq!(completion_result["closure_ready"], false);
 }
 
 #[test]

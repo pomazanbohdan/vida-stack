@@ -535,12 +535,11 @@ dev_team:
   contract_doc: docs/process/team-development-and-orchestration-protocol.md
   preserve_existing_agent_extensions: true
   preserve_existing_flow_sets: true
-  default_flow_id: default_delivery
+  default_flow_id: task_delivery_verified
   orchestrator_command_contract:
     canonical_surface: vida agent dispatch-next
     default_args:
       - --dev-team
-      - --materialize-packets
       - --current-task-id
       - "{{task_id}}"
     human_default_output: compact_toon
@@ -561,13 +560,13 @@ dev_team:
     epic: default_delivery
     defect: defect_repair_verified
     runtime_defect: runtime_defect_remediation
-    pull_request: pr_repair_verified
-    pr_repair: pr_repair_verified
+    pull_request: pr_processing_team
+    pr_repair: pr_processing_team
     architecture: architecture_design
     release_readiness: release_readiness_gate
     service_tui: service_tui_orchestration
     internal_agent_development: hook_enabled_internal_agent_development
-    task: default_delivery
+    task: task_delivery_verified
     debug: debug_fast
   validation:
     require_role_contracts: true
@@ -899,9 +898,72 @@ dev_team:
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
+    pr_processing_team:
+      enabled: true
+      description: Dedicated pull-request processing team that inventories PRs, integrates or closes the change, performs consolidated source/CI/duplication proof, then records final disposition.
+      flow_class: development
+      work_item_bindings:
+        - pull_request
+        - pr_repair
+      sequential: true
+      allow_parallel_handoffs: true
+      fail_closed_on_missing_step_contract: true
+      lifecycle_hook_templates:
+        - command_timing_summary
+      team_contract:
+        team_id: pr_processing_team
+        command_surface: vida agent dispatch-next --dev-team --current-task-id "{{task_id}}" --json
+        intended_work_items:
+          - pull_request
+          - pr_repair
+        merge_policy: four_role_integrate_or_close_with_receipt_backed_proof
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - step_id: pr-intake
+          role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [pr_inventory, changed_scope_map, ci_review_snapshot, mergeability_matrix, recommended_disposition, owned_read_scope]
+        - step_id: pr-integrate-or-close
+          role_id: developer
+          runtime_role: worker
+          task_class: implementation
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files_or_close_plan, conflict_resolution_notes, verification_notes]
+        - step_id: pr-review-and-proof
+          role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [source_fidelity_review, duplication_review_report, post_integration_verification_evidence, failing_or_passing_checks, residual_risks]
+        - step_id: pr-final-disposition
+          role_id: prover
+          runtime_role: prover
+          task_class: release_readiness
+          command_template:
+            surface: vida agent-init
+            args: [--role, prover, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [final_pr_disposition, proof_summary, follow_up_actions]
     pr_repair_verified:
       enabled: true
-      description: Pull-request processing flow that classifies open PRs, validates CI/review state, repairs or supersedes valuable changes, and gates merge/closure through independent proof.
+      description: Legacy pull-request repair flow retained for compatibility. New pull_request and pr_repair work routes through pr_processing_team.
       flow_class: development
       work_item_bindings:
         - pull_request
@@ -1199,13 +1261,63 @@ dev_team:
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
+    task_delivery_verified:
+      enabled: true
+      description: Standard bounded task flow that keeps generic task delivery shorter than release-style default_delivery while preserving scope analysis, implementation conformance review, and independent verification. Defect, runtime_defect, architecture, PR, and release_readiness work keep their specialized heavier flows.
+      flow_class: development
+      work_item_bindings:
+        - task
+      sequential: true
+      allow_parallel_handoffs: true
+      fail_closed_on_missing_step_contract: true
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          proof_gates:
+            required_outputs: [bounded_problem_statement, acceptance_contract, owned_write_scope]
+          lifecycle_hook_templates: [command_timing_summary]
+        - role_id: developer
+          runtime_role: worker
+          task_class: implementation
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files, verification_notes]
+        - role_id: coach_implementation_gate
+          runtime_role: coach
+          task_class: coach
+          command_template:
+            surface: vida agent-init
+            args: [--role, coach, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [implementation_conformance_review, rework_or_approve_decision]
+        - role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [verification_evidence]
     default_delivery:
       enabled: true
       description: System analyst produces the detailed task brief, test_author writes the test-first regression when required, coach_test_gate gates test quality, developer implements on the cheapest eligible write lane, coach_implementation_gate gates implementation conformance, then duplication_reviewer, tester, prover, and release_closure complete the independent closure path.
       flow_class: development
       work_item_bindings:
         - epic
-        - task
       sequential: true
       allow_parallel_handoffs: true
       fail_closed_on_missing_step_contract: true

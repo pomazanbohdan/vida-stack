@@ -60,10 +60,14 @@ Current reusable gate modes:
 11. `-Mode target-dir-policy -Json`
     - cheap policy probe before Cargo work from a new linked worktree.
 
-Docs-only cleanup under explicit runtime-defective mode should use static proof
-only: `git diff --check`, script parser checks through `script-check`, owner
-grep checks, and scoped Git diff review. Do not invent TaskFlow/DocFlow runtime
-receipts while the runtime is explicitly out of scope.
+An operator statement that the runtime is defective is a diagnostic lead, not a
+write-producing bypass. First verify the runtime failure with the bounded init,
+TaskFlow, DocFlow, or self-diagnostic surface that is still safe to run. Static
+proof such as `git diff --check`, script parser checks through `script-check`,
+owner grep checks, and scoped Git diff review may support read-only diagnosis,
+but it does not authorize local mutation while the root write guard is active.
+Do not invent TaskFlow/DocFlow runtime receipts while the runtime is explicitly
+out of scope.
 
 ## Current Proven Surface Summary
 
@@ -125,8 +129,9 @@ can run, build, install, or verify:
 
 ## Current Known Transitional Limits
 
-1. VIDA runtime may be explicitly bypassed for static documentation cleanup when
-   the operator says the runtime is defective.
+1. VIDA runtime defects must be verified through a bounded runtime diagnostic or
+   recorded as a runtime blocker. Operator wording alone does not authorize a
+   static-proof write bypass or root-lane mutation.
 2. Some runtime/config surfaces still reference this document as the canonical
    project development-evidence target; do not delete it until those references
    are intentionally migrated.

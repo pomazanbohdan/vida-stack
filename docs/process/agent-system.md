@@ -50,6 +50,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - for external CLI setups, `vida status --json` reports `host_agents.external_cli_preflight`; when sandbox is active and network is unavailable, preflight fails closed with actionable next steps
 - external CLI readiness must distinguish transport/tool-contract pass from carrier-specific auth/model readiness; when project config declares dispatch-level model pinning, ambient carrier-local model drift must not silently redefine execution
 - when `host_agents.external_cli_preflight.blocked_primary_backends` includes the route-primary backend, runtime must fail closed away from that carrier and rebind to the explicit `fallback_executor_backend` instead of launching a known-blocked external carrier again
+- `vida_coder` is the service-executor backend for bounded coder packets; its registry truth lives under `vida.config.yaml -> agent_system.subagents.vida_coder`, provider/model readiness is checked through the packaged `vida-coder` command, and orchestration still remains TaskFlow/`vida agent-init`-backed
 
 -----
 artifact_path: process/agent-system

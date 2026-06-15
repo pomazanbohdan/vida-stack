@@ -42,97 +42,20 @@ pub(crate) fn runtime_lane_completion_summary_blocker_code(
     completed_target: &str,
     summary: Option<&str>,
 ) -> Option<String> {
-    let normalized = summary?.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return None;
-    }
-
-    let classifier_text = completion_summary_classifier_text(&normalized);
-    let has_explicit_blocker_verdict = [
-        "verdict: blocker",
-        "verdict=blocker",
-        "verdict: blocked",
-        "verdict=blocked",
-        "verdict: rework_required",
-        "verdict=rework_required",
-        "completion_verdict: blocker",
-        "completion_verdict=blocker",
-        "completion_verdict: blocked",
-        "completion_verdict=blocked",
-        "completion_verdict: rework_required",
-        "completion_verdict=rework_required",
-        "status: blocked",
-        "status=blocked",
-        "blocker: true",
-        "blocked: true",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle));
-    let has_negative_completion_semantics = [
-        "not closure-ready",
-        "not closure ready",
-        "not approve",
-        "not approved",
-        "not closure_ready",
-        "rework",
-        "review_findings",
-        "changed_scope",
-        "implementation evidence absent",
-        "implementation evidence missing",
-        "product implementation evidence absent",
-        "product implementation evidence missing",
-        "not ready for closure",
-        "closure not ready",
-    ]
-    .iter()
-    .any(|needle| classifier_text.contains(needle));
-
-    let has_explicit_blocker = has_explicit_blocker_verdict || has_negative_completion_semantics;
-    if !has_explicit_blocker {
-        return None;
-    }
-
-    let only_positive_blocker_context = [
-        "no blocker",
-        "no blockers",
-        "without blockers",
-        "blockers: []",
-        "blocker_codes: []",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
-        && ![
-            "not closure-ready",
-            "not closure ready",
-            "not approve",
-            "not approved",
-            "rework",
-            "review_findings",
-            "changed_scope",
-            "implementation evidence absent",
-            "implementation evidence missing",
-        ]
-        .iter()
-        .any(|needle| normalized.contains(needle));
-
-    if only_positive_blocker_context {
-        return None;
-    }
-
-    Some(
-        match completed_target.trim() {
-            "verification" => "verification_rework_required",
-            "coach" => "coach_rework_required",
-            "closure" => "closure_evidence_blocked",
-            _ => "lane_completion_blocked_by_summary",
-        }
-        .to_string(),
+    taskflow_host_bridge::host_bridge_lane_completion_summary_blocker_code(
+        completed_target,
+        summary,
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_lane_completion_summary_blocker_code;
+    use std::fs;
+
+    use super::{
+        runtime_lane_completion_summary_blocker_code,
+        write_runtime_lane_completion_result_with_summary,
+    };
 
     #[test]
     fn summary_classifier_ignores_positive_receipt_blocker_context() {
@@ -163,21 +86,65 @@ mod tests {
             Some("coach_rework_required".to_string())
         );
     }
-}
 
-fn completion_summary_classifier_text(normalized_summary: &str) -> String {
-    [
-        "blocker_codes",
-        "blocker code",
-        "blocker codes",
-        "blocker_code",
-        "blockers field",
-        "blockers array",
-    ]
-    .iter()
-    .fold(normalized_summary.to_string(), |text, field_name| {
-        text.replace(field_name, " ")
-    })
+    #[test]
+    fn summary_classifier_keeps_blocked_coach_decision() {
+        let summary = "coach decision=blocked; scheduledAt missing for non-all-day meeting";
+
+        assert_eq!(
+            runtime_lane_completion_summary_blocker_code("coach", Some(summary)),
+            Some("coach_rework_required".to_string())
+        );
+    }
+
+    #[test]
+    fn summary_classifier_canonicalizes_coach_lane_target() {
+        let summary = "coach decision=blocked; scheduledAt missing for non-all-day meeting";
+
+        assert_eq!(
+            runtime_lane_completion_summary_blocker_code("coach_lane", Some(summary)),
+            Some("coach_rework_required".to_string())
+        );
+    }
+
+    #[test]
+    fn summary_classifier_preserves_coach_decision_when_target_is_stale() {
+        let summary = "coach decision=blocked; scheduledAt missing for non-all-day meeting";
+
+        assert_eq!(
+            runtime_lane_completion_summary_blocker_code("implementer", Some(summary)),
+            Some("coach_rework_required".to_string())
+        );
+    }
+
+    #[test]
+    fn completion_result_blocks_on_blocked_coach_decision() {
+        let state_root =
+            std::env::temp_dir().join(format!("vida-lane-completion-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&state_root);
+
+        let result_path = write_runtime_lane_completion_result_with_summary(
+            &state_root,
+            "run-coach",
+            "coach",
+            "receipt-1",
+            "packet.json",
+            Some("coach decision=blocked; scheduledAt missing"),
+        )
+        .expect("completion result should write");
+        let body: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&result_path).expect("completion result should be readable"),
+        )
+        .expect("completion result should decode");
+
+        assert_eq!(body["status"], "blocked");
+        assert_eq!(body["execution_state"], "blocked");
+        assert_eq!(body["completion_verdict"], "rework_required");
+        assert_eq!(body["blocker_code"], "coach_rework_required");
+        assert_eq!(body["closure_ready"], false);
+
+        let _ = fs::remove_dir_all(&state_root);
+    }
 }
 
 pub(crate) fn write_runtime_lane_completion_result_with_summary(

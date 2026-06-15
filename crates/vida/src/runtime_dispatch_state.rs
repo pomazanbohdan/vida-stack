@@ -8412,6 +8412,23 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_packet_probe_rejects_oversized_activation_and_downstream_packets() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("oversized-dispatch-packet.json");
+        fs::write(
+            &packet_path,
+            vec![b'{'; (DISPATCH_PACKET_PROBE_READ_LIMIT_BYTES as usize) + 1],
+        )
+        .expect("oversized packet should write");
+
+        let path = packet_path
+            .to_str()
+            .expect("packet path should be valid utf8");
+        assert!(!dispatch_packet_declares_activation_view_only(Some(path)));
+        assert!(!dispatch_packet_declares_downstream_dispatch(path));
+    }
+
+    #[test]
     fn apply_owned_paths_if_missing_rejects_unsafe_owned_paths() {
         let mut packet = serde_json::json!({ "owned_paths": [] });
         let owned_paths = vec![
@@ -24848,8 +24865,7 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
     else {
         return false;
     };
-    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(dispatch_packet_path))
-    else {
+    let Some(packet) = read_dispatch_packet_probe_json(dispatch_packet_path) else {
         return false;
     };
     let activation_semantics = packet
@@ -24874,8 +24890,7 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
 }
 
 fn dispatch_packet_declares_downstream_dispatch(dispatch_packet_path: &str) -> bool {
-    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(dispatch_packet_path))
-    else {
+    let Some(packet) = read_dispatch_packet_probe_json(dispatch_packet_path) else {
         return false;
     };
     packet["packet_kind"].as_str() == Some("runtime_downstream_dispatch_packet")
@@ -24883,6 +24898,36 @@ fn dispatch_packet_declares_downstream_dispatch(dispatch_packet_path: &str) -> b
             .as_str()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
+}
+
+const DISPATCH_PACKET_PROBE_READ_LIMIT_BYTES: u64 = 1024 * 1024;
+
+fn read_dispatch_packet_probe_json(dispatch_packet_path: &str) -> Option<serde_json::Value> {
+    let dispatch_packet_path = dispatch_packet_path.trim();
+    if dispatch_packet_path.is_empty() {
+        return None;
+    }
+    let path = std::path::Path::new(dispatch_packet_path);
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return None;
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > DISPATCH_PACKET_PROBE_READ_LIMIT_BYTES
+    {
+        return None;
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return None;
+    };
+    let mut raw = String::new();
+    let mut limited = std::io::Read::take(file, DISPATCH_PACKET_PROBE_READ_LIMIT_BYTES + 1);
+    if std::io::Read::read_to_string(&mut limited, &mut raw).is_err()
+        || raw.len() as u64 > DISPATCH_PACKET_PROBE_READ_LIMIT_BYTES
+    {
+        return None;
+    }
+    serde_json::from_str(&raw).ok()
 }
 
 pub(crate) fn dispatch_result_stale_after_seconds(result: &serde_json::Value) -> i64 {

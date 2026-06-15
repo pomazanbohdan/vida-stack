@@ -25,6 +25,5 @@ VIDA command resolution for Windows Codex App:
 4. When the installed production binary exists, prepend its parent directory to `$env:PATH` for the current process and invoke that binary or the refreshed `vida` command.
 5. Treat `target\\debug\\vida.exe` and `target\\release\\vida.exe` as repository diagnostics only; do not use them as the production VIDA runtime unless the parent packet explicitly asks for diagnostic fallback.
 """
-
 [shell_environment_policy]
-inherit = "all"
+inherit = "none"

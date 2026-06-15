@@ -11,6 +11,7 @@ This procedure covers the current external CLI carriers wired into the active pr
 3. `kilo_cli`
 4. `vibe_cli`
 5. `pi_cli`
+6. `vida_coder`
 
 It does not redefine runtime law. It explains how an operator should activate and validate the already-defined project/runtime posture.
 
@@ -32,8 +33,11 @@ It does not redefine runtime law. It explains how an operator should activate an
    - `pi --version`
    - `vida-pi-agent --help`
 5. Inspect the bounded design/proof surfaces:
-   - `docs/product/spec/external-cli-carrier-hardening-contract.md`
-   - `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
+    - `docs/product/spec/external-cli-carrier-hardening-contract.md`
+    - `docs/product/spec/pi-primary-environment-agent-carrier-spec.md`
+6. Inspect VIDA Coder service-executor readiness when `vida_coder` is selected or under repair:
+   - `vida-coder provider-check --json`
+   - `vida taskflow consume agent-system --json | jq '.snapshot.carriers.vida_coder'`
 
 ## Readiness States
 
@@ -100,6 +104,18 @@ Interpret `host_agents.external_cli_preflight` as follows:
 5. `vida-pi-agent` is packaged beside `vida`, `taskflow`, and `docflow`; release/install exposes it as a direct binary on the installed runtime `bin` path.
 6. Read/spec/review Pi profiles must not write. Implementation/write profiles that require `guard_required_owned_paths` are admissible only when `vida status --json` reports `write_scope_guard.pre_write_enforcement=true` and `write_scope_guard.status=active` for the selected Pi profile.
 7. In guarded-write mode, `vida-pi-agent` explicitly loads a VIDA-owned Pi extension into the one-shot Pi process. The extension receives canonical guard data through `VIDA_PI_AGENT_SCOPE_GUARD_MODE`, `VIDA_PI_AGENT_PROJECT_ROOT`, and `VIDA_PI_AGENT_OWNED_PATHS_JSON`, blocks `write`/`edit` paths outside dispatch owned paths before execution, blocks `bash`/user bash to prevent shell write bypass, and blocks unknown mutating tools. The adapter still performs post-execution touched-path validation as defense-in-depth.
+
+### vida-coder
+
+1. `vida_coder` is a service-executor backend exposed through the packaged `vida-coder` binary. Do not route bounded coder packets through a raw provider command.
+2. Model/profile truth is owned by `vida.config.yaml -> agent_system.subagents.vida_coder.model_profiles`; ambient provider configuration is readiness evidence only and must not override VIDA selection.
+3. Setup/readiness checks:
+   - `vida-coder provider-check --json`
+   - `vida status --summary --json`
+   - `vida taskflow consume agent-system --json | jq '.snapshot.carriers.vida_coder'`
+4. Auth and model readiness must be reference-based. Do not write secrets, raw API keys, tokens, or provider credentials into prompts, receipts, task notes, CLI arguments, or release manifests.
+5. `vida-coder --service dispatch --json` remains fail-closed until the service scheduler and guarded runtime-tool pipeline are executable for live delegated packets.
+6. `vida-coder` is packaged beside `vida`, `taskflow`, `docflow`, and `vida-pi-agent`; release proof includes `vida-coder provider-check --json` from the packaged binary.
 
 ## Canonical Repair Procedure
 

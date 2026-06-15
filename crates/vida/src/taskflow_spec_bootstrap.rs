@@ -337,6 +337,7 @@ fn docflow_output_is_ok(output: &str) -> bool {
 }
 fn ensure_product_spec_index(project_root: &Path) -> Result<bool, String> {
     let index_path = project_root.join(crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX);
+    reject_product_spec_index_symlink(&index_path)?;
     if !index_path.is_file() {
         if let Some(parent) = index_path.parent() {
             fs::create_dir_all(parent)
@@ -358,6 +359,7 @@ fn ensure_product_spec_index_entry(
     feature_slug: &str,
 ) -> Result<bool, String> {
     let index_path = project_root.join(crate::DEFAULT_PROJECT_PRODUCT_SPEC_INDEX);
+    reject_product_spec_index_symlink(&index_path)?;
     let mut content = fs::read_to_string(&index_path)
         .map_err(|error| format!("Failed to read {}: {error}", index_path.display()))?;
     if content.contains(design_doc_path) {
@@ -376,6 +378,19 @@ fn ensure_product_spec_index_entry(
     fs::write(&index_path, content)
         .map_err(|error| format!("Failed to write {}: {error}", index_path.display()))?;
     Ok(true)
+}
+
+fn reject_product_spec_index_symlink(index_path: &Path) -> Result<(), String> {
+    let Ok(metadata) = fs::symlink_metadata(index_path) else {
+        return Ok(());
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Refusing to use product spec index symlink {}",
+            index_path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn ensure_project_docs_sidecar_pointers(project_root: &Path) -> Result<bool, String> {
