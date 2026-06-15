@@ -3279,11 +3279,10 @@ fn dispatch_packet_json_and_path_from_current_project(
 ) -> Option<(serde_json::Value, std::path::PathBuf)> {
     let project_root = crate::resolve_runtime_project_root().ok()?;
     crate::status_surface::dispatch_packet_json_and_path_from_project_path(&project_root, path)
-        .or_else(|| dispatch_packet_json_and_path_from_state_dir_absolute_path(&project_root, path))
+        .or_else(|| dispatch_packet_json_and_path_from_state_dir_absolute_path(path))
 }
 
 fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
-    project_root: &std::path::Path,
     path: &str,
 ) -> Option<(serde_json::Value, std::path::PathBuf)> {
     const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
@@ -3316,17 +3315,21 @@ fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
     let Ok(candidate) = candidate.canonicalize() else {
         return None;
     };
-    let dispatch_packets_root = project_root
-        .canonicalize()
-        .ok()?
-        .join(".vida")
-        .join("data")
-        .join("state")
-        .join("runtime-consumption")
-        .join("dispatch-packets")
+    let state_root = crate::taskflow_task_bridge::proxy_state_dir()
         .canonicalize()
         .ok()?;
-    if !candidate.starts_with(dispatch_packets_root) {
+    let trusted_packet_roots = [
+        state_root
+            .join("runtime-consumption")
+            .join("dispatch-packets"),
+        state_root
+            .join("runtime-consumption")
+            .join("downstream-dispatch-packets"),
+    ];
+    if !trusted_packet_roots
+        .iter()
+        .any(|root| candidate.starts_with(root))
+    {
         return None;
     }
     let Ok(file) = std::fs::File::open(&candidate) else {
@@ -20185,6 +20188,33 @@ agent_system:
         .expect_err("out-of-project packet should be rejected before decode");
         assert!(error.contains("Failed to read persisted dispatch packet"));
 
+        let out_of_state_packet_path = std::env::temp_dir()
+            .join(format!(
+                "vida-out-of-state-packet-root-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or(0)
+            ))
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("packet.json");
+        fs::create_dir_all(
+            out_of_state_packet_path
+                .parent()
+                .expect("out-of-state packet parent should exist"),
+        )
+        .expect("create out-of-state dispatch packet dir");
+        fs::write(&out_of_state_packet_path, "{}").expect("write out-of-state packet");
+        let error = read_dispatch_packet(
+            out_of_state_packet_path
+                .to_str()
+                .expect("out-of-state packet path should be utf-8"),
+        )
+        .expect_err("out-of-state packet should be rejected before decode");
+        assert!(error.contains("Failed to read persisted dispatch packet"));
+
         let dot_segment_path = packet_root.join("nested").join("..").join("packet.json");
         fs::write(packet_root.join("packet.json"), "{}").expect("write dot-segment packet");
         let error = read_dispatch_packet(
@@ -20217,6 +20247,15 @@ agent_system:
         }
 
         let _ = fs::remove_file(out_of_project_path);
+        if let Some(root) = out_of_state_packet_path
+            .ancestors()
+            .find(|path| {
+                path.file_name().and_then(|name| name.to_str()) == Some("runtime-consumption")
+            })
+            .and_then(|path| path.parent())
+        {
+            let _ = fs::remove_dir_all(root);
+        }
         let _ = fs::remove_dir_all(packet_root);
     }
 
