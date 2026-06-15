@@ -106,12 +106,21 @@ pub fn default_host_bridge_required_result_fields() -> Vec<String> {
 
 #[must_use]
 pub fn host_bridge_required_result_fields(request: &Value) -> Vec<String> {
-    let fields = string_array(request, "required_result_fields");
-    if fields.is_empty() {
-        default_host_bridge_required_result_fields()
-    } else {
-        fields
+    canonical_host_bridge_required_result_fields(string_array(request, "required_result_fields"))
+}
+
+#[must_use]
+pub fn canonical_host_bridge_required_result_fields(
+    request_fields: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    let mut fields = default_host_bridge_required_result_fields();
+    for field in request_fields {
+        let field = field.trim();
+        if !field.is_empty() && !fields.iter().any(|required| required == field) {
+            fields.push(field.to_string());
+        }
     }
+    fields
 }
 
 pub fn host_bridge_request_string<'a>(request: &'a Value, field: &str) -> Option<&'a str> {
@@ -435,5 +444,20 @@ mod tests {
             loaded.required_result_fields,
             default_host_bridge_required_result_fields()
         );
+    }
+
+    #[test]
+    fn request_required_result_fields_cannot_downgrade_canonical_contract() {
+        let request = serde_json::json!({
+            "required_result_fields": ["allowed_next_node", "custom_evidence"]
+        });
+
+        let fields = host_bridge_required_result_fields(&request);
+
+        assert_eq!(
+            &fields[..HOST_BRIDGE_REQUIRED_RESULT_FIELDS.len()],
+            default_host_bridge_required_result_fields().as_slice()
+        );
+        assert!(fields.iter().any(|field| field == "custom_evidence"));
     }
 }

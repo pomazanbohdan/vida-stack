@@ -2483,6 +2483,7 @@ fn validate_existing_host_bridge_request_matches_expected(
         "request_path",
         "result_path",
         "receipt_path",
+        "required_result_fields",
     ] {
         if !host_bridge_request_value_matches(existing, expected, field) {
             return Err(format!(
