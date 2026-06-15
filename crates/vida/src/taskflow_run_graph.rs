@@ -201,7 +201,7 @@ fn completed_status_signal(value: &str) -> bool {
 }
 
 pub(crate) fn terminal_run_graph_status_resolved(status: &RunGraphStatus) -> bool {
-    completed_status_signal(&status.status) && completed_status_signal(&status.lifecycle_stage)
+    crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(status)
 }
 
 pub(crate) fn missing_task_run_graph_requires_stale_cleanup(
@@ -11294,6 +11294,15 @@ mod tests {
             default_run_graph_status("run-terminal-missing", "implementation", "closure");
         terminal.status = "completed".to_string();
         terminal.lifecycle_stage = "closure_complete".to_string();
+        terminal.resume_target = "none".to_string();
+        terminal.next_node = None;
+        let mut completed_like =
+            default_run_graph_status("run-completed-like-missing", "implementation", "coach");
+        completed_like.status = "completed".to_string();
+        completed_like.lifecycle_stage = "implementation_complete".to_string();
+        completed_like.next_node = Some("verification".to_string());
+        completed_like.resume_target = "dispatch.implementation_lane".to_string();
+        completed_like.recovery_ready = true;
         let mut active = default_run_graph_status("run-active-missing", "implementation", "coach");
         active.status = "blocked".to_string();
         active.lifecycle_stage = "coach_blocked".to_string();
@@ -11304,6 +11313,10 @@ mod tests {
         ));
         assert!(missing_task_run_graph_requires_stale_cleanup(
             Some(&active),
+            true
+        ));
+        assert!(missing_task_run_graph_requires_stale_cleanup(
+            Some(&completed_like),
             true
         ));
         assert!(!missing_task_run_graph_requires_stale_cleanup(
