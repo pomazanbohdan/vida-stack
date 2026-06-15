@@ -72,6 +72,20 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             }
         }
     } else if let Ok(request) = typed_request.as_ref() {
+        for field in [
+            "backend_id",
+            "carrier_id",
+            "execution_boundary",
+            "dispatch_transport",
+            "receipt_mode",
+            "adapter_kind",
+            "adapter_capability_id",
+            "invocation_mode",
+        ] {
+            if host_bridge_request_string(&request.raw, field).is_none() {
+                missing.push(field.to_string());
+            }
+        }
         for (field, missing_path) in [
             ("packet_path", request.packet_path.as_os_str().is_empty()),
             ("result_path", request.result_path.as_os_str().is_empty()),
@@ -320,6 +334,7 @@ mod tests {
             "carrier_id": "junior",
             "execution_boundary": "parent_host_session",
             "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
             "adapter_kind": "codex_host_tools",
             "adapter_capability_id": "codex.multi_agent_v1",
             "invocation_mode": "parent_host_tool_api",
@@ -401,6 +416,45 @@ mod tests {
                 "repair the host bridge request or selected host adapter capability before invoking parent host tools"
             ])
         );
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_blocks_defaulted_host_tool_adapter_fields() {
+        let mut request = request();
+        for field in [
+            "backend_id",
+            "carrier_id",
+            "execution_boundary",
+            "dispatch_transport",
+            "receipt_mode",
+            "adapter_kind",
+            "adapter_capability_id",
+            "invocation_mode",
+        ] {
+            request.as_object_mut().unwrap().remove(field);
+        }
+
+        let payload = payload_for(&request);
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            json!(["host_bridge_request_missing_fields"])
+        );
+        assert_eq!(
+            payload["host_bridge"]["missing_fields"],
+            json!([
+                "backend_id",
+                "carrier_id",
+                "execution_boundary",
+                "dispatch_transport",
+                "receipt_mode",
+                "adapter_kind",
+                "adapter_capability_id",
+                "invocation_mode"
+            ])
+        );
+        assert_eq!(payload["host_bridge"]["host_tool_calls"], json!([]));
     }
 
     #[test]
