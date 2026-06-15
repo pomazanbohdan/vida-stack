@@ -37,6 +37,15 @@ pub struct HostBridgeCompletionVerdict {
     pub completion_ready: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostBridgeResultVerdictFields {
+    pub decision: String,
+    pub verdict: String,
+    pub blocker_codes: Vec<String>,
+    pub rework_target: Option<String>,
+    pub allowed_next_node: String,
+}
+
 pub fn materialize_host_bridge_completion_evidence(
     input: &HostBridgeCompletionInput,
 ) -> HostBridgeCompletionEvidence {
@@ -298,6 +307,129 @@ pub fn host_bridge_completion_verdict(blocker_codes: &[String]) -> HostBridgeCom
 }
 
 #[must_use]
+pub fn host_bridge_result_verdict_fields(
+    blocker_codes: &[String],
+    rework_target: Option<&str>,
+) -> HostBridgeResultVerdictFields {
+    if blocker_codes.is_empty() {
+        HostBridgeResultVerdictFields {
+            decision: "approve".to_string(),
+            verdict: Release1ContractStatus::Pass.as_str().to_string(),
+            blocker_codes: Vec::new(),
+            rework_target: None,
+            allowed_next_node: "next".to_string(),
+        }
+    } else {
+        HostBridgeResultVerdictFields {
+            decision: "rework_required".to_string(),
+            verdict: "rework_required".to_string(),
+            blocker_codes: blocker_codes.to_vec(),
+            rework_target: Some(
+                rework_target
+                    .map(str::trim)
+                    .filter(|target| !target.is_empty())
+                    .unwrap_or("developer")
+                    .to_string(),
+            ),
+            allowed_next_node: "developer_rework".to_string(),
+        }
+    }
+}
+
+#[must_use]
+pub fn host_bridge_result_verdict_contract_blockers(
+    result: &Value,
+    required_result_fields: &[String],
+) -> Vec<String> {
+    let required_fields = if required_result_fields.is_empty() {
+        crate::request::default_host_bridge_required_result_fields()
+    } else {
+        required_result_fields.to_vec()
+    };
+    let mut blockers = Vec::new();
+    for field in required_fields {
+        if !result.get(field.as_str()).is_some_and(|value| {
+            if field == "blocker_codes" {
+                value.as_array().is_some()
+            } else if field == "rework_target" {
+                value.is_null()
+                    || value
+                        .as_str()
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty())
+            } else {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty())
+            }
+        }) {
+            push_unique_blocker(&mut blockers, "host_bridge_result_missing_verdict_field");
+        }
+    }
+
+    let decision = result
+        .get("decision")
+        .and_then(Value::as_str)
+        .map(str::trim);
+    let verdict = result.get("verdict").and_then(Value::as_str).map(str::trim);
+    let blocker_codes = result.get("blocker_codes").and_then(Value::as_array);
+    if blocker_codes.is_some_and(|codes| {
+        codes
+            .iter()
+            .any(|code| code.as_str().map(str::trim).is_none_or(str::is_empty))
+    }) {
+        push_unique_blocker(&mut blockers, "host_bridge_result_invalid_blocker_codes");
+    }
+
+    let pass_result = result
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status == Release1ContractStatus::Pass.as_str())
+        && result
+            .get("execution_state")
+            .and_then(Value::as_str)
+            .is_some_and(|state| state == "executed");
+    if pass_result {
+        let decision_mismatch = decision.is_some() && decision != Some("approve");
+        let verdict_mismatch =
+            verdict.is_some() && verdict != Some(Release1ContractStatus::Pass.as_str());
+        if decision_mismatch || verdict_mismatch {
+            push_unique_blocker(
+                &mut blockers,
+                "host_bridge_result_decision_verdict_mismatch",
+            );
+        }
+        if blocker_codes.is_some_and(|codes| !codes.is_empty()) {
+            push_unique_blocker(&mut blockers, "host_bridge_result_blocker_codes_mismatch");
+        }
+    }
+
+    let rework_verdict = matches!(decision, Some("rework_required") | Some("blocked"))
+        || matches!(verdict, Some("rework_required") | Some("blocked"));
+    if rework_verdict {
+        if blocker_codes.is_none_or(|codes| codes.is_empty()) {
+            push_unique_blocker(&mut blockers, "host_bridge_result_blocker_codes_missing");
+        }
+        if result
+            .get("rework_target")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+        {
+            push_unique_blocker(&mut blockers, "host_bridge_result_rework_target_missing");
+        }
+    }
+    blockers
+}
+
+fn push_unique_blocker(blockers: &mut Vec<String>, blocker: &str) {
+    if !blockers.iter().any(|value| value == blocker) {
+        blockers.push(blocker.to_string());
+    }
+}
+
+#[must_use]
 pub fn host_bridge_request_status_after_completion(blocker_codes: &[String]) -> String {
     if blocker_codes.is_empty() {
         Release1ContractStatus::Pass.as_str().to_string()
@@ -453,6 +585,64 @@ mod tests {
                 "host_agent_execution_failed".to_string()
             ]),
             "blocked"
+        );
+    }
+
+    #[test]
+    fn result_verdict_contract_rejects_missing_quality_gate_fields() {
+        let result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed"
+        });
+
+        assert_eq!(
+            host_bridge_result_verdict_contract_blockers(
+                &result,
+                &crate::request::default_host_bridge_required_result_fields(),
+            ),
+            vec!["host_bridge_result_missing_verdict_field".to_string()]
+        );
+    }
+
+    #[test]
+    fn result_verdict_contract_accepts_pass_and_rework_shapes() {
+        let pass_fields = host_bridge_result_verdict_fields(&[], None);
+        let pass_result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": pass_fields.decision,
+            "verdict": pass_fields.verdict,
+            "blocker_codes": pass_fields.blocker_codes,
+            "rework_target": pass_fields.rework_target,
+            "allowed_next_node": pass_fields.allowed_next_node
+        });
+        assert_eq!(
+            host_bridge_result_verdict_contract_blockers(
+                &pass_result,
+                &crate::request::default_host_bridge_required_result_fields(),
+            ),
+            Vec::<String>::new()
+        );
+
+        let rework_fields = host_bridge_result_verdict_fields(
+            &["coach_rework_required".to_string()],
+            Some("developer"),
+        );
+        let rework_result = serde_json::json!({
+            "status": "blocked",
+            "execution_state": "blocked",
+            "decision": rework_fields.decision,
+            "verdict": rework_fields.verdict,
+            "blocker_codes": rework_fields.blocker_codes,
+            "rework_target": rework_fields.rework_target,
+            "allowed_next_node": rework_fields.allowed_next_node
+        });
+        assert_eq!(
+            host_bridge_result_verdict_contract_blockers(
+                &rework_result,
+                &crate::request::default_host_bridge_required_result_fields(),
+            ),
+            Vec::<String>::new()
         );
     }
 

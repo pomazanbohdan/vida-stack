@@ -14,7 +14,7 @@ use taskflow_host_bridge::{
     host_bridge_completion_requires_implementation_artifacts,
     host_bridge_completion_retryable_blocker, host_bridge_completion_verdict,
     host_bridge_request_artifacts_are_bare_completion_candidates,
-    host_bridge_request_status_after_completion,
+    host_bridge_request_status_after_completion, host_bridge_result_verdict_fields,
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
@@ -3515,17 +3515,22 @@ fn materialize_host_bridge_completion_evidence(
     blocker_codes.dedup();
     let blocker_code = blocker_codes.first().cloned();
     let verdict = host_bridge_completion_verdict(&blocker_codes);
+    let result_verdict = host_bridge_result_verdict_fields(&blocker_codes, Some("developer"));
     let result = serde_json::json!({
         "artifact_kind": "host_tool_bridge_result",
         "schema_version": 1,
         "status": verdict.status.clone(),
         "execution_state": verdict.execution_state.clone(),
+        "decision": result_verdict.decision,
+        "verdict": result_verdict.verdict,
         "request_id": request_id,
         "run_id": run_id,
         "dispatch_target": dispatch_target,
         "completion_receipt_id": receipt_id,
         "blocker_code": blocker_code.clone(),
         "blocker_codes": blocker_codes.clone(),
+        "rework_target": result_verdict.rework_target,
+        "allowed_next_node": result_verdict.allowed_next_node,
         "host_agent_id": host_agent_id,
         "summary": summary,
         "implementation_artifacts": implementation_artifacts.artifacts.clone(),
@@ -8793,11 +8798,15 @@ mod tests {
                 "schema_version": 1,
                 "status": "blocked",
                 "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
                 "request_id": "run-host-bridge-stale-result",
                 "run_id": run_id,
                 "dispatch_target": "implementer",
                 "blocker_code": "implementation_artifacts_missing",
-                "blocker_codes": ["implementation_artifacts_missing"]
+                "blocker_codes": ["implementation_artifacts_missing"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework"
             })
             .to_string(),
         )
@@ -8809,11 +8818,15 @@ mod tests {
                 "schema_version": 1,
                 "status": "blocked",
                 "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
                 "request_id": "run-host-bridge-stale-result",
                 "run_id": run_id,
                 "dispatch_target": "implementer",
                 "blocker_code": "implementation_artifacts_missing",
-                "blocker_codes": ["implementation_artifacts_missing"]
+                "blocker_codes": ["implementation_artifacts_missing"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework"
             })
             .to_string(),
         )

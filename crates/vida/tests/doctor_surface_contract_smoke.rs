@@ -2294,8 +2294,12 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
             "request_id": "host-bridge-public-retry",
             "run_id": &fixture.run_id,
             "dispatch_target": "implementer",
+            "decision": "rework_required",
+            "verdict": "rework_required",
             "blocker_code": "implementation_artifacts_missing",
-            "blocker_codes": ["implementation_artifacts_missing"]
+            "blocker_codes": ["implementation_artifacts_missing"],
+            "rework_target": "developer",
+            "allowed_next_node": "developer_rework"
         })
         .to_string(),
     )

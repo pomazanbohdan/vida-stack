@@ -21,7 +21,7 @@ pub use artifact_scope::{
 };
 pub use completion::{
     HostBridgeCompletionEvidence, HostBridgeCompletionInput, HostBridgeCompletionVerdict,
-    host_bridge_artifact_has_retryable_completion_blocker,
+    HostBridgeResultVerdictFields, host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completion_authorized_request_artifacts,
@@ -32,6 +32,7 @@ pub use completion::{
     host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_status_after_completion,
     host_bridge_request_status_allows_parent_completion,
+    host_bridge_result_verdict_contract_blockers, host_bridge_result_verdict_fields,
     materialize_host_bridge_completion_evidence, normalize_host_bridge_provenance_for_completion,
 };
 pub use errors::HostBridgeError;
@@ -43,9 +44,11 @@ pub use receipt_binding::{
     DispatchReceiptBindingDecision, DispatchReceiptBindingInput, validate_dispatch_receipt_binding,
 };
 pub use request::{
-    HostBridgeRequest, HostBridgeRequestPath, effective_host_bridge_request,
+    HOST_BRIDGE_REQUIRED_RESULT_FIELDS, HostBridgeRequest, HostBridgeRequestPath,
+    default_host_bridge_required_result_fields, effective_host_bridge_request,
     host_bridge_path_array, host_bridge_request_owned_paths, host_bridge_request_string,
-    legacy_internal_subagents_host_bridge_request, read_host_bridge_request,
+    host_bridge_required_result_fields, legacy_internal_subagents_host_bridge_request,
+    read_host_bridge_request,
 };
 
 #[cfg(test)]
@@ -77,6 +80,7 @@ pub(crate) mod tests {
             request_path: PathBuf::from("host-tool-bridge/requests/request.json"),
             result_path: PathBuf::from("host-tool-bridge/results/result.json"),
             receipt_path: PathBuf::from("host-tool-bridge/receipts/receipt.json"),
+            required_result_fields: crate::request::default_host_bridge_required_result_fields(),
             owned_paths: vec![PathBuf::from("crates/taskflow-host-bridge")],
             raw: json!({}),
         }

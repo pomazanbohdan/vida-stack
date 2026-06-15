@@ -6935,6 +6935,14 @@ fn external_attempt_scope_guard() {
         &dispatch_result_path,
         serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
+            "schema_version": 1,
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "approve",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "rework_target": serde_json::Value::Null,
+            "allowed_next_node": "next",
             "host_tool_bridge_request": {
                 "request_path": request_path,
                 "result_path": result_path,

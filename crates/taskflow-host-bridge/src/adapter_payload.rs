@@ -12,8 +12,8 @@ use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 
 use crate::completion::host_bridge_request_status_allows_parent_completion;
 use crate::request::{
-    HostBridgeRequest, effective_host_bridge_request, host_bridge_request_string,
-    legacy_internal_subagents_host_bridge_request,
+    HostBridgeRequest, default_host_bridge_required_result_fields, effective_host_bridge_request,
+    host_bridge_request_string, legacy_internal_subagents_host_bridge_request,
 };
 
 pub struct HostBridgeAdapterPayloadInput<'a> {
@@ -164,6 +164,11 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         .ok()
         .map(|request| request.adapter_contract_source.as_str())
         .unwrap_or("request");
+    let required_result_fields = typed_request
+        .as_ref()
+        .ok()
+        .map(|request| request.required_result_fields.clone())
+        .unwrap_or_else(default_host_bridge_required_result_fields);
     let mut blocker_codes = input.provenance_blockers;
     if !missing.is_empty() {
         blocker_codes.push(
@@ -302,6 +307,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             "adapter_capability_id": adapter_capability_id,
             "invocation_mode": invocation_mode,
             "adapter_contract_source": adapter_contract_source,
+            "required_result_fields": required_result_fields.clone(),
             "missing_fields": missing,
             "result_path": result_path,
             "receipt_path": receipt_path,
@@ -314,6 +320,11 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             "adapter_capacity": adapter_capacity,
             "blocked_result_contract": {
                 "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "required_result_fields": required_result_fields,
+                "rework_target_required_when_blocked": true,
+                "allowed_next_node": "developer_rework",
                 "allowed_blocker_codes": [
                     taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
                     taskflow_contracts::BlockerCode::HostToolCapabilityMissing.as_str(),
@@ -399,6 +410,20 @@ mod tests {
         assert_eq!(
             payload["host_bridge"]["adapter_capacity"]["status"],
             "ready_to_attempt"
+        );
+        assert_eq!(
+            payload["host_bridge"]["required_result_fields"],
+            json!([
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "rework_target",
+                "allowed_next_node"
+            ])
+        );
+        assert_eq!(
+            payload["host_bridge"]["blocked_result_contract"]["decision"],
+            "rework_required"
         );
     }
 

@@ -7,6 +7,13 @@ use serde_json::Value;
 use crate::errors::HostBridgeError;
 
 const MAX_HOST_BRIDGE_REQUEST_BYTES: u64 = 1024 * 1024;
+pub const HOST_BRIDGE_REQUIRED_RESULT_FIELDS: &[&str] = &[
+    "decision",
+    "verdict",
+    "blocker_codes",
+    "rework_target",
+    "allowed_next_node",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostBridgeRequestPath {
@@ -45,6 +52,7 @@ pub struct HostBridgeRequest {
     pub request_path: PathBuf,
     pub result_path: PathBuf,
     pub receipt_path: PathBuf,
+    pub required_result_fields: Vec<String>,
     pub owned_paths: Vec<PathBuf>,
     pub raw: Value,
 }
@@ -81,9 +89,28 @@ impl HostBridgeRequest {
             request_path: optional_path(&raw, "request_path").unwrap_or_default(),
             result_path: optional_path(&raw, "result_path").unwrap_or_default(),
             receipt_path: optional_path(&raw, "receipt_path").unwrap_or_default(),
+            required_result_fields: host_bridge_required_result_fields(&raw),
             owned_paths: path_array(&raw, "owned_paths"),
             raw,
         })
+    }
+}
+
+#[must_use]
+pub fn default_host_bridge_required_result_fields() -> Vec<String> {
+    HOST_BRIDGE_REQUIRED_RESULT_FIELDS
+        .iter()
+        .map(|field| (*field).to_string())
+        .collect()
+}
+
+#[must_use]
+pub fn host_bridge_required_result_fields(request: &Value) -> Vec<String> {
+    let fields = string_array(request, "required_result_fields");
+    if fields.is_empty() {
+        default_host_bridge_required_result_fields()
+    } else {
+        fields
     }
 }
 
@@ -255,6 +282,19 @@ fn path_array(value: &Value, field: &'static str) -> Vec<PathBuf> {
         .collect()
 }
 
+fn string_array(value: &Value, field: &'static str) -> Vec<String> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn enrich_request_paths(raw: &mut Value, request_path: &std::path::Path) {
     let Some(object) = raw.as_object_mut() else {
         return;
@@ -372,6 +412,13 @@ mod tests {
                 "request_path": "host-tool-bridge/requests/request.json",
                 "result_path": "host-tool-bridge/results/result.json",
                 "receipt_path": "host-tool-bridge/receipts/receipt.json",
+                "required_result_fields": [
+                    "decision",
+                    "verdict",
+                    "blocker_codes",
+                    "rework_target",
+                    "allowed_next_node"
+                ],
                 "owned_paths": ["crates/taskflow-host-bridge/src/lib.rs"]
             })
             .to_string(),
@@ -384,5 +431,9 @@ mod tests {
         assert_eq!(loaded.request_id, "req-1");
         assert_eq!(loaded.owned_paths.len(), 1);
         assert_eq!(loaded.invocation_mode, "parent_host_tool_api");
+        assert_eq!(
+            loaded.required_result_fields,
+            default_host_bridge_required_result_fields()
+        );
     }
 }

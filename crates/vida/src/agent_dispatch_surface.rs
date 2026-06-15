@@ -3779,6 +3779,7 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
     }
     match read_host_bridge_request(&command.request, command.state_dir.as_deref()) {
         Ok(request) => {
+            let operator_request_path = command.request.clone();
             if let Ok(canonical_request_path) =
                 canonical_host_bridge_request_path(&command.request, command.state_dir.as_deref())
             {
@@ -3797,7 +3798,7 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                 });
             }
             let payload = host_bridge_adapter_payload(
-                &command.request,
+                &operator_request_path,
                 &request,
                 provenance_blockers,
                 command.state_dir.as_deref(),
@@ -4678,8 +4679,11 @@ mod tests {
             None,
         );
 
-        assert_eq!(payload["status"], "pass");
-        assert_eq!(payload["blocker_codes"].as_array().unwrap().len(), 0);
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["host_bridge_request_missing_fields"])
+        );
         assert_eq!(
             payload["host_bridge"]["adapter_capability_id"],
             "codex.multi_agent_v1"
@@ -4688,11 +4692,14 @@ mod tests {
             payload["host_bridge"]["adapter_contract_source"],
             "legacy_internal_subagents_default"
         );
-        let calls = payload["host_bridge"]["host_tool_calls"]
-            .as_array()
-            .expect("host tool calls should render");
-        assert_eq!(calls[0]["tool"], "multi_agent_v1.spawn_agent");
-        assert_eq!(calls[0]["adapter_capability_id"], "codex.multi_agent_v1");
+        assert_eq!(
+            payload["host_bridge"]["missing_fields"],
+            serde_json::json!(["adapter_kind", "adapter_capability_id", "invocation_mode"])
+        );
+        assert_eq!(
+            payload["host_bridge"]["host_tool_calls"],
+            serde_json::json!([])
+        );
     }
 
     #[test]
@@ -5339,7 +5346,7 @@ mod tests {
                 "run_id": "run-retry",
                 "dispatch_target": "implementer",
                 "blocker_code": "implementation_artifacts_missing",
-                "blocker_codes": ["implementation_artifacts_missing"]
+                "blocker_codes": ["implementation_artifacts_missing"],
             }))
             .expect("receipt should serialize"),
         )
@@ -5352,7 +5359,11 @@ mod tests {
                 "request_id": "req-retry",
                 "run_id": "run-retry",
                 "dispatch_target": "implementer",
-                "blocker_codes": ["implementation_artifacts_missing"]
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_codes": ["implementation_artifacts_missing"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework"
             }))
             .expect("result should serialize"),
         )
@@ -5429,7 +5440,11 @@ mod tests {
             serde_json::to_vec_pretty(&serde_json::json!({
                 "artifact_kind": "host_tool_bridge_result",
                 "status": "blocked",
-                "blocker_codes": ["host_agent_execution_failed"]
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_codes": ["host_agent_execution_failed"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework"
             }))
             .expect("result should serialize"),
         )

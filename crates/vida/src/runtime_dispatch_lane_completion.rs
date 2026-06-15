@@ -167,6 +167,10 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary(
         .replace(':', "-");
     let result_path = result_dir.join(format!("{safe_run_id}-{ts}.json"));
     let blocker_code = runtime_lane_completion_summary_blocker_code(completed_target, summary);
+    let blocker_codes = blocker_code.iter().cloned().collect::<Vec<_>>();
+    let rework_target = blocker_code.as_ref().map(|_| "developer");
+    let verdict_fields =
+        taskflow_host_bridge::host_bridge_result_verdict_fields(&blocker_codes, rework_target);
     let execution_state = if blocker_code.is_some() {
         "blocked"
     } else {
@@ -181,6 +185,13 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary(
         "artifact_kind": "runtime_lane_completion_result",
         "status": status,
         "execution_state": execution_state,
+        "decision": verdict_fields.decision,
+        "verdict": verdict_fields.verdict,
+        "blocker_codes": verdict_fields.blocker_codes,
+        "rework_target": verdict_fields.rework_target,
+        "allowed_next_node": verdict_fields.allowed_next_node,
+        "completion_verdict": verdict_fields.verdict,
+        "closure_ready": blocker_code.is_none(),
         "run_id": run_id,
         "completed_target": completed_target,
         "completion_receipt_id": receipt_id,
@@ -194,9 +205,7 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary(
     }
     if let Some(blocker_code) = blocker_code {
         body["blocker_code"] = serde_json::json!(blocker_code);
-        body["blockers"] = serde_json::json!([body["blocker_code"].clone()]);
-        body["closure_ready"] = serde_json::json!(false);
-        body["completion_verdict"] = serde_json::json!("rework_required");
+        body["blockers"] = body["blocker_codes"].clone();
     }
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode lane completion result: {error}"))?;

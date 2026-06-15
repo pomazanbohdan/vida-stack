@@ -13,9 +13,11 @@ use crate::runtime_assignment_policy::DispatchContractLane;
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 use taskflow_host_bridge::{
+    default_host_bridge_required_result_fields,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
-    host_bridge_existing_request_status_is_admissible, validate_dispatch_receipt_binding,
+    host_bridge_existing_request_status_is_admissible,
+    host_bridge_result_verdict_contract_blockers, validate_dispatch_receipt_binding,
     DispatchReceiptBindingInput, HostBridgeRequest,
 };
 
@@ -2641,6 +2643,7 @@ fn materialize_host_tool_bridge_request(
         "implementation_isolation": implementation_isolation,
         "expected_implementation_artifact_kinds": expected_implementation_artifact_kinds,
         "implementation_artifacts": [],
+        "required_result_fields": default_host_bridge_required_result_fields(),
         "owned_paths": dispatch_packet_string_list(dispatch_packet_path, "owned_paths"),
         "read_only_paths": dispatch_packet_string_list(dispatch_packet_path, "read_only_paths"),
         "proof_target": dispatch_packet_string_field(dispatch_packet_path, "proof_target"),
@@ -2849,23 +2852,24 @@ fn validate_completed_host_bridge_artifacts(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     backend_id: &str,
 ) -> Result<(), String> {
-    if let Ok(typed_request) = HostBridgeRequest::from_value(request.clone()) {
-        let binding_decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
-            request: typed_request,
-            receipt: Some(serde_json::json!({
-                "receipt_backed": true,
-                "dispatch_status": receipt.dispatch_status,
-                "run_id": receipt.run_id,
-                "dispatch_target": receipt.dispatch_target,
-            })),
-            allow_active_packet_target_override: false,
-        });
-        if !binding_decision.accepted {
-            return Err(format!(
-                "Host bridge request receipt binding failed shared validation: {}.",
-                binding_decision.blocker_codes.join(",")
-            ));
-        }
+    let typed_request = HostBridgeRequest::from_value(request.clone()).map_err(|error| {
+        format!("Host bridge request cannot be parsed for completed result validation: {error}.")
+    })?;
+    let binding_decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
+        request: typed_request.clone(),
+        receipt: Some(serde_json::json!({
+            "receipt_backed": true,
+            "dispatch_status": receipt.dispatch_status,
+            "run_id": receipt.run_id,
+            "dispatch_target": receipt.dispatch_target,
+        })),
+        allow_active_packet_target_override: false,
+    });
+    if !binding_decision.accepted {
+        return Err(format!(
+            "Host bridge request receipt binding failed shared validation: {}.",
+            binding_decision.blocker_codes.join(",")
+        ));
     }
     let request_id = host_bridge_required_string(request, "request_id", "request")?;
     let request_path = host_bridge_required_string(request, "request_path", "request")?;
@@ -2954,6 +2958,14 @@ fn validate_completed_host_bridge_artifacts(
         .is_some_and(host_bridge_completed_result_execution_state_is_admissible)
     {
         return Err("Host bridge result execution_state is not executed.".into());
+    }
+    let verdict_blockers =
+        host_bridge_result_verdict_contract_blockers(result, &typed_request.required_result_fields);
+    if !verdict_blockers.is_empty() {
+        return Err(format!(
+            "Host bridge result verdict contract failed: {}.",
+            verdict_blockers.join(",")
+        ));
     }
     if bridge_receipt
         .get("receipt_backed")
@@ -6208,6 +6220,11 @@ agent_system:
                 "schema_version": 1,
                 "status": "pass",
                 "execution_state": "executed",
+                "decision": "approve",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": serde_json::Value::Null,
+                "allowed_next_node": "next",
                 "request_id": request_id,
                 "run_id": receipt.run_id,
                 "dispatch_target": receipt.dispatch_target,
@@ -6288,6 +6305,9 @@ agent_system:
 
         assert_eq!(result["status"], "pass");
         assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["decision"], "approve");
+        assert_eq!(result["verdict"], "pass");
+        assert_eq!(result["blocker_codes"], serde_json::json!([]));
         assert_eq!(result["blocker_code"], serde_json::Value::Null);
         assert_eq!(result["execution_evidence"]["receipt_backed"], true);
         assert_eq!(
@@ -6300,6 +6320,82 @@ agent_system:
         );
 
         let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn host_bridge_rejects_parent_result_missing_structured_verdict_fields() {
+        let receipt = internal_codex_fallback_receipt("packet.json");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "completed",
+            "request_id": "req-1",
+            "run_id": receipt.run_id,
+            "task_id": receipt.run_id,
+            "dispatch_target": receipt.dispatch_target,
+            "packet_path": "packet.json",
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": "request.json",
+            "result_path": "result.json",
+            "receipt_path": "receipt.json",
+            "completion_receipt_id": "completion-1",
+            "required_result_fields": taskflow_host_bridge::default_host_bridge_required_result_fields()
+        });
+        let result = serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "schema_version": 1,
+            "status": "pass",
+            "execution_state": "executed",
+            "request_id": "req-1",
+            "run_id": receipt.run_id,
+            "dispatch_target": receipt.dispatch_target,
+            "completion_receipt_id": "completion-1",
+            "source_dispatch_packet_path": "packet.json",
+            "execution_evidence": {
+                "status": "recorded",
+                "backend_id": "internal_subagents",
+                "receipt_backed": true
+            }
+        });
+        let bridge_receipt = serde_json::json!({
+            "artifact_kind": "host_tool_bridge_receipt",
+            "schema_version": 1,
+            "status": "pass",
+            "receipt_backed": true,
+            "request_id": "req-1",
+            "run_id": receipt.run_id,
+            "dispatch_target": receipt.dispatch_target,
+            "completion_receipt_id": "completion-1",
+            "request_path": "request.json",
+            "result_path": "result.json",
+            "source_dispatch_packet_path": "packet.json"
+        });
+
+        let error = super::validate_completed_host_bridge_artifacts(
+            &request,
+            &result,
+            &bridge_receipt,
+            &PathBuf::from("result.json"),
+            &PathBuf::from("receipt.json"),
+            &receipt,
+            "internal_subagents",
+        )
+        .expect_err("missing structured verdict fields must fail closed");
+
+        assert!(
+            error.contains("Host bridge result verdict contract failed"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("host_bridge_result_missing_verdict_field"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -6592,10 +6688,15 @@ agent_system:
                 "schema_version": 1,
                 "status": "fail",
                 "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
                 "request_id": request_id,
                 "run_id": receipt.run_id,
                 "dispatch_target": receipt.dispatch_target,
                 "completion_receipt_id": "host-bridge-completion-test",
+                "blocker_codes": ["host_agent_execution_failed"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework",
                 "source_dispatch_packet_path": packet_path,
                 "execution_evidence": {
                     "status": "failed",
@@ -6870,19 +6971,37 @@ dispatch:
     fn host_bridge_rejects_receipt_result_path_not_bound_to_request_result() {
         let receipt = internal_codex_fallback_receipt("/tmp/dispatch.json");
         let request = serde_json::json!({
+            "schema_version": 1,
             "request_id": "run-target-dispatch-host-tool-bridge",
+            "run_id": receipt.run_id,
+            "task_id": receipt.run_id,
+            "dispatch_target": receipt.dispatch_target,
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
             "request_path": "/tmp/.vida/data/state/host-bridge/requests/request.json",
             "result_path": "/tmp/.vida/data/state/host-bridge/results/result.json",
             "receipt_path": "/tmp/.vida/data/state/host-bridge/receipts/receipt.json",
             "packet_path": "/tmp/dispatch.json",
             "status": "completed",
-            "completion_receipt_id": "host-bridge-completion-test"
+            "completion_receipt_id": "host-bridge-completion-test",
+            "required_result_fields": taskflow_host_bridge::default_host_bridge_required_result_fields()
         });
         let result = serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "schema_version": 1,
             "status": "pass",
             "execution_state": "executed",
+            "decision": "approve",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "rework_target": serde_json::Value::Null,
+            "allowed_next_node": "next",
             "request_id": "run-target-dispatch-host-tool-bridge",
             "run_id": receipt.run_id,
             "dispatch_target": receipt.dispatch_target,
@@ -8808,6 +8927,16 @@ host_tool_bridge:
         assert_eq!(
             request["expected_implementation_artifact_kinds"],
             serde_json::json!(["patch_proposal", "isolated_worktree_manifest"])
+        );
+        assert_eq!(
+            request["required_result_fields"],
+            serde_json::json!([
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "rework_target",
+                "allowed_next_node"
+            ])
         );
         assert_eq!(request["implementation_artifacts"], serde_json::json!([]));
         assert_eq!(
