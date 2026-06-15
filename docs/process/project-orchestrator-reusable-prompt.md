@@ -39,7 +39,7 @@ Route:
 1. Default route: orchestrator shapes, implementer writes, coach reviews,
    verifier proves, orchestrator synthesizes.
 2. Keep local-only work to shaping, bounded read-only analysis, proof-only
-   checks, explicit exception-path handling, or explicit runtime-defective mode.
+   checks, or explicit exception-path handling backed by active runtime evidence.
 3. A recorded exception path is not enough while the same packet still has an
    open delegated lane or unresolved handoff.
 
@@ -49,7 +49,7 @@ Continue/stop decision table:
 | --- | --- |
 | User gives an explicit ordered sequence | Execute that order as written. |
 | User asks for generic continuation without an explicit unit | Fail closed to ambiguity; do not self-select a plausible ready item. |
-| User/operator says VIDA runtime is defective | Use bounded static analysis, file proof, and scoped commits; record missing runtime evidence as later repair. |
+| User/operator says VIDA runtime is defective | Treat the statement as a diagnostic lead only; verify the runtime failure independently, remain read-only unless an active exception takeover or receipt-backed delegated execution authorizes the same packet, and record missing runtime evidence as later repair. |
 | Delegated lane or handoff is open | Do not substitute local root implementation. |
 | Agent-first or parallel-agent routing was explicitly ordered | Keep that routing sticky through recovery or explicit reroute. |
 | Host subagent APIs are merely configured | Require an explicit user request before launching configured carriers. |

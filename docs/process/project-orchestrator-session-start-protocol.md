@@ -22,8 +22,8 @@ ambiguous, blocked, audited, or changed.
 
 Run this checklist in order:
 
-1. when runtime is usable, confirm project-local runtime path with `vida status --json`,
-2. when runtime is usable, confirm current taskflow state with `vida orchestrator-init --json`,
+1. confirm project-local runtime path with `vida status --json`, or record the exact failure as a runtime-bootstrap blocker,
+2. confirm current taskflow state with `vida orchestrator-init --json`, or record the exact failure as a runtime-bootstrap blocker,
 3. read framework bootstrap carriers:
    - `AGENTS.md`
    - `AGENTS.sidecar.md`
