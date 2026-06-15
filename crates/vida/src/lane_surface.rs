@@ -13,7 +13,7 @@ use taskflow_host_bridge::{
     host_bridge_completion_authorized_request_artifacts, host_bridge_completion_retryable_blocker,
     host_bridge_completion_verdict, host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_requires_implementation_artifacts,
-    host_bridge_request_status_after_completion, host_bridge_result_verdict_fields,
+    host_bridge_request_status_after_completion, host_bridge_result_verdict_fields_for_gate,
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
@@ -3551,7 +3551,8 @@ fn materialize_host_bridge_completion_evidence(
     blocker_codes.dedup();
     let blocker_code = blocker_codes.first().cloned();
     let verdict = host_bridge_completion_verdict(&blocker_codes);
-    let mut result_verdict = host_bridge_result_verdict_fields(&blocker_codes, Some("developer"));
+    let mut result_verdict =
+        host_bridge_result_verdict_fields_for_gate(dispatch_target, &blocker_codes, None);
     if blocker_codes.is_empty() {
         if let Some(allowed_next_node) = persisted_receipt
             .downstream_dispatch_target
@@ -8500,6 +8501,19 @@ mod tests {
         assert_eq!(binding.active_bounded_unit["active_node"], "implementer");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_result_routes_reviewer_rework_to_tester_gate() {
+        let blocker_codes = vec!["review_rework_required".to_string()];
+        let result_verdict =
+            host_bridge_result_verdict_fields_for_gate("reviewer", &blocker_codes, None);
+
+        assert_eq!(result_verdict.decision, "rework_required");
+        assert_eq!(result_verdict.verdict, "rework_required");
+        assert_eq!(result_verdict.blocker_codes, blocker_codes);
+        assert_eq!(result_verdict.rework_target.as_deref(), Some("tester"));
+        assert_eq!(result_verdict.allowed_next_node, "tester");
     }
 
     #[tokio::test]
