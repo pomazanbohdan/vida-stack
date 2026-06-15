@@ -46,6 +46,87 @@ pub struct HostBridgeResultVerdictFields {
     pub allowed_next_node: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostBridgeQualityGateTransition {
+    pub gate: &'static str,
+    pub blocker_code: &'static str,
+    pub rework_target: &'static str,
+    pub blocked_allowed_next_node: &'static str,
+}
+
+const QUALITY_GATE_TRANSITIONS: &[(&[&str], HostBridgeQualityGateTransition)] = &[
+    (
+        &[
+            "coach",
+            "coach_lane",
+            "coach_test_gate",
+            "coach_implementation_gate",
+            "coach_validator",
+        ],
+        HostBridgeQualityGateTransition {
+            gate: "coach",
+            blocker_code: "coach_rework_required",
+            rework_target: "developer",
+            blocked_allowed_next_node: "developer_rework",
+        },
+    ),
+    (
+        &[
+            "tester",
+            "tester_lane",
+            "verification",
+            "verification_lane",
+            "verifier",
+            "verifier_lane",
+        ],
+        HostBridgeQualityGateTransition {
+            gate: "tester",
+            blocker_code: "verification_rework_required",
+            rework_target: "developer",
+            blocked_allowed_next_node: "developer_rework",
+        },
+    ),
+    (
+        &[
+            "reviewer",
+            "reviewer_lane",
+            "review",
+            "review_lane",
+            "duplication_reviewer",
+        ],
+        HostBridgeQualityGateTransition {
+            gate: "reviewer",
+            blocker_code: "review_rework_required",
+            rework_target: "tester",
+            blocked_allowed_next_node: "tester",
+        },
+    ),
+];
+
+#[must_use]
+pub fn host_bridge_quality_gate_transition(
+    completed_target: &str,
+) -> Option<HostBridgeQualityGateTransition> {
+    let normalized = completed_target.trim();
+    QUALITY_GATE_TRANSITIONS
+        .iter()
+        .find(|(aliases, _)| aliases.iter().any(|alias| *alias == normalized))
+        .map(|(_, transition)| *transition)
+}
+
+fn host_bridge_quality_gate_transition_for_blockers(
+    blocker_codes: &[String],
+) -> Option<HostBridgeQualityGateTransition> {
+    QUALITY_GATE_TRANSITIONS
+        .iter()
+        .find(|(_, transition)| {
+            blocker_codes
+                .iter()
+                .any(|blocker| blocker.trim() == transition.blocker_code)
+        })
+        .map(|(_, transition)| *transition)
+}
+
 pub fn materialize_host_bridge_completion_evidence(
     input: &HostBridgeCompletionInput,
 ) -> HostBridgeCompletionEvidence {
@@ -76,6 +157,7 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
         "lane_completion_blocked_by_summary"
             | "verification_rework_required"
             | "coach_rework_required"
+            | "review_rework_required"
             | "closure_evidence_blocked"
             | "host_bridge_request_task_mismatch"
     ) || matches!(
@@ -186,26 +268,35 @@ fn blocker_code_for_completion_context(
     completed_target: &str,
     normalized_summary: &str,
 ) -> &'static str {
-    if normalized_summary.contains("coach decision: blocked")
-        || normalized_summary.contains("coach decision=blocked")
-        || normalized_summary.contains("coach decision: blocker")
-        || normalized_summary.contains("coach decision=blocker")
-        || normalized_summary.contains("coach decision: rework_required")
-        || normalized_summary.contains("coach decision=rework_required")
-    {
-        return "coach_rework_required";
+    for (_, transition) in QUALITY_GATE_TRANSITIONS {
+        if quality_gate_decision_is_blocked(transition.gate, normalized_summary) {
+            return transition.blocker_code;
+        }
     }
     blocker_code_for_completed_target(completed_target)
 }
 
 fn blocker_code_for_completed_target(completed_target: &str) -> &'static str {
+    if let Some(transition) = host_bridge_quality_gate_transition(completed_target) {
+        return transition.blocker_code;
+    }
     match completed_target.trim() {
-        "verification" | "verification_lane" | "verifier" | "verifier_lane" | "tester"
-        | "tester_lane" => "verification_rework_required",
-        "coach" | "coach_lane" | "review" | "review_lane" => "coach_rework_required",
         "closure" | "closure_lane" => "closure_evidence_blocked",
         _ => "lane_completion_blocked_by_summary",
     }
+}
+
+fn quality_gate_decision_is_blocked(gate: &str, normalized_summary: &str) -> bool {
+    [
+        format!("{gate} decision: blocked"),
+        format!("{gate} decision=blocked"),
+        format!("{gate} decision: blocker"),
+        format!("{gate} decision=blocker"),
+        format!("{gate} decision: rework_required"),
+        format!("{gate} decision=rework_required"),
+    ]
+    .iter()
+    .any(|needle| normalized_summary.contains(needle))
 }
 
 fn completion_summary_classifier_text(normalized_summary: &str) -> String {
@@ -311,6 +402,15 @@ pub fn host_bridge_result_verdict_fields(
     blocker_codes: &[String],
     rework_target: Option<&str>,
 ) -> HostBridgeResultVerdictFields {
+    host_bridge_result_verdict_fields_for_gate("", blocker_codes, rework_target)
+}
+
+#[must_use]
+pub fn host_bridge_result_verdict_fields_for_gate(
+    completed_target: &str,
+    blocker_codes: &[String],
+    rework_target: Option<&str>,
+) -> HostBridgeResultVerdictFields {
     if blocker_codes.is_empty() {
         HostBridgeResultVerdictFields {
             decision: "approve".to_string(),
@@ -320,6 +420,8 @@ pub fn host_bridge_result_verdict_fields(
             allowed_next_node: "next".to_string(),
         }
     } else {
+        let transition = host_bridge_quality_gate_transition(completed_target)
+            .or_else(|| host_bridge_quality_gate_transition_for_blockers(blocker_codes));
         HostBridgeResultVerdictFields {
             decision: "rework_required".to_string(),
             verdict: "rework_required".to_string(),
@@ -328,10 +430,14 @@ pub fn host_bridge_result_verdict_fields(
                 rework_target
                     .map(str::trim)
                     .filter(|target| !target.is_empty())
+                    .or_else(|| transition.map(|transition| transition.rework_target))
                     .unwrap_or("developer")
                     .to_string(),
             ),
-            allowed_next_node: "developer_rework".to_string(),
+            allowed_next_node: transition
+                .map(|transition| transition.blocked_allowed_next_node)
+                .unwrap_or("developer_rework")
+                .to_string(),
         }
     }
 }
@@ -647,6 +753,66 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn quality_gate_transition_matrix_routes_pass_and_blocked_decisions() {
+        let cases = [
+            (
+                "coach",
+                "coach decision=blocked; implementation acceptance gap",
+                "coach_rework_required",
+                "developer",
+                "developer_rework",
+            ),
+            (
+                "tester",
+                "tester decision=blocked; focused proof failed",
+                "verification_rework_required",
+                "developer",
+                "developer_rework",
+            ),
+            (
+                "reviewer",
+                "reviewer decision=blocked; proof review needs tester rework",
+                "review_rework_required",
+                "tester",
+                "tester",
+            ),
+        ];
+
+        for (gate, blocked_summary, blocker_code, rework_target, allowed_next_node) in cases {
+            let pass_fields = host_bridge_result_verdict_fields_for_gate(gate, &[], None);
+            assert_eq!(pass_fields.decision, "approve", "{gate}");
+            assert_eq!(pass_fields.verdict, "pass", "{gate}");
+            assert_eq!(pass_fields.blocker_codes, Vec::<String>::new(), "{gate}");
+            assert_eq!(pass_fields.rework_target, None, "{gate}");
+            assert_eq!(pass_fields.allowed_next_node, "next", "{gate}");
+
+            assert_eq!(
+                host_bridge_lane_completion_summary_blocker_code(gate, Some(blocked_summary)),
+                Some(blocker_code.to_string()),
+                "{gate}"
+            );
+            let blocked_fields =
+                host_bridge_result_verdict_fields_for_gate(gate, &[blocker_code.to_string()], None);
+            assert_eq!(blocked_fields.decision, "rework_required", "{gate}");
+            assert_eq!(blocked_fields.verdict, "rework_required", "{gate}");
+            assert_eq!(
+                blocked_fields.blocker_codes,
+                vec![blocker_code.to_string()],
+                "{gate}"
+            );
+            assert_eq!(
+                blocked_fields.rework_target,
+                Some(rework_target.to_string()),
+                "{gate}"
+            );
+            assert_eq!(
+                blocked_fields.allowed_next_node, allowed_next_node,
+                "{gate}"
+            );
+        }
     }
 
     #[test]

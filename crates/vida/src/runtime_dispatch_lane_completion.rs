@@ -145,6 +145,89 @@ mod tests {
 
         let _ = fs::remove_dir_all(&state_root);
     }
+
+    #[test]
+    fn completion_result_uses_quality_gate_transition_matrix() {
+        let cases = [
+            ("coach", None, None, None, "next"),
+            (
+                "coach",
+                Some("coach decision=blocked; implementation acceptance gap"),
+                Some("coach_rework_required"),
+                Some("developer"),
+                "developer_rework",
+            ),
+            ("tester", None, None, None, "next"),
+            (
+                "tester",
+                Some("tester decision=blocked; focused proof failed"),
+                Some("verification_rework_required"),
+                Some("developer"),
+                "developer_rework",
+            ),
+            ("reviewer", None, None, None, "next"),
+            (
+                "reviewer",
+                Some("reviewer decision=blocked; proof review needs tester rework"),
+                Some("review_rework_required"),
+                Some("tester"),
+                "tester",
+            ),
+        ];
+
+        for (target, summary, blocker_code, rework_target, allowed_next_node) in cases {
+            let state_root = std::env::temp_dir().join(format!(
+                "vida-lane-completion-{}-{target}-{}",
+                std::process::id(),
+                summary.is_some()
+            ));
+            let _ = fs::remove_dir_all(&state_root);
+
+            let result_path = write_runtime_lane_completion_result_with_summary(
+                &state_root,
+                &format!("run-{target}-{}", summary.is_some()),
+                target,
+                "receipt-1",
+                "packet.json",
+                summary,
+            )
+            .expect("completion result should write");
+            let body: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(&result_path).expect("completion result should be readable"),
+            )
+            .expect("completion result should decode");
+
+            if let Some(blocker_code) = blocker_code {
+                assert_eq!(body["status"], "blocked", "{target}");
+                assert_eq!(body["execution_state"], "blocked", "{target}");
+                assert_eq!(body["decision"], "rework_required", "{target}");
+                assert_eq!(body["verdict"], "rework_required", "{target}");
+                assert_eq!(body["completion_verdict"], "rework_required", "{target}");
+                assert_eq!(body["blocker_code"], blocker_code, "{target}");
+                assert_eq!(
+                    body["blocker_codes"],
+                    serde_json::json!([blocker_code]),
+                    "{target}"
+                );
+                assert_eq!(
+                    body["rework_target"],
+                    rework_target.expect("rework target"),
+                    "{target}"
+                );
+            } else {
+                assert_eq!(body["status"], "pass", "{target}");
+                assert_eq!(body["execution_state"], "executed", "{target}");
+                assert_eq!(body["decision"], "approve", "{target}");
+                assert_eq!(body["verdict"], "pass", "{target}");
+                assert_eq!(body["completion_verdict"], "pass", "{target}");
+                assert_eq!(body["blocker_codes"], serde_json::json!([]), "{target}");
+                assert_eq!(body["rework_target"], serde_json::Value::Null, "{target}");
+            }
+            assert_eq!(body["allowed_next_node"], allowed_next_node, "{target}");
+
+            let _ = fs::remove_dir_all(&state_root);
+        }
+    }
 }
 
 pub(crate) fn write_runtime_lane_completion_result_with_summary(
@@ -168,9 +251,8 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary(
     let result_path = result_dir.join(format!("{safe_run_id}-{ts}.json"));
     let blocker_code = runtime_lane_completion_summary_blocker_code(completed_target, summary);
     let blocker_codes = blocker_code.iter().cloned().collect::<Vec<_>>();
-    let rework_target = blocker_code.as_ref().map(|_| "developer");
     let verdict_fields =
-        taskflow_host_bridge::host_bridge_result_verdict_fields(&blocker_codes, rework_target);
+        taskflow_host_bridge::host_bridge_result_verdict_fields(&blocker_codes, None);
     let execution_state = if blocker_code.is_some() {
         "blocked"
     } else {

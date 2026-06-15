@@ -1988,15 +1988,11 @@ fn create_host_bridge_lane_fixture_for_target(
     let result_path = format!("{bridge_dir}/{test_name}-result.json");
     let bridge_receipt_path = format!("{bridge_dir}/{test_name}-receipt.json");
     let activation_result_path = format!("{activation_dir}/{test_name}-activation.json");
-    let task_class = if dispatch_target == "coach" {
-        "coach"
-    } else {
-        "implementation"
-    };
-    let runtime_role = if dispatch_target == "coach" {
-        "coach"
-    } else {
-        "worker"
+    let (task_class, runtime_role, downstream_target) = match dispatch_target {
+        "coach" => ("coach", "coach", "tester"),
+        "tester" => ("verification", "verifier", "reviewer"),
+        "reviewer" => ("review", "verifier", "release_closure"),
+        _ => ("implementation", "worker", "coach"),
     };
 
     std::fs::write(
@@ -2021,7 +2017,7 @@ fn create_host_bridge_lane_fixture_for_target(
                 "stop_rules": ["stop if bridge evidence is missing"],
                 "blocking_question": "none"
             },
-            "downstream_dispatch_target": "coach",
+            "downstream_dispatch_target": downstream_target,
             "downstream_dispatch_active_target": "implementer",
             "downstream_dispatch_ready": false,
             "downstream_dispatch_blockers": ["pending_implementation_evidence"],
@@ -2205,89 +2201,213 @@ fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
 }
 
 #[test]
-fn host_bridge_public_cli_blocks_on_negative_coach_decision_summary() {
-    let fixture = create_host_bridge_lane_fixture_for_target(
-        "host-bridge-coach-blocked-summary",
-        "crates/vida/src/lib.rs",
-        "coach",
-    );
-
-    let output = vida()
-        .args([
-            "lane",
-            "complete",
-            &fixture.run_id,
-            "--receipt-id",
-            "host-bridge-coach-blocked-summary-receipt",
-            "--host-bridge-request",
-            &fixture.request_path,
-            "--host-agent-id",
-            "agent-coach-proof",
-            "--host-bridge-summary",
+fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions() {
+    let cases = [
+        (
+            "coach",
+            "coach decision=approve; implementation accepted",
+            true,
+            None,
+            None,
+            "next",
+        ),
+        (
+            "coach",
             "coach decision=blocked; scheduledAt missing for non-all-day meeting",
-            "--state-dir",
-            &fixture.state_dir,
-            "--json",
-        ])
-        .output()
-        .expect("coach lane complete should run");
-    assert_failure(
-        &output,
-        "lane complete should block on negative coach verdict",
-    );
-    let payload: serde_json::Value =
-        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-            panic!(
-                "lane complete blocked json should parse: {error}; stdout={}; stderr={}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
+            false,
+            Some("coach_rework_required"),
+            Some("developer"),
+            "developer_rework",
+        ),
+        (
+            "tester",
+            "tester decision=approve; focused proof passed",
+            true,
+            None,
+            None,
+            "next",
+        ),
+        (
+            "tester",
+            "tester decision=blocked; focused proof failed",
+            false,
+            Some("verification_rework_required"),
+            Some("developer"),
+            "developer_rework",
+        ),
+        (
+            "reviewer",
+            "reviewer decision=approve; proof review accepted",
+            true,
+            None,
+            None,
+            "next",
+        ),
+        (
+            "reviewer",
+            "reviewer decision=blocked; proof review needs tester rework",
+            false,
+            Some("review_rework_required"),
+            Some("tester"),
+            "tester",
+        ),
+    ];
+
+    for (target, summary, should_pass, blocker_code, rework_target, allowed_next_node) in cases {
+        let fixture = create_host_bridge_lane_fixture_for_target(
+            &format!(
+                "host-bridge-{target}-{}-summary",
+                if should_pass { "pass" } else { "blocked" }
+            ),
+            "crates/vida/src/lib.rs",
+            target,
+        );
+        let receipt_id = format!(
+            "host-bridge-{target}-{}-summary-receipt",
+            if should_pass { "pass" } else { "blocked" }
+        );
+        let output = vida()
+            .args([
+                "lane",
+                "complete",
+                &fixture.run_id,
+                "--receipt-id",
+                &receipt_id,
+                "--host-bridge-request",
+                &fixture.request_path,
+                "--host-agent-id",
+                "agent-quality-gate-proof",
+                "--host-bridge-summary",
+                summary,
+                "--state-dir",
+                &fixture.state_dir,
+                "--json",
+            ])
+            .output()
+            .expect("quality-gate lane complete should run");
+        if should_pass {
+            assert_success(&output, &format!("lane complete should pass for {target}"));
+        } else {
+            assert_failure(&output, &format!("lane complete should block for {target}"));
+        }
+        let payload: serde_json::Value =
+            serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+                panic!(
+                    "lane complete json should parse for {target}: {error}; stdout={}; stderr={}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            });
+        assert_eq!(payload["surface"], "vida lane", "{target}");
+        assert_eq!(
+            payload["status"],
+            if should_pass { "pass" } else { "blocked" },
+            "{target}"
+        );
+
+        let bridge_result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
+        )
+        .expect("bridge result should parse");
+        assert_eq!(
+            bridge_result["status"],
+            if should_pass { "pass" } else { "blocked" },
+            "{target}"
+        );
+        assert_eq!(
+            bridge_result["execution_state"],
+            if should_pass { "executed" } else { "blocked" },
+            "{target}"
+        );
+        assert_eq!(
+            bridge_result["decision"],
+            if should_pass {
+                "approve"
+            } else {
+                "rework_required"
+            },
+            "{target}"
+        );
+        assert_eq!(
+            bridge_result["verdict"],
+            if should_pass {
+                "pass"
+            } else {
+                "rework_required"
+            },
+            "{target}"
+        );
+        assert_eq!(
+            bridge_result["execution_evidence"]["receipt_backed"], true,
+            "receipt-backed execution must not imply pass verdict for {target}: {bridge_result}"
+        );
+        assert_eq!(
+            bridge_result["execution_evidence"]["completion_verdict"],
+            if should_pass {
+                "pass"
+            } else {
+                "rework_required"
+            },
+            "{target}"
+        );
+
+        if should_pass {
+            assert_eq!(
+                bridge_result["blocker_codes"],
+                serde_json::json!([]),
+                "{target}"
+            );
+            assert_eq!(
+                bridge_result["rework_target"],
+                serde_json::Value::Null,
+                "{target}"
+            );
+            assert_eq!(
+                bridge_result["allowed_next_node"], allowed_next_node,
+                "{target}"
+            );
+        } else {
+            let blocker_code = blocker_code.expect("blocked case should name blocker code");
+            let rework_target = rework_target.expect("blocked case should name rework target");
+            assert!(
+                !payload["blocker_codes"]
+                    .as_array()
+                    .expect("blocker codes should be an array")
+                    .is_empty(),
+                "lane payload should expose a blocked envelope for {target}: {payload}"
+            );
+            let completion_result_path = payload["artifact_refs"]
+                ["downstream_dispatch_result_path"]
+                .as_str()
+                .expect("completion result path should be present");
+            let completion_result: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(completion_result_path)
+                    .expect("completion result should exist"),
             )
-        });
-    assert_eq!(payload["surface"], "vida lane");
-    assert_eq!(payload["status"], "blocked");
-    assert_eq!(payload["dispatch_status"], "blocked");
-    assert!(!payload["blocker_codes"]
-        .as_array()
-        .expect("blocker codes should be an array")
-        .is_empty());
-    assert_eq!(payload["lane_id"], "coach_lane");
-
-    let completion_result_path = payload["artifact_refs"]["downstream_dispatch_result_path"]
-        .as_str()
-        .expect("completion result path should be present");
-    let completion_result: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(completion_result_path).expect("completion result should exist"),
-    )
-    .expect("completion result should parse");
-    assert_eq!(completion_result["status"], "blocked");
-    assert_eq!(completion_result["execution_state"], "blocked");
-    assert_eq!(completion_result["decision"], "rework_required");
-    assert_eq!(completion_result["verdict"], "rework_required");
-    assert_eq!(completion_result["completion_verdict"], "rework_required");
-    assert_eq!(completion_result["rework_target"], "developer");
-    assert_eq!(completion_result["allowed_next_node"], "developer_rework");
-    assert_eq!(
-        completion_result["blocker_code"], "coach_rework_required",
-        "completion result should preserve coach blocker: {completion_result}"
-    );
-    assert_eq!(completion_result["closure_ready"], false);
-
-    let bridge_result: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
-    )
-    .expect("bridge result should parse");
-    assert_eq!(bridge_result["status"], "blocked");
-    assert_eq!(bridge_result["execution_state"], "blocked");
-    assert_eq!(bridge_result["decision"], "rework_required");
-    assert_eq!(bridge_result["verdict"], "rework_required");
-    assert_eq!(
-        bridge_result["execution_evidence"]["receipt_backed"], true,
-        "receipt-backed execution must not imply pass verdict: {bridge_result}"
-    );
-    assert_eq!(
-        bridge_result["execution_evidence"]["completion_verdict"],
-        "rework_required"
-    );
+            .expect("completion result should parse");
+            assert_eq!(completion_result["status"], "blocked", "{target}");
+            assert_eq!(completion_result["execution_state"], "blocked", "{target}");
+            assert_eq!(completion_result["decision"], "rework_required", "{target}");
+            assert_eq!(completion_result["verdict"], "rework_required", "{target}");
+            assert_eq!(
+                completion_result["completion_verdict"], "rework_required",
+                "{target}"
+            );
+            assert_eq!(
+                completion_result["rework_target"], rework_target,
+                "{target}"
+            );
+            assert_eq!(
+                completion_result["allowed_next_node"], allowed_next_node,
+                "{target}"
+            );
+            assert_eq!(
+                completion_result["blocker_code"], blocker_code,
+                "completion result should preserve blocker for {target}: {completion_result}"
+            );
+            assert_eq!(completion_result["closure_ready"], false, "{target}");
+        }
+    }
 }
 
 #[test]
