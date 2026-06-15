@@ -1320,7 +1320,7 @@ fn suggest_owned_paths(
                 "crates/vida/src/state_store_task_graph.rs".to_string(),
             ],
             PlanWorkItemKind::Docs => vec![
-                "docs/product/spec/task-graph-adaptive-planner-design.md".to_string(),
+                "docs/product/spec/task-graph-adaptive-planner-contract.md".to_string(),
                 "docs/product/spec/current-spec-map.md".to_string(),
             ],
             PlanWorkItemKind::Proof => vec!["crates/vida/tests".to_string()],
@@ -2420,6 +2420,35 @@ mod tests {
                     == "low_confidence_proof_targets_template_guess_requires_operator_confirmation"
             })
         }));
+    }
+
+    #[test]
+    fn plan_generate_docs_template_fallback_uses_canonical_contract_path() {
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some("Update docs artifact alignment.".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
+            require_context: false,
+            task_prefix: Some("feature-docs".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        let docs_node = draft
+            .nodes
+            .iter()
+            .find(|node| node.title.contains("Align docs and artifact surfaces"))
+            .expect("draft should include docs alignment node");
+        assert!(docs_node
+            .owned_paths
+            .contains(&"docs/product/spec/task-graph-adaptive-planner-contract.md".to_string()));
+        assert!(!docs_node
+            .owned_paths
+            .contains(&"docs/product/spec/task-graph-adaptive-planner-design.md".to_string()));
     }
 
     #[test]
