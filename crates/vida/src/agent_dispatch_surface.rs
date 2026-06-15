@@ -1834,6 +1834,81 @@ fn materialization_owned_paths_for_lane_task(
     }
 }
 
+async fn preflight_agent_dispatch_next_packet_materialization(
+    selected_lanes: &[AgentDispatchLanePreview],
+    state_dir: &std::path::Path,
+) -> Vec<serde_json::Value> {
+    let Ok(store) = StateStore::open_existing_read_only(state_dir.to_path_buf()).await else {
+        return selected_lanes
+            .iter()
+            .map(|lane| {
+                serde_json::json!({
+                    "task_id": lane.task_id,
+                    "role_label": lane.role_label,
+                    "blocker_code": "dispatch_packet_contract_invalid",
+                    "blocker_codes": ["dispatch_packet_contract_invalid"],
+                    "missing_fields": ["task_metadata_store"],
+                    "next_actions": [
+                        "Repair the TaskFlow state store binding before materializing dispatch packets."
+                    ],
+                    "error": format!(
+                        "Runtime dispatch packet `{}` cannot validate required packet fields before materialization because TaskFlow state store `{}` could not be opened",
+                        crate::development_flow_orchestration::packet_template_kind_for_dev_team_task_class(
+                            lane.task_class.as_str()
+                        ),
+                        state_dir.display()
+                    ),
+                })
+            })
+            .collect();
+    };
+    let mut errors = Vec::new();
+    for lane in selected_lanes {
+        let task = store.show_task(&lane.task_id).await.ok();
+        let mut missing_fields = Vec::new();
+        if lane.runtime_role.trim().is_empty() {
+            missing_fields.push("runtime_role");
+        }
+        if lane.task_class.trim().is_empty() {
+            missing_fields.push("task_class");
+        }
+        if lane.selection_truth.selected_carrier.trim().is_empty() {
+            missing_fields.push("carrier_id");
+        }
+        if crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths(
+            lane.task_class.as_str(),
+        ) {
+            let owned_paths = task
+                .map(|task| materialization_owned_paths_for_lane_task(task, lane))
+                .unwrap_or_default();
+            if owned_paths.is_empty() {
+                missing_fields.push("owned_paths");
+            }
+        }
+        if !missing_fields.is_empty() {
+            errors.push(serde_json::json!({
+                "task_id": lane.task_id,
+                "role_label": lane.role_label,
+                "blocker_code": "dispatch_packet_contract_invalid",
+                "blocker_codes": ["dispatch_packet_contract_invalid"],
+                "missing_fields": missing_fields,
+                "next_actions": [
+                    "Add the missing TaskFlow planner_metadata.owned_paths or reshape the selected dev-team lane before materializing dispatch packets."
+                ],
+                "error": format!(
+                    "Runtime dispatch packet `{}` is missing required packet fields before materialization: {}",
+                    crate::development_flow_orchestration::packet_template_kind_for_dev_team_task_class(
+                        lane.task_class.as_str()
+                    ),
+                    missing_fields.join(", ")
+                ),
+            }));
+        }
+    }
+    store.close().await;
+    errors
+}
+
 fn build_agent_dispatch_next_preview(
     activation_bundle: &serde_json::Value,
     projection: &state_store::TaskSchedulingProjection,
@@ -3091,6 +3166,71 @@ async fn materialize_agent_dispatch_next_packets(
         return preview;
     }
 
+    let preflight_errors =
+        preflight_agent_dispatch_next_packet_materialization(&preview.selected_lanes, state_dir)
+            .await;
+    if !preflight_errors.is_empty() {
+        preview.status = release1_blocked_status().to_string();
+        if !preview
+            .blocker_codes
+            .iter()
+            .any(|value| value == "dispatch_packet_contract_invalid")
+        {
+            preview
+                .blocker_codes
+                .push("dispatch_packet_contract_invalid".to_string());
+        }
+        preview.next_actions.clear();
+        preview.next_actions.push(
+            "Add the missing TaskFlow planner_metadata.owned_paths or reshape the selected dev-team lane before materializing dispatch packets."
+                .to_string(),
+        );
+        if let Some(planner) = preview.parallelization_planner.as_object_mut() {
+            planner.insert(
+                "mode".to_string(),
+                serde_json::json!("blocked_packet_contract"),
+            );
+            planner.insert("materializes_packets".to_string(), serde_json::json!(false));
+            planner.insert("packet_artifacts".to_string(), serde_json::json!([]));
+        }
+        if let Some(flow_projection) = preview.flow_projection.as_object_mut() {
+            flow_projection.insert(
+                "status".to_string(),
+                serde_json::json!(release1_blocked_status()),
+            );
+            flow_projection.insert(
+                "receipt_status".to_string(),
+                serde_json::json!({
+                    "receipt_backed": false,
+                    "status": "blocked_packet_contract",
+                }),
+            );
+            flow_projection.insert(
+                "proof_state".to_string(),
+                serde_json::json!({
+                    "status": "blocked_packet_contract",
+                    "diagnostic_only": false,
+                }),
+            );
+            flow_projection.insert(
+                "blocker_codes".to_string(),
+                serde_json::json!(preview.blocker_codes),
+            );
+            flow_projection.insert(
+                "next_actions".to_string(),
+                serde_json::json!(preview.next_actions),
+            );
+        }
+        preview.packet_materialization = serde_json::json!({
+            "status": release1_blocked_status(),
+            "requested": true,
+            "materializes_packets": false,
+            "errors": preflight_errors,
+            "artifacts": [],
+        });
+        return preview;
+    }
+
     let mut artifacts = Vec::new();
     let mut errors = Vec::new();
     for lane in &preview.selected_lanes {
@@ -3104,6 +3244,12 @@ async fn materialize_agent_dispatch_next_packets(
                 errors.push(serde_json::json!({
                     "task_id": lane.task_id,
                     "role_label": lane.role_label,
+                    "blocker_code": "packet_materialization_failed",
+                    "blocker_codes": ["packet_materialization_failed"],
+                    "missing_fields": [],
+                    "next_actions": [
+                        "Inspect the packet materialization error and repair the selected lane before retrying dispatch packet materialization."
+                    ],
                     "error": error,
                 }));
             }

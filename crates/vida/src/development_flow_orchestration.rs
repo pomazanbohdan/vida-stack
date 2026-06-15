@@ -457,7 +457,7 @@ fn configured_dev_team_flow_templates(
         .collect()
 }
 
-fn packet_template_kind_for_dev_team_task_class(task_class: &str) -> &'static str {
+pub(crate) fn packet_template_kind_for_dev_team_task_class(task_class: &str) -> &'static str {
     match task_class {
         "coach" | "review" | "validation" => "coach_review_packet",
         "verification" | "quality_gate" | "release_readiness" => "verifier_proof_packet",

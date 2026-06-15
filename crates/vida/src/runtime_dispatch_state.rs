@@ -23782,7 +23782,7 @@ agent_system:
     }
 
     #[test]
-    fn write_runtime_dispatch_packet_persists_blocked_implementer_packet_without_owned_scope() {
+    fn write_runtime_dispatch_packet_rejects_blocked_implementer_packet_without_owned_scope() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
         let state_root = harness.path().join(crate::state_store::default_state_dir());
@@ -23863,23 +23863,19 @@ agent_system:
             serde_json::json!(["owned_paths"])
         );
 
-        let packet_path =
-            write_runtime_dispatch_packet(&ctx).expect("blocked dispatch packet should persist");
-        let packet = crate::read_json_file_if_present(Path::new(&packet_path))
-            .expect("dispatch packet json should load");
-
-        assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
-        assert!(packet["dispatch_command"]
-            .as_str()
-            .expect("dispatch command should be present")
-            .starts_with("vida agent-init --dispatch-packet "));
-        assert_eq!(
-            packet["delivery_task_packet"]["handoff_task_class"],
-            "implementation"
+        let error = write_runtime_dispatch_packet(&ctx)
+            .expect_err("blocked dispatch packet without owned_paths should fail closed");
+        assert!(
+            error.contains("missing required packet fields: owned_paths"),
+            "unexpected error: {error}"
         );
+        let packet_dir = state_root
+            .join("runtime-consumption")
+            .join("dispatch-packets");
+        let written_packets = fs::read_dir(&packet_dir).ok().into_iter().flatten().count();
         assert_eq!(
-            packet["delivery_task_packet"]["owned_paths"],
-            serde_json::json!([])
+            written_packets, 0,
+            "no dispatch packet should be written when required owned_paths are missing"
         );
     }
 
@@ -24027,15 +24023,12 @@ pub(crate) fn write_runtime_dispatch_packet(
         ctx.selected_backend_override.as_deref(),
     );
     let body = build_runtime_dispatch_packet_body(ctx, activation_command)?;
-    let validation_error =
-        validate_runtime_dispatch_packet_contract(&body, "Runtime dispatch packet").err();
-    if ctx.receipt.dispatch_status != "blocked" {
-        if let Some(error) = validation_error {
-            return Err(format!(
-                "{error}; run_id `{}`; dispatch packet `{}`",
-                ctx.receipt.run_id, packet_path_display
-            ));
-        }
+    if let Err(error) = validate_runtime_dispatch_packet_contract(&body, "Runtime dispatch packet")
+    {
+        return Err(format!(
+            "{error}; run_id `{}`; dispatch packet `{}`",
+            ctx.receipt.run_id, packet_path_display
+        ));
     }
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode dispatch packet: {error}"))?;

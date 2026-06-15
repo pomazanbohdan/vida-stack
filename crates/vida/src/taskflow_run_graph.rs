@@ -7908,33 +7908,14 @@ async fn preview_run_graph_dispatch_init_artifacts(
     )
     .await?;
     set_dispatch_init_timeout_stage(timeout_stage, "write_runtime_dispatch_packet");
-    let mut ctx = crate::RuntimeDispatchPacketContext::new(
+    let ctx = crate::RuntimeDispatchPacketContext::new(
         store.root(),
         &role_selection,
         &dispatch_receipt,
         &taskflow_handoff_plan,
         &run_graph_bootstrap,
     );
-    let dispatch_packet_path = match crate::write_runtime_dispatch_packet(&ctx) {
-        Ok(path) => path,
-        Err(error) if error.contains("missing required packet fields: owned_paths") => {
-            dispatch_receipt.dispatch_status = "blocked".to_string();
-            dispatch_receipt.lane_status = "lane_blocked".to_string();
-            dispatch_receipt.blocker_code = Some("missing_owned_write_scope".to_string());
-            dispatch_receipt.downstream_dispatch_ready = false;
-            dispatch_receipt.downstream_dispatch_blockers =
-                vec!["missing_owned_write_scope".to_string()];
-            ctx = crate::RuntimeDispatchPacketContext::new(
-                store.root(),
-                &role_selection,
-                &dispatch_receipt,
-                &taskflow_handoff_plan,
-                &run_graph_bootstrap,
-            );
-            crate::write_runtime_dispatch_packet(&ctx)?
-        }
-        Err(error) => return Err(error),
-    };
+    let dispatch_packet_path = crate::write_runtime_dispatch_packet(&ctx)?;
     dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
     set_dispatch_init_timeout_stage(timeout_stage, "read_dispatch_command_from_packet");
     dispatch_receipt.dispatch_command = dispatch_command_from_packet_path(&dispatch_packet_path)?;
@@ -13182,7 +13163,7 @@ mod tests {
             prepare_run_graph_dispatch_init_artifacts(&store, "task-writer-planner-scope")
                 .await
                 .expect("dispatch init artifacts should be prepared from planner metadata");
-        assert_eq!(artifacts.dispatch_receipt.dispatch_target, "writer");
+        assert_eq!(artifacts.dispatch_receipt.dispatch_target, "developer");
         assert!(artifacts
             .dispatch_receipt
             .downstream_dispatch_blockers

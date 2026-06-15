@@ -4404,6 +4404,91 @@ fn projection_surfaces_fail_closed_for_ready_missing_task_run_host_bridge() {
 }
 
 #[test]
+fn dev_team_materialization_blocks_missing_owned_paths_before_packet_write() {
+    let state_dir = boot_session_triage_state();
+    sync_protocol_binding(&state_dir);
+    create_session_triage_task(
+        &state_dir,
+        "missing-owned-paths-epic",
+        "Missing owned paths epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        "missing-owned-paths-task",
+        "Missing owned paths task",
+        "task",
+        "in_progress",
+        "0",
+        Some("missing-owned-paths-epic"),
+    );
+
+    let dispatch = vida()
+        .args([
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--materialize-packets",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("dispatch-next json should run");
+    assert!(
+        !dispatch.status.success(),
+        "dispatch-next should fail closed before packet write"
+    );
+    let dispatch_json: serde_json::Value =
+        serde_json::from_slice(&dispatch.stdout).expect("dispatch-next json should parse");
+    assert_eq!(dispatch_json["status"], "blocked");
+    assert!(
+        dispatch_json["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should be an array")
+            .iter()
+            .any(|code| code == "dispatch_packet_contract_invalid"),
+        "dispatch-next should expose dispatch_packet_contract_invalid: {dispatch_json}"
+    );
+    assert_eq!(dispatch_json["packet_materialization"]["status"], "blocked");
+    assert_eq!(
+        dispatch_json["packet_materialization"]["materializes_packets"],
+        false
+    );
+    assert_eq!(
+        dispatch_json["packet_materialization"]["artifacts"],
+        serde_json::json!([])
+    );
+    let errors = dispatch_json["packet_materialization"]["errors"]
+        .as_array()
+        .expect("packet materialization errors should be an array");
+    assert!(
+        errors.iter().any(|error| {
+            error["task_id"] == "missing-owned-paths-task"
+                && error["missing_fields"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|field| field == "owned_paths")
+        }),
+        "missing owned_paths should be reported before packet artifact write: {dispatch_json}"
+    );
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    let written_packets = std::fs::read_dir(&packet_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .count();
+    assert_eq!(
+        written_packets, 0,
+        "no dispatch packet should be written when required owned_paths are missing"
+    );
+    let _ = std::fs::remove_dir_all(state_dir);
+}
+
+#[test]
 fn projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge() {
     let (project_root, state_dir) = project_bound_state_dir();
     let run_id = "zzzz-run-host-bridge-pass";
