@@ -4,9 +4,10 @@ fn shell_quote(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
     }
-    if value.chars().all(|ch| {
-        ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | ':' | '<' | '>')
-    }) {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | ':'))
+    {
         return value.to_string();
     }
     format!("'{}'", value.replace('\'', "'\"'\"'"))
@@ -108,6 +109,18 @@ mod tests {
         assert_eq!(
             consume_continue_command(Some("run with space")),
             "vida taskflow consume continue --run-id 'run with space'"
+        );
+        assert_eq!(
+            human_run_graph_status_command("run>pwned"),
+            "vida taskflow run-graph status 'run>pwned'"
+        );
+        assert_eq!(
+            human_recovery_status_command("run<secret"),
+            "vida taskflow recovery status 'run<secret'"
+        );
+        assert_eq!(
+            consume_continue_command(Some("run>pwned")),
+            "vida taskflow consume continue --run-id 'run>pwned'"
         );
         assert_eq!(
             human_closed_run_reconcile_command(),
