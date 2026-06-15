@@ -23,27 +23,3 @@ config_file = "agents/senior.toml"
 [agents.architect]
 description = "Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully."
 config_file = "agents/architect.toml"
-
-[agents.development_specification]
-description = "Internal VIDA Codex alias for bounded research, specification, and implementation-plan shaping before execution."
-config_file = "agents/development_specification.toml"
-
-[agents.development_execution_preparation]
-description = "Internal VIDA Codex alias for architecture preparation and developer handoff shaping before code execution."
-config_file = "agents/development_execution_preparation.toml"
-
-[agents.development_implementer]
-description = "Internal VIDA Codex alias for one bounded write-producing implementation packet."
-config_file = "agents/development_implementer.toml"
-
-[agents.development_coach]
-description = "Internal VIDA Codex alias for packet-local implemented-result versus approved-spec conformance."
-config_file = "agents/development_coach.toml"
-
-[agents.development_verifier]
-description = "Internal VIDA Codex alias for independent proof, risk review, and closure readiness."
-config_file = "agents/development_verifier.toml"
-
-[agents.development_escalation]
-description = "Internal VIDA Codex alias for hard conflicts and cross-scope arbitration when normal closure cannot proceed."
-config_file = "agents/development_escalation.toml"

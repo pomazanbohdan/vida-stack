@@ -8,7 +8,7 @@ project_bootstrap:
   process_root: docs/process
   research_root: docs/research
   readme_doc: README.md
-  architecture_doc: docs/product/architecture.md
+  architecture_doc: docs/product/spec/index.md
   decisions_doc: docs/process/decisions.md
   environments_doc: docs/process/environments.md
   project_operations_doc: docs/process/project-operations.md
