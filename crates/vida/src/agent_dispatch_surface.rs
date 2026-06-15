@@ -429,9 +429,16 @@ fn canonical_state_artifact_path(
     })?;
     if require_existing_file {
         let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
-        existing_regular_file_under_root(&state_root, &path, ArtifactPathKind::HostBridgeRequest)
-            .map(|file| file.path().to_path_buf())
-            .map_err(|error| match error {
+        match existing_regular_file_under_root(
+            &state_root,
+            &path,
+            ArtifactPathKind::HostBridgeRequest,
+        ) {
+            Ok(file) => Ok(file.path().to_path_buf()),
+            Err(_) if !path.is_absolute() && path.exists() => {
+                canonical_existing_host_bridge_artifact_path(&path, &canonical_state_root)
+            }
+            Err(error) => Err(match error {
                 runtime_path_policy::PathPolicyError::OutsideStateRoot { path, root, .. } => {
                     format!(
                         "Host bridge artifact `{}` escapes VIDA state root `{}`.",
@@ -440,7 +447,8 @@ fn canonical_state_artifact_path(
                     )
                 }
                 other => other.to_string(),
-            })
+            }),
+        }
     } else {
         let parent = path.parent().ok_or_else(|| {
             format!(
@@ -463,6 +471,44 @@ fn canonical_state_artifact_path(
         }
         Ok(path)
     }
+}
+
+fn canonical_existing_host_bridge_artifact_path(
+    path: &Path,
+    canonical_state_root: &Path,
+) -> Result<std::path::PathBuf, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "host bridge request path `{}` could not be inspected: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "host bridge request path `{}` is a symlink",
+            path.display()
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "host bridge request path `{}` is not a regular file",
+            path.display()
+        ));
+    }
+    let canonical_path = std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "host bridge request path `{}` could not be canonicalized: {error}",
+            path.display()
+        )
+    })?;
+    if !canonical_path.starts_with(canonical_state_root) {
+        return Err(format!(
+            "Host bridge artifact `{}` escapes VIDA state root `{}`.",
+            canonical_path.display(),
+            canonical_state_root.display()
+        ));
+    }
+    Ok(canonical_path)
 }
 
 fn host_bridge_request_string<'a>(request: &'a serde_json::Value, field: &str) -> Option<&'a str> {
@@ -5450,6 +5496,33 @@ mod tests {
         assert_eq!(
             inferred,
             std::fs::canonicalize(&state_root).expect("state root should canonicalize")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_request_accepts_project_relative_path_with_explicit_state_dir() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = PathBuf::from("target").join(format!(
+            "vida-host-bridge-project-relative-request-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should exist");
+        std::fs::write(&request_path, b"{}").expect("request should write");
+
+        let canonical_path =
+            canonical_state_artifact_path(&state_root, &request_path.display().to_string(), true)
+                .expect("project-relative request under explicit state root should be accepted");
+
+        assert_eq!(
+            canonical_path,
+            std::fs::canonicalize(&request_path).expect("request should canonicalize")
         );
         let _ = std::fs::remove_dir_all(&root);
     }
