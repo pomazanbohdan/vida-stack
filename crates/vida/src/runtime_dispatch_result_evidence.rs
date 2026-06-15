@@ -204,19 +204,7 @@ pub(crate) fn dispatch_rework_route_from_result_path(
 pub(crate) fn dispatch_rework_route_from_result(
     result: &serde_json::Value,
 ) -> Option<DispatchReworkRoute> {
-    let rework_verdict = matches!(
-        result
-            .get("decision")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim),
-        Some("rework_required") | Some("blocked")
-    ) || matches!(
-        result
-            .get("verdict")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim),
-        Some("rework_required") | Some("blocked")
-    );
+    let rework_verdict = dispatch_result_has_rework_verdict(result);
     if !rework_verdict {
         return None;
     }
@@ -235,6 +223,24 @@ pub(crate) fn dispatch_rework_route_from_result(
         allowed_next_node: allowed_next_node.replace('-', "_"),
         blocker_code: result_blocker_code(result),
     })
+}
+
+fn dispatch_result_has_rework_verdict(result: &serde_json::Value) -> bool {
+    dispatch_result_field_is_rework_verdict(result.get("decision"))
+        || dispatch_result_field_is_rework_verdict(result.get("verdict"))
+        || dispatch_result_field_is_rework_verdict(result.get("completion_verdict"))
+        || result.get("execution_evidence").is_some_and(|evidence| {
+            dispatch_result_field_is_rework_verdict(evidence.get("decision"))
+                || dispatch_result_field_is_rework_verdict(evidence.get("verdict"))
+                || dispatch_result_field_is_rework_verdict(evidence.get("completion_verdict"))
+        })
+}
+
+fn dispatch_result_field_is_rework_verdict(value: Option<&serde_json::Value>) -> bool {
+    value
+        .and_then(serde_json::Value::as_str)
+        .map(|text| text.trim().to_ascii_lowercase())
+        .is_some_and(|text| matches!(text.as_str(), "rework_required" | "blocked" | "blocker"))
 }
 
 fn result_blocker_code(result: &serde_json::Value) -> Option<String> {
@@ -328,4 +334,64 @@ pub(crate) fn canonical_lane_execution_receipt_artifact_json(
         },
     )
     .expect("lane execution receipt artifact should serialize")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dispatch_rework_route_from_result;
+
+    #[test]
+    fn dispatch_rework_route_accepts_legacy_top_level_completion_verdict() {
+        let result = serde_json::json!({
+            "status": "blocked",
+            "completion_verdict": "blocked",
+            "rework_target": "developer",
+            "allowed_next_node": "developer-rework",
+            "blocker_codes": ["verification_rework_required"]
+        });
+
+        let route = dispatch_rework_route_from_result(&result)
+            .expect("legacy completion_verdict should produce a rework route");
+        assert_eq!(route.rework_target, "developer");
+        assert_eq!(route.allowed_next_node, "developer_rework");
+        assert_eq!(
+            route.blocker_code.as_deref(),
+            Some("verification_rework_required")
+        );
+    }
+
+    #[test]
+    fn dispatch_rework_route_accepts_nested_execution_completion_verdict() {
+        let result = serde_json::json!({
+            "status": "blocked",
+            "execution_evidence": {
+                "receipt_backed": true,
+                "completion_verdict": "rework_required"
+            },
+            "rework_target": "tester",
+            "allowed_next_node": "tester",
+            "blocker_code": "review_rework_required"
+        });
+
+        let route = dispatch_rework_route_from_result(&result)
+            .expect("nested completion_verdict should produce a rework route");
+        assert_eq!(route.rework_target, "tester");
+        assert_eq!(route.allowed_next_node, "tester");
+        assert_eq!(
+            route.blocker_code.as_deref(),
+            Some("review_rework_required")
+        );
+    }
+
+    #[test]
+    fn dispatch_rework_route_rejects_pass_completion_verdict() {
+        let result = serde_json::json!({
+            "status": "pass",
+            "completion_verdict": "pass",
+            "rework_target": "developer",
+            "allowed_next_node": "developer_rework"
+        });
+
+        assert!(dispatch_rework_route_from_result(&result).is_none());
+    }
 }
