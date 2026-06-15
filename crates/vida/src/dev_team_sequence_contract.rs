@@ -5,6 +5,11 @@ pub(crate) struct DevTeamSequenceStep {
     pub(crate) role_label: String,
     pub(crate) runtime_role: String,
     pub(crate) task_class: String,
+    pub(crate) packet_template_kind: Option<String>,
+    pub(crate) closure_class: Option<String>,
+    pub(crate) stage: Option<String>,
+    pub(crate) completion_blocker: Option<String>,
+    pub(crate) inclusion_rule: Option<String>,
     pub(crate) requires_task: bool,
     pub(crate) requires_user_approval: bool,
     pub(crate) approval_policy: serde_json::Value,
@@ -166,6 +171,11 @@ pub(crate) fn dev_team_sequence(activation_bundle: &serde_json::Value) -> Vec<De
                 role_label: dispatch_target,
                 runtime_role,
                 task_class,
+                packet_template_kind: json_string_field(route, "packet_template_kind"),
+                closure_class: json_string_field(route, "closure_class"),
+                stage: json_string_field(route, "stage"),
+                completion_blocker: json_string_field(route, "completion_blocker"),
+                inclusion_rule: json_string_field(route, "inclusion_rule"),
                 requires_task: true,
                 requires_user_approval: false,
                 approval_policy: serde_json::Value::Null,
@@ -267,6 +277,19 @@ fn dev_team_sequence_from_explicit_flow(
                 role_label: role_id.to_string(),
                 runtime_role,
                 task_class,
+                packet_template_kind: policy_field_from_step_or_role(
+                    step,
+                    role,
+                    "packet_template_kind",
+                ),
+                closure_class: policy_field_from_step_or_role(step, role, "closure_class"),
+                stage: policy_field_from_step_or_role(step, role, "stage"),
+                completion_blocker: policy_field_from_step_or_role(
+                    step,
+                    role,
+                    "completion_blocker",
+                ),
+                inclusion_rule: policy_field_from_step_or_role(step, role, "inclusion_rule"),
                 requires_task: role_id != "release_closure" && role_id != "terminal_closure",
                 requires_user_approval: step["requires_user_approval"].as_bool().unwrap_or(false),
                 approval_policy: step["approval_policy"].clone(),
@@ -354,6 +377,19 @@ fn dev_team_sequence_from_readiness_with_default(
                     role_label: role_id.to_string(),
                     runtime_role,
                     task_class,
+                    packet_template_kind: policy_field_from_step_or_role(
+                        step,
+                        role,
+                        "packet_template_kind",
+                    ),
+                    closure_class: policy_field_from_step_or_role(step, role, "closure_class"),
+                    stage: policy_field_from_step_or_role(step, role, "stage"),
+                    completion_blocker: policy_field_from_step_or_role(
+                        step,
+                        role,
+                        "completion_blocker",
+                    ),
+                    inclusion_rule: policy_field_from_step_or_role(step, role, "inclusion_rule"),
                     requires_task: role_id != "release_closure" && role_id != "terminal_closure",
                     requires_user_approval: step["requires_user_approval"]
                         .as_bool()
@@ -394,6 +430,11 @@ fn dev_team_sequence_from_readiness_with_default(
                 role_label: role_id.to_string(),
                 runtime_role,
                 task_class,
+                packet_template_kind: json_string_field(role, "packet_template_kind"),
+                closure_class: json_string_field(role, "closure_class"),
+                stage: json_string_field(role, "stage"),
+                completion_blocker: json_string_field(role, "completion_blocker"),
+                inclusion_rule: json_string_field(role, "inclusion_rule"),
                 requires_task: role_id != "release_closure" && role_id != "terminal_closure",
                 requires_user_approval: false,
                 approval_policy: serde_json::Value::Null,
@@ -441,6 +482,11 @@ fn dev_team_sequence_from_carrier_runtime(
                 role_label: role_id.to_string(),
                 runtime_role,
                 task_class,
+                packet_template_kind: None,
+                closure_class: None,
+                stage: None,
+                completion_blocker: None,
+                inclusion_rule: None,
                 requires_task: true,
                 requires_user_approval: false,
                 approval_policy: serde_json::Value::Null,
@@ -450,6 +496,23 @@ fn dev_team_sequence_from_carrier_runtime(
             })
         })
         .collect()
+}
+
+fn policy_field_from_step_or_role(
+    step: &serde_json::Value,
+    role: &serde_json::Value,
+    key: &str,
+) -> Option<String> {
+    json_string_field(step, key).or_else(|| json_string_field(role, key))
+}
+
+fn json_string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn flow_matches_work_item_type(flow: &serde_json::Value, work_item_type: &str) -> bool {

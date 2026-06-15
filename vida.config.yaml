@@ -583,6 +583,11 @@ dev_team:
       task_classes:
         - specification
         - planning
+      packet_template_kind: delivery_task_packet
+      closure_class: law
+      stage: design_gate
+      completion_blocker: pending_specification_evidence
+      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -603,6 +608,11 @@ dev_team:
       task_classes:
         - architecture
         - execution_preparation
+      packet_template_kind: escalation_packet
+      closure_class: refactor
+      stage: execution
+      completion_blocker: pending_execution_preparation_evidence
+      inclusion_rule: always
       default_carrier: architect
       cost_policy:
         budget_units: 16
@@ -620,6 +630,11 @@ dev_team:
       task_classes:
         - test_authoring
         - regression_test
+      packet_template_kind: delivery_task_packet
+      closure_class: implementation
+      stage: execution
+      completion_blocker: pending_implementation_evidence
+      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -640,6 +655,11 @@ dev_team:
         - test_authoring
         - regression_test
         - verification_test_design
+      packet_template_kind: delivery_task_packet
+      closure_class: implementation
+      stage: execution
+      completion_blocker: pending_implementation_evidence
+      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -658,6 +678,11 @@ dev_team:
       runtime_role: coach
       task_classes:
         - coach
+      packet_template_kind: coach_review_packet
+      closure_class: proof
+      stage: execution
+      completion_blocker: pending_review_clean_evidence
+      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -677,6 +702,11 @@ dev_team:
         - implementation
         - delivery_task
         - execution_block
+      packet_template_kind: delivery_task_packet
+      closure_class: implementation
+      stage: execution
+      completion_blocker: pending_implementation_evidence
+      inclusion_rule: always
       default_carrier: junior
       cost_policy:
         budget_units: 1
@@ -695,6 +725,11 @@ dev_team:
       task_classes:
         - coach
         - review
+      packet_template_kind: coach_review_packet
+      closure_class: proof
+      stage: execution
+      completion_blocker: pending_review_clean_evidence
+      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -714,6 +749,11 @@ dev_team:
         - coach
         - review
         - validation
+      packet_template_kind: coach_review_packet
+      closure_class: proof
+      stage: execution
+      completion_blocker: pending_review_clean_evidence
+      inclusion_rule: always
       default_carrier: middle
       cost_policy:
         budget_units: 4
@@ -733,6 +773,11 @@ dev_team:
         - review
         - verification
         - quality_gate
+      packet_template_kind: coach_review_packet
+      closure_class: proof
+      stage: execution
+      completion_blocker: pending_review_clean_evidence
+      inclusion_rule: always
       default_carrier: senior
       cost_policy:
         budget_units: 16
@@ -761,6 +806,11 @@ dev_team:
         - verification
         - review
         - quality_gate
+      packet_template_kind: verifier_proof_packet
+      closure_class: proof
+      stage: execution
+      completion_blocker: pending_verification_evidence
+      inclusion_rule: always
       default_carrier: senior
       cost_policy:
         budget_units: 16
@@ -778,6 +828,11 @@ dev_team:
         - verification
         - quality_gate
         - release_readiness
+      packet_template_kind: verifier_proof_packet
+      closure_class: proof
+      stage: execution
+      completion_blocker: pending_verification_evidence
+      inclusion_rule: always
       default_carrier: senior
       cost_policy:
         budget_units: 16
@@ -794,6 +849,11 @@ dev_team:
       task_classes:
         - release_readiness
         - quality_gate
+      packet_template_kind: verifier_proof_packet
+      closure_class: proof
+      stage: execution
+      completion_blocker: pending_verification_evidence
+      inclusion_rule: always
       default_carrier: senior
       cost_policy:
         budget_units: 16

@@ -436,17 +436,63 @@ fn configured_dev_team_flow_templates(
             let role_label = step.role_label;
             let runtime_role = step.runtime_role;
             let task_class = step.task_class;
+            let mut fallback_fields = Vec::new();
+            let packet_template_kind = dev_team_policy_field_or_fallback(
+                step.packet_template_kind.as_deref(),
+                packet_template_kind_for_dev_team_task_class(&task_class),
+                "packet_template_kind",
+                &mut fallback_fields,
+            );
+            let closure_class = dev_team_policy_field_or_fallback(
+                step.closure_class.as_deref(),
+                closure_class_for_dev_team_task_class(&task_class),
+                "closure_class",
+                &mut fallback_fields,
+            );
+            let stage = dev_team_policy_field_or_fallback(
+                step.stage.as_deref(),
+                stage_for_dev_team_task_class(&task_class),
+                "stage",
+                &mut fallback_fields,
+            );
+            let fallback_completion_blocker =
+                completion_blocker_for_dev_team_task_class(&task_class);
+            let completion_blocker = dev_team_policy_field_or_fallback(
+                step.completion_blocker.as_deref(),
+                &fallback_completion_blocker,
+                "completion_blocker",
+                &mut fallback_fields,
+            );
+            let inclusion_rule = dev_team_policy_field_or_fallback(
+                step.inclusion_rule.as_deref(),
+                "always",
+                "inclusion_rule",
+                &mut fallback_fields,
+            );
+            let fallback_used = !fallback_fields.is_empty();
             serde_json::json!({
                 "lane_id": role_label.clone(),
                 "dispatch_target": role_label,
                 "dispatch_alias": "",
                 "task_class": task_class.clone(),
                 "runtime_role": runtime_role,
-                "packet_template_kind": packet_template_kind_for_dev_team_task_class(&task_class),
-                "closure_class": closure_class_for_dev_team_task_class(&task_class),
-                "stage": stage_for_dev_team_task_class(&task_class),
-                "inclusion_rule": "always",
-                "completion_blocker": completion_blocker_for_dev_team_task_class(&task_class),
+                "packet_template_kind": packet_template_kind,
+                "closure_class": closure_class,
+                "stage": stage,
+                "inclusion_rule": inclusion_rule,
+                "completion_blocker": completion_blocker,
+                "policy_diagnostics": {
+                    "source": "dev_team_readiness",
+                    "fallback_used": fallback_used,
+                    "fallback_fields": fallback_fields,
+                    "fallback_reason": if fallback_used {
+                        serde_json::Value::String(
+                            "missing_configured_dev_team_policy_fields".to_string(),
+                        )
+                    } else {
+                        serde_json::Value::Null
+                    },
+                },
                 "requires_user_approval": step.requires_user_approval,
                 "approval_policy": step.approval_policy,
                 "lifecycle_hook_templates": step.lifecycle_hook_templates,
@@ -455,6 +501,19 @@ fn configured_dev_team_flow_templates(
             })
         })
         .collect()
+}
+
+fn dev_team_policy_field_or_fallback(
+    configured: Option<&str>,
+    fallback: &str,
+    field: &'static str,
+    fallback_fields: &mut Vec<&'static str>,
+) -> String {
+    if let Some(configured) = configured.map(str::trim).filter(|value| !value.is_empty()) {
+        return configured.to_string();
+    }
+    fallback_fields.push(field);
+    fallback.to_string()
 }
 
 pub(crate) fn packet_template_kind_for_dev_team_task_class(task_class: &str) -> &'static str {
@@ -635,7 +694,9 @@ fn build_resolved_development_dispatch_contract(
                 "packet_template_kind": lane_template["packet_template_kind"],
                 "closure_class": lane_template["closure_class"],
                 "stage": lane_template["stage"],
+                "inclusion_rule": lane_template["inclusion_rule"],
                 "completion_blocker": lane_template["completion_blocker"],
+                "policy_diagnostics": lane_template["policy_diagnostics"],
                 "activation": activation,
             })
         })
@@ -1215,7 +1276,16 @@ mod tests {
             "dev_team_readiness": {
                 "roles": [
                     {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
-                    {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                    {
+                        "role_id": "developer",
+                        "runtime_role": "worker",
+                        "task_classes": ["implementation"],
+                        "packet_template_kind": "delivery_task_packet",
+                        "closure_class": "implementation",
+                        "stage": "execution",
+                        "completion_blocker": "configured_implementation_blocker",
+                        "inclusion_rule": "always"
+                    },
                     {"role_id": "reviewer", "runtime_role": "verifier", "task_classes": ["review"]}
                 ],
                 "flows": [
@@ -1225,7 +1295,14 @@ mod tests {
                         "ordered_steps": [
                             {"role_id": "analyst"},
                             {"role_id": "developer"},
-                            {"role_id": "reviewer"}
+                            {
+                                "role_id": "reviewer",
+                                "packet_template_kind": "verifier_proof_packet",
+                                "closure_class": "proof",
+                                "stage": "execution",
+                                "completion_blocker": "configured_review_blocker",
+                                "inclusion_rule": "when_flow_requires_verification"
+                            }
                         ]
                     }
                 ]
@@ -1277,7 +1354,42 @@ mod tests {
             contract["lane_catalog"]["developer"]["runtime_role"],
             "worker"
         );
+        assert_eq!(
+            contract["lane_catalog"]["developer"]["completion_blocker"],
+            "configured_implementation_blocker"
+        );
+        assert_eq!(
+            contract["lane_catalog"]["developer"]["policy_diagnostics"]["fallback_used"],
+            false
+        );
         assert_eq!(contract["lane_catalog"]["reviewer"]["task_class"], "review");
+        assert_eq!(
+            contract["lane_catalog"]["reviewer"]["packet_template_kind"],
+            "verifier_proof_packet"
+        );
+        assert_eq!(
+            contract["lane_catalog"]["reviewer"]["completion_blocker"],
+            "configured_review_blocker"
+        );
+        assert_eq!(
+            contract["lane_catalog"]["reviewer"]["inclusion_rule"],
+            "when_flow_requires_verification"
+        );
+        assert_eq!(
+            contract["lane_catalog"]["reviewer"]["policy_diagnostics"]["fallback_used"],
+            false
+        );
+        assert_eq!(
+            contract["lane_catalog"]["analyst"]["policy_diagnostics"]["fallback_used"],
+            true
+        );
+        assert!(
+            contract["lane_catalog"]["analyst"]["policy_diagnostics"]["fallback_fields"]
+                .as_array()
+                .expect("fallback fields should be reported")
+                .contains(&json!("packet_template_kind")),
+            "missing configured policy fields must be reported explicitly"
+        );
     }
 
     #[test]

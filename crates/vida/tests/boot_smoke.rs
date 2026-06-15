@@ -11037,16 +11037,13 @@ fn taskflow_dispatch_init_uses_configured_dev_team_slice_for_owned_task() {
 
     assert_eq!(
         dispatch["run_graph_bootstrap"]["latest_status"]["next_node"],
-        "test_author"
+        "developer"
     );
     assert_eq!(
         dispatch["run_graph_bootstrap"]["latest_status"]["task_class"],
-        "test_authoring"
+        "implementation"
     );
-    assert_eq!(
-        dispatch["dispatch_receipt"]["dispatch_target"],
-        "test_author"
-    );
+    assert_eq!(dispatch["dispatch_receipt"]["dispatch_target"], "developer");
     assert_eq!(
         dispatch["dispatch_receipt"]["activation_runtime_role"],
         "worker"
@@ -11058,10 +11055,10 @@ fn taskflow_dispatch_init_uses_configured_dev_team_slice_for_owned_task() {
         &fs::read(dispatch_packet_path).expect("dispatch packet should read"),
     )
     .expect("dispatch packet should parse");
-    assert_eq!(dispatch_packet["dispatch_target"], "test_author");
+    assert_eq!(dispatch_packet["dispatch_target"], "developer");
     assert_eq!(
         dispatch_packet["delivery_task_packet"]["handoff_task_class"],
-        "test_authoring"
+        "implementation"
     );
     assert_eq!(
         dispatch_packet["delivery_task_packet"]["owned_paths"],
@@ -11078,10 +11075,10 @@ fn taskflow_dispatch_init_uses_configured_dev_team_slice_for_owned_task() {
     );
     let status: serde_json::Value = serde_json::from_slice(&run_graph_status.stdout)
         .expect("run-graph status json should parse");
-    assert_eq!(status["run_graph_status"]["next_node"], "test_author");
+    assert_eq!(status["run_graph_status"]["next_node"], "developer");
     assert_eq!(
         status["projection_truth"]["dispatch_receipt"]["dispatch_target"],
-        "test_author"
+        "developer"
     );
 
     fs::remove_dir_all(state_dir).expect("temp state dir should be removed");

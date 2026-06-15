@@ -1025,6 +1025,19 @@ fn dev_team_roles(
             "role_id": role_id,
             "runtime_role": runtime_role,
             "task_classes": task_classes,
+            "packet_template_kind": crate::yaml_string(
+                crate::yaml_lookup(role_entry, &["packet_template_kind"])
+            ),
+            "closure_class": crate::yaml_string(
+                crate::yaml_lookup(role_entry, &["closure_class"])
+            ),
+            "stage": crate::yaml_string(crate::yaml_lookup(role_entry, &["stage"])),
+            "completion_blocker": crate::yaml_string(
+                crate::yaml_lookup(role_entry, &["completion_blocker"])
+            ),
+            "inclusion_rule": crate::yaml_string(
+                crate::yaml_lookup(role_entry, &["inclusion_rule"])
+            ),
             "default_carrier": default_carrier,
             "default_model": default_model,
             "default_model_reasoning_effort": crate::yaml_string(
@@ -1631,6 +1644,11 @@ fn dev_team_flow_ordered_steps(
                         "role",
                         "runtime_role",
                         "task_class",
+                        "packet_template_kind",
+                        "closure_class",
+                        "stage",
+                        "completion_blocker",
+                        "inclusion_rule",
                         "command_template",
                         "lifecycle_hook_templates",
                         "carrier_constraints",
@@ -1675,6 +1693,19 @@ fn dev_team_flow_ordered_steps(
                     "role_id": role_id,
                     "runtime_role": crate::yaml_string(crate::yaml_lookup(step, &["runtime_role"])),
                     "task_class": crate::yaml_string(crate::yaml_lookup(step, &["task_class"])),
+                    "packet_template_kind": crate::yaml_string(
+                        crate::yaml_lookup(step, &["packet_template_kind"])
+                    ),
+                    "closure_class": crate::yaml_string(
+                        crate::yaml_lookup(step, &["closure_class"])
+                    ),
+                    "stage": crate::yaml_string(crate::yaml_lookup(step, &["stage"])),
+                    "completion_blocker": crate::yaml_string(
+                        crate::yaml_lookup(step, &["completion_blocker"])
+                    ),
+                    "inclusion_rule": crate::yaml_string(
+                        crate::yaml_lookup(step, &["inclusion_rule"])
+                    ),
                     "command_template": yaml_field_json(step, "command_template"),
                     "lifecycle_hook_templates": lifecycle_hook_templates,
                     "carrier_constraints": yaml_field_json(step, "carrier_constraints"),
@@ -2067,6 +2098,11 @@ dev_team:
     developer:
       runtime_role: worker
       task_classes: [implementation]
+      packet_template_kind: delivery_task_packet
+      closure_class: implementation
+      stage: execution
+      completion_blocker: pending_implementation_evidence
+      inclusion_rule: always
       default_carrier: junior
       handoff:
         next_role: tester
@@ -2102,6 +2138,11 @@ dev_team:
           role_id: analyst
           runtime_role: business_analyst
           task_class: specification
+          packet_template_kind: delivery_task_packet
+          closure_class: law
+          stage: design_gate
+          completion_blocker: pending_specification_evidence
+          inclusion_rule: when_design_gate
           command_template:
             command: vida agent-init --role business_analyst {{task_id}} --json
           lifecycle_hook_templates: [command_timing_summary]
@@ -2201,6 +2242,20 @@ dev_team:
         assert_eq!(flow["ordered_steps"][0]["step_id"], "analysis");
         assert_eq!(flow["ordered_steps"][0]["runtime_role"], "business_analyst");
         assert_eq!(flow["ordered_steps"][0]["task_class"], "specification");
+        assert_eq!(
+            flow["ordered_steps"][0]["packet_template_kind"],
+            "delivery_task_packet"
+        );
+        assert_eq!(flow["ordered_steps"][0]["closure_class"], "law");
+        assert_eq!(flow["ordered_steps"][0]["stage"], "design_gate");
+        assert_eq!(
+            flow["ordered_steps"][0]["completion_blocker"],
+            "pending_specification_evidence"
+        );
+        assert_eq!(
+            flow["ordered_steps"][0]["inclusion_rule"],
+            "when_design_gate"
+        );
         assert_eq!(flow["ordered_steps"][0]["requires_user_approval"], true);
         assert_eq!(
             flow["ordered_steps"][0]["approval_policy"]["mode"],
@@ -2211,6 +2266,21 @@ dev_team:
             "codex_host_tools"
         );
         assert_eq!(flow["ordered_steps"][1]["role_id"], "developer");
+        let developer_role = readiness["roles"]
+            .as_array()
+            .expect("roles should project")
+            .iter()
+            .find(|role| role["role_id"] == "developer")
+            .expect("developer role should project");
+        assert_eq!(
+            developer_role["packet_template_kind"],
+            "delivery_task_packet"
+        );
+        assert_eq!(
+            developer_role["completion_blocker"],
+            "pending_implementation_evidence"
+        );
+        assert_eq!(developer_role["inclusion_rule"], "always");
     }
 
     #[test]
