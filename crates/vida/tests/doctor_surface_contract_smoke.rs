@@ -1279,6 +1279,55 @@ fn status_and_orchestrator_init_help_describe_view_fields_and_json_options() {
 }
 
 #[test]
+fn taskflow_route_topic_help_documents_run_id_for_route_surfaces() {
+    let route_help = vida()
+        .args(["taskflow", "help", "route"])
+        .output()
+        .expect("taskflow route topic help should run");
+    assert!(
+        route_help.status.success(),
+        "taskflow route topic help should succeed: stderr={}",
+        String::from_utf8_lossy(&route_help.stderr)
+    );
+    let route_stdout = String::from_utf8_lossy(&route_help.stdout);
+    for expected in [
+        "vida taskflow route explain [--run-id <run-id>] [--json]",
+        "vida route explain [--run-id <run-id>] [--json]",
+        "vida taskflow validate-routing [--run-id <run-id>] [--json]",
+    ] {
+        assert!(
+            route_stdout.contains(expected),
+            "route topic help should document {expected}: {route_stdout}"
+        );
+    }
+    assert!(
+        !route_stdout.contains("vida taskflow route explain [--json]"),
+        "route topic help must not preserve stale run-id-free usage: {route_stdout}"
+    );
+
+    let validate_help = vida()
+        .args(["taskflow", "help", "validate-routing"])
+        .output()
+        .expect("taskflow validate-routing topic help should run");
+    assert!(
+        validate_help.status.success(),
+        "taskflow validate-routing topic help should succeed: stderr={}",
+        String::from_utf8_lossy(&validate_help.stderr)
+    );
+    let validate_stdout = String::from_utf8_lossy(&validate_help.stdout);
+    for expected in [
+        "vida taskflow validate-routing [--run-id <run-id>] [--json]",
+        "vida taskflow route explain [--run-id <run-id>] [--json]",
+        "vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+    ] {
+        assert!(
+            validate_stdout.contains(expected),
+            "validate-routing topic help should document {expected}: {validate_stdout}"
+        );
+    }
+}
+
+#[test]
 fn agent_host_bridge_outputs_default_toon_json_and_help_contracts() {
     let request_dir = unique_state_dir();
     std::fs::create_dir_all(&request_dir).expect("host bridge request dir should exist");

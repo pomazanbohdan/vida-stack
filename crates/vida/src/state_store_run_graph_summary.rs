@@ -8990,6 +8990,14 @@ mod tests {
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("task-replay-lineage-older", "open"))
+            .await
+            .expect("seed older replay lineage task");
+        store
+            .persist_task_record(test_task_record("task-replay-lineage-latest", "open"))
+            .await
+            .expect("seed latest replay lineage task");
 
         let mut older_status = sample_run_graph_status();
         older_status.run_id = "run-replay-lineage-older".to_string();
@@ -9321,6 +9329,14 @@ mod tests {
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("task-projection-old", "open"))
+            .await
+            .expect("seed older projection task");
+        store
+            .persist_task_record(test_task_record("task-projection-new", "open"))
+            .await
+            .expect("seed latest projection task");
 
         let mut older_status = sample_run_graph_status();
         older_status.run_id = "run-projection-old".to_string();

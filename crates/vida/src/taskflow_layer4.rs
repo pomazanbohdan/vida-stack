@@ -524,9 +524,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida taskflow route explain [--json]");
-            println!("  vida route explain [--json]");
-            println!("  vida taskflow validate-routing [--json]");
+            println!("  vida taskflow route explain [--run-id <run-id>] [--json]");
+            println!("  vida route explain [--run-id <run-id>] [--json]");
+            println!("  vida taskflow validate-routing [--run-id <run-id>] [--json]");
             println!();
             println!("Returned semantics:");
             println!(
@@ -551,9 +551,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida taskflow validate-routing [--json]");
-            println!("  vida taskflow route explain [--json]");
-            println!("  vida taskflow config-actuation census [--json]");
+            println!("  vida taskflow validate-routing [--run-id <run-id>] [--json]");
+            println!("  vida taskflow route explain [--run-id <run-id>] [--json]");
+            println!("  vida taskflow config-actuation census [--run-id <run-id>] [--json]");
             println!();
             println!("Returned semantics:");
             println!(

@@ -2569,6 +2569,32 @@ hierarchy: framework,contracts
         }
     }
 
+    fn run_graph_fixture_task(task_id: &str) -> TaskRecord {
+        TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: task_id.to_string(),
+            description: task_id.to_string(),
+            status: "open".to_string(),
+            priority: 1,
+            issue_type: "task".to_string(),
+            created_at: "2026-05-22T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "2026-05-22T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: TaskExecutionSemantics::default(),
+            planner_metadata: TaskPlannerMetadata::default(),
+            provider_mapping: None,
+            dependencies: Vec::new(),
+        }
+    }
+
     #[tokio::test]
     async fn record_run_graph_status_persists_route_bound_approval_delegation_receipt() {
         let nanos = SystemTime::now()
@@ -2885,6 +2911,10 @@ hierarchy: framework,contracts
         ));
 
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(run_graph_fixture_task("task-current"))
+            .await
+            .expect("seed current task");
 
         let mut status = sample_run_graph_status();
         status.run_id = "run-current".to_string();
@@ -2947,6 +2977,10 @@ hierarchy: framework,contracts
         ));
 
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(run_graph_fixture_task("vida-a"))
+            .await
+            .expect("seed latest task");
         let status = sample_run_graph_status();
         store
             .record_run_graph_status(&status)
@@ -3008,6 +3042,10 @@ hierarchy: framework,contracts
         ));
 
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(run_graph_fixture_task("vida-a"))
+            .await
+            .expect("seed latest task");
         let status = sample_run_graph_status();
         store
             .record_run_graph_status(&status)
@@ -3039,29 +3077,36 @@ hierarchy: framework,contracts
             .expect("latest run id should exist");
         assert_eq!(latest_run_id, "run-vida-a");
 
-        let recovery_error = store
+        let recovery = store
             .latest_run_graph_recovery_summary()
             .await
-            .expect_err("missing latest governance row should fail closed for recovery summary");
-        assert!(recovery_error
-            .to_string()
-            .contains("recovery/checkpoint summary is inconsistent"));
+            .expect("missing latest governance row should produce fail-closed recovery summary")
+            .expect("latest recovery summary should exist");
+        assert_eq!(recovery.run_id, "run-vida-a");
+        assert_eq!(recovery.policy_gate, "stale_missing_run_graph_governance");
+        assert_eq!(
+            recovery.handoff_state,
+            "blocked_missing_run_graph_governance"
+        );
+        assert!(!recovery.recovery_ready);
 
-        let checkpoint_error = store
+        let checkpoint = store
             .latest_run_graph_checkpoint_summary()
             .await
-            .expect_err("missing latest governance row should fail closed for checkpoint summary");
-        assert!(checkpoint_error
-            .to_string()
-            .contains("recovery/checkpoint summary is inconsistent"));
+            .expect("missing latest governance row should produce fail-closed checkpoint summary")
+            .expect("latest checkpoint summary should exist");
+        assert_eq!(checkpoint.run_id, "run-vida-a");
+        assert_eq!(checkpoint.resume_target, "none");
+        assert!(!checkpoint.recovery_ready);
 
-        let gate_error = store
+        let gate = store
             .latest_run_graph_gate_summary()
             .await
-            .expect_err("missing latest governance row should fail closed for gate summary");
-        assert!(gate_error
-            .to_string()
-            .contains("recovery/checkpoint summary is inconsistent"));
+            .expect("missing latest governance row should produce fail-closed gate summary")
+            .expect("latest gate summary should exist");
+        assert_eq!(gate.run_id, "run-vida-a");
+        assert_eq!(gate.policy_gate, "stale_missing_run_graph_governance");
+        assert_eq!(gate.handoff_state, "blocked_missing_run_graph_governance");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -3534,6 +3579,14 @@ hierarchy: framework,contracts
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(run_graph_fixture_task("task-aaa"))
+            .await
+            .expect("seed older task");
+        store
+            .persist_task_record(run_graph_fixture_task("task-bbb"))
+            .await
+            .expect("seed latest task");
 
         let mut older_status = sample_run_graph_status();
         older_status.run_id = "run-aaa".to_string();
