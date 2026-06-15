@@ -38,18 +38,17 @@ pub fn exception_takeover_state_label(
         return None;
     }
 
-    let gate_blocked = latest_recovery.is_some_and(|recovery| {
-        recovery.local_exception_takeover_gate.trim() == "blocked_open_delegated_cycle"
-    });
-
-    if !gate_blocked && receipt.lane_status == "lane_exception_takeover" {
-        return Some(ExceptionTakeoverStateLabel::Active);
-    }
-    if !gate_blocked && receipt.lane_status == "lane_exception_recorded" {
-        return Some(ExceptionTakeoverStateLabel::AdmissibleNotActive);
-    }
     if has_nonempty_value(receipt.supersedes_receipt_id) {
         return Some(ExceptionTakeoverStateLabel::Active);
+    }
+
+    let gate_clear = latest_recovery.is_some_and(|recovery| {
+        let gate = recovery.local_exception_takeover_gate.trim();
+        !gate.is_empty() && gate != "blocked_open_delegated_cycle"
+    });
+
+    if gate_clear && receipt.lane_status == "lane_exception_recorded" {
+        return Some(ExceptionTakeoverStateLabel::AdmissibleNotActive);
     }
     if receipt.lane_status == "lane_exception_takeover" {
         return Some(ExceptionTakeoverStateLabel::AdmissibleNotActive);
@@ -131,9 +130,10 @@ mod tests {
     }
 
     #[test]
-    fn exception_takeover_state_label_marks_explicit_takeover_active() {
+    fn exception_takeover_state_label_requires_supersession_for_active_takeover() {
         let receipt = ExceptionTakeoverReceipt {
             lane_status: "lane_exception_takeover",
+            supersedes_receipt_id: Some("supersede-1"),
             ..receipt()
         };
 
@@ -148,6 +148,20 @@ mod tests {
             Some(&receipt),
             Some(&recovery("delegated_cycle_clear"))
         ));
+    }
+
+    #[test]
+    fn exception_takeover_state_label_fails_closed_without_recovery_or_supersession() {
+        let receipt = ExceptionTakeoverReceipt {
+            lane_status: "lane_exception_takeover",
+            ..receipt()
+        };
+
+        assert_eq!(
+            exception_takeover_state_label(Some(&receipt), None),
+            Some(ExceptionTakeoverStateLabel::AdmissibleNotActive)
+        );
+        assert!(!exception_takeover_is_lawfully_active(Some(&receipt), None));
     }
 
     #[test]
