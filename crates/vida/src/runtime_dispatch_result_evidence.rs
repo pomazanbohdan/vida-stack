@@ -107,6 +107,154 @@ pub(crate) fn is_terminal_dispatch_execution_state(body: &serde_json::Value) -> 
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DispatchReworkRoute {
+    pub(crate) rework_target: String,
+    pub(crate) allowed_next_node: String,
+    pub(crate) blocker_code: Option<String>,
+}
+
+pub(crate) fn dispatch_rework_route_from_receipt_fields(
+    downstream_dispatch_result_path: Option<&str>,
+    dispatch_result_path: Option<&str>,
+    dispatch_packet_path: Option<&str>,
+) -> Option<DispatchReworkRoute> {
+    for result_path in dispatch_result_path_candidates_from_receipt_fields(
+        downstream_dispatch_result_path,
+        dispatch_result_path,
+        dispatch_packet_path,
+    ) {
+        if let Some(route) = dispatch_rework_route_from_result_path(&result_path) {
+            return Some(route);
+        }
+    }
+    None
+}
+
+pub(crate) fn dispatch_result_path_candidates_from_receipt_fields(
+    downstream_dispatch_result_path: Option<&str>,
+    dispatch_result_path: Option<&str>,
+    dispatch_packet_path: Option<&str>,
+) -> Vec<String> {
+    let mut paths = Vec::new();
+    push_non_empty_path(&mut paths, downstream_dispatch_result_path);
+    push_non_empty_path(&mut paths, dispatch_result_path);
+
+    if let Some(packet_path) = dispatch_packet_path {
+        let packet_path = packet_path.trim();
+        if !packet_path.is_empty() {
+            let packet_path =
+                crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
+            if let Ok(raw) = std::fs::read_to_string(packet_path) {
+                if let Ok(packet) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    push_json_string_path(
+                        &mut paths,
+                        &packet,
+                        &[
+                            "downstream_dispatch_result_path",
+                            "dispatch_result_path",
+                            "result_path",
+                        ],
+                    );
+                    if let Some(host_bridge_request) = packet.get("host_tool_bridge_request") {
+                        push_json_string_path(
+                            &mut paths,
+                            host_bridge_request,
+                            &["result_path", "dispatch_result_path"],
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    paths
+}
+
+fn push_json_string_path(paths: &mut Vec<String>, value: &serde_json::Value, field_names: &[&str]) {
+    for field_name in field_names {
+        push_non_empty_path(
+            paths,
+            value
+                .get(field_name)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim),
+        );
+    }
+}
+
+fn push_non_empty_path(paths: &mut Vec<String>, path: Option<&str>) {
+    let Some(path) = path.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if !paths.iter().any(|existing| existing == path) {
+        paths.push(path.to_string());
+    }
+}
+
+pub(crate) fn dispatch_rework_route_from_result_path(
+    result_path: &str,
+) -> Option<DispatchReworkRoute> {
+    let result_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(result_path);
+    let raw = std::fs::read_to_string(result_path).ok()?;
+    let result: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    dispatch_rework_route_from_result(&result)
+}
+
+pub(crate) fn dispatch_rework_route_from_result(
+    result: &serde_json::Value,
+) -> Option<DispatchReworkRoute> {
+    let rework_verdict = matches!(
+        result
+            .get("decision")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim),
+        Some("rework_required") | Some("blocked")
+    ) || matches!(
+        result
+            .get("verdict")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim),
+        Some("rework_required") | Some("blocked")
+    );
+    if !rework_verdict {
+        return None;
+    }
+    let rework_target = result
+        .get("rework_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let allowed_next_node = result
+        .get("allowed_next_node")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(DispatchReworkRoute {
+        rework_target: rework_target.replace('-', "_"),
+        allowed_next_node: allowed_next_node.replace('-', "_"),
+        blocker_code: result_blocker_code(result),
+    })
+}
+
+fn result_blocker_code(result: &serde_json::Value) -> Option<String> {
+    result
+        .get("blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            result
+                .get("blocker_codes")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|codes| codes.iter().find_map(serde_json::Value::as_str))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
 pub(crate) fn canonical_lane_execution_receipt_artifact_json(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     body: &serde_json::Value,

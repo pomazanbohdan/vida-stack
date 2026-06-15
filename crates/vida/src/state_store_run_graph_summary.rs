@@ -159,6 +159,22 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.handoff_state = "none".to_string();
             status.resume_target = "none".to_string();
             status.context_state = "sealed".to_string();
+        } else if let Some(rework_route) = downstream_rework_route_from_completion_result(&receipt)
+        {
+            let completed_target = receipt.dispatch_target.trim().replace('-', "_");
+            status.active_node = receipt.dispatch_target.clone();
+            status.next_node = Some(rework_route.allowed_next_node.clone());
+            status.lifecycle_stage = format!("{completed_target}_rework_required");
+            status.policy_gate = rework_route
+                .blocker_code
+                .unwrap_or_else(|| receipt.blocker_code.clone().unwrap_or_default());
+            status.handoff_state = format!("awaiting_{}", rework_route.allowed_next_node);
+            status.resume_target = format!("dispatch.{}", rework_route.allowed_next_node);
+            status.context_state = "sealed".to_string();
+            status.checkpoint_kind = "execution_cursor".to_string();
+            status.status = "ready".to_string();
+            status.recovery_ready = true;
+            return Ok(status);
         } else if let Some(blocked_source) =
             blocked_source_lane_from_downstream_dispatch_packet(&receipt)
         {
@@ -291,6 +307,16 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
 struct BlockedSourceLane {
     dispatch_target: String,
     blocker_code: Option<String>,
+}
+
+fn downstream_rework_route_from_completion_result(
+    receipt: &RunGraphDispatchReceiptStored,
+) -> Option<crate::runtime_dispatch_result_evidence::DispatchReworkRoute> {
+    crate::runtime_dispatch_result_evidence::dispatch_rework_route_from_receipt_fields(
+        receipt.downstream_dispatch_result_path.as_deref(),
+        receipt.dispatch_result_path.as_deref(),
+        receipt.dispatch_packet_path.as_deref(),
+    )
 }
 
 fn blocked_source_lane_from_downstream_dispatch_packet(
@@ -4509,6 +4535,80 @@ mod tests {
             selected_backend: Some("middle".to_string()),
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn blocked_downstream_completion_result_routes_to_developer_rework() {
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-coach-rework-route".to_string();
+        status.task_id = "coach-blocked-developer-rework-routing".to_string();
+        status.active_node = "tester".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "tester_blocked".to_string();
+        status.recovery_ready = false;
+
+        let root = temp_run_graph_root("coach-rework-route");
+        let result_path =
+            root.join(".vida/data/state/runtime-consumption/dispatch-results/coach-rework.json");
+        fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create result parent");
+        fs::write(
+            &result_path,
+            serde_json::to_string(&serde_json::json!({
+                "status": "blocked",
+                "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_code": "verification_rework_required",
+                "blocker_codes": ["verification_rework_required"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework",
+                "completion_verdict": "rework_required"
+            }))
+            .expect("serialize result"),
+        )
+        .expect("write result");
+        let packet_path = root.join(
+            ".vida/data/state/runtime-consumption/downstream-dispatch-packets/coach-rework.json",
+        );
+        fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        fs::write(
+            &packet_path,
+            serde_json::to_string(&serde_json::json!({
+                "source_dispatch_target": "coach_implementation_gate",
+                "source_dispatch_status": "blocked",
+                "source_blocker_code": "verification_rework_required",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["verification_rework_required"],
+                "downstream_dispatch_target": "tester",
+                "downstream_dispatch_result_path": result_path.display().to_string()
+            }))
+            .expect("serialize packet"),
+        )
+        .expect("write packet");
+
+        let mut receipt = sample_dispatch_receipt(&status.run_id);
+        receipt.dispatch_target = "tester".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("verification_rework_required".to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+
+        let stored_receipt = RunGraphDispatchReceiptStored::from(receipt);
+        let projected =
+            reconcile_run_graph_status_with_dispatch_receipt(status, Some(&stored_receipt))
+                .expect("rework route should reconcile");
+
+        assert_eq!(projected.status, "ready");
+        assert!(projected.recovery_ready);
+        assert_eq!(projected.active_node, "tester");
+        assert_eq!(projected.next_node.as_deref(), Some("developer_rework"));
+        assert_eq!(projected.handoff_state, "awaiting_developer_rework");
+        assert_eq!(projected.resume_target, "dispatch.developer_rework");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     fn reconciled_pack_dispatch_receipt_for_path(packet_path: String) -> RunGraphDispatchReceipt {

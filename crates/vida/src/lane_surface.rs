@@ -2836,42 +2836,38 @@ fn validated_host_bridge_paths_from_receipt(
 ) -> Result<HostBridgeReceiptPaths, String> {
     let canonical_request_path =
         canonicalize_existing_state_path(state_root, request_path, "request")?;
-    let Some(dispatch_result_path) = receipt.dispatch_result_path.as_deref() else {
-        return Err(
-            "Lane receipt is missing persisted host bridge dispatch result evidence.".into(),
-        );
-    };
-    let dispatch_result_path =
-        crate::runtime_dispatch_state::normalize_persisted_runtime_path(dispatch_result_path);
-    let dispatch_result_path = canonicalize_existing_regular_state_path(
-        state_root,
-        &dispatch_result_path,
-        "dispatch result",
-    )?;
-    let result = read_host_bridge_json_artifact_at_path(&dispatch_result_path)?;
-    let paths = match host_bridge_request_paths_from_dispatch_result(&result) {
-        Ok(paths) => paths,
-        Err(error) if allow_reconciled_request_paths => {
-            let mut request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
-            if request
-                .get("request_path")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .is_none()
-            {
-                if let Some(object) = request.as_object_mut() {
-                    object.insert(
-                        "request_path".to_string(),
-                        serde_json::json!(canonical_request_path.display().to_string()),
-                    );
-                }
+    let paths = if allow_reconciled_request_paths {
+        let mut request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
+        if request
+            .get("request_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            if let Some(object) = request.as_object_mut() {
+                object.insert(
+                    "request_path".to_string(),
+                    serde_json::json!(canonical_request_path.display().to_string()),
+                );
             }
-            host_bridge_request_paths_from_request_object(&request).map_err(|request_error| {
-                format!("{error}; reconciled request path evidence is invalid: {request_error}")
-            })?
         }
-        Err(error) => return Err(error),
+        host_bridge_request_paths_from_request_object(&request)?
+    } else {
+        let Some(dispatch_result_path) = receipt.dispatch_result_path.as_deref() else {
+            return Err(
+                "Lane receipt is missing persisted host bridge dispatch result evidence.".into(),
+            );
+        };
+        let dispatch_result_path =
+            crate::runtime_dispatch_state::normalize_persisted_runtime_path(dispatch_result_path);
+        let dispatch_result_path = canonicalize_existing_regular_state_path(
+            state_root,
+            &dispatch_result_path,
+            "dispatch result",
+        )?;
+        let result = read_host_bridge_json_artifact_at_path(&dispatch_result_path)?;
+        host_bridge_request_paths_from_dispatch_result(&result)?
     };
     let canonical_paths_request_path =
         canonicalize_existing_regular_state_path(state_root, &paths.request_path, "request")?;
@@ -4304,7 +4300,9 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     taskflow_artifacts,
                     &authoritative_owned_paths,
                     retrying_summary_guard || retrying_request_guard,
-                    host_bridge_completion_context.is_some(),
+                    host_bridge_completion_context.is_some()
+                        || retrying_summary_guard
+                        || retrying_request_guard,
                 ) {
                     Ok(evidence) => Some(evidence),
                     Err(error) => {
@@ -8909,6 +8907,114 @@ mod tests {
             .dispatch_result_path
             .as_deref()
             .is_some_and(|path| path.ends_with("run-host-bridge-stale-result.json")));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_path_validation_prefers_trusted_request_over_oversized_dispatch_result() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-large-dispatch-result-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let run_id = "run-host-bridge-large-dispatch-result";
+        let dispatch_target = "tester";
+
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/run-large-result.json");
+        let dispatch_result_path =
+            root.join("runtime-consumption/dispatch-results/run-large-result.json");
+        let request_path = root.join("host-tool-bridge/requests/run-large-result.json");
+        let result_path = root.join("host-tool-bridge/results/run-large-result.json");
+        let bridge_receipt_path = root.join("host-tool-bridge/receipts/run-large-result.json");
+
+        for path in [
+            &packet_path,
+            &dispatch_result_path,
+            &request_path,
+            &result_path,
+            &bridge_receipt_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("test path should have parent"))
+                .expect("create test artifact parent");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": dispatch_target,
+                "downstream_dispatch_active_target": dispatch_target,
+                "downstream_dispatch_status": "blocked"
+            })
+            .to_string(),
+        )
+        .expect("write downstream packet");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "run-large-result",
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": dispatch_target,
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "carrier_id": "senior",
+                "execution_boundary": "parent_host_session",
+                "dispatch_transport": "host_tool_bridge",
+                "request_path": request_path.display().to_string(),
+                "result_path": result_path.display().to_string(),
+                "receipt_path": bridge_receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write host bridge request");
+        std::fs::write(
+            &dispatch_result_path,
+            "x".repeat((MAX_HOST_BRIDGE_REQUEST_BYTES + 1) as usize),
+        )
+        .expect("write oversized dispatch result");
+
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = dispatch_target.to_string();
+        receipt.dispatch_result_path = Some(dispatch_result_path.display().to_string());
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+
+        let trusted =
+            validated_host_bridge_paths_from_receipt(&root, &request_path, &receipt, false, true)
+                .expect("trusted explicit request should not parse oversized dispatch result");
+        assert_eq!(
+            trusted.request_path,
+            std::fs::canonicalize(&request_path).unwrap()
+        );
+        assert!(trusted
+            .result_path
+            .ends_with("host-tool-bridge/results/run-large-result.json"));
+        assert!(trusted
+            .receipt_path
+            .ends_with("host-tool-bridge/receipts/run-large-result.json"));
+
+        let untrusted_error = match validated_host_bridge_paths_from_receipt(
+            &root,
+            &request_path,
+            &receipt,
+            false,
+            false,
+        ) {
+            Ok(_) => panic!("untrusted completion should still inspect dispatch result evidence"),
+            Err(error) => error,
+        };
+        assert!(
+            untrusted_error.contains("exceeds"),
+            "unexpected error: {untrusted_error}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
