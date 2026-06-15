@@ -291,10 +291,10 @@ fn descendant_progress_summary(
         canonical_commands,
         next_required_command,
     ) = if closure_candidate {
-        let close_command = human_command(&format!(
+        let close_command = format!(
             "vida task close {} --reason \"all descendants closed\" --json",
             quote_task_id(&root_task.id)
-        ));
+        );
         (
             "ready_to_close".to_string(),
             Some("root container is open while all descendants are closed-like".to_string()),
@@ -432,11 +432,23 @@ fn non_container_progress_state(
 }
 
 fn task_status_is_closed_like(status: &str) -> bool {
-    matches!(status, "closed" | "done" | "cancelled")
+    matches!(status, "closed" | "completed")
 }
 
 fn task_is_program_container(task: &TaskProgressRow) -> bool {
-    matches!(task.issue_type.as_str(), "epic" | "program" | "milestone")
+    normalize_work_item_issue_type(&task.issue_type) == "epic"
+}
+
+fn normalize_work_item_issue_type(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| match ch {
+            ' ' | '-' => '_',
+            _ => ch,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -461,7 +473,7 @@ mod tests {
         let rows = vec![
             row("parent", "open", "task", None),
             row("child-a", "closed", "task", Some("parent")),
-            row("child-b", "done", "task", Some("parent")),
+            row("child-b", "completed", "task", Some("parent")),
         ];
 
         let summary = task_progress_summary_from_rows(
@@ -478,6 +490,70 @@ mod tests {
         assert_eq!(summary.closure_candidate_state, "ready_to_close");
         assert_eq!(summary.closed_count, 1);
         assert_eq!(summary.descendant_count, 2);
+    }
+
+    #[test]
+    fn direct_child_progress_rejects_done_and_cancelled_as_open_work() {
+        let rows = vec![
+            row("parent", "open", "task", None),
+            row("child-done", "done", "task", Some("parent")),
+            row("child-cancelled", "cancelled", "task", Some("parent")),
+        ];
+
+        let summary = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DirectChildren,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert!(!summary.closure_candidate);
+        assert!(!summary.ready_for_close);
+        assert_eq!(summary.closure_candidate_state, "direct_children_remaining");
+        assert_eq!(summary.closed_count, 0);
+        assert_eq!(summary.percent_closed, 0.0);
+    }
+
+    #[test]
+    fn descendant_progress_uses_normalized_epic_as_container_taxonomy() {
+        let rows = vec![
+            row("parent", "open", " Epic ", None),
+            row("child", "completed", "task", Some("parent")),
+        ];
+
+        let summary = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert!(summary.closure_candidate);
+        assert!(summary.ready_for_close);
+        assert_eq!(summary.closure_candidate_state, "ready_to_close");
+    }
+
+    #[test]
+    fn descendant_progress_does_not_treat_program_or_milestone_as_containers() {
+        for issue_type in ["program", "milestone"] {
+            let rows = vec![row("parent", "in_progress", issue_type, None)];
+            let summary = task_progress_summary_from_rows(
+                &rows,
+                "parent",
+                TaskProgressBasis::DescendantsExcludingRoot,
+                |value| value.to_string(),
+                |value| value.to_string(),
+            )
+            .unwrap();
+
+            assert_eq!(summary.closure_candidate_state, "leaf_ready_for_close");
+            assert!(summary.ready_for_close);
+            assert!(!summary.closure_candidate);
+        }
     }
 
     #[test]
