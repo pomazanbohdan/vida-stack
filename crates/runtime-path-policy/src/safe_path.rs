@@ -223,6 +223,7 @@ pub fn new_output_path_under_root(
             kind,
             path: path.clone(),
         })?;
+    ensure_parent_safe_to_create(root, parent, kind)?;
     std::fs::create_dir_all(parent).map_err(|source| PathPolicyError::ParentCreate {
         kind,
         path: parent.to_path_buf(),
@@ -259,6 +260,31 @@ fn reject_dot_segment(path: &Path, kind: ArtifactPathKind) -> Result<(), PathPol
         });
     }
     Ok(())
+}
+
+fn ensure_parent_safe_to_create(
+    root: &StateRoot,
+    parent: &Path,
+    kind: ArtifactPathKind,
+) -> Result<(), PathPolicyError> {
+    let mut ancestor = parent;
+    while !ancestor.exists() {
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| PathPolicyError::MissingParent {
+                kind,
+                path: parent.to_path_buf(),
+            })?;
+    }
+    let ancestor_canonical =
+        ancestor
+            .canonicalize()
+            .map_err(|source| PathPolicyError::Canonicalize {
+                kind,
+                path: ancestor.to_path_buf(),
+                source,
+            })?;
+    ensure_under_root(root, &ancestor_canonical, kind)
 }
 
 fn ensure_under_root(
@@ -345,5 +371,47 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, PathPolicyError::AlreadyExists { .. }));
+    }
+
+    #[test]
+    fn new_output_path_rejects_outside_absolute_parent_before_create() {
+        let root_dir = temp_root("new-output-absolute-root");
+        let outside_dir = temp_root("new-output-absolute-outside");
+        let state_root = StateRoot::open(root_dir).unwrap();
+        let outside_parent = outside_dir.join("created-by-rejected-call");
+        let outside_path = outside_parent.join("result.json");
+
+        let err = new_output_path_under_root(
+            &state_root,
+            &outside_path,
+            ArtifactPathKind::HostBridgeResult,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, PathPolicyError::OutsideStateRoot { .. }));
+        assert!(!outside_parent.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_output_path_rejects_symlink_parent_before_create() {
+        let root_dir = temp_root("new-output-symlink-root");
+        let outside_dir = temp_root("new-output-symlink-outside");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let link = root_dir.join("link");
+        std::os::unix::fs::symlink(&outside_dir, &link).unwrap();
+        let outside_parent = outside_dir.join("created-by-rejected-call");
+
+        let err = new_output_path_under_root(
+            &state_root,
+            link.join("created-by-rejected-call").join("result.json"),
+            ArtifactPathKind::HostBridgeResult,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, PathPolicyError::OutsideStateRoot { .. }));
+        assert!(!outside_parent.exists());
     }
 }
