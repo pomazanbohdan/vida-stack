@@ -3388,18 +3388,12 @@ fn agent_dispatch_next_projection_name(
     )
 }
 
-fn dev_team_config_default_materializes_packets(activation_bundle: &serde_json::Value) -> bool {
-    activation_bundle
-        .pointer("/dev_team_readiness/orchestrator_command_contract/default_args")
-        .or_else(|| {
-            activation_bundle.pointer("/dev_team/orchestrator_command_contract/default_args")
-        })
-        .and_then(serde_json::Value::as_array)
-        .map(|args| {
-            args.iter()
-                .any(|arg| arg.as_str() == Some("--materialize-packets"))
-        })
-        .unwrap_or(false)
+fn agent_dispatch_next_effective_materialize_packets(
+    command: &AgentDispatchNextArgs,
+    _activation_bundle: &serde_json::Value,
+) -> bool {
+    // Config default_args are launch suggestions; packet writes require an explicit CLI flag.
+    command.materialize_packets
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4357,12 +4351,8 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                     explicit_state_dir,
                 )
             };
-            let effective_materialize_packets = if command.dev_team {
-                command.materialize_packets
-                    || dev_team_config_default_materializes_packets(&activation_bundle)
-            } else {
-                command.materialize_packets
-            };
+            let effective_materialize_packets =
+                agent_dispatch_next_effective_materialize_packets(&command, &activation_bundle);
             let projection_name =
                 agent_dispatch_next_projection_name(&command, effective_materialize_packets);
             let preview = if effective_materialize_packets {
@@ -4444,8 +4434,8 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 if let Some(object) = activation_bundle.as_object_mut() {
                     object.insert("dev_team_readiness".to_string(), readiness);
                 }
-                let effective_materialize_packets = command.materialize_packets
-                    || dev_team_config_default_materializes_packets(&activation_bundle);
+                let effective_materialize_packets =
+                    agent_dispatch_next_effective_materialize_packets(&command, &activation_bundle);
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
                 let mut preview = build_agent_dispatch_next_preview(
@@ -4480,12 +4470,13 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_status_runtime_task_stale_code, apply_continuation_dispatch_gate_to_preview,
-        build_agent_dispatch_next_preview, canonical_host_bridge_request_path,
-        configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
-        dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
-        host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
-        host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
+        agent_dispatch_next_effective_materialize_packets, agent_status_runtime_task_stale_code,
+        apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
+        canonical_host_bridge_request_path, configured_dev_team_first_step_for_task,
+        dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
+        dispatch_target_for_agent_dispatch_lane, host_bridge_adapter_payload,
+        host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
+        host_bridge_normalized_implementation_artifact_path,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, materialize_configured_agent_dispatch_lane,
@@ -4496,8 +4487,8 @@ mod tests {
         AgentDispatchLanePreview, AgentDispatchLaneSelectionTruth, MAX_HOST_BRIDGE_ARTIFACT_BYTES,
     };
     use crate::state_store::{
-        CreateTaskRequest, RunGraphDispatchReceipt, TaskExecutionSemantics, TaskRecord,
-        TaskSchedulingCandidate, TaskSchedulingProjection,
+        CreateTaskRequest, LauncherActivationSnapshot, RunGraphDispatchReceipt,
+        TaskExecutionSemantics, TaskRecord, TaskSchedulingCandidate, TaskSchedulingProjection,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
@@ -8249,6 +8240,45 @@ mod tests {
     }
 
     #[test]
+    fn agent_dispatch_next_materialization_requires_explicit_cli_flag_even_with_config_default() {
+        let activation_bundle = serde_json::json!({
+            "dev_team": {
+                "orchestrator_command_contract": {
+                    "default_args": ["--dev-team", "--materialize-packets"]
+                }
+            },
+            "dev_team_readiness": {
+                "orchestrator_command_contract": {
+                    "default_args": ["--dev-team", "--materialize-packets"]
+                }
+            }
+        });
+        let preview_command = AgentDispatchNextArgs {
+            lanes: 4,
+            scope: None,
+            current_task_id: None,
+            state_dir: None,
+            json: true,
+            dev_team: true,
+            materialize_packets: false,
+        };
+        assert!(
+            !agent_dispatch_next_effective_materialize_packets(
+                &preview_command,
+                &activation_bundle
+            ),
+            "dev-team config default_args must not turn preview into packet materialization"
+        );
+
+        let mut materialize_command = preview_command.clone();
+        materialize_command.materialize_packets = true;
+        assert!(agent_dispatch_next_effective_materialize_packets(
+            &materialize_command,
+            &activation_bundle
+        ));
+    }
+
+    #[test]
     fn agent_dispatch_next_preview_dev_team_uses_only_configured_registry_roles() {
         let projection = TaskSchedulingProjection {
             current_task_id: Some("task-analyst".to_string()),
@@ -8747,12 +8777,43 @@ mod tests {
 
     #[test]
     fn agent_dispatch_next_command_uses_configured_runtime_selection_truth() {
+        std::thread::Builder::new()
+            .name("agent_dispatch_next_command_selection_truth".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(agent_dispatch_next_command_uses_configured_runtime_selection_truth_inner)
+            .expect("test thread should spawn")
+            .join()
+            .expect("test thread should complete");
+    }
+
+    fn agent_dispatch_next_command_uses_configured_runtime_selection_truth_inner() {
         let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         runtime.block_on(async {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
+            let project_root = crate::repo_runtime_root();
+            let config_path = crate::config_file_path_for_root(&project_root);
+            let source_config_digest =
+                crate::launcher_activation_snapshot::config_file_digest(&config_path)
+                    .expect("config digest should compute");
+            let mut compiled_bundle = activation_bundle_with_worker_selection_truth();
+            compiled_bundle["role_selection"] = serde_json::json!({
+                "fallback_role": "worker",
+                "mode": "native"
+            });
+            store
+                .write_launcher_activation_snapshot(&LauncherActivationSnapshot {
+                    source: "state_store".to_string(),
+                    source_config_path: config_path.display().to_string(),
+                    source_config_digest,
+                    captured_at: "2026-03-08T00:00:00Z".to_string(),
+                    compiled_bundle,
+                    pack_router_keywords: serde_json::json!({}),
+                })
+                .await
+                .expect("launcher activation snapshot should seed");
             store
                 .create_task_with_fixture_parent(CreateTaskRequest {
                     task_id: "task-ready",
@@ -8777,6 +8838,7 @@ mod tests {
                 .expect("snapshot should refresh");
         });
 
+        let _cwd = guard_current_dir(&crate::repo_runtime_root());
         let _vida_root = EnvVarGuard::unset("VIDA_ROOT");
         let code = runtime.block_on(crate::run(cli(&[
             "agent",

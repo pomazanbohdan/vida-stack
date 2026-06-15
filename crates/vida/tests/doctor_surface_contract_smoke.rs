@@ -4614,6 +4614,75 @@ fn dev_team_materialization_blocks_missing_owned_paths_before_packet_write() {
 }
 
 #[test]
+fn dev_team_dispatch_next_json_preview_does_not_materialize_packets_without_flag() {
+    let state_dir = boot_session_triage_state();
+    sync_protocol_binding(&state_dir);
+    create_session_triage_task(
+        &state_dir,
+        "preview-only-epic",
+        "Preview only epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        "preview-only-task",
+        "Preview only task",
+        "task",
+        "in_progress",
+        "0",
+        Some("preview-only-epic"),
+    );
+
+    let dispatch = vida()
+        .args(["agent", "dispatch-next", "--dev-team", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("dispatch-next preview json should run");
+    assert!(
+        dispatch.status.success(),
+        "dispatch-next preview should succeed: stderr={} stdout={}",
+        String::from_utf8_lossy(&dispatch.stderr),
+        String::from_utf8_lossy(&dispatch.stdout)
+    );
+    let dispatch_stdout = String::from_utf8_lossy(&dispatch.stdout);
+    let dispatch_json: serde_json::Value =
+        serde_json::from_slice(&dispatch.stdout).expect("dispatch-next json should parse");
+    assert_eq!(dispatch_json["status"], "pass");
+    assert_eq!(dispatch_json["mode"], "preview-dev-team");
+    assert_eq!(
+        dispatch_json["packet_materialization"]["status"],
+        "not_requested"
+    );
+    assert_eq!(dispatch_json["packet_materialization"]["requested"], false);
+    assert_eq!(
+        dispatch_json["packet_materialization"]["materializes_packets"],
+        false
+    );
+    assert_eq!(
+        dispatch_json["packet_materialization"]["artifacts"],
+        serde_json::json!([])
+    );
+    assert!(
+        !dispatch_stdout.contains("dispatch_packet_path"),
+        "preview-only dispatch must not reference dispatch packet paths: {dispatch_stdout}"
+    );
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    let written_packets = std::fs::read_dir(&packet_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .count();
+    assert_eq!(
+        written_packets, 0,
+        "preview-only dispatch must not write dispatch packet artifacts"
+    );
+    let _ = std::fs::remove_dir_all(state_dir);
+}
+
+#[test]
 fn projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge() {
     let (project_root, state_dir) = project_bound_state_dir();
     let run_id = "zzzz-run-host-bridge-pass";
