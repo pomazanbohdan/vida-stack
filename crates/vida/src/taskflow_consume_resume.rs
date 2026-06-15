@@ -3898,14 +3898,12 @@ fn retry_backend_for_dispatch_receipt(
             })
             .is_some()
         {
-            if let Some(next_review_backend) = route.and_then(|route| {
-                crate::taskflow_routing::fanout_executor_backends_from_route(route)
-                    .into_iter()
-                    .map(|backend| backend.trim().to_string())
-                    .find(|backend| {
-                        !backend.is_empty() && Some(backend.as_str()) != current_backend
-                    })
-            }) {
+            if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
+                &role_selection.execution_plan,
+                &dispatch_receipt.dispatch_target,
+                route,
+                current_backend,
+            ) {
                 return Some(next_review_backend);
             }
         }
@@ -3975,18 +3973,6 @@ fn retry_backend_from_dispatch_packet(
         .or_else(|| dispatch_packet_json_from_current_project(packet_path))?;
     let execution_plan = &packet["role_selection_full"]["execution_plan"];
     let route = super::execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
-    if packet["packet_kind"].as_str() == Some("runtime_dispatch_packet")
-        && dispatch_target == "coach"
-    {
-        if let Some(next_review_backend) = route.and_then(|route| {
-            crate::taskflow_routing::fanout_executor_backends_from_route(route)
-                .into_iter()
-                .map(|backend| backend.trim().to_string())
-                .find(|backend| !backend.is_empty() && Some(backend.as_str()) != current_backend)
-        }) {
-            return Some(next_review_backend);
-        }
-    }
     if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
         execution_plan,
         dispatch_target,
@@ -16073,6 +16059,219 @@ agent_system:
         let fallback = retry_backend_for_dispatch_receipt(&role_selection, &receipt);
 
         assert_eq!(fallback.as_deref(), Some("opencode_cli"));
+        let _ = fs::remove_dir_all(packet_root);
+    }
+
+    #[test]
+    fn retry_backend_for_dispatch_receipt_skips_inadmissible_runtime_dispatch_fanout() {
+        let packet_root = unique_dispatch_packet_test_root("vida-retry-runtime-fanout-admissible");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
+        fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet"
+            }))
+            .expect("dispatch packet should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents",
+                        "fanout_executor_backends": ["hermes_cli", "opencode_cli"]
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "hermes_cli",
+                        "lane_admissibility": {
+                            "coach": true
+                        }
+                    },
+                    {
+                        "backend_id": "opencode_cli",
+                        "lane_admissibility": {
+                            "coach": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "lane_admissibility": {
+                            "coach": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-retry-runtime-fanout-admissibility".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes chat".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !crate::runtime_dispatch_state::backend_is_admissible_for_dispatch_target(
+                &role_selection.execution_plan,
+                "opencode_cli",
+                "coach"
+            )
+        );
+        let fallback = retry_backend_for_dispatch_receipt(&role_selection, &receipt);
+
+        assert_eq!(fallback.as_deref(), Some("internal_subagents"));
+        let _ = fs::remove_dir_all(packet_root);
+    }
+
+    #[test]
+    fn retry_backend_for_dispatch_receipt_skips_inadmissible_persisted_packet_fanout() {
+        let packet_root = unique_dispatch_packet_test_root("vida-retry-packet-fanout-admissible");
+        let packet_path = packet_root.join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet dir");
+        fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "coach": {
+                                "executor_backend": "hermes_cli",
+                                "fallback_executor_backend": "internal_subagents",
+                                "fanout_executor_backends": ["hermes_cli", "opencode_cli"]
+                            }
+                        },
+                        "backend_admissibility_matrix": [
+                            {
+                                "backend_id": "hermes_cli",
+                                "lane_admissibility": {
+                                    "coach": true
+                                }
+                            },
+                            {
+                                "backend_id": "opencode_cli",
+                                "lane_admissibility": {
+                                    "coach": false
+                                }
+                            },
+                            {
+                                "backend_id": "internal_subagents",
+                                "lane_admissibility": {
+                                    "coach": true
+                                }
+                            }
+                        ]
+                    }
+                }
+            }))
+            .expect("dispatch packet should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-retry-persisted-fanout-admissibility".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes chat".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        let persisted_packet = crate::read_json_file_if_present(&packet_path)
+            .expect("persisted packet should read");
+        assert!(
+            !crate::runtime_dispatch_state::backend_is_admissible_for_dispatch_target(
+                &persisted_packet["role_selection_full"]["execution_plan"],
+                "opencode_cli",
+                "coach"
+            )
+        );
+        let fallback = retry_backend_for_dispatch_receipt(&role_selection, &receipt);
+
+        assert_eq!(fallback.as_deref(), Some("internal_subagents"));
         let _ = fs::remove_dir_all(packet_root);
     }
 
