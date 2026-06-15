@@ -39,22 +39,26 @@ pub fn changed_markdown_paths(input: SafeGitStatusInput) -> Result<Vec<String>, 
 
 fn markdown_paths_from_status_stdout(stdout: &[u8]) -> Vec<String> {
     let mut paths = BTreeSet::new();
-    for line in String::from_utf8_lossy(stdout).lines() {
-        if line.len() < 4 {
+
+    let mut records = stdout.split(|byte| *byte == b'\0');
+    while let Some(record) = records.next() {
+        if record.len() < 4 {
             continue;
         }
-        let status = &line[..2];
-        if status == " D" || status == "D " || status == "DD" {
+
+        let status = &record[..2];
+        if status == b" D" || status == b"D " || status == b"DD" {
             continue;
         }
-        let path = line[3..]
-            .rsplit(" -> ")
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .trim_matches('"');
+
+        let path = String::from_utf8_lossy(&record[3..]);
+        let path = path.trim();
         if path.ends_with(".md") && !path.is_empty() {
             paths.insert(path.replace('\\', "/"));
+        }
+
+        if status[0] == b'R' || status[0] == b'C' {
+            let _ = records.next();
         }
     }
     paths.into_iter().collect()
@@ -89,8 +93,18 @@ fn run_git_status_with_timeout(input: SafeGitStatusInput) -> Result<Output, Docf
             "core.hooksPath=",
             "-c",
             "core.untrackedCache=false",
+            "-c",
+            "color.status=false",
+            "-c",
+            "core.quotePath=false",
         ])
-        .args(["status", "--short", "--"])
+        .args([
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+        ])
         .args(pathspecs);
     bounded_command_output(command, timeout)
 }
@@ -166,11 +180,58 @@ mod tests {
 
     #[test]
     fn git_status_parser_returns_changed_markdown_only() {
-        let stdout = b" M docs/a.md\n D docs/removed.md\nR  docs/old.md -> docs/new.md\n?? notes.txt\n?? docs/new.md\n";
+        let stdout = b" M docs/a.md\0 D docs/removed.md\0R  docs/new.md\0docs/old.md\0?? notes.txt\0?? docs/new.md\0";
         assert_eq!(
             markdown_paths_from_status_stdout(stdout),
             vec!["docs/a.md".to_string(), "docs/new.md".to_string()]
         );
+    }
+
+    #[test]
+    fn changed_markdown_paths_ignores_repo_local_status_formatting_controls() {
+        let root = unique_temp_root("docflow-core-git-status-formatting");
+        fs::create_dir_all(root.join("docs")).expect("docs dir should be created");
+        fs::write(root.join("docs/hidden.md"), "# Hidden\n").expect("doc should be written");
+
+        let git_init = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("init")
+            .output()
+            .expect("git init should run");
+        assert!(
+            git_init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&git_init.stderr)
+        );
+
+        for args in [
+            ["config", "status.showUntrackedFiles", "no"],
+            ["config", "color.status", "always"],
+            ["config", "core.quotePath", "true"],
+        ] {
+            let git_config = Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .expect("git config should run");
+            assert!(
+                git_config.status.success(),
+                "{}",
+                String::from_utf8_lossy(&git_config.stderr)
+            );
+        }
+
+        let paths = changed_markdown_paths(SafeGitStatusInput {
+            root: root.clone(),
+            pathspecs: vec![":(glob)**/*.md".to_string()],
+            timeout: Duration::from_secs(10),
+        })
+        .expect("safe git status should run");
+        assert_eq!(paths, vec!["docs/hidden.md".to_string()]);
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
     }
 
     #[test]
