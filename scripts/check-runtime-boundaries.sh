@@ -42,14 +42,11 @@ existing_paths() {
 run_check() {
     local name="$1"
     local pattern="$2"
-    local paths_var="$3"
-    local globs_var="$4"
-    local -n paths_ref="${paths_var}"
-    local -n globs_ref="${globs_var}"
+    shift 2
     local output exit_code
 
     set +e
-    output="$("${RG_BIN}" --color never --line-number "${pattern}" "${paths_ref[@]}" "${globs_ref[@]}" 2>&1)"
+    output="$("${RG_BIN}" --color never --line-number "${pattern}" "$@" 2>&1)"
     exit_code=$?
     set -e
 
@@ -108,7 +105,10 @@ RG_BIN="$(find_rg)" || {
     exit 2
 }
 
-mapfile -t vida_paths < <(existing_paths crates/vida/src)
+vida_paths=()
+while IFS= read -r path; do
+    vida_paths+=("${path}")
+done < <(existing_paths crates/vida/src)
 
 common_globs=(-g '!**/tests/**' -g '!**/generated/**' -g '!**/adapters/**')
 
@@ -119,7 +119,7 @@ path_absent_check 'legacy vida operator facade files removed' \
     crates/vida/src/operator_contracts.rs \
     crates/vida/src/operator_toon_report.rs || status=1
 path_present_check 'release1 operator output bridge present' crates/vida/src/release1_operator_output.rs || status=1
-run_check 'no legacy vida operator facade imports' 'mod operator_(command_text|contracts|toon_report)|crate::operator_(command_text|contracts|toon_report)|use crate::operator_(command_text|contracts|toon_report)::' vida_paths common_globs || status=1
-run_check 'no broad runtime_dispatch_state export' 'pub\(crate\) use runtime_dispatch_state::\*' vida_paths common_globs || status=1
+run_check 'no legacy vida operator facade imports' 'mod operator_(command_text|contracts|toon_report)|crate::operator_(command_text|contracts|toon_report)|use crate::operator_(command_text|contracts|toon_report)::' "${common_globs[@]}" "${vida_paths[@]}" || status=1
+run_check 'no broad runtime_dispatch_state export' 'pub\(crate\) use runtime_dispatch_state::\*' "${common_globs[@]}" "${vida_paths[@]}" || status=1
 
 exit "${status}"
