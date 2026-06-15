@@ -2411,6 +2411,82 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
 }
 
 #[test]
+fn coach_blocked_flow_does_not_dispatch_verification() {
+    let fixture = create_host_bridge_lane_fixture_for_target(
+        "host-bridge-coach-blocked-no-verification",
+        "crates/vida/src/lib.rs",
+        "coach",
+    );
+
+    let output = vida()
+        .args([
+            "lane",
+            "complete",
+            &fixture.run_id,
+            "--receipt-id",
+            "host-bridge-coach-blocked-no-verification-receipt",
+            "--host-bridge-request",
+            &fixture.request_path,
+            "--host-agent-id",
+            "agent-coach-blocked-regression",
+            "--host-bridge-summary",
+            "coach decision=blocked; implementation must return to developer rework",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("blocked coach lane complete should run");
+    assert_failure(&output, "blocked coach lane complete");
+
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lane complete json should parse");
+    assert_eq!(payload["status"], "blocked");
+    assert!(
+        !payload["blocker_codes"]
+            .as_array()
+            .expect("lane blocker codes should be an array")
+            .is_empty(),
+        "lane payload should expose a blocked envelope: {payload}"
+    );
+    assert_ne!(payload["downstream_dispatch_target"], "tester");
+    assert_ne!(payload["downstream_dispatch_target"], "verification");
+    assert_ne!(payload["downstream_dispatch_target"], "verifier");
+    let downstream_packet_path = payload["artifact_refs"]["downstream_dispatch_packet_path"]
+        .as_str()
+        .expect("blocked lane payload should retain the current coach packet path");
+    let downstream_packet: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(downstream_packet_path)
+            .expect("downstream packet reference should be readable"),
+    )
+    .expect("downstream packet reference should parse");
+    assert_eq!(downstream_packet["dispatch_target"], "coach");
+    assert_ne!(downstream_packet["dispatch_target"], "tester");
+    assert_ne!(downstream_packet["activation_runtime_role"], "verifier");
+
+    let completion_result_path = payload["artifact_refs"]["downstream_dispatch_result_path"]
+        .as_str()
+        .expect("blocked completion result path should be present");
+    let completion_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(completion_result_path)
+            .expect("blocked completion result should exist"),
+    )
+    .expect("blocked completion result should parse");
+    assert_eq!(completion_result["status"], "blocked");
+    assert_eq!(completion_result["decision"], "rework_required");
+    assert_eq!(completion_result["verdict"], "rework_required");
+    assert_eq!(completion_result["blocker_code"], "coach_rework_required");
+    assert_eq!(
+        completion_result["blocker_codes"],
+        serde_json::json!(["coach_rework_required"])
+    );
+    assert_eq!(completion_result["rework_target"], "developer");
+    assert_eq!(completion_result["allowed_next_node"], "developer_rework");
+    assert_ne!(completion_result["allowed_next_node"], "verification");
+    assert_ne!(completion_result["allowed_next_node"], "tester");
+}
+
+#[test]
 fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifacts() {
     let fixture =
         create_host_bridge_lane_fixture("host-bridge-public-retry", "crates/vida/src/lib.rs");

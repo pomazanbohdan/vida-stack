@@ -8387,6 +8387,24 @@ pub(crate) async fn derive_advanced_run_graph_status(
             ));
         }
 
+        match implementation_verification_outcome(existing.status.as_str()) {
+            ImplementationVerificationOutcome::Clean
+            | ImplementationVerificationOutcome::Approved => {}
+            ImplementationVerificationOutcome::ReworkReady
+            | ImplementationVerificationOutcome::FindingsBlocked => {
+                return Err(format!(
+                    "run-graph advance blocked: coach review requires developer_rework before verification; got status `{}`",
+                    existing.status
+                ));
+            }
+            ImplementationVerificationOutcome::UnexpectedStatus => {
+                return Err(format!(
+                    "run-graph advance expected coach status `clean` or `approved` before verification handoff, got `{}`",
+                    existing.status
+                ));
+            }
+        }
+
         let verification = compiled_control.verification.clone();
 
         return Ok(TaskflowRunGraphAdvancePayload {
@@ -14768,6 +14786,47 @@ mod tests {
         assert_eq!(payload.status.lifecycle_stage, "coach_active");
         assert_eq!(payload.status.next_node.as_deref(), Some("review_ensemble"));
         assert_eq!(payload.status.handoff_state, "awaiting_review_ensemble");
+    }
+
+    #[tokio::test]
+    async fn blocked_coach_lane_cannot_advance_to_verification() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let mut existing = default_run_graph_status(
+            "task-blocked-coach-no-verification",
+            "implementation",
+            "implementation",
+        );
+        existing.active_node = "coach".to_string();
+        existing.next_node = Some("review_ensemble".to_string());
+        existing.status = "blocked".to_string();
+        existing.lane_id = "coach_lane".to_string();
+        existing.lifecycle_stage = "coach_blocked".to_string();
+        existing.handoff_state = "awaiting_verification".to_string();
+        existing.resume_target = "dispatch.review_ensemble".to_string();
+        existing.recovery_ready = true;
+        store
+            .record_run_graph_status(&existing)
+            .await
+            .expect("record run status");
+
+        let error = derive_advanced_run_graph_status(&store, existing)
+            .await
+            .expect_err("blocked coach should not advance to verification");
+
+        assert!(
+            error.contains("developer_rework before verification"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !error.contains("verification_active"),
+            "blocked coach must not enter verification: {error}"
+        );
     }
 
     #[test]
