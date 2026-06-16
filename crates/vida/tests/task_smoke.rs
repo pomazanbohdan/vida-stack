@@ -2448,6 +2448,7 @@ fn cli_help_description_inventory_covers_agent_and_task_operator_options() {
             &["task", "close", "--help"][..],
             &[
                 "--reason <REASON>",
+                "--reason-file <PATH>",
                 "--include-global-progress",
                 "--stage-owned",
                 "--commit-file <COMMIT_FILES>",
@@ -17965,6 +17966,78 @@ fn task_update_accepts_notes_file_for_shell_safe_progress_recording() {
     assert_eq!(
         parsed["task"]["notes"],
         "line 1\nline 2 with `backticks` and $(shell-like text)\n"
+    );
+
+    fs::remove_dir_all(&state_dir).expect("cleanup state dir");
+}
+
+#[test]
+fn task_close_accepts_reason_file_for_shell_safe_multiline_evidence() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let import_path = format!("{state_dir}/tasks.jsonl");
+    let reason_path = format!("{state_dir}/close-reason.txt");
+    let close_reason = "line 1\nline 2 with `backticks` and $(shell-like text)\nfinal line\n";
+    sample_jsonl(&import_path);
+    fs::write(&reason_path, close_reason).expect("reason file should write");
+
+    run_and_assert_success(
+        &["task", "import-jsonl", &import_path, "--json"],
+        &state_dir,
+    );
+
+    let parsed = run_command_json(
+        &[
+            "task",
+            "close",
+            "vida-a",
+            "--reason-file",
+            &reason_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(parsed["task"]["status"], "closed");
+    assert_eq!(parsed["task"]["close_reason"], close_reason);
+
+    fs::remove_dir_all(&state_dir).expect("cleanup state dir");
+}
+
+#[test]
+fn task_close_rejects_reason_and_reason_file_together() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let import_path = format!("{state_dir}/tasks.jsonl");
+    let reason_path = format!("{state_dir}/close-reason.txt");
+    sample_jsonl(&import_path);
+    fs::write(&reason_path, "file reason\n").expect("reason file should write");
+
+    run_and_assert_success(
+        &["task", "import-jsonl", &import_path, "--json"],
+        &state_dir,
+    );
+
+    let output = run_command_capture(
+        &[
+            "task",
+            "close",
+            "vida-a",
+            "--reason",
+            "inline reason",
+            "--reason-file",
+            &reason_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Use only one reason source: --reason <text> or --reason-file <path>"),
+        "stderr was: {stderr}"
     );
 
     fs::remove_dir_all(&state_dir).expect("cleanup state dir");

@@ -2504,7 +2504,14 @@ pub(crate) struct TaskCloseArgs {
     pub(crate) task_id: String,
 
     #[arg(long = "reason", help = "Closure reason and evidence summary")]
-    pub(crate) reason: String,
+    pub(crate) reason: Option<String>,
+
+    #[arg(
+        long = "reason-file",
+        value_name = "PATH",
+        help = "Read the closure reason exactly from a UTF-8 file"
+    )]
+    pub(crate) reason_file: Option<PathBuf>,
 
     #[arg(long = "source", hide = true)]
     pub(crate) source: Option<String>,

@@ -6235,9 +6235,14 @@ fn task_close_git_automation_receipt(
 ) -> TaskCloseGitAutomationReceipt {
     let explicit_files = task_close_commit_file_strings(command, task);
     let commit_message = command.commit_message.clone().or_else(|| {
-        command
-            .commit
-            .then(|| format!("Close {}: {}", command.task_id, command.reason))
+        command.commit.then(|| {
+            let reason = command
+                .reason
+                .as_deref()
+                .or_else(|| task.and_then(|task| task.close_reason.as_deref()))
+                .unwrap_or("reason file evidence");
+            format!("Close {}: {}", command.task_id, reason)
+        })
     });
 
     if command.push && !command.commit {
@@ -10966,10 +10971,25 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .unwrap_or_else(state_store::default_state_dir);
             let project_root = project_root_for_task_state(&state_dir);
             let feedback_source = command.source.as_deref().unwrap_or("vida task close");
+            let close_reason = match resolve_optional_text_arg(
+                "reason",
+                command.reason.as_deref(),
+                command.reason_file.as_deref(),
+            ) {
+                Ok(Some(reason)) => reason,
+                Ok(None) => {
+                    eprintln!("task close requires --reason or --reason-file");
+                    return ExitCode::from(2);
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
             match StateStore::open_existing(state_dir.clone()).await {
                 Ok(store) => {
                     if crate::agent_feedback_surface::canonical_close_status_from_reason(
-                        &command.reason,
+                        &close_reason,
                     )
                     .is_some()
                     {
@@ -10987,7 +11007,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             explicit_state_dir,
                             project_root.as_deref(),
                             &task_value,
-                            &command.reason,
+                            &close_reason,
                             feedback_source,
                         );
                         if let Some((blocker_codes, next_actions)) =
@@ -11018,7 +11038,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     }
-                    match store.close_task(&command.task_id, &command.reason).await {
+                    match store.close_task(&command.task_id, &close_reason).await {
                         Ok(_task) => {
                             if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &command.task_id).await {
                             eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
@@ -11057,7 +11077,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 explicit_state_dir,
                                 project_root.as_deref(),
                                 &task_value,
-                                &command.reason,
+                                &close_reason,
                                 feedback_source,
                             );
                             let automation = if task_close_automation_requested(&command) {
