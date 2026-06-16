@@ -457,11 +457,9 @@ pub fn host_bridge_result_verdict_contract_blockers(
     result: &Value,
     required_result_fields: &[String],
 ) -> Vec<String> {
-    let required_fields = if required_result_fields.is_empty() {
-        crate::request::default_host_bridge_required_result_fields()
-    } else {
-        required_result_fields.to_vec()
-    };
+    let required_fields = crate::request::canonical_host_bridge_required_result_fields(
+        required_result_fields.to_vec(),
+    );
     let mut blockers = Vec::new();
     for field in required_fields {
         if !result.get(field.as_str()).is_some_and(|value| {
@@ -755,6 +753,21 @@ mod tests {
                 &result,
                 &crate::request::default_host_bridge_required_result_fields(),
             ),
+            vec!["host_bridge_result_missing_verdict_field".to_string()]
+        );
+    }
+
+    #[test]
+    fn result_verdict_contract_rejects_request_schema_downgrade() {
+        let result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "allowed_next_node": "next"
+        });
+        let downgraded_required_fields = vec!["allowed_next_node".to_string()];
+
+        assert_eq!(
+            host_bridge_result_verdict_contract_blockers(&result, &downgraded_required_fields),
             vec!["host_bridge_result_missing_verdict_field".to_string()]
         );
     }
