@@ -496,57 +496,35 @@ pub fn host_bridge_result_verdict_contract_blockers(
         push_unique_blocker(&mut blockers, "host_bridge_result_invalid_blocker_codes");
     }
 
-    let pass_result = result
-        .get("status")
+    let status = result.get("status").and_then(Value::as_str).map(str::trim);
+    let execution_state = result
+        .get("execution_state")
         .and_then(Value::as_str)
-        .is_some_and(|status| status == Release1ContractStatus::Pass.as_str())
-        && result
-            .get("execution_state")
-            .and_then(Value::as_str)
-            .is_some_and(|state| state == "executed");
+        .map(str::trim);
+    let pass_result = status == Some(Release1ContractStatus::Pass.as_str())
+        && execution_state == Some("executed");
+    let blocked_result = status == Some(Release1ContractStatus::Blocked.as_str())
+        && execution_state == Some(Release1ContractStatus::Blocked.as_str());
     let pass_verdict =
         decision == Some("approve") && verdict == Some(Release1ContractStatus::Pass.as_str());
-    if pass_result {
-        if !pass_verdict {
-            push_unique_blocker(
-                &mut blockers,
-                "host_bridge_result_decision_verdict_mismatch",
-            );
-        }
-        if blocker_codes.is_some_and(|codes| !codes.is_empty()) {
-            push_unique_blocker(&mut blockers, "host_bridge_result_blocker_codes_mismatch");
-        }
+    let rework_verdict = matches!(decision, Some("rework_required") | Some("blocked"))
+        && matches!(verdict, Some("rework_required") | Some("blocked"));
+
+    let verdict_tuple_complete =
+        status.is_some() && execution_state.is_some() && decision.is_some() && verdict.is_some();
+    if verdict_tuple_complete && !(pass_result && pass_verdict || blocked_result && rework_verdict)
+    {
+        push_unique_blocker(
+            &mut blockers,
+            "host_bridge_result_decision_verdict_mismatch",
+        );
     }
 
-    let blocked_result = result
-        .get("status")
-        .and_then(Value::as_str)
-        .is_some_and(|status| status == Release1ContractStatus::Blocked.as_str())
-        && result
-            .get("execution_state")
-            .and_then(Value::as_str)
-            .is_some_and(|state| state == Release1ContractStatus::Blocked.as_str());
-    let rework_verdict = matches!(decision, Some("rework_required") | Some("blocked"))
-        || matches!(verdict, Some("rework_required") | Some("blocked"));
-    if pass_verdict && !pass_result {
-        push_unique_blocker(
-            &mut blockers,
-            "host_bridge_result_decision_verdict_mismatch",
-        );
+    if pass_result && blocker_codes.is_some_and(|codes| !codes.is_empty()) {
+        push_unique_blocker(&mut blockers, "host_bridge_result_blocker_codes_mismatch");
     }
-    if blocked_result && !rework_verdict {
-        push_unique_blocker(
-            &mut blockers,
-            "host_bridge_result_decision_verdict_mismatch",
-        );
-    }
+
     if rework_verdict {
-        if !blocked_result {
-            push_unique_blocker(
-                &mut blockers,
-                "host_bridge_result_decision_verdict_mismatch",
-            );
-        }
         if blocker_codes.is_none_or(|codes| codes.is_empty()) {
             push_unique_blocker(&mut blockers, "host_bridge_result_blocker_codes_missing");
         }
@@ -899,6 +877,18 @@ mod tests {
                     "execution_state": "blocked",
                     "decision": "approve",
                     "verdict": "pass",
+                    "blocker_codes": [],
+                    "rework_target": null,
+                    "allowed_next_node": "next"
+                }),
+                "host_bridge_result_decision_verdict_mismatch",
+            ),
+            (
+                serde_json::json!({
+                    "status": "blocked",
+                    "execution_state": "executed",
+                    "decision": "defer",
+                    "verdict": "defer",
                     "blocker_codes": [],
                     "rework_target": null,
                     "allowed_next_node": "next"
