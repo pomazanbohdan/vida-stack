@@ -1659,6 +1659,9 @@ fn build_orchestrator_runtime_contract(
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let continuation_idle = continuation_binding["status"].as_str() == Some("idle")
+        || continuation_binding["primary_path"].as_str() == Some("idle_project_ready")
+        || pause_boundary_gate == Some("allowed_no_active_work");
     let default_topology =
         init_view["project_activation"]["normal_work_defaults"]["default_agent_topology"].clone();
     let configured_flows = dev_team_readiness["flows"].clone();
@@ -1669,6 +1672,13 @@ fn build_orchestrator_runtime_contract(
             "surface": "vida project-activator",
             "command": "vida project-activator --json",
             "reason": "project activation must complete before normal dispatch"
+        })
+    } else if continuation_idle {
+        serde_json::json!({
+            "status": "idle_project_ready",
+            "surface": "vida task ready",
+            "command": "vida task ready --json",
+            "reason": "no active TaskFlow or runtime bounded unit is present; no dispatch is required until work is selected"
         })
     } else if !continuation_allowed
         && (ambiguity_reason.is_some()
@@ -2470,6 +2480,72 @@ mod tests {
         assert_eq!(
             orchestrator_init_effective_status(&init_view, &contract),
             "blocked"
+        );
+    }
+
+    #[test]
+    fn orchestrator_runtime_contract_preserves_idle_no_active_work() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let bundle = crate::taskflow_runtime_bundle::blocking_runtime_bundle("test");
+        let init_view = json!({
+            "status": "ready_enough_for_normal_work",
+            "local_runtime_surface": "vida orchestrator-init",
+            "boot_surface": "vida boot",
+            "project_activation": {
+                "activation_pending": false,
+                "status": "ready_enough_for_normal_work",
+                "normal_work_defaults": {
+                    "default_agent_topology": "dev-team"
+                }
+            },
+            "project_root": harness.path().display().to_string(),
+            "root_artifact_id": "root",
+            "continuation_binding": {
+                "status": "idle",
+                "continuation_allowed": false,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": "No active TaskFlow work and no runtime bounded unit are present.",
+                "primary_path": "idle_project_ready",
+                "sequential_vs_parallel_posture": "not_applicable_no_active_work",
+                "pause_boundary_gate": "allowed_no_active_work",
+                "ambiguity_reason": serde_json::Value::Null,
+                "next_actions": []
+            }
+        });
+        let dev_team_readiness = json!({
+            "flows": [],
+            "roles": [],
+            "status": "ready",
+            "sequence": [],
+            "active_selection": serde_json::Value::Null,
+            "source_paths": []
+        });
+        let contract = build_orchestrator_runtime_contract(&init_view, &dev_team_readiness);
+        let payload = build_orchestrator_init_summary_payload(
+            &init_view,
+            &dev_team_readiness,
+            &contract,
+            &bundle,
+            harness.path(),
+        );
+
+        assert_eq!(
+            contract["next_lawful_dispatch_action"]["status"],
+            "idle_project_ready"
+        );
+        assert_eq!(
+            orchestrator_init_effective_status(&init_view, &contract),
+            "ready_enough_for_normal_work"
+        );
+        assert_eq!(payload["status"], "ready_enough_for_normal_work");
+        assert_eq!(
+            payload["continuation_binding"]["primary_path"],
+            "idle_project_ready"
+        );
+        assert_eq!(
+            payload["continuation_binding"]["pause_boundary_gate"],
+            "allowed_no_active_work"
         );
     }
 

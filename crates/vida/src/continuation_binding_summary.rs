@@ -900,6 +900,22 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
         }
     }
 
+    if terminal_completed_without_next_unit_is_idle {
+        return serde_json::json!({
+            "status": "idle",
+            "continuation_allowed": false,
+            "continuation_required_now": false,
+            "active_bounded_unit": serde_json::Value::Null,
+            "binding_source": serde_json::Value::Null,
+            "why_this_unit": "No active TaskFlow work and no runtime bounded unit are present.",
+            "primary_path": "idle_project_ready",
+            "sequential_vs_parallel_posture": "not_applicable_no_active_work",
+            "pause_boundary_gate": "allowed_no_active_work",
+            "ambiguity_reason": serde_json::Value::Null,
+            "next_actions": []
+        });
+    }
+
     serde_json::json!({
         "status": "ambiguous",
         "continuation_allowed": false,
@@ -2471,6 +2487,20 @@ mod tests {
             summary["ambiguity_reason"],
             "completed_without_explicit_next_bounded_unit"
         );
+    }
+
+    #[test]
+    fn missing_runtime_evidence_is_idle_when_taskflow_has_no_active_work() {
+        let summary = build_continuation_binding_summary_with_idle_policy(
+            None, None, None, None, None, false, true, false,
+        );
+
+        assert_eq!(summary["status"], "idle");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+        assert_eq!(summary["primary_path"], "idle_project_ready");
+        assert_eq!(summary["pause_boundary_gate"], "allowed_no_active_work");
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }
 
     #[test]
