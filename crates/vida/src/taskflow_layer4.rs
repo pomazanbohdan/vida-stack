@@ -63,6 +63,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\""
             );
+            println!("  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run");
             println!(
                 "  vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels alpha,beta"
             );
@@ -123,6 +124,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!(
                 "  Create one bounded child task: vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\""
+            );
+            println!(
+                "  Create many bounded child tasks from JSON/YAML/JSONL: vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run"
             );
             println!(
                 "  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels alpha,beta"

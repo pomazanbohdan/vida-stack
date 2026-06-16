@@ -222,6 +222,7 @@ fn command_label(command: &Option<Command>) -> String {
 
 fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
     match &args.command {
+        TaskCommand::Import(command) => command.state_dir.is_some(),
         TaskCommand::ImportJsonl(command) => command.state_dir.is_some(),
         TaskCommand::ReplaceJsonl(command) => command.state_dir.is_some(),
         TaskCommand::ExportJsonl(command) => command.state_dir.is_some(),

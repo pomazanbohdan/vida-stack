@@ -6,7 +6,7 @@ use crate::task_cli_render::{
     task_ready_payload, task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use taskflow_core::task::block::{append_task_block_note, normalize_task_block_list};
 use taskflow_core::task::dependencies::{
     parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
@@ -2691,6 +2691,1273 @@ fn task_update_planner_metadata_arg(
         metadata.proof_targets = normalize_proof_target_commands(proof_targets);
     }
     Some(metadata)
+}
+
+const TASK_BULK_IMPORT_SURFACE: &str = "vida task import";
+const TASK_BULK_IMPORT_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+struct TaskBulkImportRawItem {
+    index: usize,
+    line: Option<usize>,
+    value: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+struct TaskBulkImportParsedInput {
+    input_format: String,
+    requested_count: usize,
+    tasks: Vec<TaskBulkImportPlannedTask>,
+    validation_errors: Vec<TaskBulkImportValidationError>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskBulkImportValidationError {
+    index: usize,
+    line: Option<usize>,
+    task_id: Option<String>,
+    field: Option<String>,
+    reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskBulkImportPlannedTask {
+    index: usize,
+    line: Option<usize>,
+    task_id: String,
+    title: String,
+    display_id: Option<String>,
+    description: String,
+    issue_type: String,
+    status: String,
+    priority: u32,
+    parent_id: Option<String>,
+    notes: Option<String>,
+    labels: Vec<String>,
+    execution_semantics: state_store::TaskExecutionSemantics,
+    planner_metadata: state_store::TaskPlannerMetadata,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskBulkImportResult {
+    source_path: String,
+    input_format: String,
+    dry_run: bool,
+    applied: bool,
+    requested_count: usize,
+    planned_count: usize,
+    created_count: usize,
+    validation_error_count: usize,
+    graph_issue_count: usize,
+    planned_task_ids: Vec<String>,
+    created_task_ids: Vec<String>,
+    validation_errors: Vec<TaskBulkImportValidationError>,
+    graph_issues: Vec<state_store::TaskGraphIssue>,
+}
+
+struct TaskBulkImportPlan {
+    result: TaskBulkImportResult,
+    tasks: Vec<TaskBulkImportPlannedTask>,
+}
+
+fn task_bulk_import_validation_error(
+    index: usize,
+    line: Option<usize>,
+    task_id: Option<String>,
+    field: Option<&str>,
+    reason: impl Into<String>,
+) -> TaskBulkImportValidationError {
+    TaskBulkImportValidationError {
+        index,
+        line,
+        task_id,
+        field: field.map(ToOwned::to_owned),
+        reason: reason.into(),
+    }
+}
+
+fn task_bulk_import_format_label(format: crate::TaskImportFormatArg) -> &'static str {
+    match format {
+        crate::TaskImportFormatArg::Auto => "auto",
+        crate::TaskImportFormatArg::Json => "json",
+        crate::TaskImportFormatArg::Yaml => "yaml",
+        crate::TaskImportFormatArg::Jsonl => "jsonl",
+    }
+}
+
+fn resolve_task_bulk_import_format(
+    path: &std::path::Path,
+    requested: crate::TaskImportFormatArg,
+) -> Result<&'static str, String> {
+    match requested {
+        crate::TaskImportFormatArg::Json => return Ok("json"),
+        crate::TaskImportFormatArg::Yaml => return Ok("yaml"),
+        crate::TaskImportFormatArg::Jsonl => return Ok("jsonl"),
+        crate::TaskImportFormatArg::Auto => {}
+    }
+    match path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("json") => Ok("json"),
+        Some("yaml" | "yml") => Ok("yaml"),
+        Some("jsonl" | "ndjson") => Ok("jsonl"),
+        Some(extension) => Err(format!(
+            "Cannot infer task import format from extension `{extension}`; pass --format json, --format yaml, or --format jsonl."
+        )),
+        None => Err(
+            "Cannot infer task import format from a path without extension; pass --format json, --format yaml, or --format jsonl."
+                .to_string(),
+        ),
+    }
+}
+
+fn read_task_bulk_import_file(path: &std::path::Path) -> Result<String, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Failed to inspect import file `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Refusing to read import file `{}`: symlinks are not allowed",
+            path.display()
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "Refusing to read import file `{}`: expected a regular file",
+            path.display()
+        ));
+    }
+    if metadata.len() > TASK_BULK_IMPORT_MAX_FILE_BYTES {
+        return Err(format!(
+            "Refusing to read import file `{}`: file is {} bytes, limit is {} bytes",
+            path.display(),
+            metadata.len(),
+            TASK_BULK_IMPORT_MAX_FILE_BYTES
+        ));
+    }
+    std::fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read import file `{}`: {error}", path.display()))
+}
+
+fn task_bulk_import_raw_items_from_value(
+    value: serde_json::Value,
+) -> Result<Vec<TaskBulkImportRawItem>, String> {
+    let values = match value {
+        serde_json::Value::Array(items) => items,
+        serde_json::Value::Object(mut object) => match object.remove("tasks") {
+            Some(serde_json::Value::Array(items)) => items,
+            Some(_) => return Err("Task import object field `tasks` must be an array.".to_string()),
+            None => {
+                return Err(
+                    "Task import file must be an array or an object containing a `tasks` array."
+                        .to_string(),
+                );
+            }
+        },
+        _ => {
+            return Err(
+                "Task import file must be an array or an object containing a `tasks` array."
+                    .to_string(),
+            );
+        }
+    };
+    Ok(values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| TaskBulkImportRawItem {
+            index,
+            line: None,
+            value,
+        })
+        .collect())
+}
+
+fn parse_task_bulk_import_raw_items(
+    path: &std::path::Path,
+    requested_format: crate::TaskImportFormatArg,
+) -> Result<(String, Vec<TaskBulkImportRawItem>), String> {
+    let format = resolve_task_bulk_import_format(path, requested_format)?;
+    let text = read_task_bulk_import_file(path)?;
+    let items = match format {
+        "json" => {
+            let value = serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|error| format!("Failed to parse JSON task import file: {error}"))?;
+            task_bulk_import_raw_items_from_value(value)?
+        }
+        "yaml" => {
+            let value = serde_yaml::from_str::<serde_yaml::Value>(&text)
+                .map_err(|error| format!("Failed to parse YAML task import file: {error}"))?;
+            let value = serde_json::to_value(value)
+                .map_err(|error| format!("Failed to normalize YAML task import file: {error}"))?;
+            task_bulk_import_raw_items_from_value(value)?
+        }
+        "jsonl" => {
+            let mut items = Vec::new();
+            for (line_index, line) in text.lines().enumerate() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let value =
+                    serde_json::from_str::<serde_json::Value>(trimmed).map_err(|error| {
+                        format!(
+                            "Failed to parse JSONL task import file at line {}: {error}",
+                            line_index + 1
+                        )
+                    })?;
+                items.push(TaskBulkImportRawItem {
+                    index: items.len(),
+                    line: Some(line_index + 1),
+                    value,
+                });
+            }
+            items
+        }
+        other => {
+            return Err(format!("Unsupported task import format `{other}`."));
+        }
+    };
+    Ok((format.to_string(), items))
+}
+
+fn task_bulk_json_field<'a>(
+    value: &'a serde_json::Value,
+    names: &[&str],
+) -> Option<&'a serde_json::Value> {
+    let object = value.as_object()?;
+    names.iter().find_map(|name| object.get(*name))
+}
+
+fn task_bulk_json_object_field<'a>(
+    value: &'a serde_json::Value,
+    names: &[&str],
+) -> Result<Option<&'a serde_json::Map<String, serde_json::Value>>, String> {
+    match task_bulk_json_field(value, names) {
+        Some(serde_json::Value::Object(object)) => Ok(Some(object)),
+        Some(serde_json::Value::Null) | None => Ok(None),
+        Some(_) => Err(format!("field `{}` must be an object", names[0])),
+    }
+}
+
+fn task_bulk_json_string_field(
+    value: &serde_json::Value,
+    names: &[&str],
+) -> Result<Option<String>, String> {
+    match task_bulk_json_field(value, names) {
+        Some(serde_json::Value::String(text)) => {
+            Ok(Some(text.trim().to_string()).filter(|text| !text.is_empty()))
+        }
+        Some(serde_json::Value::Null) | None => Ok(None),
+        Some(_) => Err(format!("field `{}` must be a string", names[0])),
+    }
+}
+
+fn task_bulk_json_u32_field(
+    value: &serde_json::Value,
+    names: &[&str],
+) -> Result<Option<u32>, String> {
+    match task_bulk_json_field(value, names) {
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .map(Some)
+            .ok_or_else(|| format!("field `{}` must be a non-negative u32", names[0])),
+        Some(serde_json::Value::String(text)) => text
+            .trim()
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|_| format!("field `{}` must be a non-negative u32", names[0])),
+        Some(serde_json::Value::Null) | None => Ok(None),
+        Some(_) => Err(format!("field `{}` must be a non-negative u32", names[0])),
+    }
+}
+
+fn task_bulk_string_list_from_value(
+    field_name: &str,
+    value: &serde_json::Value,
+) -> Result<Vec<String>, String> {
+    match value {
+        serde_json::Value::String(text) => Ok(parse_label_values(&[text.to_string()])),
+        serde_json::Value::Array(values) => {
+            let mut result = Vec::new();
+            for item in values {
+                match item {
+                    serde_json::Value::String(text) => {
+                        result.extend(parse_label_values(&[text.to_string()]));
+                    }
+                    _ => {
+                        return Err(format!(
+                            "field `{field_name}` array entries must be strings"
+                        ))
+                    }
+                }
+            }
+            Ok(result)
+        }
+        serde_json::Value::Null => Ok(Vec::new()),
+        _ => Err(format!(
+            "field `{field_name}` must be a string or an array of strings"
+        )),
+    }
+}
+
+fn task_bulk_json_string_list_field(
+    value: &serde_json::Value,
+    names: &[&str],
+) -> Result<Vec<String>, String> {
+    match task_bulk_json_field(value, names) {
+        Some(value) => task_bulk_string_list_from_value(names[0], value),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn task_bulk_nested_string_field(
+    value: &serde_json::Value,
+    nested: Option<&serde_json::Map<String, serde_json::Value>>,
+    names: &[&str],
+) -> Result<Option<String>, String> {
+    if let Some(value) = task_bulk_json_string_field(value, names)? {
+        return Ok(Some(value));
+    }
+    match nested.and_then(|object| names.iter().find_map(|name| object.get(*name))) {
+        Some(serde_json::Value::String(text)) => {
+            Ok(Some(text.trim().to_string()).filter(|text| !text.is_empty()))
+        }
+        Some(serde_json::Value::Null) | None => Ok(None),
+        Some(_) => Err(format!("field `{}` must be a string", names[0])),
+    }
+}
+
+fn task_bulk_nested_string_list_field(
+    value: &serde_json::Value,
+    nested: Option<&serde_json::Map<String, serde_json::Value>>,
+    names: &[&str],
+) -> Result<Vec<String>, String> {
+    let mut result = task_bulk_json_string_list_field(value, names)?;
+    if let Some(nested_value) =
+        nested.and_then(|object| names.iter().find_map(|name| object.get(*name)))
+    {
+        result.extend(task_bulk_string_list_from_value(names[0], nested_value)?);
+    }
+    Ok(result)
+}
+
+fn task_bulk_normalize_string_list(values: Vec<String>) -> Vec<String> {
+    let mut normalized = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn task_bulk_merge_string_lists(left: Vec<String>, right: Vec<String>) -> Vec<String> {
+    task_bulk_normalize_string_list(left.into_iter().chain(right).collect())
+}
+
+fn task_bulk_normalize_optional_text(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn task_bulk_validate_execution_mode(
+    task_id: &str,
+    mode: Option<String>,
+) -> Result<Option<String>, String> {
+    let mode = task_bulk_normalize_optional_text(mode);
+    let Some(mode) = mode else {
+        return Ok(None);
+    };
+    match mode.as_str() {
+        "sequential" | "parallel_safe" | "exclusive" | "container_only" => Ok(Some(mode)),
+        _ => Err(format!(
+            "task `{task_id}` execution_mode must be one of sequential, parallel_safe, exclusive, container_only"
+        )),
+    }
+}
+
+fn task_bulk_parse_item(
+    raw: TaskBulkImportRawItem,
+    command: &TaskBulkImportArgs,
+) -> Result<TaskBulkImportPlannedTask, TaskBulkImportValidationError> {
+    if !raw.value.is_object() {
+        return Err(task_bulk_import_validation_error(
+            raw.index,
+            raw.line,
+            None,
+            None,
+            "task import item must be an object",
+        ));
+    }
+    let item = &raw.value;
+    let task_id = task_bulk_json_string_field(item, &["id", "task_id"])
+        .map_err(|reason| {
+            task_bulk_import_validation_error(raw.index, raw.line, None, Some("id"), reason)
+        })?
+        .ok_or_else(|| {
+            task_bulk_import_validation_error(
+                raw.index,
+                raw.line,
+                None,
+                Some("id"),
+                "task import item requires `id` or `task_id`",
+            )
+        })?;
+    let title = task_bulk_json_string_field(item, &["title"])
+        .map_err(|reason| {
+            task_bulk_import_validation_error(
+                raw.index,
+                raw.line,
+                Some(task_id.clone()),
+                Some("title"),
+                reason,
+            )
+        })?
+        .ok_or_else(|| {
+            task_bulk_import_validation_error(
+                raw.index,
+                raw.line,
+                Some(task_id.clone()),
+                Some("title"),
+                "task import item requires `title`",
+            )
+        })?;
+    let execution_object =
+        task_bulk_json_object_field(item, &["execution_semantics"]).map_err(|reason| {
+            task_bulk_import_validation_error(
+                raw.index,
+                raw.line,
+                Some(task_id.clone()),
+                Some("execution_semantics"),
+                reason,
+            )
+        })?;
+    let planner_object =
+        task_bulk_json_object_field(item, &["planner_metadata"]).map_err(|reason| {
+            task_bulk_import_validation_error(
+                raw.index,
+                raw.line,
+                Some(task_id.clone()),
+                Some("planner_metadata"),
+                reason,
+            )
+        })?;
+
+    let labels = task_bulk_merge_string_lists(
+        parse_label_values(&command.labels),
+        task_bulk_json_string_list_field(item, &["labels"]).map_err(|reason| {
+            task_bulk_import_validation_error(
+                raw.index,
+                raw.line,
+                Some(task_id.clone()),
+                Some("labels"),
+                reason,
+            )
+        })?,
+    );
+    let owned_paths = task_bulk_merge_string_lists(
+        parse_label_values(&command.owned_paths),
+        task_bulk_nested_string_list_field(item, planner_object, &["owned_paths"]).map_err(
+            |reason| {
+                task_bulk_import_validation_error(
+                    raw.index,
+                    raw.line,
+                    Some(task_id.clone()),
+                    Some("owned_paths"),
+                    reason,
+                )
+            },
+        )?,
+    );
+    let acceptance_targets = task_bulk_merge_string_lists(
+        parse_label_values(&command.acceptance_targets),
+        task_bulk_nested_string_list_field(
+            item,
+            planner_object,
+            &["acceptance_targets", "acceptance"],
+        )
+        .map_err(|reason| {
+            task_bulk_import_validation_error(
+                raw.index,
+                raw.line,
+                Some(task_id.clone()),
+                Some("acceptance_targets"),
+                reason,
+            )
+        })?,
+    );
+    let proof_targets = normalize_proof_target_commands(task_bulk_merge_string_lists(
+        parse_label_values(&command.proof_targets),
+        task_bulk_nested_string_list_field(item, planner_object, &["proof_targets", "proof"])
+            .map_err(|reason| {
+                task_bulk_import_validation_error(
+                    raw.index,
+                    raw.line,
+                    Some(task_id.clone()),
+                    Some("proof_targets"),
+                    reason,
+                )
+            })?,
+    ));
+
+    let execution_mode = task_bulk_nested_string_field(item, execution_object, &["execution_mode"])
+        .map_err(|reason| {
+            task_bulk_import_validation_error(
+                raw.index,
+                raw.line,
+                Some(task_id.clone()),
+                Some("execution_mode"),
+                reason,
+            )
+        })?
+        .or_else(|| command.execution_mode.clone());
+    let execution_mode =
+        task_bulk_validate_execution_mode(&task_id, execution_mode).map_err(|reason| {
+            task_bulk_import_validation_error(
+                raw.index,
+                raw.line,
+                Some(task_id.clone()),
+                Some("execution_mode"),
+                reason,
+            )
+        })?;
+
+    Ok(TaskBulkImportPlannedTask {
+        index: raw.index,
+        line: raw.line,
+        task_id,
+        title,
+        display_id: task_bulk_json_string_field(item, &["display_id"]).map_err(|reason| {
+            task_bulk_import_validation_error(raw.index, raw.line, None, Some("display_id"), reason)
+        })?,
+        description: task_bulk_json_string_field(item, &["description"])
+            .map_err(|reason| {
+                task_bulk_import_validation_error(
+                    raw.index,
+                    raw.line,
+                    None,
+                    Some("description"),
+                    reason,
+                )
+            })?
+            .unwrap_or_default(),
+        issue_type: task_bulk_json_string_field(item, &["issue_type", "type"])
+            .map_err(|reason| {
+                task_bulk_import_validation_error(raw.index, raw.line, None, Some("type"), reason)
+            })?
+            .unwrap_or_else(|| command.issue_type.clone()),
+        status: task_bulk_json_string_field(item, &["status"])
+            .map_err(|reason| {
+                task_bulk_import_validation_error(raw.index, raw.line, None, Some("status"), reason)
+            })?
+            .unwrap_or_else(|| command.status.clone()),
+        priority: task_bulk_json_u32_field(item, &["priority"])
+            .map_err(|reason| {
+                task_bulk_import_validation_error(
+                    raw.index,
+                    raw.line,
+                    None,
+                    Some("priority"),
+                    reason,
+                )
+            })?
+            .unwrap_or(command.priority),
+        parent_id: task_bulk_json_string_field(item, &["parent_id"])
+            .map_err(|reason| {
+                task_bulk_import_validation_error(
+                    raw.index,
+                    raw.line,
+                    None,
+                    Some("parent_id"),
+                    reason,
+                )
+            })?
+            .or_else(|| command.parent_id.clone()),
+        notes: task_bulk_json_string_field(item, &["notes"]).map_err(|reason| {
+            task_bulk_import_validation_error(raw.index, raw.line, None, Some("notes"), reason)
+        })?,
+        labels,
+        execution_semantics: state_store::TaskExecutionSemantics {
+            execution_mode,
+            order_bucket: task_bulk_nested_string_field(item, execution_object, &["order_bucket"])
+                .map_err(|reason| {
+                    task_bulk_import_validation_error(
+                        raw.index,
+                        raw.line,
+                        None,
+                        Some("order_bucket"),
+                        reason,
+                    )
+                })?
+                .or_else(|| command.order_bucket.clone()),
+            parallel_group: task_bulk_nested_string_field(
+                item,
+                execution_object,
+                &["parallel_group"],
+            )
+            .map_err(|reason| {
+                task_bulk_import_validation_error(
+                    raw.index,
+                    raw.line,
+                    None,
+                    Some("parallel_group"),
+                    reason,
+                )
+            })?
+            .or_else(|| command.parallel_group.clone()),
+            conflict_domain: task_bulk_nested_string_field(
+                item,
+                execution_object,
+                &["conflict_domain"],
+            )
+            .map_err(|reason| {
+                task_bulk_import_validation_error(
+                    raw.index,
+                    raw.line,
+                    None,
+                    Some("conflict_domain"),
+                    reason,
+                )
+            })?
+            .or_else(|| command.conflict_domain.clone()),
+        },
+        planner_metadata: state_store::TaskPlannerMetadata {
+            owned_paths,
+            acceptance_targets,
+            proof_targets,
+            risk: task_bulk_nested_string_field(item, planner_object, &["risk"]).map_err(
+                |reason| {
+                    task_bulk_import_validation_error(
+                        raw.index,
+                        raw.line,
+                        None,
+                        Some("risk"),
+                        reason,
+                    )
+                },
+            )?,
+            estimate: task_bulk_nested_string_field(item, planner_object, &["estimate"]).map_err(
+                |reason| {
+                    task_bulk_import_validation_error(
+                        raw.index,
+                        raw.line,
+                        None,
+                        Some("estimate"),
+                        reason,
+                    )
+                },
+            )?,
+            lane_hint: task_bulk_nested_string_field(item, planner_object, &["lane_hint"])
+                .map_err(|reason| {
+                    task_bulk_import_validation_error(
+                        raw.index,
+                        raw.line,
+                        None,
+                        Some("lane_hint"),
+                        reason,
+                    )
+                })?,
+        },
+    })
+}
+
+fn parse_task_bulk_import_input(
+    command: &TaskBulkImportArgs,
+) -> Result<TaskBulkImportParsedInput, String> {
+    let (input_format, raw_items) =
+        parse_task_bulk_import_raw_items(&command.file, command.format)?;
+    let requested_count = raw_items.len();
+    let mut tasks = Vec::new();
+    let mut validation_errors = Vec::new();
+    for raw in raw_items {
+        match task_bulk_parse_item(raw, command) {
+            Ok(task) => tasks.push(task),
+            Err(error) => validation_errors.push(error),
+        }
+    }
+    Ok(TaskBulkImportParsedInput {
+        input_format,
+        requested_count,
+        tasks,
+        validation_errors,
+    })
+}
+
+fn task_bulk_import_task_record(
+    task: &TaskBulkImportPlannedTask,
+    created_by: &str,
+    source_repo: &str,
+) -> state_store::TaskRecord {
+    let dependencies = task
+        .parent_id
+        .iter()
+        .map(|parent_id| state_store::TaskDependencyRecord {
+            issue_id: task.task_id.clone(),
+            depends_on_id: parent_id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "planned".to_string(),
+            created_by: created_by.to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        })
+        .collect::<Vec<_>>();
+    state_store::TaskRecord {
+        id: task.task_id.clone(),
+        display_id: task_bulk_normalize_optional_text(task.display_id.clone()),
+        title: task.title.trim().to_string(),
+        description: task.description.clone(),
+        status: task.status.trim().to_string(),
+        priority: task.priority,
+        issue_type: task.issue_type.trim().to_string(),
+        created_at: "planned".to_string(),
+        created_by: created_by.to_string(),
+        updated_at: "planned".to_string(),
+        closed_at: (task.status.trim() == "closed").then(|| "planned".to_string()),
+        close_reason: None,
+        source_repo: source_repo.to_string(),
+        compaction_level: 0,
+        original_size: 0,
+        notes: task.notes.clone(),
+        labels: task_bulk_normalize_string_list(task.labels.clone()),
+        execution_semantics: task.execution_semantics.clone(),
+        planner_metadata: state_store::TaskPlannerMetadata {
+            owned_paths: task_bulk_normalize_string_list(task.planner_metadata.owned_paths.clone()),
+            acceptance_targets: task_bulk_normalize_string_list(
+                task.planner_metadata.acceptance_targets.clone(),
+            ),
+            proof_targets: task_bulk_normalize_string_list(
+                task.planner_metadata.proof_targets.clone(),
+            ),
+            risk: task_bulk_normalize_optional_text(task.planner_metadata.risk.clone()),
+            estimate: task_bulk_normalize_optional_text(task.planner_metadata.estimate.clone()),
+            lane_hint: task_bulk_normalize_optional_text(task.planner_metadata.lane_hint.clone()),
+        },
+        provider_mapping: None,
+        dependencies,
+    }
+}
+
+fn task_bulk_import_validate_basic(
+    existing_rows: &[state_store::TaskRecord],
+    tasks: &[TaskBulkImportPlannedTask],
+) -> Vec<TaskBulkImportValidationError> {
+    let existing_ids = existing_rows
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let existing_display_ids = existing_rows
+        .iter()
+        .filter_map(|task| {
+            task.display_id
+                .as_deref()
+                .map(|display_id| (display_id, task.id.as_str()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut batch_ids = BTreeMap::<&str, usize>::new();
+    let mut batch_display_ids = BTreeMap::<&str, usize>::new();
+    let mut errors = Vec::new();
+
+    if tasks.is_empty() {
+        errors.push(task_bulk_import_validation_error(
+            0,
+            None,
+            None,
+            Some("tasks"),
+            "task import input contains no tasks",
+        ));
+        return errors;
+    }
+
+    for task in tasks {
+        if let Some(previous_index) = batch_ids.insert(task.task_id.as_str(), task.index) {
+            errors.push(task_bulk_import_validation_error(
+                task.index,
+                task.line,
+                Some(task.task_id.clone()),
+                Some("id"),
+                format!("duplicate task id also appears at index {previous_index}"),
+            ));
+        }
+        if existing_ids.contains(task.task_id.as_str()) {
+            errors.push(task_bulk_import_validation_error(
+                task.index,
+                task.line,
+                Some(task.task_id.clone()),
+                Some("id"),
+                format!("task already exists: {}", task.task_id),
+            ));
+        }
+        if task.title.trim().is_empty() {
+            errors.push(task_bulk_import_validation_error(
+                task.index,
+                task.line,
+                Some(task.task_id.clone()),
+                Some("title"),
+                "task title is empty",
+            ));
+        }
+        if state_store::work_item_requires_parent(&task.issue_type) && task.parent_id.is_none() {
+            errors.push(task_bulk_import_validation_error(
+                task.index,
+                task.line,
+                Some(task.task_id.clone()),
+                Some("parent_id"),
+                format!(
+                    "task `{}` of type `{}` requires parent_id",
+                    task.task_id, task.issue_type
+                ),
+            ));
+        }
+        if let Some(parent_id) = task.parent_id.as_deref() {
+            if parent_id == task.task_id {
+                errors.push(task_bulk_import_validation_error(
+                    task.index,
+                    task.line,
+                    Some(task.task_id.clone()),
+                    Some("parent_id"),
+                    "task parent_id cannot point to itself",
+                ));
+            }
+            if !existing_ids.contains(parent_id)
+                && !tasks.iter().any(|other| other.task_id == parent_id)
+            {
+                errors.push(task_bulk_import_validation_error(
+                    task.index,
+                    task.line,
+                    Some(task.task_id.clone()),
+                    Some("parent_id"),
+                    format!(
+                        "parent task does not exist in current state or import batch: {parent_id}"
+                    ),
+                ));
+            }
+        }
+        if let Some(display_id) = task
+            .display_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if existing_ids.contains(display_id) {
+                errors.push(task_bulk_import_validation_error(
+                    task.index,
+                    task.line,
+                    Some(task.task_id.clone()),
+                    Some("display_id"),
+                    format!("display_id `{display_id}` conflicts with an existing task id"),
+                ));
+            }
+            if let Some(existing_task_id) = existing_display_ids.get(display_id) {
+                errors.push(task_bulk_import_validation_error(
+                    task.index,
+                    task.line,
+                    Some(task.task_id.clone()),
+                    Some("display_id"),
+                    format!(
+                        "display_id `{display_id}` conflicts with existing task `{existing_task_id}`"
+                    ),
+                ));
+            }
+            if let Some((other_index, _)) = tasks
+                .iter()
+                .map(|other| (other.index, other.task_id.as_str()))
+                .find(|(other_index, other_task_id)| {
+                    *other_index != task.index && *other_task_id == display_id
+                })
+            {
+                errors.push(task_bulk_import_validation_error(
+                    task.index,
+                    task.line,
+                    Some(task.task_id.clone()),
+                    Some("display_id"),
+                    format!("display_id `{display_id}` conflicts with batch task id at index {other_index}"),
+                ));
+            }
+            if let Some(previous_index) = batch_display_ids.insert(display_id, task.index) {
+                errors.push(task_bulk_import_validation_error(
+                    task.index,
+                    task.line,
+                    Some(task.task_id.clone()),
+                    Some("display_id"),
+                    format!("duplicate display_id also appears at index {previous_index}"),
+                ));
+            }
+        }
+    }
+
+    errors
+}
+
+fn task_bulk_import_build_plan(
+    source_path: String,
+    input_format: String,
+    dry_run: bool,
+    requested_count: usize,
+    tasks: Vec<TaskBulkImportPlannedTask>,
+    parse_errors: Vec<TaskBulkImportValidationError>,
+    existing_rows: &[state_store::TaskRecord],
+    created_by: &str,
+    source_repo: &str,
+) -> TaskBulkImportPlan {
+    let mut validation_errors = parse_errors;
+    validation_errors.extend(task_bulk_import_validate_basic(existing_rows, &tasks));
+
+    let mut graph_issues = Vec::new();
+    let planned_task_ids = tasks
+        .iter()
+        .map(|task| task.task_id.clone())
+        .collect::<Vec<_>>();
+    if validation_errors.is_empty() {
+        let mut after_rows = existing_rows.to_vec();
+        after_rows.extend(
+            tasks
+                .iter()
+                .map(|task| task_bulk_import_task_record(task, created_by, source_repo)),
+        );
+        let touched_task_ids = tasks
+            .iter()
+            .flat_map(|task| {
+                std::iter::once(task.task_id.clone()).chain(task.parent_id.iter().cloned())
+            })
+            .collect::<BTreeSet<_>>();
+        graph_issues = state_store::StateStore::validate_task_graph_rows_for_mutation(
+            existing_rows,
+            &after_rows,
+            &touched_task_ids,
+        );
+    }
+
+    let result = TaskBulkImportResult {
+        source_path,
+        input_format,
+        dry_run,
+        applied: false,
+        requested_count,
+        planned_count: if validation_errors.is_empty() {
+            tasks.len()
+        } else {
+            0
+        },
+        created_count: 0,
+        validation_error_count: validation_errors.len(),
+        graph_issue_count: graph_issues.len(),
+        planned_task_ids,
+        created_task_ids: Vec::new(),
+        validation_errors,
+        graph_issues,
+    };
+    TaskBulkImportPlan { result, tasks }
+}
+
+fn task_bulk_import_apply_order(
+    existing_rows: &[state_store::TaskRecord],
+    tasks: &[TaskBulkImportPlannedTask],
+) -> Result<Vec<usize>, String> {
+    let mut available = existing_rows
+        .iter()
+        .map(|task| task.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut remaining = (0..tasks.len()).collect::<Vec<_>>();
+    let mut ordered = Vec::new();
+
+    while !remaining.is_empty() {
+        let before = remaining.len();
+        let mut index = 0;
+        while index < remaining.len() {
+            let task_index = remaining[index];
+            let parent_ready = tasks[task_index]
+                .parent_id
+                .as_deref()
+                .map(|parent_id| available.contains(parent_id))
+                .unwrap_or(true);
+            if parent_ready {
+                available.insert(tasks[task_index].task_id.clone());
+                ordered.push(task_index);
+                remaining.remove(index);
+            } else {
+                index += 1;
+            }
+        }
+        if remaining.len() == before {
+            return Err(
+                "could not order imported tasks parent-first; inspect parent_id cycles or missing parents"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(ordered)
+}
+
+fn task_bulk_import_result_is_blocked(result: &TaskBulkImportResult) -> bool {
+    result.validation_error_count > 0 || result.graph_issue_count > 0
+}
+
+fn task_bulk_import_result_payload(result: &TaskBulkImportResult) -> serde_json::Value {
+    let mut blocker_codes = Vec::new();
+    if result.validation_error_count > 0 {
+        blocker_codes.extend(crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::SchemaContractMissing,
+        ));
+    }
+    if result.graph_issue_count > 0 {
+        blocker_codes.extend(crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+        ));
+    }
+    let next_actions = if blocker_codes.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "Repair the import file `{}` and rerun `vida task import --file {}` with --dry-run before applying.",
+            result.source_path,
+            crate::shell_quote(&result.source_path)
+        )]
+    };
+    crate::release1_operator_output::build_release1_operator_output_payload(
+        TASK_BULK_IMPORT_SURFACE,
+        blocker_codes,
+        next_actions,
+        serde_json::json!({
+            "surface": TASK_BULK_IMPORT_SURFACE,
+            "source_path": result.source_path,
+            "input_format": result.input_format,
+        }),
+        serde_json::json!({
+            "result": result,
+            "dry_run": result.dry_run,
+            "applied": result.applied,
+            "requested_count": result.requested_count,
+            "planned_count": result.planned_count,
+            "created_count": result.created_count,
+            "validation_error_count": result.validation_error_count,
+            "graph_issue_count": result.graph_issue_count,
+        }),
+    )
+    .expect("task bulk import output should finalize release-1 operator output")
+}
+
+fn print_task_bulk_import_result(render: RenderMode, result: &TaskBulkImportResult, as_json: bool) {
+    let payload = task_bulk_import_result_payload(result);
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task bulk import result should render as json",
+    ) {
+        return;
+    }
+    print_surface_header(render, TASK_BULK_IMPORT_SURFACE);
+    print_surface_line(
+        render,
+        "status",
+        if task_bulk_import_result_is_blocked(result) {
+            "blocked"
+        } else {
+            "pass"
+        },
+    );
+    print_surface_line(render, "source", &result.source_path);
+    print_surface_line(render, "format", &result.input_format);
+    print_surface_line(
+        render,
+        "dry_run",
+        if result.dry_run { "true" } else { "false" },
+    );
+    print_surface_line(
+        render,
+        "applied",
+        if result.applied { "true" } else { "false" },
+    );
+    print_surface_line(render, "requested", &result.requested_count.to_string());
+    print_surface_line(render, "planned", &result.planned_count.to_string());
+    print_surface_line(render, "created", &result.created_count.to_string());
+    print_surface_line(
+        render,
+        "validation_errors",
+        &result.validation_error_count.to_string(),
+    );
+    print_surface_line(
+        render,
+        "graph_issues",
+        &result.graph_issue_count.to_string(),
+    );
+    if let Some(error) = result.validation_errors.first() {
+        print_surface_line(render, "first_error", &error.reason);
+    }
+}
+
+fn task_bulk_import_blocked_result(
+    command: &TaskBulkImportArgs,
+    reason: impl Into<String>,
+    field: &'static str,
+) -> TaskBulkImportResult {
+    let source_path = command.file.display().to_string();
+    TaskBulkImportResult {
+        source_path,
+        input_format: task_bulk_import_format_label(command.format).to_string(),
+        dry_run: command.dry_run,
+        applied: false,
+        requested_count: 0,
+        planned_count: 0,
+        created_count: 0,
+        validation_error_count: 1,
+        graph_issue_count: 0,
+        planned_task_ids: Vec::new(),
+        created_task_ids: Vec::new(),
+        validation_errors: vec![task_bulk_import_validation_error(
+            0,
+            None,
+            None,
+            Some(field),
+            reason,
+        )],
+        graph_issues: Vec::new(),
+    }
+}
+
+async fn run_task_bulk_import(command: TaskBulkImportArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    let source_path = command.file.display().to_string();
+    let parsed = match parse_task_bulk_import_input(&command) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let result = task_bulk_import_blocked_result(&command, error, "file");
+            print_task_bulk_import_result(command.render, &result, command.json);
+            return ExitCode::from(2);
+        }
+    };
+    let project_root = project_root_for_task_state(&state_dir).unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    });
+    let source_repo = project_root.display().to_string();
+    let store = match open_task_store(state_dir.clone()).await {
+        Ok(store) => store,
+        Err(error) => {
+            let result = task_bulk_import_blocked_result(&command, error.to_string(), "state_dir");
+            print_task_bulk_import_result(command.render, &result, command.json);
+            return ExitCode::from(1);
+        }
+    };
+    let existing_rows = match store.all_tasks().await {
+        Ok(rows) => rows,
+        Err(error) => {
+            let result = task_bulk_import_blocked_result(&command, error.to_string(), "state_dir");
+            print_task_bulk_import_result(command.render, &result, command.json);
+            return ExitCode::from(1);
+        }
+    };
+    let plan = task_bulk_import_build_plan(
+        source_path,
+        parsed.input_format,
+        command.dry_run,
+        parsed.requested_count,
+        parsed.tasks,
+        parsed.validation_errors,
+        &existing_rows,
+        &command.created_by,
+        &source_repo,
+    );
+    if task_bulk_import_result_is_blocked(&plan.result) || command.dry_run {
+        let exit_code = if task_bulk_import_result_is_blocked(&plan.result) {
+            ExitCode::from(2)
+        } else {
+            ExitCode::SUCCESS
+        };
+        print_task_bulk_import_result(command.render, &plan.result, command.json);
+        return exit_code;
+    }
+
+    let order = match task_bulk_import_apply_order(&existing_rows, &plan.tasks) {
+        Ok(order) => order,
+        Err(error) => {
+            let result = task_bulk_import_blocked_result(&command, error, "parent_id");
+            print_task_bulk_import_result(command.render, &result, command.json);
+            return ExitCode::from(2);
+        }
+    };
+    let mut created_task_ids = Vec::new();
+    for task_index in order {
+        let task = &plan.tasks[task_index];
+        let created = match store
+            .create_task(state_store::CreateTaskRequest {
+                task_id: &task.task_id,
+                title: &task.title,
+                display_id: task.display_id.as_deref(),
+                description: &task.description,
+                issue_type: &task.issue_type,
+                status: &task.status,
+                priority: task.priority,
+                parent_id: task.parent_id.as_deref(),
+                labels: &task.labels,
+                execution_semantics: task.execution_semantics.clone(),
+                planner_metadata: task.planner_metadata.clone(),
+                created_by: &command.created_by,
+                source_repo: &source_repo,
+            })
+            .await
+        {
+            Ok(created) => created,
+            Err(error) => {
+                let result = task_bulk_import_blocked_result(&command, error.to_string(), "task");
+                print_task_bulk_import_result(command.render, &result, command.json);
+                return ExitCode::from(1);
+            }
+        };
+        let final_task = if let Some(notes) = task.notes.as_deref() {
+            match store
+                .update_task(state_store::UpdateTaskRequest {
+                    task_id: &task.task_id,
+                    title: None,
+                    status: None,
+                    priority: None,
+                    notes: Some(notes),
+                    description: None,
+                    parent_id: None,
+                    add_labels: &[],
+                    remove_labels: &[],
+                    set_labels: None,
+                    execution_mode: None,
+                    order_bucket: None,
+                    parallel_group: None,
+                    conflict_domain: None,
+                    planner_metadata: None,
+                })
+                .await
+            {
+                Ok(updated) => updated,
+                Err(error) => {
+                    let result =
+                        task_bulk_import_blocked_result(&command, error.to_string(), "notes");
+                    print_task_bulk_import_result(command.render, &result, command.json);
+                    return ExitCode::from(1);
+                }
+            }
+        } else {
+            created
+        };
+        created_task_ids.push(final_task.id);
+    }
+    if let Err(code) = refresh_task_snapshot_after_mutation(&store, TASK_BULK_IMPORT_SURFACE).await
+    {
+        return code;
+    }
+    let mut result = plan.result;
+    result.applied = true;
+    result.created_count = created_task_ids.len();
+    result.created_task_ids = created_task_ids;
+    print_task_bulk_import_result(command.render, &result, command.json);
+    ExitCode::SUCCESS
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -7372,6 +8639,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 | "list"
                 | "adaptive-preview"
                 | "show"
+                | "import"
+                | "create-bulk"
+                | "bulk-create"
                 | "import-jsonl"
                 | "replace-jsonl"
                 | "export-jsonl"
@@ -7390,6 +8660,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        TaskCommand::Import(command) => run_task_bulk_import(command).await,
         TaskCommand::ImportJsonl(command) => {
             let state_dir = command
                 .state_dir
@@ -10209,6 +11480,207 @@ mod tests {
             .expect("expanded test stack thread should spawn")
             .join()
             .expect("expanded test stack thread should complete");
+    }
+
+    fn task_bulk_import_command_for_test(
+        file: std::path::PathBuf,
+        state_dir: std::path::PathBuf,
+    ) -> crate::TaskBulkImportArgs {
+        crate::TaskBulkImportArgs {
+            file,
+            format: crate::TaskImportFormatArg::Auto,
+            parent_id: None,
+            issue_type: "task".to_string(),
+            status: "open".to_string(),
+            priority: 2,
+            labels: Vec::new(),
+            execution_mode: None,
+            order_bucket: None,
+            parallel_group: None,
+            conflict_domain: None,
+            owned_paths: Vec::new(),
+            acceptance_targets: Vec::new(),
+            proof_targets: Vec::new(),
+            dry_run: false,
+            created_by: "vida task import".to_string(),
+            state_dir: Some(state_dir),
+            render: crate::RenderMode::Plain,
+            json: true,
+        }
+    }
+
+    #[test]
+    fn task_bulk_import_accepts_jsonl_fixture_with_metadata_and_parent_first_ordering() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let source = harness.path().join("tasks.jsonl");
+        let state_dir = harness.path().join("bulk-state");
+        fs::write(
+            &source,
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({
+                    "id": "bulk-child",
+                    "title": "Bulk child",
+                    "type": "todo",
+                    "parent_id": "bulk-parent"
+                }),
+                serde_json::json!({
+                    "id": "bulk-parent",
+                    "title": "Bulk parent",
+                    "type": "epic",
+                    "labels": ["file-label"],
+                    "notes": "created from fixture",
+                    "execution_semantics": {
+                        "execution_mode": "parallel_safe",
+                        "order_bucket": "wave-a",
+                        "parallel_group": "operator-cli",
+                        "conflict_domain": "task-import"
+                    },
+                    "planner_metadata": {
+                        "owned_paths": ["crates/vida/src/task_surface.rs"],
+                        "acceptance_targets": ["bulk import works"],
+                        "proof_targets": ["cargo test -p vida task_bulk_import"]
+                    }
+                })
+            ),
+        )
+        .expect("jsonl fixture should write");
+
+        let mut command = task_bulk_import_command_for_test(source.clone(), state_dir.clone());
+        command.labels = vec!["global-label".to_string()];
+        let parsed =
+            super::parse_task_bulk_import_input(&command).expect("jsonl fixture should parse");
+        let plan = super::task_bulk_import_build_plan(
+            command.file.display().to_string(),
+            parsed.input_format,
+            false,
+            parsed.requested_count,
+            parsed.tasks,
+            parsed.validation_errors,
+            &[],
+            &command.created_by,
+            ".",
+        );
+
+        assert!(!super::task_bulk_import_result_is_blocked(&plan.result));
+        assert_eq!(plan.result.planned_count, 2);
+        assert_eq!(
+            plan.result.planned_task_ids,
+            vec!["bulk-child".to_string(), "bulk-parent".to_string()]
+        );
+        let order = super::task_bulk_import_apply_order(&[], &plan.tasks)
+            .expect("batch should order parent first");
+        let ordered_ids = order
+            .into_iter()
+            .map(|index| plan.tasks[index].task_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_ids, vec!["bulk-parent", "bulk-child"]);
+        let parent = plan
+            .tasks
+            .iter()
+            .find(|task| task.task_id == "bulk-parent")
+            .expect("parent task should be planned");
+        assert_eq!(parent.notes.as_deref(), Some("created from fixture"));
+        assert_eq!(
+            parent.labels,
+            vec!["file-label".to_string(), "global-label".to_string()]
+        );
+        assert_eq!(
+            parent.execution_semantics.execution_mode.as_deref(),
+            Some("parallel_safe")
+        );
+        assert_eq!(
+            parent.planner_metadata.acceptance_targets,
+            vec!["bulk import works".to_string()]
+        );
+    }
+
+    #[test]
+    fn task_bulk_import_dry_run_validates_yaml_without_mutating_store() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let source = harness.path().join("tasks.yaml");
+        let state_dir = harness.path().join("bulk-state");
+        fs::write(
+            &source,
+            "tasks:\n  - id: dry-run-task\n    title: Dry run task\n    type: epic\n    labels: dry-run,operator-dx\n",
+        )
+        .expect("yaml fixture should write");
+
+        let mut command = task_bulk_import_command_for_test(source.clone(), state_dir.clone());
+        command.dry_run = true;
+        let parsed =
+            super::parse_task_bulk_import_input(&command).expect("yaml fixture should parse");
+        let plan = super::task_bulk_import_build_plan(
+            command.file.display().to_string(),
+            parsed.input_format,
+            command.dry_run,
+            parsed.requested_count,
+            parsed.tasks,
+            parsed.validation_errors,
+            &[],
+            &command.created_by,
+            ".",
+        );
+
+        assert!(!super::task_bulk_import_result_is_blocked(&plan.result));
+        assert!(plan.result.dry_run);
+        assert!(!plan.result.applied);
+        assert_eq!(plan.result.created_count, 0);
+        assert_eq!(plan.result.planned_count, 1);
+        assert_eq!(
+            plan.result.planned_task_ids,
+            vec!["dry-run-task".to_string()]
+        );
+    }
+
+    #[test]
+    fn task_bulk_import_validation_reports_clear_errors_before_mutation() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let source = harness.path().join("invalid.json");
+        fs::write(
+            &source,
+            serde_json::json!({
+                "tasks": [
+                    {
+                        "id": "missing-parent",
+                        "title": "Missing parent task",
+                        "type": "task"
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .expect("invalid fixture should write");
+        let command = task_bulk_import_command_for_test(source, harness.path().to_path_buf());
+        let parsed = super::parse_task_bulk_import_input(&command)
+            .expect("invalid semantic input should parse structurally");
+        let plan = super::task_bulk_import_build_plan(
+            command.file.display().to_string(),
+            parsed.input_format,
+            true,
+            parsed.requested_count,
+            parsed.tasks,
+            parsed.validation_errors,
+            &[],
+            &command.created_by,
+            ".",
+        );
+
+        assert_eq!(plan.result.validation_error_count, 1);
+        assert_eq!(
+            plan.result.validation_errors[0].field.as_deref(),
+            Some("parent_id")
+        );
+        assert!(plan.result.validation_errors[0]
+            .reason
+            .contains("requires parent_id"));
+        assert_eq!(plan.result.planned_count, 0);
+        let payload = super::task_bulk_import_result_payload(&plan.result);
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["schema_contract_missing"])
+        );
     }
 
     #[test]

@@ -6,11 +6,11 @@ const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida task reparent-children <from-parent-id> <to-parent-id> --json\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida task reparent-children <from-parent-id> <to-parent-id> --json\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
-const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida taskflow help scheduler\n  vida taskflow help scheduling\n  vida task tree <task-id> --json\n  vida taskflow graph explain <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow closeout --json --compact\n  vida taskflow receipt-pack --since HEAD~1\n  vida taskflow plan generate --json\n  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json\n  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida taskflow scheduler dispatch --json\n  vida taskflow scheduling actualize --scope open-epics --dry-run --json\n  vida taskflow route explain --json\n  vida taskflow validate-routing --json\n  vida taskflow pricing status --json\n  vida taskflow pricing import --source-file <path> --dry-run --json\n  vida taskflow status --summary --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nParallelism guidance:\n  `vida taskflow graph explain <task-id> --json` explains one task's ready/blocked/parallel-safe posture from canonical projection truth.\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow scheduler dispatch --json` turns that projection into a preview-first launch plan capped by `max_parallel_agents`.\n  `vida taskflow scheduling actualize --dry-run --json` previews conservative scheduling metadata repairs before `--apply` mutates tasks.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
+const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida taskflow help scheduler\n  vida taskflow help scheduling\n  vida task tree <task-id> --json\n  vida task import --file tasks.yaml --parent-id <parent-id> --dry-run --json\n  vida taskflow graph explain <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow closeout --json --compact\n  vida taskflow receipt-pack --since HEAD~1\n  vida taskflow plan generate --json\n  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json\n  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida taskflow scheduler dispatch --json\n  vida taskflow scheduling actualize --scope open-epics --dry-run --json\n  vida taskflow route explain --json\n  vida taskflow validate-routing --json\n  vida taskflow pricing status --json\n  vida taskflow pricing import --source-file <path> --dry-run --json\n  vida taskflow status --summary --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nParallelism guidance:\n  `vida taskflow graph explain <task-id> --json` explains one task's ready/blocked/parallel-safe posture from canonical projection truth.\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow scheduler dispatch --json` turns that projection into a preview-first launch plan capped by `max_parallel_agents`.\n  `vida taskflow scheduling actualize --dry-run --json` previews conservative scheduling metadata repairs before `--apply` mutates tasks.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
 
 const DOCFLOW_LONG_ABOUT: &str = "Delegate to the DocFlow runtime family.\n\nDocFlow is the standalone documentation/readiness utility. Use it for documentation bootstrap, artifact init, validation, readiness checks, inventory, relations, and agent handoff instructions.";
 
@@ -34,6 +34,9 @@ const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
 const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id> --json\n  vida task create <task-id> --title <title> --json\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n\nNotes:\n  Provide exactly one title source: positional <title> or --title <title>.\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary --json` to verify parallel-safe admission after mutation.";
+const TASK_IMPORT_ABOUT: &str = "Create many tracked tasks from a structured file.";
+const TASK_IMPORT_LONG_ABOUT: &str = "Create many tracked tasks from a structured file without oversized shell payloads.\n\nSupported input:\n- JSON or YAML array of task objects\n- JSON or YAML object with a `tasks` array\n- JSONL/NDJSON with one task object per line\n\nEach task object requires `id` (or `task_id`) and `title`. Optional fields include `display_id`, `description`, `type`/`issue_type`, `status`, `priority`, `parent_id`, `notes`, `labels`, execution semantics, and planner metadata. Command flags provide defaults for parent assignment, execution semantics, labels, owned paths, acceptance targets, and proof targets.";
+const TASK_IMPORT_AFTER_HELP: &str = "Examples:\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  vida task import --file tasks.yaml --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task create-bulk --file tasks.json --labels operator-dx,taskflow --acceptance-target \"Tasks imported\" --proof-target \"cargo test -p vida task_bulk_import\" --json\n\nInput task object fields:\n  id | task_id, title, display_id, description, type | issue_type, status, priority, parent_id, notes\n  labels: [\"operator-dx\"] or \"operator-dx,taskflow\"\n  execution_semantics: { execution_mode, order_bucket, parallel_group, conflict_domain }\n  planner_metadata: { owned_paths, acceptance_targets, proof_targets, risk, estimate, lane_hint }\n\nNotes:\n  `--dry-run` validates against the current graph and does not mutate TaskFlow state.\n  Per-task fields override command defaults; list defaults are appended and de-duplicated.\n  JSONL lets operators import large batches from a file instead of passing oversized command payloads.";
 
 const TASK_UPDATE_ABOUT: &str = "Update one tracked task in the authoritative backlog store.";
 const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive|container_only`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field";
@@ -54,6 +57,15 @@ pub(crate) enum RenderMode {
     Color,
     #[value(name = "color_emoji")]
     ColorEmoji,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum TaskImportFormatArg {
+    #[default]
+    Auto,
+    Json,
+    Yaml,
+    Jsonl,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
@@ -837,6 +849,13 @@ pub(crate) struct TaskArgs {
 pub(crate) enum TaskCommand {
     #[command(about = "show TaskFlow-owned help topics and compatibility aliases")]
     Help(TaskHelpArgs),
+    #[command(
+        about = TASK_IMPORT_ABOUT,
+        long_about = TASK_IMPORT_LONG_ABOUT,
+        after_help = TASK_IMPORT_AFTER_HELP,
+        visible_aliases = ["create-bulk", "bulk-create"]
+    )]
+    Import(TaskBulkImportArgs),
     #[command(about = "import backlog tasks from a JSONL snapshot file")]
     ImportJsonl(TaskImportJsonlArgs),
     #[command(about = "authoritatively replace backlog state from a canonical snapshot artifact")]
@@ -1060,6 +1079,138 @@ pub(crate) struct TaskDependencyBulkAddCommandArgs {
     pub(crate) render: RenderMode,
 
     #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskBulkImportArgs {
+    #[arg(
+        long = "file",
+        short = 'f',
+        value_name = "PATH",
+        help = "Structured task batch file to import (JSON, YAML, or JSONL)"
+    )]
+    pub(crate) file: PathBuf,
+
+    #[arg(
+        long = "format",
+        value_enum,
+        default_value_t = TaskImportFormatArg::Auto,
+        help = "Input format: auto, json, yaml, or jsonl"
+    )]
+    pub(crate) format: TaskImportFormatArg,
+
+    #[arg(
+        long = "parent-id",
+        help = "Default parent task id for imported tasks that omit parent_id"
+    )]
+    pub(crate) parent_id: Option<String>,
+
+    #[arg(
+        long = "type",
+        default_value = "task",
+        help = "Default task issue type for imported tasks that omit type or issue_type"
+    )]
+    pub(crate) issue_type: String,
+
+    #[arg(
+        long = "status",
+        default_value = "open",
+        help = "Default task status for imported tasks that omit status"
+    )]
+    pub(crate) status: String,
+
+    #[arg(
+        long = "priority",
+        default_value_t = 2,
+        help = "Default task priority for imported tasks that omit priority"
+    )]
+    pub(crate) priority: u32,
+
+    #[arg(
+        long = "labels",
+        value_delimiter = ',',
+        help = "Default labels appended to each imported task. Accepts comma-separated values and repeated flags."
+    )]
+    pub(crate) labels: Vec<String>,
+
+    #[arg(
+        long = "execution-mode",
+        help = "Default execution scheduling mode: sequential, parallel_safe, exclusive, or container_only"
+    )]
+    pub(crate) execution_mode: Option<String>,
+
+    #[arg(
+        long = "order-bucket",
+        help = "Default ordering bucket for imported tasks"
+    )]
+    pub(crate) order_bucket: Option<String>,
+
+    #[arg(
+        long = "parallel-group",
+        help = "Default parallel admission group for imported tasks"
+    )]
+    pub(crate) parallel_group: Option<String>,
+
+    #[arg(
+        long = "conflict-domain",
+        help = "Default conflict domain for imported tasks"
+    )]
+    pub(crate) conflict_domain: Option<String>,
+
+    #[arg(
+        long = "owned-path",
+        value_delimiter = ',',
+        help = "Default planner metadata owned paths appended to each imported task"
+    )]
+    pub(crate) owned_paths: Vec<String>,
+
+    #[arg(
+        long = "acceptance-target",
+        visible_alias = "acceptance",
+        value_delimiter = ',',
+        help = "Default planner metadata acceptance targets appended to each imported task"
+    )]
+    pub(crate) acceptance_targets: Vec<String>,
+
+    #[arg(
+        long = "proof-target",
+        visible_alias = "proof",
+        value_delimiter = ',',
+        help = "Default planner metadata proof targets appended to each imported task"
+    )]
+    pub(crate) proof_targets: Vec<String>,
+
+    #[arg(
+        long = "dry-run",
+        help = "Validate the import without mutating TaskFlow state"
+    )]
+    pub(crate) dry_run: bool,
+
+    #[arg(
+        long = "created-by",
+        default_value = "vida task import",
+        help = "Created-by value stored on imported tasks"
+    )]
+    pub(crate) created_by: String,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 
@@ -3346,6 +3497,22 @@ mod tests {
         assert!(help.contains("[TITLE]"));
         assert!(help.contains("--title <TITLE>"));
         assert!(help.contains("Provide exactly one title source"));
+    }
+
+    #[test]
+    fn task_import_help_lists_bulk_file_dry_run_and_metadata_options() {
+        let error = Cli::try_parse_from(["vida", "task", "import", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+
+        assert!(help.contains("--file <PATH>"));
+        assert!(help.contains("--format <FORMAT>"));
+        assert!(help.contains("--dry-run"));
+        assert!(help.contains("--parent-id"));
+        assert!(help.contains("--execution-mode"));
+        assert!(help.contains("--acceptance-target"));
+        assert!(help.contains("--proof-target"));
+        assert!(help.contains("JSONL lets operators import large batches"));
     }
 
     #[test]
