@@ -193,6 +193,11 @@ Minimum successful result:
   "backend_id": "internal_subagents",
   "carrier_id": "junior",
   "execution_state": "executed",
+  "decision": "pass",
+  "verdict": "completed",
+  "blocker_codes": [],
+  "rework_target": null,
+  "allowed_next_node": "vida_lane_complete",
   "host_agent_id": "...",
   "summary": "..."
 }
@@ -215,10 +220,41 @@ Minimum successful receipt:
 }
 ```
 
+Minimum non-pass result:
+
+```json
+{
+  "artifact_kind": "host_tool_bridge_result",
+  "schema_version": 1,
+  "request_id": "...",
+  "run_id": "...",
+  "dispatch_target": "implementer",
+  "backend_id": "internal_subagents",
+  "carrier_id": "junior",
+  "execution_state": "blocked",
+  "decision": "rework",
+  "verdict": "blocked",
+  "blocker_codes": [
+    "host_agent_capacity_unavailable"
+  ],
+  "rework_target": "host_agent_bridge_adapter",
+  "allowed_next_node": "reclaim_or_retry_host_bridge_request",
+  "host_agent_id": null,
+  "summary": "Host agent capacity is unavailable; reclaim completed host handles or retry when capacity is available.",
+  "next_actions": [
+    "Reclaim or close completed host-agent handles, then retry the same host bridge request."
+  ]
+}
+```
+
 If the adapter cannot start a host agent, it must write blocked artifacts with:
 
 - `execution_state: "blocked"`
-- `blocker_code: "host_agent_capacity_unavailable" | "host_tool_capability_missing" | "host_agent_execution_failed"`
+- `decision: "rework"` or another non-pass decision that prevents lane completion
+- `verdict: "blocked"` or the precise non-pass verdict
+- `blocker_codes` containing one or more of `host_agent_capacity_unavailable`, `host_tool_capability_missing`, or `host_agent_execution_failed`
+- `rework_target` naming the adapter, request, host capability, or process-carrier configuration that must be repaired
+- `allowed_next_node` naming only the next rework-safe node, such as reclaiming, retrying, repairing the adapter, or selecting an explicit process carrier
 - `next_actions` with an exact reclaim, retry, repair, or explicit process-carrier command.
 
 Thread limits and unavailable host capabilities are capacity/readiness blockers, not routing success and not `internal_codex_carrier_unavailable`.
