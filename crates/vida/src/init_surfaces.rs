@@ -62,7 +62,7 @@ fn emit_agent_init_invalid_role(
     if args.json {
         let artifact_refs = serde_json::json!({
             "surface": "vida agent-init",
-            "usage": "vida agent-init --role <runtime-role|dev-team-role> [task-id] --json",
+            "usage": "vida agent-init --role <runtime-role|dev-team-role> [task-id] [--json]",
         });
         let shared_fields = serde_json::json!({
             "trace_id": serde_json::Value::Null,
@@ -1073,60 +1073,60 @@ fn agent_init_execute_dispatch_resume_error_next_actions(
             format!(
                 "Inspect the blocked run with `{}`.",
                 operator_output::command_text::human_command(&format!(
-                    "vida taskflow recovery status {} --json",
+                    "vida taskflow recovery status {}",
                     crate::shell_quote(run_id)
                 ))
             ),
             format!(
                 "Inspect run-graph gate fields with `{}` and make recovery_ready=true through the canonical recovery/continue path before retrying execute-dispatch.",
                 operator_output::command_text::human_command(&format!(
-                    "vida taskflow run-graph status {} --json",
+                    "vida taskflow run-graph status {}",
                     crate::shell_quote(run_id)
                 ))
             ),
             format!(
                 "Inspect route freshness with `{}`; if it reports model_not_pinned or catalog drift, refresh or reseed the route assignment before creating another packet.",
-                operator_output::command_text::human_command("vida taskflow route explain --json")
+                operator_output::command_text::human_command("vida taskflow route explain")
             ),
         ],
         ("run_graph_recovery_not_ready", None) => vec![
             format!(
                 "Inspect the blocked run with `{}`.",
                 operator_output::command_text::human_command(
-                    "vida taskflow recovery latest --json"
+                    "vida taskflow recovery latest"
                 )
             ),
             format!(
                 "Inspect run-graph gate fields with `{}` and make recovery_ready=true through the canonical recovery/continue path before retrying execute-dispatch.",
                 operator_output::command_text::human_command(
-                    "vida taskflow run-graph status <run-id> --json"
+                    "vida taskflow run-graph status <run-id>"
                 )
             ),
             format!(
                 "Inspect route freshness with `{}`; if it reports model_not_pinned or catalog drift, refresh or reseed the route assignment before creating another packet.",
-                operator_output::command_text::human_command("vida taskflow route explain --json")
+                operator_output::command_text::human_command("vida taskflow route explain")
             ),
         ],
         ("stale_missing_task_run_graph", Some(run_id)) => vec![
             format!(
                 "Retire the stale missing-task run with `{}`.",
                 operator_output::command_text::human_command(&format!(
-                    "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json",
+                    "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"",
                     crate::shell_quote(run_id),
                     crate::shell_quote(run_id)
                 ))
             ),
             format!(
                 "Refresh continuation evidence with `{}` and `{}` before retrying execute-dispatch.",
-                operator_output::command_text::human_command("vida status --json"),
-                operator_output::command_text::human_command("vida taskflow recovery latest --json")
+                operator_output::command_text::human_command("vida status"),
+                operator_output::command_text::human_command("vida taskflow recovery latest")
             ),
         ],
         ("missing_run_graph_dispatch_receipt", Some(run_id)) => vec![
             format!(
                 "Inspect recovery for missing receipt repair with `{}`.",
                 operator_output::command_text::human_command(&format!(
-                    "vida taskflow recovery status {} --json",
+                    "vida taskflow recovery status {}",
                     crate::shell_quote(run_id)
                 ))
             ),
@@ -1136,31 +1136,31 @@ fn agent_init_execute_dispatch_resume_error_next_actions(
             format!(
                 "Inspect continuation evidence with `{}`.",
                 operator_output::command_text::human_command(&format!(
-                    "vida taskflow recovery status {} --json",
+                    "vida taskflow recovery status {}",
                     crate::shell_quote(run_id)
                 ))
             ),
             format!(
                 "Refresh the blocked run through the taskflow surface with `{}`; `vida agent-init` does not accept `--run-id`.",
                 operator_output::command_text::human_command(&format!(
-                    "vida taskflow consume continue --run-id {} --json",
+                    "vida taskflow consume continue --run-id {}",
                     crate::shell_quote(run_id)
                 ))
             ),
             format!(
                 "Do not retry `{}` until the recovery surface reports recovery_ready=true and a dispatch resume target.",
-                operator_output::command_text::human_command("vida agent-init --execute-dispatch --json")
+                operator_output::command_text::human_command("vida agent-init --execute-dispatch")
             ),
         ],
         _ => vec![
             format!(
                 "Inspect continuation evidence with `{}` and `{}`.",
-                operator_output::command_text::human_command("vida status --json"),
-                operator_output::command_text::human_command("vida taskflow recovery latest --json")
+                operator_output::command_text::human_command("vida status"),
+                operator_output::command_text::human_command("vida taskflow recovery latest")
             ),
             format!(
                 "Do not retry `{}` until the recovery surface reports recovery_ready=true and a dispatch resume target.",
-                operator_output::command_text::human_command("vida agent-init --execute-dispatch --json")
+                operator_output::command_text::human_command("vida agent-init --execute-dispatch")
             ),
         ],
     }
@@ -1298,11 +1298,11 @@ fn insert_stale_internal_carrier_receipt_repair(
     dispatch_result_path: Option<&str>,
 ) {
     let repair_command = format!(
-        "vida taskflow run-graph dispatch-init {} --json",
+        "vida taskflow run-graph dispatch-init {}",
         crate::shell_quote(&receipt.run_id)
     );
     let recovery_command = format!(
-        "vida taskflow recovery status {} --json",
+        "vida taskflow recovery status {}",
         crate::shell_quote(&receipt.run_id)
     );
     let actions = vec![
@@ -1441,7 +1441,7 @@ fn compact_project_activation_summary(init_view: &serde_json::Value) -> serde_js
         "status": project_activation["status"],
         "activation_pending": project_activation["activation_pending"],
         "project_shape": project_activation["project_shape"],
-        "next_steps": project_activation["next_steps"],
+        "next_steps": humanize_string_array(&project_activation["next_steps"]),
         "host_environment": {
             "selected_cli_system": project_activation["host_environment"]["selected_cli_system"],
             "selected_cli_execution_class": project_activation["host_environment"]["selected_cli_execution_class"],
@@ -1518,7 +1518,8 @@ fn build_orchestrator_init_summary_payload(
         "view": "summary",
         "status": status,
         "full_output_available": true,
-        "full_output_command": "vida orchestrator-init --full --json",
+                "full_output_command": operator_output::command_text::human_command("vida orchestrator-init --full"),
+        "full_output_machine_command": "vida orchestrator-init --full --json",
         "state_read": {
             "mode": "authoritative_open",
             "lock_resilient": true,
@@ -1555,6 +1556,44 @@ fn orchestrator_init_effective_status(
         serde_json::Value::String("blocked".to_string())
     } else {
         init_view["status"].clone()
+    }
+}
+
+fn human_command_value(command: &str) -> serde_json::Value {
+    serde_json::Value::String(operator_output::command_text::human_command(command))
+}
+
+fn humanize_string_array(value: &serde_json::Value) -> serde_json::Value {
+    serde_json::Value::Array(
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(|entry| serde_json::Value::String(humanize_backticked_commands(entry)))
+            .collect(),
+    )
+}
+
+fn humanize_backticked_commands(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut remainder = value;
+    loop {
+        let Some(start) = remainder.find('`') else {
+            output.push_str(remainder);
+            return output;
+        };
+        output.push_str(&remainder[..start + 1]);
+        remainder = &remainder[start + 1..];
+        let Some(end) = remainder.find('`') else {
+            output.push_str(remainder);
+            return output;
+        };
+        output.push_str(&operator_output::command_text::human_command(
+            &remainder[..end],
+        ));
+        output.push('`');
+        remainder = &remainder[end + 1..];
     }
 }
 
@@ -1670,14 +1709,16 @@ fn build_orchestrator_runtime_contract(
         serde_json::json!({
             "status": "blocked_pending_activation",
             "surface": "vida project-activator",
-            "command": "vida project-activator --json",
+            "command": human_command_value("vida project-activator"),
+            "machine_command": "vida project-activator --json",
             "reason": "project activation must complete before normal dispatch"
         })
     } else if continuation_idle {
         serde_json::json!({
             "status": "idle_project_ready",
             "surface": "vida task ready",
-            "command": "vida task ready --json",
+            "command": human_command_value("vida task ready"),
+            "machine_command": "vida task ready --json",
             "reason": "no active TaskFlow or runtime bounded unit is present; no dispatch is required until work is selected"
         })
     } else if !continuation_allowed
@@ -1694,7 +1735,8 @@ fn build_orchestrator_runtime_contract(
         serde_json::json!({
             "status": "preview_required",
             "surface": "vida agent dispatch-next",
-            "command": "vida agent dispatch-next --dev-team --json",
+            "command": human_command_value("vida agent dispatch-next --dev-team"),
+            "machine_command": "vida agent dispatch-next --dev-team --json",
             "reason": "review configured carrier/model/cost truth before any `vida agent-init` execution dispatch"
         })
     };
@@ -2009,7 +2051,7 @@ fn agent_init_packet_execute_command(selection: &serde_json::Value) -> Option<St
         .and_then(serde_json::Value::as_str)
         .map(|path| {
             format!(
-                "vida agent-init --dispatch-packet {} --execute-dispatch --json",
+                "vida agent-init --dispatch-packet {} --execute-dispatch",
                 crate::shell_quote(path)
             )
         })
@@ -2019,7 +2061,7 @@ fn agent_init_packet_execute_command(selection: &serde_json::Value) -> Option<St
                 .and_then(serde_json::Value::as_str)
                 .map(|path| {
                     format!(
-                        "vida agent-init --downstream-packet {} --execute-dispatch --json",
+                        "vida agent-init --downstream-packet {} --execute-dispatch",
                         crate::shell_quote(path)
                     )
                 })
@@ -2046,7 +2088,7 @@ fn agent_init_operator_guidance(
             "run `{command}` for a packet-backed execution attempt; do not treat this activation view as completion"
         )
     } else {
-        "create or refresh a scheduler dispatch packet first, then run `vida agent-init --dispatch-packet <path> --execute-dispatch --json` for execution evidence".to_string()
+        "create or refresh a scheduler dispatch packet first, then run `vida agent-init --dispatch-packet <path> --execute-dispatch` for execution evidence".to_string()
     };
 
     serde_json::json!({
@@ -2074,7 +2116,7 @@ fn agent_init_operator_guidance(
         "flow_distinctions": [
             {
                 "stage": "startup_activation_view",
-                "surface": "vida agent-init --role <runtime-role> <task-id> --json",
+                "surface": "vida agent-init --role <runtime-role> <task-id>",
                 "executes_packet": false,
                 "records_completion_receipt": false,
                 "meaning": "bounded lane startup/context only"
@@ -2083,7 +2125,7 @@ fn agent_init_operator_guidance(
                 "stage": "packet_backed_execution_attempt",
                 "surface": execute_command
                     .as_deref()
-                    .unwrap_or("vida agent-init --dispatch-packet <path> --execute-dispatch --json"),
+                    .unwrap_or("vida agent-init --dispatch-packet <path> --execute-dispatch"),
                 "executes_packet": true,
                 "records_completion_receipt": "only_on_success",
                 "meaning": "attempts the bounded delegated packet and must return execution evidence"
@@ -2275,6 +2317,14 @@ mod tests {
         assert_eq!(
             payload["init"]["continuation_binding"]["active_bounded_unit"]["task_id"],
             "active-task"
+        );
+        assert_eq!(
+            payload["full_output_command"],
+            "vida orchestrator-init --full"
+        );
+        assert_eq!(
+            payload["full_output_machine_command"],
+            "vida orchestrator-init --full --json"
         );
         assert!(
             cached_orchestrator_init_payload_has_top_level_continuation_fields(
@@ -2535,6 +2585,14 @@ mod tests {
             "idle_project_ready"
         );
         assert_eq!(
+            contract["next_lawful_dispatch_action"]["command"],
+            "vida task ready"
+        );
+        assert_eq!(
+            contract["next_lawful_dispatch_action"]["machine_command"],
+            "vida task ready --json"
+        );
+        assert_eq!(
             orchestrator_init_effective_status(&init_view, &contract),
             "ready_enough_for_normal_work"
         );
@@ -2775,7 +2833,7 @@ mod tests {
                 "lane_status": "packet_ready",
                 "dispatch_kind": "agent_lane",
                 "dispatch_surface": "vida agent-init",
-                "dispatch_command": "vida agent-init --dispatch-packet packet --execute-dispatch --json",
+                "dispatch_command": "vida agent-init --dispatch-packet packet --execute-dispatch",
                 "activation_agent_type": "middle",
                 "activation_runtime_role": "coach",
                 "selected_backend": "internal_subagents",
@@ -4023,7 +4081,7 @@ Default feature-delivery flow:\n\n\
 9. For normal write-producing work, treat project agent-first execution as the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional executor details and not the canonical project control surface.\n\
 9a. Project configuration or runtime init reporting agent-only/default orchestration is not user authorization to launch configured carriers or host bridge execution. Treat it as routing preference only; require an explicit user request for agent-first/parallel-agent execution before using configured agent carriers.\n\
 10. Keep the root session in orchestration posture unless an explicit exception path is recorded.\n\
-11. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; if the root-session write guard is still active, continue through packet shaping or `vida agent-init` dispatch instead of local coding.\n\
+11. Before any local write decision, re-check `vida status`, `vida taskflow recovery latest`, and `vida taskflow consume continue`; if the root-session write guard is still active, continue through packet shaping or `vida agent-init` dispatch instead of local coding.\n\
 12. Host-local shell/edit capability is not a lane-change receipt and does not authorize root-session coding.\n\
 13. If the user explicitly orders agent-first or parallel-agent execution, keep that routing intent sticky; do not silently substitute root-session coding.\n\
 14. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure does not authorize root-session coding; recover delegated lanes, wait, reroute, or record the exception path first.\n\
@@ -4034,8 +4092,8 @@ Default feature-delivery flow:\n\n\
 19. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n\
 20. After any bounded result, green test, successful build, runtime handoff, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n\
 21. Sticky continuation intent is not permission to self-select `ready_head[0]`, the first ready backlog item, or any adjacent slice; fail closed unless the active bounded unit is explicit from user wording or runtime evidence.\n\
-22. If continued-development intent is active but `vida status --json` or `vida orchestrator-init --json` cannot state `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, publish an ambiguity report instead of continuing implementation.\n\
-23. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n",
+22. If continued-development intent is active but `vida status` or `vida orchestrator-init` cannot state `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, publish an ambiguity report instead of continuing implementation.\n\
+23. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path>` over inline shell quoting for complex text.\n",
             super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
         ),
         "process/project-operations",
@@ -4117,7 +4175,7 @@ pub(crate) fn render_project_research_index() -> String {
 
 pub(crate) fn render_project_host_agent_guide() -> String {
     with_scaffold_footer(
-        "# Host Agent Configuration Guide\n\nThis project uses framework-materialized host runtime surfaces; the active internal Codex surface currently renders under `.codex/**`.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.systems.<system>.carriers` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by the current internal Codex adapter after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from the selected host-system carrier catalog\n\nCarrier rule:\n\n- the primary visible agent model is the configured carrier catalog rendered from `vida.config.yaml`, not a Rust-hardcoded role list\n- compatibility projections such as `host_environment.codex.agents` may exist for older consumers but must not be treated as a second canonical source\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured carrier catalog instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Canonical delegated execution still dispatches through `vida agent-init`; host-tool-specific subagent APIs are optional executor details and not the primary project delegation surface.\n6a. VIDA config/init reporting agent-only or default agent orchestration is not the explicit delegation request required by host subagent APIs. Require an explicit user request for agent-first or parallel-agent execution before launching configured carriers or host bridge execution.\n7. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; an active root-session write guard still means orchestration-only.\n8. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute root-session coding because a host tool offers local write access.\n9. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure is not a lane-change receipt and does not authorize root-session coding.\n10. Recover delegated-lane saturation first: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n11. Under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.\n12. Do not treat commentary, status output, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n13. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n14. After any bounded result, successful build, runtime handoff, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n15. Sticky continuation intent does not authorize choosing the first ready task or an adjacent slice by plausibility; continue only when the active bounded unit is explicit from user wording or runtime evidence.\n16. If `vida status --json` or `vida orchestrator-init --json` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to an ambiguity report instead of continuing implementation.\n17. When recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n18. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
+        "# Host Agent Configuration Guide\n\nThis project uses framework-materialized host runtime surfaces; the active internal Codex surface currently renders under `.codex/**`.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.systems.<system>.carriers` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by the current internal Codex adapter after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from the selected host-system carrier catalog\n\nCarrier rule:\n\n- the primary visible agent model is the configured carrier catalog rendered from `vida.config.yaml`, not a Rust-hardcoded role list\n- compatibility projections such as `host_environment.codex.agents` may exist for older consumers but must not be treated as a second canonical source\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured carrier catalog instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Canonical delegated execution still dispatches through `vida agent-init`; host-tool-specific subagent APIs are optional executor details and not the primary project delegation surface.\n6a. VIDA config/init reporting agent-only or default agent orchestration is not the explicit delegation request required by host subagent APIs. Require an explicit user request for agent-first or parallel-agent execution before launching configured carriers or host bridge execution.\n7. Before any local write decision, re-check `vida status`, `vida taskflow recovery latest`, and `vida taskflow consume continue`; an active root-session write guard still means orchestration-only.\n8. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute root-session coding because a host tool offers local write access.\n9. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure is not a lane-change receipt and does not authorize root-session coding.\n10. Recover delegated-lane saturation first: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n11. Under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.\n12. Do not treat commentary, status output, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n13. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n14. After any bounded result, successful build, runtime handoff, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n15. Sticky continuation intent does not authorize choosing the first ready task or an adjacent slice by plausibility; continue only when the active bounded unit is explicit from user wording or runtime evidence.\n16. If `vida status` or `vida orchestrator-init` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to an ambiguity report instead of continuing implementation.\n17. When recording task progress from shell, prefer `vida task update <task-id> --notes-file <path>` over inline shell quoting for complex text.\n18. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
         "process/codex-agent-configuration-guide",
         "process_doc",
         "docs/process/codex-agent-configuration-guide.md",
@@ -4373,7 +4431,10 @@ fn print_init_summary(project_root: &Path, activation_view: &serde_json::Value) 
         .as_bool()
         .unwrap_or(true)
     {
-        println!("next step: vida project-activator --json");
+        println!(
+            "next step: {}",
+            operator_output::command_text::human_command("vida project-activator")
+        );
         if let Some(example) = activation_view["interview"]["one_shot_example"].as_str() {
             println!("activation example: {example}");
         }
@@ -4863,7 +4924,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                             "next lawful dispatch",
                             orchestrator_runtime_contract["next_lawful_dispatch_action"]["command"]
                                 .as_str()
-                                .unwrap_or("vida agent dispatch-next --dev-team --json"),
+                                .unwrap_or("vida agent dispatch-next --dev-team"),
                         );
                         print_compact_command_families(RenderMode::Plain, "vida orchestrator-init");
                         if init_view["project_activation"]["activation_pending"]
@@ -4873,7 +4934,9 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                             print_surface_line(
                                 RenderMode::Plain,
                                 "next step",
-                                "vida project-activator --json",
+                                &operator_output::command_text::human_command(
+                                    "vida project-activator --json",
+                                ),
                             );
                             if let Some(example) = init_view["project_activation"]["interview"]
                                 ["one_shot_example"]
@@ -4900,13 +4963,20 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                                 "feature flow",
                                 "for requests that combine research/specification/planning and implementation, start with one bounded design document before code execution",
                             );
-                            print_surface_line(
-                                RenderMode::Plain,
-                                "feature intake",
+                            let feature_intake_command =
                                 init_view["project_activation"]["normal_work_defaults"]
                                     ["intake_runtime"]
                                     .as_str()
-                                    .unwrap_or("vida taskflow consume final <request> --json"),
+                                    .map(operator_output::command_text::human_command)
+                                    .unwrap_or_else(|| {
+                                        operator_output::command_text::human_command(
+                                            "vida taskflow consume final <request>",
+                                        )
+                                    });
+                            print_surface_line(
+                                RenderMode::Plain,
+                                "feature intake",
+                                &feature_intake_command,
                             );
                             print_surface_line(
                                 RenderMode::Plain,
@@ -4937,57 +5007,6 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                                     "agent=execution carrier; role=runtime activation state",
                                 );
                                 print_surface_line(RenderMode::Plain, "carrier selection", rule);
-                            }
-                            if let Some(command) = init_view["project_activation"]
-                                ["normal_work_defaults"]["execution_carrier_model"]
-                                ["inspect_commands"]["snapshot"]
-                                .as_str()
-                            {
-                                print_surface_line(
-                                    RenderMode::Plain,
-                                    "agent snapshot cmd",
-                                    command,
-                                );
-                            }
-                            if let Some(command) = init_view["project_activation"]
-                                ["normal_work_defaults"]["execution_carrier_model"]
-                                ["inspect_commands"]["carrier_catalog"]
-                                .as_str()
-                            {
-                                print_surface_line(
-                                    RenderMode::Plain,
-                                    "carrier catalog cmd",
-                                    command,
-                                );
-                            }
-                            if let Some(command) = init_view["project_activation"]
-                                ["normal_work_defaults"]["execution_carrier_model"]
-                                ["inspect_commands"]["runtime_roles"]
-                                .as_str()
-                            {
-                                print_surface_line(RenderMode::Plain, "runtime roles cmd", command);
-                            }
-                            if let Some(command) = init_view["project_activation"]
-                                ["normal_work_defaults"]["execution_carrier_model"]
-                                ["inspect_commands"]["scores"]
-                                .as_str()
-                            {
-                                print_surface_line(
-                                    RenderMode::Plain,
-                                    "carrier scores cmd",
-                                    command,
-                                );
-                            }
-                            if let Some(command) = init_view["project_activation"]
-                                ["normal_work_defaults"]["execution_carrier_model"]
-                                ["inspect_commands"]["selection_preview"]
-                                .as_str()
-                            {
-                                print_surface_line(
-                                    RenderMode::Plain,
-                                    "selection preview cmd",
-                                    command,
-                                );
                             }
                         }
                     }
@@ -6445,7 +6464,9 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     print_surface_line(
                         RenderMode::Plain,
                         "next step",
-                        "vida project-activator --json",
+                        &operator_output::command_text::human_command(
+                            "vida project-activator --json",
+                        ),
                     );
                     if let Some(example) =
                         init_view["project_activation"]["interview"]["one_shot_example"].as_str()
@@ -6527,7 +6548,7 @@ fn agent_init_packet_selection(
         .unwrap_or_default();
     if !downstream && packet_kind == "runtime_downstream_dispatch_packet" {
         return Err(format!(
-            "Downstream dispatch packet {} requires `--downstream-packet`. Run: vida agent-init --downstream-packet {} --execute-dispatch --json",
+            "Downstream dispatch packet {} requires `--downstream-packet`. Run: vida agent-init --downstream-packet {} --execute-dispatch",
             crate::shell_quote(packet_path),
             crate::shell_quote(packet_path)
         ));
@@ -7797,6 +7818,10 @@ mod agent_init_surface_tests {
         );
         assert_eq!(
             contract["next_lawful_dispatch_action"]["command"],
+            "vida agent dispatch-next --dev-team"
+        );
+        assert_eq!(
+            contract["next_lawful_dispatch_action"]["machine_command"],
             "vida agent dispatch-next --dev-team --json"
         );
         assert_eq!(
@@ -7933,7 +7958,7 @@ mod agent_init_surface_tests {
         assert_eq!(
             payload["operator_guidance"]["flow_distinctions"][1]["surface"],
             format!(
-                "vida agent-init --dispatch-packet {} --execute-dispatch --json",
+                "vida agent-init --dispatch-packet {} --execute-dispatch",
                 crate::shell_quote("/tmp/dispatch.json")
             )
         );
@@ -8007,7 +8032,7 @@ mod agent_init_surface_tests {
                     "goal": "Verify downstream source context",
                     "scope_in": ["downstream packet resume"],
                     "definition_of_done": ["source dispatch target is preserved"],
-                    "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch --json",
+                    "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch",
                     "proof_target": "decoded dispatch receipt",
                     "stop_rules": ["stop after decode"],
                     "blocking_question": "Does the downstream packet carry previous-lane context?"
@@ -8102,7 +8127,7 @@ mod agent_init_surface_tests {
                 "goal": "Write downstream fix",
                 "scope_in": ["writer packet must not reuse analysis receipt"],
                 "definition_of_done": ["writer has its own receipt-backed execution"],
-                "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch --json",
+                "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch",
                 "proof_target": "writer dispatch result",
                 "stop_rules": ["stop after writer evidence"],
                 "blocking_question": "Does writer require downstream packet execution?"
@@ -8125,7 +8150,7 @@ mod agent_init_surface_tests {
         );
         assert!(
             error.contains(&format!(
-                "vida agent-init --downstream-packet {} --execute-dispatch --json",
+                "vida agent-init --downstream-packet {} --execute-dispatch",
                 crate::shell_quote(packet_path)
             )),
             "unexpected error: {error}"
@@ -8161,7 +8186,7 @@ mod agent_init_surface_tests {
                     "scope_in": ["dispatch_target:prover"],
                     "read_only_paths": [".vida/data/state/runtime-consumption"],
                     "definition_of_done": ["prover handoff result is recorded"],
-                    "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch --json",
+                    "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch",
                     "proof_target": "prover dispatch result",
                     "stop_rules": ["stop after prover result"],
                     "blocking_question": "Does prover handoff retain downstream carrier assignment?"
@@ -9125,7 +9150,7 @@ mod agent_init_surface_tests {
             exception_path_receipt_id: None,
             dispatch_kind: "agent_lane".to_string(),
             dispatch_surface: Some("vida agent-init".to_string()),
-            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
             dispatch_packet_path: Some("dispatch-packet.json".to_string()),
             dispatch_result_path: Some("dispatch-result.json".to_string()),
             blocker_code: Some("internal_codex_carrier_unavailable".to_string()),
@@ -9195,7 +9220,7 @@ mod agent_init_surface_tests {
         );
         assert_eq!(
             payload["stale_internal_carrier_receipt_repair"]["repair_command"],
-            "vida taskflow run-graph dispatch-init epic-2-run --json"
+            "vida taskflow run-graph dispatch-init epic-2-run"
         );
         assert!(payload["next_actions"][0]
             .as_str()
@@ -9220,7 +9245,7 @@ mod agent_init_surface_tests {
         assert_eq!(
             command,
             format!(
-                "vida agent-init --dispatch-packet {} --execute-dispatch --json",
+                "vida agent-init --dispatch-packet {} --execute-dispatch",
                 crate::shell_quote(unsafe_path)
             )
         );
@@ -9240,7 +9265,7 @@ mod agent_init_surface_tests {
         assert_eq!(
             command,
             format!(
-                "vida agent-init --downstream-packet {} --execute-dispatch --json",
+                "vida agent-init --downstream-packet {} --execute-dispatch",
                 crate::shell_quote(unsafe_path)
             )
         );

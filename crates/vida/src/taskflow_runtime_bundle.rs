@@ -1841,18 +1841,18 @@ pub(crate) fn build_orchestrator_init_view(
         },
         "minimum_commands": [
             "vida boot",
-            "vida orchestrator-init --json",
+            "vida orchestrator-init",
             "vida protocol view bootstrap/router",
             "vida protocol view agent-definitions/entry.orchestrator-entry",
             "vida protocol view instruction-contracts/overlay.step-thinking-runtime-capsule",
-            "vida task ready --json",
-            "vida taskflow consume bundle check --json",
+            "vida task ready",
+            "vida taskflow consume bundle check",
             "vida docflow protocol-coverage-check --profile active-canon"
         ],
         "operator_command_map": operator_command_map("vida orchestrator-init"),
         "feature_delivery_default_flow": {
             "documentation_first": true,
-            "intake_runtime": "vida taskflow consume final <request> --json",
+            "intake_runtime": "vida taskflow consume final <request>",
             "design_template_path": "docs/product/spec/templates/feature-design-document.template.md",
             "tracked_flow_order": [
                 "open epic in vida taskflow",
@@ -1914,11 +1914,11 @@ pub(crate) fn build_agent_init_view(
             "system-maps/bootstrap.worker-boot-flow"
         ],
         "minimum_commands": [
-            "vida agent-init --role worker --json",
+            "vida agent-init --role worker",
             "vida protocol view agent-definitions/entry.worker-entry",
             "vida protocol view instruction-contracts/role.worker-thinking",
-            "vida task show <task-id> --json",
-            "vida taskflow consume bundle check --json"
+            "vida task show <task-id>",
+            "vida taskflow consume bundle check"
         ],
         "operator_command_map": operator_command_map("vida agent-init"),
         "allowed_non_orchestrator_roles": non_orchestrator_roles(activation_bundle),
