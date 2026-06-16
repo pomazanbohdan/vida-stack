@@ -6,7 +6,7 @@ use crate::task_cli_render::{
     task_ready_payload, task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use taskflow_core::task::block::{append_task_block_note, normalize_task_block_list};
 use taskflow_core::task::dependencies::{
     parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
@@ -3144,6 +3144,7 @@ fn task_update_planner_metadata_arg(
 
 const TASK_BULK_IMPORT_SURFACE: &str = "vida task import";
 const TASK_BULK_IMPORT_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const TASK_BULK_IMPORT_MAX_TASKS: usize = 10_000;
 
 #[derive(Debug, Clone)]
 struct TaskBulkImportRawItem {
@@ -3316,6 +3317,13 @@ fn task_bulk_import_raw_items_from_value(
             );
         }
     };
+    if values.len() > TASK_BULK_IMPORT_MAX_TASKS {
+        return Err(format!(
+            "Task import contains {} tasks, limit is {} tasks.",
+            values.len(),
+            TASK_BULK_IMPORT_MAX_TASKS
+        ));
+    }
     Ok(values
         .into_iter()
         .enumerate()
@@ -3352,6 +3360,13 @@ fn parse_task_bulk_import_raw_items(
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
+                }
+                if items.len() >= TASK_BULK_IMPORT_MAX_TASKS {
+                    return Err(format!(
+                        "Task import contains more than {} tasks; first excess item is at line {}.",
+                        TASK_BULK_IMPORT_MAX_TASKS,
+                        line_index + 1
+                    ));
                 }
                 let value =
                     serde_json::from_str::<serde_json::Value>(trimmed).map_err(|error| {
@@ -3927,7 +3942,7 @@ fn task_bulk_import_validate_basic(
     }
 
     for task in tasks {
-        if let Some(previous_index) = batch_ids.insert(task.task_id.as_str(), task.index) {
+        if let Some(previous_index) = batch_ids.get(task.task_id.as_str()).copied() {
             errors.push(task_bulk_import_validation_error(
                 task.index,
                 task.line,
@@ -3935,7 +3950,30 @@ fn task_bulk_import_validate_basic(
                 Some("id"),
                 format!("duplicate task id also appears at index {previous_index}"),
             ));
+        } else {
+            batch_ids.insert(task.task_id.as_str(), task.index);
         }
+        if let Some(display_id) = task
+            .display_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if let Some(previous_index) = batch_display_ids.get(display_id).copied() {
+                errors.push(task_bulk_import_validation_error(
+                    task.index,
+                    task.line,
+                    Some(task.task_id.clone()),
+                    Some("display_id"),
+                    format!("duplicate display_id also appears at index {previous_index}"),
+                ));
+            } else {
+                batch_display_ids.insert(display_id, task.index);
+            }
+        }
+    }
+
+    for task in tasks {
         if existing_ids.contains(task.task_id.as_str()) {
             errors.push(task_bulk_import_validation_error(
                 task.index,
@@ -3976,9 +4014,7 @@ fn task_bulk_import_validate_basic(
                     "task parent_id cannot point to itself",
                 ));
             }
-            if !existing_ids.contains(parent_id)
-                && !tasks.iter().any(|other| other.task_id == parent_id)
-            {
+            if !existing_ids.contains(parent_id) && !batch_ids.contains_key(parent_id) {
                 errors.push(task_bulk_import_validation_error(
                     task.index,
                     task.line,
@@ -4016,12 +4052,10 @@ fn task_bulk_import_validate_basic(
                     ),
                 ));
             }
-            if let Some((other_index, _)) = tasks
-                .iter()
-                .map(|other| (other.index, other.task_id.as_str()))
-                .find(|(other_index, other_task_id)| {
-                    *other_index != task.index && *other_task_id == display_id
-                })
+            if let Some(other_index) = batch_ids
+                .get(display_id)
+                .copied()
+                .filter(|other_index| *other_index != task.index)
             {
                 errors.push(task_bulk_import_validation_error(
                     task.index,
@@ -4029,15 +4063,6 @@ fn task_bulk_import_validate_basic(
                     Some(task.task_id.clone()),
                     Some("display_id"),
                     format!("display_id `{display_id}` conflicts with batch task id at index {other_index}"),
-                ));
-            }
-            if let Some(previous_index) = batch_display_ids.insert(display_id, task.index) {
-                errors.push(task_bulk_import_validation_error(
-                    task.index,
-                    task.line,
-                    Some(task.task_id.clone()),
-                    Some("display_id"),
-                    format!("duplicate display_id also appears at index {previous_index}"),
                 ));
             }
         }
@@ -4115,33 +4140,58 @@ fn task_bulk_import_apply_order(
         .iter()
         .map(|task| task.id.clone())
         .collect::<BTreeSet<_>>();
-    let mut remaining = (0..tasks.len()).collect::<Vec<_>>();
-    let mut ordered = Vec::new();
+    let batch_index_by_id = tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| (task.task_id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut child_indexes_by_parent = BTreeMap::<&str, Vec<usize>>::new();
+    let mut pending_parent_counts = vec![0usize; tasks.len()];
+    let mut ready = VecDeque::new();
 
-    while !remaining.is_empty() {
-        let before = remaining.len();
-        let mut index = 0;
-        while index < remaining.len() {
-            let task_index = remaining[index];
-            let parent_ready = tasks[task_index]
-                .parent_id
-                .as_deref()
-                .map(|parent_id| available.contains(parent_id))
-                .unwrap_or(true);
-            if parent_ready {
-                available.insert(tasks[task_index].task_id.clone());
-                ordered.push(task_index);
-                remaining.remove(index);
-            } else {
-                index += 1;
+    for (task_index, task) in tasks.iter().enumerate() {
+        match task.parent_id.as_deref() {
+            Some(parent_id) if available.contains(parent_id) => ready.push_back(task_index),
+            Some(parent_id) => {
+                if let Some(parent_task_index) = batch_index_by_id.get(parent_id) {
+                    pending_parent_counts[task_index] += 1;
+                    child_indexes_by_parent
+                        .entry(tasks[*parent_task_index].task_id.as_str())
+                        .or_default()
+                        .push(task_index);
+                } else {
+                    return Err(
+                        "could not order imported tasks parent-first; inspect parent_id cycles or missing parents"
+                            .to_string(),
+                    );
+                }
+            }
+            None => ready.push_back(task_index),
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(tasks.len());
+    while let Some(task_index) = ready.pop_front() {
+        if !available.insert(tasks[task_index].task_id.clone()) {
+            continue;
+        }
+        ordered.push(task_index);
+        if let Some(child_indexes) = child_indexes_by_parent.get(tasks[task_index].task_id.as_str())
+        {
+            for child_index in child_indexes {
+                pending_parent_counts[*child_index] =
+                    pending_parent_counts[*child_index].saturating_sub(1);
+                if pending_parent_counts[*child_index] == 0 {
+                    ready.push_back(*child_index);
+                }
             }
         }
-        if remaining.len() == before {
-            return Err(
-                "could not order imported tasks parent-first; inspect parent_id cycles or missing parents"
-                    .to_string(),
-            );
-        }
+    }
+    if ordered.len() != tasks.len() {
+        return Err(
+            "could not order imported tasks parent-first; inspect parent_id cycles or missing parents"
+                .to_string(),
+        );
     }
     Ok(ordered)
 }
@@ -12064,6 +12114,65 @@ mod tests {
             parent.planner_metadata.acceptance_targets,
             vec!["bulk import works".to_string()]
         );
+    }
+
+    #[test]
+    fn task_bulk_import_rejects_jsonl_batches_above_task_count_limit() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let source = harness.path().join("too-many.jsonl");
+        let mut text = String::new();
+        for index in 0..=super::TASK_BULK_IMPORT_MAX_TASKS {
+            text.push_str(
+                &serde_json::json!({
+                    "id": format!("bulk-{index}"),
+                    "title": "Bulk task",
+                    "type": "epic"
+                })
+                .to_string(),
+            );
+            text.push('\n');
+        }
+        fs::write(&source, text).expect("oversized jsonl fixture should write");
+
+        let command = task_bulk_import_command_for_test(source, harness.path().to_path_buf());
+        let error = super::parse_task_bulk_import_input(&command)
+            .expect_err("jsonl batch above task count limit should fail before validation");
+
+        assert!(error.contains("more than 10000 tasks"));
+    }
+
+    #[test]
+    fn task_bulk_import_apply_order_handles_large_reversed_chains() {
+        let mut tasks = Vec::new();
+        for index in (0..512).rev() {
+            tasks.push(super::TaskBulkImportPlannedTask {
+                index,
+                line: None,
+                task_id: format!("chain-{index}"),
+                title: format!("Chain task {index}"),
+                display_id: None,
+                description: String::new(),
+                issue_type: "epic".to_string(),
+                status: "open".to_string(),
+                priority: 2,
+                parent_id: (index > 0).then(|| format!("chain-{}", index - 1)),
+                notes: None,
+                labels: Vec::new(),
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+            });
+        }
+
+        let order = super::task_bulk_import_apply_order(&[], &tasks)
+            .expect("reversed chain should order parent-first");
+        let ordered_ids = order
+            .into_iter()
+            .map(|task_index| tasks[task_index].task_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ordered_ids.first().copied(), Some("chain-0"));
+        assert_eq!(ordered_ids.last().copied(), Some("chain-511"));
+        assert_eq!(ordered_ids.len(), 512);
     }
 
     #[test]
