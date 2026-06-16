@@ -886,10 +886,82 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let agent_extensions_summary = crate::project_activator_agent_extensions_summary::
         build_project_activator_agent_extensions_summary(project_root, project_overlay.as_ref());
     let agent_extensions_enabled = agent_extensions_summary.agent_extensions_enabled;
-    let agent_extensions_ready = agent_extensions_summary.agent_extensions_ready;
-    let agent_extension_validation_error =
+    let bundle_agent_extensions_ready = agent_extensions_summary.agent_extensions_ready;
+    let mut agent_extension_validation_error =
         agent_extensions_summary.agent_extension_validation_error;
     let execution_carrier_model = agent_extensions_summary.execution_carrier_model;
+    let (registry_projections, dispatch_alias_projection) = match project_overlay
+        .as_ref()
+        .filter(|_| agent_extensions_enabled)
+        .map(|config| {
+            crate::agent_extension_registry_projection::agent_extension_registry_projection_parities(
+                config,
+                project_root,
+            )
+        }) {
+        Some(Ok(parities)) => {
+            let mut registry_projections = Vec::new();
+            let mut dispatch_alias_projection = serde_json::json!({
+                "status": "not_applicable",
+                "reason": "dispatch alias registry already uses the runtime projection path or is not configured",
+            });
+            for parity in parities {
+                if !parity.in_sync {
+                    let stale_summary = parity.stale_summary();
+                    agent_extension_validation_error = Some(match agent_extension_validation_error {
+                        Some(existing) if !existing.trim().is_empty() => {
+                            format!("{existing}; {stale_summary}")
+                        }
+                        _ => stale_summary,
+                    });
+                }
+                let projection = serde_json::json!({
+                    "status": if parity.in_sync { "in_sync" } else { "stale" },
+                    "registry_label": parity.registry_label,
+                    "config_key": parity.config_key,
+                    "configured_source_path": parity.configured_source_path,
+                    "source_path": parity.source_path.display().to_string(),
+                    "runtime_projection_path": parity.runtime_projection_path.display().to_string(),
+                    "source_alias_count": parity.source_alias_count,
+                    "runtime_alias_count": parity.runtime_alias_count,
+                    "missing_runtime_aliases": parity.missing_runtime_aliases,
+                    "extra_runtime_aliases": parity.extra_runtime_aliases,
+                    "content_matches": parity.content_matches,
+                });
+                if projection["config_key"].as_str() == Some("dispatch_aliases") {
+                    dispatch_alias_projection = projection.clone();
+                }
+                registry_projections.push(projection);
+            }
+            (
+                serde_json::Value::Array(registry_projections),
+                dispatch_alias_projection,
+            )
+        }
+        Some(Err(error)) => {
+            let validation_error =
+                format!("agent extension runtime projection parity check failed: {error}");
+            agent_extension_validation_error = Some(match agent_extension_validation_error {
+                Some(existing) if !existing.trim().is_empty() => {
+                    format!("{existing}; {validation_error}")
+                }
+                _ => validation_error.clone(),
+            });
+            (
+                serde_json::json!([{
+                    "status": "blocked",
+                    "error": validation_error,
+                }]),
+                serde_json::json!({
+                    "status": "blocked",
+                    "error": validation_error,
+                }),
+            )
+        }
+        None => (serde_json::Value::Null, serde_json::Value::Null),
+    };
+    let agent_extensions_ready =
+        bundle_agent_extensions_ready && agent_extension_validation_error.is_none();
 
     let runtime_agent_extensions_missing = [
         &runtime_agent_extensions_index,
@@ -999,6 +1071,8 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "profiles_sidecar": runtime_agent_extension_profile_sidecar.is_file(),
             "flows_sidecar": runtime_agent_extension_flow_sidecar.is_file(),
             "dispatch_aliases_sidecar": runtime_agent_extension_dispatch_alias_sidecar.is_file(),
+            "registry_projections": registry_projections,
+            "dispatch_alias_projection": dispatch_alias_projection,
             "bundle_ready": agent_extensions_ready,
             "validation_error": agent_extension_validation_error,
         },
@@ -1192,7 +1266,21 @@ fn repair_project_activation_assets(project_root: &Path) -> Result<(), String> {
     )
     .and_then(|()| super::init_surfaces::ensure_runtime_home(project_root))
     .and_then(|()| super::init_surfaces::write_runtime_agent_extension_projections(project_root))
+    .and_then(|()| repair_runtime_agent_extension_projections(project_root))
     .and_then(|()| super::init_surfaces::materialize_project_docs_scaffold(project_root))
+}
+
+fn repair_runtime_agent_extension_projections(project_root: &Path) -> Result<(), String> {
+    let config_path = project_root.join("vida.config.yaml");
+    if !config_path.is_file() {
+        return Ok(());
+    }
+    let config = read_yaml_file_checked(&config_path)?;
+    crate::agent_extension_registry_projection::refresh_runtime_agent_extension_projections_from_configured_sources(
+        &config,
+        project_root,
+    )
+    .map(|_| ())
 }
 
 pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> ExitCode {
@@ -2357,6 +2445,129 @@ mod tests {
         );
     }
 
+    fn point_dispatch_alias_config_at_docs_source(root: &std::path::Path) {
+        let source_dir = root.join("docs/process/agent-extensions");
+        fs::create_dir_all(&source_dir).expect("docs agent extension source dir should exist");
+        fs::write(
+            source_dir.join("dispatch-aliases.yaml"),
+            crate::DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML,
+        )
+        .expect("docs dispatch alias source should be written");
+        let config_path = root.join("vida.config.yaml");
+        let config_body = fs::read_to_string(&config_path).expect("config should be readable");
+        let updated = config_body
+            .replace("enabled: false", "enabled: true")
+            .replace(
+                "dispatch_aliases: .vida/project/agent-extensions/dispatch-aliases.yaml",
+                "dispatch_aliases: docs/process/agent-extensions/dispatch-aliases.yaml",
+            );
+        fs::write(&config_path, updated).expect("config should be rewritten");
+    }
+
+    fn remove_test_author_from_runtime_dispatch_alias_projection(root: &std::path::Path) {
+        let projection_path = root.join(".vida/project/agent-extensions/dispatch-aliases.yaml");
+        let projection = fs::read_to_string(&projection_path)
+            .expect("runtime dispatch aliases projection should be readable");
+        let start = projection
+            .find("  - alias_id: development_test_author\n")
+            .expect("runtime projection should contain test author before truncation");
+        let end = projection[start + 1..]
+            .find("\n  - alias_id: development_coach\n")
+            .map(|offset| start + 1 + offset + 1)
+            .expect("runtime projection should contain coach after test author");
+        let stale_projection = format!("{}{}", &projection[..start], &projection[end..]);
+        fs::write(&projection_path, stale_projection)
+            .expect("stale runtime dispatch aliases projection should be written");
+    }
+
+    fn point_qwen_template_at_existing_codex_source(root: &std::path::Path) {
+        let config_path = root.join("vida.config.yaml");
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let mut config_yaml: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let qwen_system = config_yaml
+            .get_mut("host_environment")
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|host_environment| host_environment.get_mut("systems"))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|systems| systems.get_mut("qwen"))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("qwen host system should exist in test config");
+        qwen_system.insert(
+            serde_yaml::Value::String("template_root".to_string()),
+            serde_yaml::Value::String(".codex".to_string()),
+        );
+        fs::write(
+            &config_path,
+            serde_yaml::to_string(&config_yaml).expect("config should serialize"),
+        )
+        .expect("test config should point qwen at an existing template source");
+    }
+
+    #[test]
+    fn project_activator_reports_stale_dispatch_alias_runtime_projection() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        point_dispatch_alias_config_at_docs_source(harness.path());
+        remove_test_author_from_runtime_dispatch_alias_projection(harness.path());
+
+        let view = super::build_project_activator_view(harness.path());
+
+        assert_eq!(
+            view["agent_extensions"]["dispatch_alias_projection"]["status"],
+            "stale"
+        );
+        assert_eq!(
+            view["agent_extensions"]["dispatch_alias_projection"]["missing_runtime_aliases"],
+            serde_json::json!(["development_test_author"])
+        );
+        assert_eq!(view["triggers"]["agent_extensions_invalid"], true);
+        assert_eq!(view["activation_pending"], true);
+        assert!(view["next_steps"]
+            .as_array()
+            .expect("next steps should render")
+            .iter()
+            .any(|step| step
+                .as_str()
+                .unwrap_or_default()
+                .contains("dispatch alias runtime projection is stale")));
+    }
+
+    #[test]
+    fn project_activator_repair_refreshes_stale_dispatch_alias_runtime_projection() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        point_dispatch_alias_config_at_docs_source(harness.path());
+        remove_test_author_from_runtime_dispatch_alias_projection(harness.path());
+
+        super::repair_project_activation_assets(harness.path())
+            .expect("repair should refresh runtime dispatch alias projection");
+
+        let projection = fs::read_to_string(
+            harness
+                .path()
+                .join(".vida/project/agent-extensions/dispatch-aliases.yaml"),
+        )
+        .expect("runtime dispatch aliases projection should be readable after repair");
+        assert!(projection.contains("alias_id: development_test_author"));
+
+        let view = super::build_project_activator_view(harness.path());
+        assert_eq!(
+            view["agent_extensions"]["dispatch_alias_projection"]["status"],
+            "in_sync"
+        );
+        assert_eq!(
+            view["agent_extensions"]["dispatch_alias_projection"]["source_alias_count"],
+            view["agent_extensions"]["dispatch_alias_projection"]["runtime_alias_count"]
+        );
+    }
+
     #[test]
     fn db_first_activation_truth_read_back_allows_source_config_path_as_provenance_only() {
         let expected = LauncherActivationSnapshot {
@@ -2561,6 +2772,7 @@ host_environment:
         let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        point_qwen_template_at_existing_codex_source(harness.path());
 
         let config = super::read_yaml_file_checked(&harness.path().join("vida.config.yaml"))
             .expect("project config should exist");
@@ -2570,7 +2782,7 @@ host_environment:
             .expect("configured qwen template source should exist");
         let source = super::resolve_host_cli_template_source("qwen", Some(qwen_entry))
             .expect("configured qwen template source should resolve");
-        assert!(source.ends_with(".qwen"));
+        assert!(source.ends_with(".codex"));
 
         let runtime_root =
             super::materialize_host_cli_template(harness.path(), "qwen", Some(qwen_entry))
@@ -2586,6 +2798,7 @@ host_environment:
         let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        point_qwen_template_at_existing_codex_source(harness.path());
         let config_path = harness.path().join("vida.config.yaml");
         let config = fs::read_to_string(&config_path).expect("config should exist");
         let mut config_yaml: serde_yaml::Value =

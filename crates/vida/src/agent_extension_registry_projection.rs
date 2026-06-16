@@ -1,5 +1,292 @@
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+
+pub(crate) const RUNTIME_DISPATCH_ALIASES_PROJECTION: &str =
+    ".vida/project/agent-extensions/dispatch-aliases.yaml";
+
+#[derive(Clone, Copy, Debug)]
+struct RegistryProjectionSpec {
+    label: &'static str,
+    config_key: &'static str,
+    registry_key: &'static str,
+    id_field: &'static str,
+    runtime_projection_path: &'static str,
+}
+
+const REGISTRY_PROJECTION_SPECS: &[RegistryProjectionSpec] = &[
+    RegistryProjectionSpec {
+        label: "role",
+        config_key: "roles",
+        registry_key: "roles",
+        id_field: "role_id",
+        runtime_projection_path: ".vida/project/agent-extensions/roles.yaml",
+    },
+    RegistryProjectionSpec {
+        label: "skill",
+        config_key: "skills",
+        registry_key: "skills",
+        id_field: "skill_id",
+        runtime_projection_path: ".vida/project/agent-extensions/skills.yaml",
+    },
+    RegistryProjectionSpec {
+        label: "profile",
+        config_key: "profiles",
+        registry_key: "profiles",
+        id_field: "profile_id",
+        runtime_projection_path: ".vida/project/agent-extensions/profiles.yaml",
+    },
+    RegistryProjectionSpec {
+        label: "flow",
+        config_key: "flows",
+        registry_key: "flow_sets",
+        id_field: "flow_id",
+        runtime_projection_path: ".vida/project/agent-extensions/flows.yaml",
+    },
+    RegistryProjectionSpec {
+        label: "dispatch alias",
+        config_key: "dispatch_aliases",
+        registry_key: "dispatch_aliases",
+        id_field: "alias_id",
+        runtime_projection_path: RUNTIME_DISPATCH_ALIASES_PROJECTION,
+    },
+    RegistryProjectionSpec {
+        label: "hook template",
+        config_key: "hook_templates",
+        registry_key: "hook_templates",
+        id_field: "template_id",
+        runtime_projection_path: ".vida/project/agent-extensions/hook-templates.yaml",
+    },
+];
+
+#[derive(Clone, Debug)]
+pub(crate) struct DispatchAliasProjectionParity {
+    pub(crate) registry_label: String,
+    pub(crate) config_key: String,
+    pub(crate) configured_source_path: String,
+    pub(crate) source_path: PathBuf,
+    pub(crate) runtime_projection_path: PathBuf,
+    pub(crate) source_alias_count: usize,
+    pub(crate) runtime_alias_count: usize,
+    pub(crate) missing_runtime_aliases: Vec<String>,
+    pub(crate) extra_runtime_aliases: Vec<String>,
+    pub(crate) content_matches: bool,
+    pub(crate) in_sync: bool,
+}
+
+impl DispatchAliasProjectionParity {
+    pub(crate) fn stale_summary(&self) -> String {
+        let missing = if self.missing_runtime_aliases.is_empty() {
+            "none".to_string()
+        } else {
+            self.missing_runtime_aliases.join(", ")
+        };
+        let extra = if self.extra_runtime_aliases.is_empty() {
+            "none".to_string()
+        } else {
+            self.extra_runtime_aliases.join(", ")
+        };
+        format!(
+            "{} runtime projection is stale: configured source `{}` has {} rows, runtime projection `{}` has {} rows; missing runtime ids: {missing}; extra runtime ids: {extra}; run `vida project-activator --repair --json` to refresh the generated base projection",
+            self.registry_label,
+            self.configured_source_path,
+            self.source_alias_count,
+            self.runtime_projection_path.display(),
+            self.runtime_alias_count
+        )
+    }
+}
+
+fn registry_ids(
+    registry: &serde_yaml::Value,
+    registry_key: &str,
+    id_field: &str,
+) -> BTreeSet<String> {
+    crate::registry_ids_by_key(registry, registry_key, id_field)
+        .into_iter()
+        .collect()
+}
+
+fn same_configured_registry_projection_path(
+    configured_path: &str,
+    resolved_path: &Path,
+    root: &Path,
+    runtime_projection_path: &str,
+) -> bool {
+    let configured = configured_path.replace('\\', "/");
+    if configured == runtime_projection_path {
+        return true;
+    }
+    resolved_path == root.join(runtime_projection_path)
+}
+
+fn registry_projection_parity(
+    config: &serde_yaml::Value,
+    root: &Path,
+    spec: RegistryProjectionSpec,
+) -> Result<Option<DispatchAliasProjectionParity>, String> {
+    let Some(configured_source_path) = crate::yaml_string(crate::yaml_lookup(
+        config,
+        &["agent_extensions", "registries", spec.config_key],
+    )) else {
+        return Ok(None);
+    };
+    let source_path =
+        crate::project_activator_surface::resolve_overlay_path(root, &configured_source_path);
+    if same_configured_registry_projection_path(
+        &configured_source_path,
+        &source_path,
+        root,
+        spec.runtime_projection_path,
+    ) {
+        return Ok(None);
+    }
+
+    let runtime_projection_path = root.join(spec.runtime_projection_path);
+    let source_registry = crate::project_activator_surface::read_yaml_file_checked(&source_path)
+        .map_err(|error| {
+            format!(
+                "failed to load configured {} source `{}`: {error}",
+                spec.label, configured_source_path
+            )
+        })?;
+    let runtime_registry =
+        crate::project_activator_surface::read_yaml_file_checked(&runtime_projection_path)
+            .map_err(|error| {
+                format!(
+                    "failed to load runtime {} projection `{}`: {error}",
+                    spec.label, spec.runtime_projection_path
+                )
+            })?;
+    let source_aliases = registry_ids(&source_registry, spec.registry_key, spec.id_field);
+    let runtime_aliases = registry_ids(&runtime_registry, spec.registry_key, spec.id_field);
+    let source_raw = std::fs::read_to_string(&source_path).map_err(|error| {
+        format!(
+            "failed to read configured {} source `{}`: {error}",
+            spec.label,
+            source_path.display()
+        )
+    })?;
+    let runtime_raw = std::fs::read_to_string(&runtime_projection_path).map_err(|error| {
+        format!(
+            "failed to read runtime {} projection `{}`: {error}",
+            spec.label,
+            runtime_projection_path.display()
+        )
+    })?;
+    let missing_runtime_aliases = source_aliases
+        .difference(&runtime_aliases)
+        .cloned()
+        .collect::<Vec<_>>();
+    let extra_runtime_aliases = runtime_aliases
+        .difference(&source_aliases)
+        .cloned()
+        .collect::<Vec<_>>();
+    let content_matches = source_raw.trim_end() == runtime_raw.trim_end();
+    let in_sync =
+        content_matches && missing_runtime_aliases.is_empty() && extra_runtime_aliases.is_empty();
+
+    Ok(Some(DispatchAliasProjectionParity {
+        registry_label: spec.label.to_string(),
+        config_key: spec.config_key.to_string(),
+        configured_source_path,
+        source_path,
+        runtime_projection_path,
+        source_alias_count: source_aliases.len(),
+        runtime_alias_count: runtime_aliases.len(),
+        missing_runtime_aliases,
+        extra_runtime_aliases,
+        content_matches,
+        in_sync,
+    }))
+}
+
+pub(crate) fn dispatch_alias_projection_parity(
+    config: &serde_yaml::Value,
+    root: &Path,
+) -> Result<Option<DispatchAliasProjectionParity>, String> {
+    registry_projection_parity(
+        config,
+        root,
+        *REGISTRY_PROJECTION_SPECS
+            .iter()
+            .find(|spec| spec.config_key == "dispatch_aliases")
+            .expect("dispatch alias projection spec should exist"),
+    )
+}
+
+pub(crate) fn agent_extension_registry_projection_parities(
+    config: &serde_yaml::Value,
+    root: &Path,
+) -> Result<Vec<DispatchAliasProjectionParity>, String> {
+    let mut parities = Vec::new();
+    for spec in REGISTRY_PROJECTION_SPECS {
+        if let Some(parity) = registry_projection_parity(config, root, *spec)? {
+            parities.push(parity);
+        }
+    }
+    Ok(parities)
+}
+
+pub(crate) fn refresh_runtime_dispatch_alias_projection_from_configured_source(
+    config: &serde_yaml::Value,
+    root: &Path,
+) -> Result<Option<DispatchAliasProjectionParity>, String> {
+    let Some(parity) = dispatch_alias_projection_parity(config, root)? else {
+        return Ok(None);
+    };
+    if parity.in_sync {
+        return Ok(Some(parity));
+    }
+
+    let source = std::fs::read_to_string(&parity.source_path).map_err(|error| {
+        format!(
+            "failed to read configured dispatch alias source `{}`: {error}",
+            parity.source_path.display()
+        )
+    })?;
+    if let Some(parent) = parity.runtime_projection_path.parent() {
+        crate::ensure_dir(parent)?;
+    }
+    std::fs::write(&parity.runtime_projection_path, source).map_err(|error| {
+        format!(
+            "failed to refresh runtime dispatch alias projection `{}`: {error}",
+            parity.runtime_projection_path.display()
+        )
+    })?;
+    dispatch_alias_projection_parity(config, root)
+}
+
+pub(crate) fn refresh_runtime_agent_extension_projections_from_configured_sources(
+    config: &serde_yaml::Value,
+    root: &Path,
+) -> Result<Vec<DispatchAliasProjectionParity>, String> {
+    for spec in REGISTRY_PROJECTION_SPECS {
+        let Some(parity) = registry_projection_parity(config, root, *spec)? else {
+            continue;
+        };
+        if parity.in_sync {
+            continue;
+        }
+        let source = std::fs::read_to_string(&parity.source_path).map_err(|error| {
+            format!(
+                "failed to read configured {} source `{}`: {error}",
+                parity.registry_label,
+                parity.source_path.display()
+            )
+        })?;
+        if let Some(parent) = parity.runtime_projection_path.parent() {
+            crate::ensure_dir(parent)?;
+        }
+        std::fs::write(&parity.runtime_projection_path, source).map_err(|error| {
+            format!(
+                "failed to refresh runtime {} projection `{}`: {error}",
+                parity.registry_label,
+                parity.runtime_projection_path.display()
+            )
+        })?;
+    }
+    agent_extension_registry_projection_parities(config, root)
+}
 
 pub(crate) struct AgentExtensionValidationConfig {
     pub(crate) require_registry_files: bool,
@@ -257,5 +544,93 @@ pub(crate) fn build_agent_extension_registry_projection(
         dispatch_aliases_path,
         validation,
         validation_errors,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        dispatch_alias_projection_parity,
+        refresh_runtime_dispatch_alias_projection_from_configured_source,
+    };
+    use crate::temp_state::TempStateHarness;
+    use std::fs;
+
+    fn write_dispatch_alias_projection_fixture(root: &std::path::Path) -> serde_yaml::Value {
+        fs::create_dir_all(root.join("docs/process/agent-extensions"))
+            .expect("docs agent extensions dir should exist");
+        fs::create_dir_all(root.join(".vida/project/agent-extensions"))
+            .expect("runtime agent extensions dir should exist");
+        fs::write(
+            root.join("docs/process/agent-extensions/dispatch-aliases.yaml"),
+            concat!(
+                "version: 1\n",
+                "dispatch_aliases:\n",
+                "  - alias_id: development_implementer\n",
+                "    carrier_tier: junior\n",
+                "  - alias_id: development_test_author\n",
+                "    carrier_tier: middle\n",
+            ),
+        )
+        .expect("source dispatch aliases should be written");
+        fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.yaml"),
+            concat!(
+                "version: 1\n",
+                "dispatch_aliases:\n",
+                "  - alias_id: development_implementer\n",
+                "    carrier_tier: junior\n",
+            ),
+        )
+        .expect("runtime dispatch aliases should be written");
+        serde_yaml::from_str(
+            r#"
+agent_extensions:
+  registries:
+    dispatch_aliases: docs/process/agent-extensions/dispatch-aliases.yaml
+"#,
+        )
+        .expect("config should parse")
+    }
+
+    #[test]
+    fn agent_extension_projection_detects_stale_dispatch_alias_source_runtime_mismatch() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config = write_dispatch_alias_projection_fixture(harness.path());
+
+        let parity = dispatch_alias_projection_parity(&config, harness.path())
+            .expect("parity check should run")
+            .expect("configured docs source should require parity");
+
+        assert!(!parity.in_sync);
+        assert_eq!(parity.source_alias_count, 2);
+        assert_eq!(parity.runtime_alias_count, 1);
+        assert_eq!(
+            parity.missing_runtime_aliases,
+            vec!["development_test_author".to_string()]
+        );
+    }
+
+    #[test]
+    fn agent_extension_projection_refreshes_runtime_dispatch_alias_base_from_source() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config = write_dispatch_alias_projection_fixture(harness.path());
+
+        let parity = refresh_runtime_dispatch_alias_projection_from_configured_source(
+            &config,
+            harness.path(),
+        )
+        .expect("projection refresh should run")
+        .expect("configured docs source should require parity");
+
+        assert!(parity.in_sync);
+        assert_eq!(parity.source_alias_count, parity.runtime_alias_count);
+        let refreshed = fs::read_to_string(
+            harness
+                .path()
+                .join(".vida/project/agent-extensions/dispatch-aliases.yaml"),
+        )
+        .expect("runtime projection should be readable");
+        assert!(refreshed.contains("alias_id: development_test_author"));
     }
 }
