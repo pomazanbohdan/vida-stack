@@ -117,25 +117,37 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
     snapshot_path: Option<&str>,
 ) -> serde_json::Value {
     let Some(path) = snapshot_path else {
-        return serde_json::json!({
-            "status": "missing",
-            "reason": "runtime_consumption_snapshot_missing",
-            "lawful_write_surface": serde_json::Value::Null,
-            "host_local_write_capability_is_not_authority": serde_json::Value::Null,
-            "local_write_requires_exception_path": serde_json::Value::Null,
-            "required_exception_evidence": serde_json::Value::Null,
-        });
+        let mut guard = canonical_root_session_write_guard_defaults();
+        if let Some(object) = guard.as_object_mut() {
+            object.insert(
+                "reason".to_string(),
+                serde_json::Value::String("runtime_consumption_snapshot_missing".to_string()),
+            );
+            object.insert(
+                "idle_state_baseline".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+        return root_session_write_guard_summary_from_guard(guard, None, false);
     };
     let snapshot = crate::read_json_file_if_present(Path::new(path));
     let Some(snapshot) = snapshot else {
-        return serde_json::json!({
-            "status": "missing",
-            "reason": "runtime_consumption_snapshot_unreadable",
-            "lawful_write_surface": serde_json::Value::Null,
-            "host_local_write_capability_is_not_authority": serde_json::Value::Null,
-            "local_write_requires_exception_path": serde_json::Value::Null,
-            "required_exception_evidence": serde_json::Value::Null,
-        });
+        let mut guard = canonical_root_session_write_guard_defaults();
+        if let Some(object) = guard.as_object_mut() {
+            object.insert(
+                "reason".to_string(),
+                serde_json::Value::String("runtime_consumption_snapshot_unreadable".to_string()),
+            );
+            object.insert(
+                "idle_state_baseline".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+        return root_session_write_guard_summary_from_guard(
+            guard,
+            latest_dispatch_blocker_code_from_snapshot_path(snapshot_path.map(Path::new)),
+            false,
+        );
     };
     let mut guard = runtime_root_session_write_guard_from_snapshot(&snapshot);
     if guard.is_none() {
@@ -169,17 +181,30 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
             }
         }
     }
-    let guard_ok = has_runtime_root_session_write_guard(&guard);
     let blocking_dispatch_blocker_code =
         latest_dispatch_blocker_code_from_snapshot_path(snapshot_path.map(Path::new))
             .map(serde_json::Value::String)
             .unwrap_or(serde_json::Value::Null);
-    let activation_view_only_dispatch_blocker_active =
-        blocking_dispatch_blocker_code.as_str() == Some("internal_activation_view_only");
+    root_session_write_guard_summary_from_guard(
+        guard,
+        blocking_dispatch_blocker_code.as_str().map(str::to_string),
+        blocking_dispatch_blocker_code.as_str() == Some("internal_activation_view_only"),
+    )
+}
+
+fn root_session_write_guard_summary_from_guard(
+    guard: serde_json::Value,
+    blocking_dispatch_blocker_code: Option<String>,
+    activation_view_only_dispatch_blocker_active: bool,
+) -> serde_json::Value {
+    let guard_ok = has_runtime_root_session_write_guard(&guard);
+    let blocking_dispatch_blocker_code = blocking_dispatch_blocker_code
+        .map(serde_json::Value::String)
+        .unwrap_or(serde_json::Value::Null);
     serde_json::json!({
         "status": if guard_ok { "blocked_by_default" } else { "missing" },
         "reason": if guard_ok {
-            serde_json::Value::Null
+            guard["reason"].clone()
         } else {
             serde_json::Value::String(
                 blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string()
@@ -196,6 +221,7 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
         "root_local_write_allowed_for_only_these_paths": guard["root_local_write_allowed_for_only_these_paths"].clone(),
         "required_exception_evidence": guard["required_exception_evidence"].clone(),
         "pre_write_checkpoint_required": guard["pre_write_checkpoint_required"].clone(),
+        "idle_state_baseline": guard["idle_state_baseline"].clone(),
         "blocking_dispatch_blocker_code": blocking_dispatch_blocker_code,
         "activation_view_only_dispatch_blocker_active": activation_view_only_dispatch_blocker_active,
     })
@@ -543,6 +569,28 @@ mod tests {
         assert_eq!(merged["status"], "blocked_by_default");
         assert_eq!(merged["root_local_write_allowed"], false);
         assert_eq!(merged["local_exception_takeover_state"], "receipt_recorded");
+    }
+
+    #[test]
+    fn root_session_write_guard_summary_materializes_idle_baseline_without_snapshot() {
+        let summary = root_session_write_guard_summary_from_snapshot_path(None);
+
+        assert_eq!(summary["status"], "blocked_by_default");
+        assert_eq!(summary["reason"], "runtime_consumption_snapshot_missing");
+        assert_eq!(summary["idle_state_baseline"], true);
+        assert_eq!(summary["root_session_role"], "orchestrator");
+        assert_eq!(summary["lawful_write_surface"], "vida agent-init");
+        assert_eq!(summary["local_write_requires_exception_path"], true);
+        assert_eq!(summary["root_local_write_allowed"], false);
+        assert_eq!(
+            summary["root_local_write_allowed_for_only_these_paths"],
+            serde_json::json!([])
+        );
+        assert_eq!(summary["pre_write_checkpoint_required"], true);
+        assert_eq!(
+            summary["activation_view_only_dispatch_blocker_active"],
+            false
+        );
     }
 
     #[test]

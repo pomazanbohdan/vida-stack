@@ -115,6 +115,16 @@ fn selected_effective_bundle_receipt_id(
         .unwrap_or_else(|| effective_instruction_bundle.receipt_id.clone())
 }
 
+fn missing_instruction_runtime_state_bundle() -> crate::state_store::EffectiveInstructionBundle {
+    crate::state_store::EffectiveInstructionBundle {
+        root_artifact_id: "missing_instruction_runtime_state".to_string(),
+        mandatory_chain_order: Vec::new(),
+        source_version_tuple: Vec::new(),
+        projected_artifacts: Vec::new(),
+        receipt_id: String::new(),
+    }
+}
+
 fn terminal_task_active_run_matches_effective_run(
     terminal: &crate::state_store::RunGraphStatus,
     current_session_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
@@ -1028,6 +1038,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 },
+                Err(crate::state_store::StateStoreError::MissingInstructionRuntimeState) => {
+                    missing_instruction_runtime_state_bundle()
+                }
                 Err(error) => {
                     eprintln!("active instruction root: failed ({error})");
                     return ExitCode::from(1);

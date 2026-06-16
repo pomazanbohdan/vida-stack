@@ -3500,6 +3500,92 @@ fn doctor_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundl
 }
 
 #[test]
+fn status_and_doctor_materialize_clean_state_root_guard_baseline() {
+    let state_dir = unique_state_dir();
+
+    let reset = vida()
+        .args(vec![
+            "state".to_string(),
+            "reset".to_string(),
+            "--archive".to_string(),
+            "--reinit".to_string(),
+            "--state-dir".to_string(),
+            state_dir.clone(),
+            "--json".to_string(),
+        ])
+        .output()
+        .expect("state reset should run");
+    assert!(
+        reset.status.success(),
+        "state reset should succeed: stderr={}",
+        String::from_utf8_lossy(&reset.stderr)
+    );
+
+    let status = vida()
+        .args(vec![
+            "status".to_string(),
+            "--state-dir".to_string(),
+            state_dir.clone(),
+            "--json".to_string(),
+        ])
+        .output()
+        .expect("status should run");
+    assert!(
+        status.status.success(),
+        "status should succeed: stderr={}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json should parse");
+
+    let doctor = vida()
+        .args(vec![
+            "doctor".to_string(),
+            "--state-dir".to_string(),
+            state_dir.clone(),
+            "--json".to_string(),
+        ])
+        .output()
+        .expect("doctor should run");
+    assert!(
+        doctor.status.success(),
+        "doctor should return blocked JSON instead of process failure: stderr={}",
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    let doctor_json: serde_json::Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor json should parse");
+
+    for payload in [&status_json, &doctor_json] {
+        assert_eq!(
+            payload["root_session_write_guard"]["status"],
+            "blocked_by_default"
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["root_local_write_allowed"],
+            false
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["idle_state_baseline"],
+            true
+        );
+    }
+    assert_eq!(
+        status_json["root_session_write_guard"]["status"],
+        doctor_json["root_session_write_guard"]["status"]
+    );
+    assert!(
+        !doctor_json["blocker_codes"]
+            .as_array()
+            .expect("doctor blocker codes should be an array")
+            .iter()
+            .any(|code| code.as_str() == Some("missing_root_session_write_guard")),
+        "doctor should not report missing root-session write guard: {doctor_json}"
+    );
+
+    let _ = std::fs::remove_dir_all(state_dir);
+}
+
+#[test]
 fn status_and_doctor_ignore_forged_final_snapshot_dispatch_receipt_without_persisted_receipt() {
     let state_dir = unique_state_dir();
 
