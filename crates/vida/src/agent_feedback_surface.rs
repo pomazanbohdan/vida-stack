@@ -589,6 +589,7 @@ fn has_current_failure_outcome_language(normalized: &str) -> bool {
     .iter()
     .any(|prefix| trimmed.starts_with(prefix));
     starts_with_failure_state
+        || has_concrete_canonical_close_phrase(trimmed)
         || trimmed.contains("current blocker")
         || trimmed.contains("current blocked")
         || trimmed.contains("currently blocked")
@@ -1584,6 +1585,20 @@ mod tests {
             super::canonical_close_status_from_reason(reason),
             Some(("blocked", "blocked"))
         );
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_historical_current_blocker_reasons() {
+        for reason in [
+            "Blocked by previous dependency not complete",
+            "Blocked on prior approval",
+        ] {
+            assert_eq!(
+                super::canonical_close_status_from_reason(reason),
+                Some(("blocked", "blocked")),
+                "historical wording must not hide a current blocker reason: {reason}"
+            );
+        }
     }
 
     #[test]
