@@ -297,10 +297,33 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
             &in_progress_tasks,
         );
-    let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
-        continuation_binding,
-        taskflow_active_candidates,
-    );
+    let continuation_binding =
+        match crate::orchestrator_session_surface::build_runtime_owner_evidence(store.root(), false)
+            .ok()
+            .and_then(|evidence| {
+                evidence["current_session"]["session_id"]
+                    .as_str()
+                    .map(str::to_string)
+            }) {
+            Some(current_session_id) => match store.active_orchestrator_claims().await {
+                Ok(active_claims) => {
+                    crate::continuation_binding_summary::add_taskflow_active_work_truth_with_session_claims(
+                        continuation_binding,
+                        taskflow_active_candidates,
+                        &active_claims,
+                        &current_session_id,
+                    )
+                }
+                Err(_) => crate::continuation_binding_summary::add_taskflow_active_work_truth(
+                    continuation_binding,
+                    taskflow_active_candidates,
+                ),
+            },
+            None => crate::continuation_binding_summary::add_taskflow_active_work_truth(
+                continuation_binding,
+                taskflow_active_candidates,
+            ),
+        };
     let continuation_binding = if terminal_task_active_run_graph_task_missing {
         match latest_terminal_task_active_run_graph_status.as_ref() {
             Some(status) => {
