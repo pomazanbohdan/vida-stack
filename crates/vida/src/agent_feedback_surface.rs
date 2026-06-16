@@ -410,6 +410,7 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
         ],
     );
     ignored.extend(ignored_historical_blocker_meta_phrases(reason));
+    ignored.extend(ignored_historical_failure_state_segments(reason));
     ignored.extend(ignored_canonical_close_meta_segments(reason));
     ignored.sort();
     ignored.dedup();
@@ -442,6 +443,157 @@ fn ignored_historical_blocker_meta_phrases(reason: &str) -> Vec<String> {
     .filter(|phrase| normalized.contains(*phrase))
     .map(ToString::to_string)
     .collect()
+}
+
+fn ignored_canonical_close_historical_context(reason: &str) -> Vec<String> {
+    let mut ignored = ignored_historical_blocker_meta_phrases(reason);
+    ignored.extend(ignored_historical_failure_state_segments(reason));
+    ignored.sort();
+    ignored.dedup();
+    ignored
+}
+
+fn ignored_historical_failure_state_segments(reason: &str) -> Vec<String> {
+    reason
+        .split(['.', ';', '\n'])
+        .filter_map(|segment| {
+            let trimmed = segment.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let normalized = trimmed.to_ascii_lowercase();
+            if !has_failure_state_language(&normalized)
+                || !has_historical_or_success_evidence_context(&normalized)
+                || has_current_failure_outcome_language(&normalized)
+            {
+                return None;
+            }
+            Some(normalized)
+        })
+        .collect()
+}
+
+fn has_failure_state_language(normalized: &str) -> bool {
+    let keyword_markers = [
+        "blocked".to_string(),
+        "blocker".to_string(),
+        "failed".to_string(),
+        "failure".to_string(),
+        "rejected".to_string(),
+    ];
+    if !super::contains_keywords(normalized, &keyword_markers).is_empty() {
+        return true;
+    }
+
+    [
+        "failure-state",
+        "failure state",
+        "canonical_gate_blocked",
+        "canonical_status_blocked",
+        "close_feedback_canonical_status_blocked",
+        "status=blocked",
+        "status: blocked",
+        "blocker details",
+        "blocker code",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+}
+
+fn has_historical_or_success_evidence_context(normalized: &str) -> bool {
+    let has_historical_context = [
+        "previous",
+        "previously",
+        "prior",
+        "historical",
+        "history",
+        "earlier",
+        "former",
+        "formerly",
+        "past",
+        "old ",
+        "quoted",
+        "quote",
+        "repro",
+        "reproduction",
+        "reproduced",
+        "attempt",
+        "attempts",
+        "retry",
+        "returned",
+        "logged",
+        "log ",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+    let has_evidence_context = ["proof", "evidence", "coverage", "validated", "verified"]
+        .iter()
+        .any(|phrase| normalized.contains(phrase));
+    let has_success_context = [
+        "proof passed",
+        "proofs passed",
+        "proof commands passed",
+        "test passed",
+        "tests passed",
+        "validated",
+        "verified",
+        "fixed",
+        "closed",
+        "complete",
+        "succeeded",
+        "green",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+
+    has_historical_context
+        || (has_evidence_context
+            && has_success_context
+            && has_failure_state_artifact_language(normalized))
+}
+
+fn has_failure_state_artifact_language(normalized: &str) -> bool {
+    [
+        "canonical_gate_blocked",
+        "canonical_status_blocked",
+        "close_feedback_canonical_status_blocked",
+        "status=blocked",
+        "status: blocked",
+        "blocker details",
+        "blocker code",
+        "blocked flag",
+        "continuation_blocked",
+        "failure-state",
+        "failure state",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+}
+
+fn has_current_failure_outcome_language(normalized: &str) -> bool {
+    let trimmed = normalized.trim_start_matches(['"', '\'', '`', ' ']);
+    let starts_with_failure_state = [
+        "blocked:",
+        "blocker:",
+        "blocker_code=",
+        "blocker_code:",
+        "blocker code:",
+        "blocker details:",
+        "blocked flag:",
+        "continuation blocker:",
+        "continuation_blocked:",
+        "continuation_blocked flag:",
+        "awaiting_approval:",
+        "approval_wait:",
+    ]
+    .iter()
+    .any(|prefix| trimmed.starts_with(prefix));
+    starts_with_failure_state
+        || trimmed.contains("current blocker")
+        || trimmed.contains("current blocked")
+        || trimmed.contains("currently blocked")
+        || trimmed.contains("currently failing")
+        || has_contrastive_blocker_clause(trimmed)
 }
 
 const CONCRETE_CANONICAL_CLOSE_PHRASES: &[&str] = &[
@@ -580,6 +732,9 @@ pub(crate) fn canonical_close_status_from_reason(
     reason: &str,
 ) -> Option<(&'static str, &'static str)> {
     let mut normalized = reason.to_ascii_lowercase();
+    for phrase in ignored_canonical_close_historical_context(reason) {
+        normalized = normalized.replace(&phrase, " canonical_close_context_language ");
+    }
     if has_concrete_canonical_close_field_label(&normalized) {
         return Some(("blocked", "blocked"));
     }
@@ -1545,6 +1700,28 @@ mod tests {
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "verifier blocker closure regression fix"));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_historical_failure_state_evidence_segments() {
+        let reason = "Closed after verification: current implementation is complete. Evidence: previous task close output quoted blocker details: close_feedback_canonical_status_blocked/canonical_gate_blocked and failure-state wording; proof commands passed.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase.as_str().is_some_and(
+                |value| value.contains("previous task close output quoted blocker details")
+            )));
     }
 
     #[test]
