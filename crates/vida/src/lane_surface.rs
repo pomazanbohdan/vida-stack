@@ -334,7 +334,7 @@ impl ExceptionTakeoverMetadata {
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--state-dir <path>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]\n\nOptions:\n  --receipt-id <id>              Receipt id that proves the lane mutation source\n  --reason <text>                Human-readable retire reason\n  --host-bridge-request <path>   Host bridge request artifact to complete\n  --host-agent-id <id>           Parent host agent id that executed the bridge request\n  --host-bridge-summary <text>   Completion summary from the parent host adapter\n  --state-dir <path>             Override the TaskFlow state directory for this lane mutation\n  --reason-class <class>         Exception takeover reason class\n  --active-bounded-unit <unit>   Bounded unit authorized by the exception path\n  --owned-write-scope <path>     Receipt-bound write scope; may be repeated\n  --verification-step <text>     Verification step for exception takeover; may be repeated\n  --activate                     Activate the exception takeover immediately\n  --completed                    Reclaim completed lanes\n  --host-agents                  Include host-agent lane handles during reclaim\n  --json                         Emit machine-readable JSON output\n  -h, --help                     Print help"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--host-bridge-result-file <path>] [--decision <decision>] [--verdict <verdict>] [--allowed-next-node <node>] [--blocker-codes <json-or-list>] [--blocker-code <code> ...] [--rework-target <target>] [--state-dir <path>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]\n\nOptions:\n  --receipt-id <id>              Receipt id that proves the lane mutation source\n  --reason <text>                Human-readable retire reason\n  --host-bridge-request <path>   Host bridge request artifact to complete\n  --host-agent-id <id>           Parent host agent id that executed the bridge request\n  --host-bridge-summary <text>   Completion summary from the parent host adapter\n  --host-bridge-result-file <path> Completion result file from the parent host adapter\n  --decision <decision>          Host bridge completion decision\n  --verdict <verdict>            Host bridge completion verdict\n  --allowed-next-node <node>     Next workflow node allowed by completion\n  --blocker-codes <json-or-list> Completion blocker codes\n  --blocker-code <code>          Completion blocker code; may be repeated\n  --rework-target <target>       Workflow target for rework when completion is blocked\n  --state-dir <path>             Override the TaskFlow state directory for this lane mutation\n  --reason-class <class>         Exception takeover reason class\n  --active-bounded-unit <unit>   Bounded unit authorized by the exception path\n  --owned-write-scope <path>     Receipt-bound write scope; may be repeated\n  --verification-step <text>     Verification step for exception takeover; may be repeated\n  --activate                     Activate the exception takeover immediately\n  --completed                    Reclaim completed lanes\n  --host-agents                  Include host-agent lane handles during reclaim\n  --json                         Emit machine-readable JSON output\n  -h, --help                     Print help"
 }
 
 fn lane_retire_help() -> &'static str {
@@ -407,6 +407,13 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
             let mut host_agent_id = None;
             let mut host_bridge_summary = None;
             let mut state_dir = None;
+            let mut host_bridge_result_file = None;
+            let mut decision = None;
+            let mut verdict = None;
+            let mut allowed_next_node = None;
+            let mut blocker_codes = None;
+            let mut blocker_code = Vec::new();
+            let mut rework_target = None;
             let mut index = 0;
             while index < rest.len() {
                 match rest[index].as_str() {
@@ -449,9 +456,67 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                         state_dir = Some(value.as_str());
                         index += 2;
                     }
+                    "--host-bridge-result-file" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        host_bridge_result_file = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--decision" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        decision = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--verdict" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        verdict = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--allowed-next-node" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        allowed_next_node = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--blocker-codes" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        blocker_codes = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--blocker-code" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        blocker_code.push(value.as_str());
+                        index += 2;
+                    }
+                    "--rework-target" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        rework_target = Some(value.as_str());
+                        index += 2;
+                    }
                     _ => return Err(lane_usage().to_string()),
                 }
             }
+            let _ = (
+                host_bridge_result_file,
+                decision,
+                verdict,
+                allowed_next_node,
+                blocker_codes,
+                blocker_code,
+                rework_target,
+            );
             let Some(receipt_id) = receipt_id else {
                 return Err(lane_usage().to_string());
             };
@@ -5356,6 +5421,48 @@ mod tests {
                 host_bridge_summary: Some("agent completed"),
                 state_dir: Some(".vida/data/state"),
                 as_json: true
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_lane_complete_accepts_host_bridge_completion_result_options() {
+        let args = vec![
+            "complete".to_string(),
+            "run-1".to_string(),
+            "--receipt-id".to_string(),
+            "receipt-1".to_string(),
+            "--host-bridge-request".to_string(),
+            ".vida/data/state/host-tool-bridge/requests/request-1.json".to_string(),
+            "--host-agent-id".to_string(),
+            "agent-1".to_string(),
+            "--decision".to_string(),
+            "pass".to_string(),
+            "--verdict".to_string(),
+            "implemented".to_string(),
+            "--allowed-next-node".to_string(),
+            "coach".to_string(),
+            "--blocker-codes".to_string(),
+            "[]".to_string(),
+            "--blocker-code".to_string(),
+            "implementation_artifacts_missing".to_string(),
+            "--rework-target".to_string(),
+            "developer".to_string(),
+            "--host-bridge-result-file".to_string(),
+            ".vida/data/state/host-tool-bridge/results/result-1.json".to_string(),
+        ];
+        let command =
+            parse_lane_args(&args).expect("host bridge completion result options should parse");
+        assert!(matches!(
+            command,
+            LaneCommand::Complete {
+                run_id: "run-1",
+                receipt_id: "receipt-1",
+                host_bridge_request: Some(
+                    ".vida/data/state/host-tool-bridge/requests/request-1.json"
+                ),
+                host_agent_id: Some("agent-1"),
+                ..
             }
         ));
     }
