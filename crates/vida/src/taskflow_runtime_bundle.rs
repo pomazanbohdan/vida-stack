@@ -46,17 +46,12 @@ const RETRIEVAL_OPTIONAL_CONTEXT_BOUNDARY_REQUIRED: [&str; 3] = [
     "non_promoted_project_docs",
     "broad_repo_manual_scan",
 ];
-const RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_FRESH_REINIT_BASELINE: &str =
-    "runtime_consumption_snapshot_registry:fresh_reinit_baseline";
-const RETRIEVAL_TRUST_FRESHNESS_POSTURE_FRESH_REINIT_BASELINE: &str =
-    "fresh_reinit_protocol_binding_baseline";
-
 fn runtime_bundle_retrieval_trust_evidence(
     runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
     latest_admissible_final_snapshot_path: Option<&str>,
     latest_recorded_final_snapshot_path: Option<&str>,
     protocol_binding_receipt_id: Option<&str>,
-    protocol_binding_recorded_at: Option<&str>,
+    _protocol_binding_recorded_at: Option<&str>,
 ) -> serde_json::Value {
     latest_admissible_retrieval_trust_signal(
         runtime_consumption,
@@ -70,42 +65,7 @@ fn runtime_bundle_retrieval_trust_evidence(
             protocol_binding_receipt_id,
         )
     })
-    .or_else(|| {
-        fresh_reinit_retrieval_trust_baseline(
-            protocol_binding_receipt_id,
-            protocol_binding_recorded_at,
-        )
-    })
     .unwrap_or_else(|| serde_json::json!({}))
-}
-
-fn fresh_reinit_retrieval_trust_baseline(
-    protocol_binding_receipt_id: Option<&str>,
-    protocol_binding_recorded_at: Option<&str>,
-) -> Option<serde_json::Value> {
-    let acl = protocol_binding_receipt_id?.trim();
-    if acl.is_empty() {
-        return None;
-    }
-    let recorded_at = protocol_binding_recorded_at
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("fresh_reinit");
-    let acl_context = format!(
-        "{}:{acl}",
-        crate::runtime_consumption_state::RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT
-    );
-
-    Some(serde_json::json!({
-        "source": crate::runtime_consumption_state::RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
-        "source_registry_ref": RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_FRESH_REINIT_BASELINE,
-        "citation": acl_context,
-        "freshness": recorded_at,
-        "freshness_posture": RETRIEVAL_TRUST_FRESHNESS_POSTURE_FRESH_REINIT_BASELINE,
-        "acl": acl,
-        "acl_context": acl_context,
-        "acl_propagation": crate::runtime_consumption_state::RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
-    }))
 }
 
 pub(crate) async fn build_taskflow_consume_bundle_payload(
@@ -2928,8 +2888,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_bundle_retrieval_trust_evidence_without_admissible_snapshot_materializes_fresh_baseline(
-    ) {
+    fn runtime_bundle_retrieval_trust_evidence_without_admissible_snapshot_fails_closed() {
         let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
             total_snapshots: 4,
             bundle_snapshots: 1,
@@ -2949,30 +2908,23 @@ mod tests {
             Some("2026-03-17T00:00:00Z"),
         );
 
-        assert_eq!(
-            evidence["source"],
-            serde_json::json!("runtime_consumption_snapshot_index")
-        );
-        assert_eq!(
-            evidence["source_registry_ref"],
-            serde_json::json!("runtime_consumption_snapshot_registry:fresh_reinit_baseline")
-        );
-        assert_eq!(
-            evidence["citation"],
-            serde_json::json!("protocol_binding_receipt:receipt-1")
-        );
-        assert_eq!(
-            evidence["freshness"],
-            serde_json::json!("2026-03-17T00:00:00Z")
-        );
-        assert_eq!(evidence["acl"], serde_json::json!("receipt-1"));
+        assert_eq!(evidence, serde_json::json!({}));
+
         let contract = serde_json::json!({
             "retrieval_trust_evidence": evidence,
         });
-        let blockers = retrieval_trust_evidence_blockers(&contract);
-        assert!(
-            blockers.is_empty(),
-            "fresh reinit baseline should satisfy retrieval-trust contract: {blockers:?}"
+        assert_eq!(
+            retrieval_trust_evidence_blockers(&contract),
+            vec![
+                "missing_retrieval_trust_evidence_acl",
+                "missing_retrieval_trust_evidence_acl_context",
+                "missing_retrieval_trust_evidence_acl_propagation",
+                "missing_retrieval_trust_evidence_citation",
+                "missing_retrieval_trust_evidence_freshness",
+                "missing_retrieval_trust_evidence_freshness_posture",
+                "missing_retrieval_trust_evidence_source",
+                "missing_retrieval_trust_evidence_source_registry_ref",
+            ]
         );
     }
 
