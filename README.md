@@ -235,8 +235,14 @@ powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode target-
 # Debug runtime smoke: build debug vida and run status from the effective Cargo target dir.
 powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode runtime-smoke -Json
 
-# Release archive packaging without installing the operator-facing launcher.
-powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -Json
+# Windows-native release archive packaging without installing the operator-facing launcher.
+powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -SkipBuild -Windows -ReleaseBinDir .\.vida\cargo-target\release -Json
+
+# Timed gate wrapper for the same Windows-native skip-build package path.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -SkipBuild -Windows -ReleaseBinDir .\.vida\cargo-target\release -Json
+
+# Focused no-install package smoke with isolated fixture binaries and manifest validation.
+powershell -ExecutionPolicy Bypass -File scripts/check-release-package.ps1 -Json
 
 # Installed runtime proof only when the bounded target requires the operator-facing launcher.
 powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-install -Json

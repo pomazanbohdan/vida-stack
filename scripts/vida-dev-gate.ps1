@@ -2,7 +2,12 @@ param(
     [ValidateSet("script-check", "quick", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy")]
     [string]$Mode = "quick",
     [string]$TestFilter = "",
+    [string]$ReleaseVersion = "",
+    [string]$ReleaseBinDir = "",
+    [string]$ReleaseSuffix = "",
     [int]$Jobs = 0,
+    [switch]$SkipBuild,
+    [switch]$Windows,
     [switch]$Json,
     [Alias("h")]
     [switch]$Help
@@ -17,6 +22,7 @@ function Show-Help {
     @"
 Usage:
   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode <mode> [-Json] [-Jobs <n>] [-TestFilter <filter>]
+  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -SkipBuild -Windows -ReleaseBinDir <dir> [-ReleaseVersion vX.Y.Z] [-Json]
 
 Modes:
   script-check      No-Cargo proof for diffs, runtime boundaries, and script syntax.
@@ -27,13 +33,14 @@ Modes:
   doc-test          Workspace Rust doc tests.
   build-debug       Debug build of supported runtime entrypoints.
   runtime-smoke     Build debug vida and run status from the effective target dir.
-  release-package   Build release archives with scripts/build-release.sh.
+  release-package   Build release archives with native PowerShell scripts/build-release.ps1.
   release-install   Installed launcher proof through vida release install.
   target-dir-policy Print the effective Cargo target directory policy.
 
 Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
-  release-package honors VIDA_RELEASE_SKIP_BUILD=1 and VIDA_RELEASE_BIN_DIR=<dir> for packaging already-built release binaries.
+  release-package accepts explicit -SkipBuild, -Windows, -ReleaseBinDir, -ReleaseVersion, and -ReleaseSuffix flags for packaging already-built release binaries.
+  release-package also honors VIDA_RELEASE_SKIP_BUILD=1, VIDA_RELEASE_BIN_DIR=<dir>, and VIDA_RELEASE_SUFFIX=<suffix> for compatibility.
   JSON mode records operation timing and log artifact paths under .vida/data/state/command-timing.
 "@
 }
@@ -354,6 +361,20 @@ try {
             "-Command",
             '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/vida-dev-gate.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
         )
+        Invoke-Timed "powershell-build-release-parse" @(
+            $PwshPath,
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/build-release.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
+        )
+        Invoke-Timed "powershell-release-package-check-parse" @(
+            $PwshPath,
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/check-release-package.ps1"), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }'
+        )
         Invoke-Timed "powershell-evaluation-log-linter-parse" @(
             $PwshPath,
             "-NoLogo",
@@ -418,11 +439,36 @@ try {
         Invoke-Timed "cargo-build-debug" @("cargo", "build", "--locked", "-p", "vida")
         Invoke-Timed "debug-vida-status" @($DebugVidaPath, "status", "--json")
     } elseif ($Mode -eq "release-package") {
-        if (-not (Test-CommandExists $BashPath)) {
-            Write-Error "-Mode release-package requires bash."
-            exit 2
+        $releaseCommand = New-Object System.Collections.Generic.List[string]
+        $releaseCommand.Add($PwshPath)
+        $releaseCommand.Add("-NoLogo")
+        $releaseCommand.Add("-NoProfile")
+        $releaseCommand.Add("-ExecutionPolicy")
+        $releaseCommand.Add("Bypass")
+        $releaseCommand.Add("-File")
+        $releaseCommand.Add("scripts/build-release.ps1")
+        if ($SkipBuild -or ($env:VIDA_RELEASE_SKIP_BUILD -match '^(1|true|TRUE|yes|YES)$')) {
+            $releaseCommand.Add("-SkipBuild")
         }
-        Invoke-Timed "release-package" @($BashPath, "scripts/build-release.sh")
+        if ($Windows) {
+            $releaseCommand.Add("-Windows")
+        }
+        if ($ReleaseVersion.Trim().Length -gt 0) {
+            $releaseCommand.Add("-Version")
+            $releaseCommand.Add($ReleaseVersion)
+        }
+        if ($ReleaseBinDir.Trim().Length -gt 0) {
+            $releaseCommand.Add("-ReleaseBinDir")
+            $releaseCommand.Add($ReleaseBinDir)
+        }
+        if ($ReleaseSuffix.Trim().Length -gt 0) {
+            $releaseCommand.Add("-ReleaseSuffix")
+            $releaseCommand.Add($ReleaseSuffix)
+        }
+        if ($Json) {
+            $releaseCommand.Add("-Json")
+        }
+        Invoke-Timed "release-package" $releaseCommand.ToArray()
     } elseif ($Mode -eq "release-install") {
         Invoke-Timed "cargo-build-release-vida" @("cargo", "build", "--locked", "-p", "vida", "--release")
         Invoke-Timed "vida-release-install" @($ReleaseVidaPath, "release", "install", "--skip-build", "--source-binary", $ReleaseVidaPath, "--json")
