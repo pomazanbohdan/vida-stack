@@ -52,6 +52,8 @@ struct LaneEnvelope {
     supersedes_receipt_id: Option<String>,
     exception_path_receipt_id: Option<String>,
     exception_path_metadata_path: Option<String>,
+    exception_path_metadata_state: Option<&'static str>,
+    historical_exception_path_metadata_path: Option<String>,
     exception_path_metadata: Option<ExceptionTakeoverMetadata>,
     root_local_write_allowed: bool,
     owned_write_scope: Vec<String>,
@@ -740,6 +742,22 @@ fn build_lane_envelope_with_owned_scope(
         active_exception_write_scope(&summary, exception_path_metadata.as_ref());
     let root_local_write_allowed = !root_local_write_allowed_for_only_these_paths.is_empty();
     let owned_write_scope = root_local_write_allowed_for_only_these_paths.clone();
+    let exception_path_metadata_state = exception_path_metadata.as_ref().map(|_| {
+        if root_local_write_allowed {
+            "active"
+        } else {
+            "historical"
+        }
+    });
+    let historical_exception_path_metadata_path = (!root_local_write_allowed)
+        .then(|| exception_path_metadata_path.clone())
+        .flatten();
+    let current_exception_path_metadata_path = root_local_write_allowed
+        .then(|| exception_path_metadata_path.clone())
+        .flatten();
+    let current_exception_path_metadata = root_local_write_allowed
+        .then_some(exception_path_metadata)
+        .flatten();
     let next_action = lane_ready_downstream_next_action(&summary, blocked).or_else(|| {
         lane_blocked_next_action(
             &summary,
@@ -758,10 +776,12 @@ fn build_lane_envelope_with_owned_scope(
     let artifact_refs = serde_json::json!({
         "latest_run_graph_dispatch_receipt_id": run_id.clone(),
         "exception_path_receipt_id": exception_path_receipt_id.clone(),
-        "exception_path_metadata_path": exception_path_metadata_path.clone(),
+        "exception_path_metadata_path": current_exception_path_metadata_path.clone(),
+        "exception_path_metadata_state": exception_path_metadata_state,
+        "historical_exception_path_metadata_path": historical_exception_path_metadata_path.clone(),
         "root_local_write_allowed": root_local_write_allowed,
         "owned_write_scope": owned_write_scope.clone(),
-        "root_local_write_allowed_for_only_these_paths": exception_path_metadata
+        "root_local_write_allowed_for_only_these_paths": current_exception_path_metadata
             .as_ref()
             .map(|_| root_local_write_allowed_for_only_these_paths.clone())
             .unwrap_or_default(),
@@ -811,11 +831,13 @@ fn build_lane_envelope_with_owned_scope(
         operator_session_projection,
         supersedes_receipt_id,
         exception_path_receipt_id,
-        exception_path_metadata_path,
+        exception_path_metadata_path: current_exception_path_metadata_path,
+        exception_path_metadata_state,
+        historical_exception_path_metadata_path,
         root_local_write_allowed,
         owned_write_scope,
         root_local_write_allowed_for_only_these_paths,
-        exception_path_metadata,
+        exception_path_metadata: current_exception_path_metadata,
     }
 }
 
@@ -1823,6 +1845,20 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
         crate::print_surface_line(
             crate::RenderMode::Plain,
             "exception_path_metadata_path",
+            path,
+        );
+    }
+    if let Some(state) = envelope.exception_path_metadata_state {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "exception_path_metadata_state",
+            state,
+        );
+    }
+    if let Some(path) = envelope.historical_exception_path_metadata_path.as_deref() {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "historical_exception_path_metadata_path",
             path,
         );
     }
@@ -5866,6 +5902,13 @@ mod tests {
         let mut stale_receipt = sample_receipt("executed");
         stale_receipt.blocker_code = None;
         stale_receipt.lane_status = crate::LaneStatus::LaneRunning.as_str().to_string();
+        stale_receipt.dispatch_result_path =
+            Some("runtime-consumption/dispatch-results/current-bridge-result.json".to_string());
+        stale_receipt.downstream_dispatch_ready = true;
+        stale_receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+        stale_receipt.downstream_dispatch_target = Some("coach".to_string());
+        stale_receipt.downstream_dispatch_packet_path =
+            Some("runtime-consumption/downstream-dispatch-packets/coach.json".to_string());
         let stale_envelope = build_lane_envelope(
             crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(stale_receipt),
             None,
@@ -5882,10 +5925,34 @@ mod tests {
         assert!(!stale_envelope.root_local_write_allowed);
         assert!(stale_envelope.owned_write_scope.is_empty());
         assert_eq!(
+            stale_envelope.exception_path_metadata_state,
+            Some("historical")
+        );
+        assert!(stale_envelope.exception_path_metadata_path.is_none());
+        assert!(stale_envelope.exception_path_metadata.is_none());
+        assert_eq!(
+            stale_envelope
+                .historical_exception_path_metadata_path
+                .as_deref(),
+            Some("/tmp/exception.json")
+        );
+        assert_eq!(
             stale_envelope.artifact_refs["root_local_write_allowed_for_only_these_paths"]
                 .as_array()
                 .map(Vec::len),
             Some(0)
+        );
+        assert_eq!(
+            stale_envelope.artifact_refs["exception_path_metadata_state"],
+            "historical"
+        );
+        assert_eq!(
+            stale_envelope.artifact_refs["exception_path_metadata_path"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            stale_envelope.artifact_refs["historical_exception_path_metadata_path"],
+            "/tmp/exception.json"
         );
 
         let mut active_receipt = sample_receipt("executed");
@@ -5911,6 +5978,18 @@ mod tests {
         );
         assert!(active_envelope.root_local_write_allowed);
         assert_eq!(
+            active_envelope.exception_path_metadata_state,
+            Some("active")
+        );
+        assert_eq!(
+            active_envelope.exception_path_metadata_path.as_deref(),
+            Some("/tmp/exception.json")
+        );
+        assert!(active_envelope.exception_path_metadata.is_some());
+        assert!(active_envelope
+            .historical_exception_path_metadata_path
+            .is_none());
+        assert_eq!(
             active_envelope.owned_write_scope,
             vec!["crates/vida/src/lane_surface.rs".to_string()]
         );
@@ -5921,6 +6000,18 @@ mod tests {
         assert_eq!(
             active_envelope.artifact_refs["owned_write_scope"],
             serde_json::json!(["crates/vida/src/lane_surface.rs"])
+        );
+        assert_eq!(
+            active_envelope.artifact_refs["exception_path_metadata_state"],
+            "active"
+        );
+        assert_eq!(
+            active_envelope.artifact_refs["exception_path_metadata_path"],
+            "/tmp/exception.json"
+        );
+        assert_eq!(
+            active_envelope.artifact_refs["historical_exception_path_metadata_path"],
+            serde_json::Value::Null
         );
     }
 
@@ -5993,6 +6084,13 @@ mod tests {
         assert!(envelope
             .root_local_write_allowed_for_only_these_paths
             .is_empty());
+        assert_eq!(envelope.exception_path_metadata_state, Some("historical"));
+        assert!(envelope.exception_path_metadata_path.is_none());
+        assert!(envelope.exception_path_metadata.is_none());
+        assert_eq!(
+            envelope.historical_exception_path_metadata_path.as_deref(),
+            Some("/tmp/exception.json")
+        );
         assert!(!envelope
             .blocker_codes
             .contains(&"open_delegated_cycle".to_string()));
