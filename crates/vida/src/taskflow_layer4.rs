@@ -84,6 +84,15 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida task export-jsonl .vida/exports/tasks.snapshot.jsonl");
             println!("  Add --json only when machine-readable output is required.");
             println!();
+            println!("Large-batch transport:");
+            println!(
+                "  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of oversized shell payloads."
+            );
+            println!("  Use JSONL/NDJSON when each task should be a reviewable line in a file.");
+            println!(
+                "  Use `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges."
+            );
+            println!();
             println!("Failure modes:");
             println!("  Missing or ambiguous runtime root fails closed.");
             println!(
@@ -127,6 +136,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!(
                 "  Create many bounded child tasks from JSON/YAML/JSONL: vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run"
+            );
+            println!(
+                "  Avoid shell command-size failures: put large task batches in JSONL/YAML and import the file."
+            );
+            println!(
+                "  Create many dependency edges from a file: vida task dep add-bulk --edge-file edges.txt --dry-run"
             );
             println!(
                 "  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels alpha,beta"

@@ -321,7 +321,10 @@ It already covers:
 - checkpoint / replay / recovery behavior
 - verification merge and admissibility
 - DB-backed task store with JSONL import
+- file-based batch transport through `vida task import --file <path> --dry-run`
 - final `taskflow -> DocFlow` runtime-consumption wiring
+
+For large TaskFlow batches, put task objects in JSONL/YAML and run `vida task import --file <path> --dry-run` before applying. Put many dependency edges in a newline-delimited `issue_id:depends_on_id:edge_type` file and run `vida task dep add-bulk --edge-file <path> --dry-run`. These file workflows avoid command-line size limits and keep the batch reviewable.
 
 ### 📚 `DocFlow`
 
@@ -403,6 +406,10 @@ Typical documentation/runtime proving flow:
 vida docflow overview
 
 vida docflow readiness-check --profile active-canon
+
+vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run
+
+vida task dep add-bulk --edge-file edges.txt --dry-run
 
 vida taskflow task import-jsonl .vida/imports/tasks.seed.jsonl --json
 
