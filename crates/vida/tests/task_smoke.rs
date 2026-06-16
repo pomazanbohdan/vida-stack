@@ -7171,6 +7171,14 @@ fn external_attempt_scope_guard() {
             &request_path,
             "--host-agent-id",
             "agent-pass",
+            "--decision",
+            "pass",
+            "--verdict",
+            "implemented",
+            "--allowed-next-node",
+            "coach",
+            "--blocker-codes",
+            "[]",
             "--host-bridge-summary",
             "parent host adapter completed receipt-backed execution",
             "--state-dir",
@@ -7262,6 +7270,14 @@ fn external_attempt_scope_guard() {
             &request_path,
             "--host-agent-id",
             "agent-blocked",
+            "--decision",
+            "pass",
+            "--verdict",
+            "implemented",
+            "--allowed-next-node",
+            "coach",
+            "--blocker-codes",
+            "[]",
             "--host-bridge-summary",
             "blocked by reviewer summary and implementation artifact scope violation",
             "--state-dir",
@@ -7285,14 +7301,12 @@ fn external_attempt_scope_guard() {
         "scope guard blocker must stay visible on lane output: {blocked}"
     );
     assert!(
-        blocked["blocker_codes"]
+        !blocked["blocker_codes"]
             .as_array()
             .expect("blocked lane blocker codes should render")
             .iter()
-            .any(|code| {
-                code == "lane_completion_blocked_by_summary" || code == "open_delegated_cycle"
-            }),
-        "summary or delegated-cycle blocker should remain visible with scope blocker: {blocked}"
+            .any(|code| code == "lane_completion_blocked_by_summary"),
+        "typed host bridge completion must not derive blockers from summary text: {blocked}"
     );
     let blocked_result: Value = serde_json::from_str(
         &fs::read_to_string(&result_path).expect("blocked result should read"),
@@ -7308,14 +7322,12 @@ fn external_attempt_scope_guard() {
         "host bridge result should preserve scope blocker: {blocked_result}"
     );
     assert!(
-        blocked_result["blocker_codes"]
+        !blocked_result["blocker_codes"]
             .as_array()
             .expect("host bridge result blocker codes should render")
             .iter()
-            .any(|code| {
-                code == "lane_completion_blocked_by_summary" || code == "open_delegated_cycle"
-            }),
-        "host bridge result should preserve summary or delegated-cycle blocker: {blocked_result}"
+            .any(|code| code == "lane_completion_blocked_by_summary"),
+        "typed host bridge result must not preserve summary parser blockers: {blocked_result}"
     );
     assert_eq!(
         blocked_result["scope_validation"]["out_of_scope_paths"],
@@ -7376,6 +7388,14 @@ fn external_attempt_scope_guard() {
             &request_path,
             "--host-agent-id",
             "agent-missing",
+            "--decision",
+            "pass",
+            "--verdict",
+            "implemented",
+            "--allowed-next-node",
+            "coach",
+            "--blocker-codes",
+            "[]",
             "--host-bridge-summary",
             "parent host adapter completed receipt-backed execution",
             "--state-dir",
