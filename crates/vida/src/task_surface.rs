@@ -301,6 +301,455 @@ async fn reconcile_epics_from_direct_children(
     })
 }
 
+const TASK_PRUNE_CLOSED_EPICS_SURFACE: &str = "vida task prune-closed-epics";
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskPruneClosedEpicsReceipt {
+    surface: &'static str,
+    status: String,
+    dry_run: bool,
+    state_dir: String,
+    archive_path: Option<String>,
+    inspected_task_count: usize,
+    candidate_count: usize,
+    archived_count: usize,
+    pruned_count: usize,
+    protected_count: usize,
+    candidates: Vec<TaskPruneClosedEpicsRow>,
+    protected: Vec<TaskPruneProtectedRow>,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    graph_issues: Vec<state_store::TaskGraphIssue>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskPruneClosedEpicsRow {
+    task_id: String,
+    title: String,
+    status: String,
+    issue_type: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskPruneProtectedRow {
+    task_id: String,
+    title: String,
+    status: String,
+    issue_type: String,
+    reason: String,
+    blocking_task_ids: Vec<String>,
+}
+
+struct TaskPruneClosedEpicsPlan {
+    receipt: TaskPruneClosedEpicsReceipt,
+    candidate_ids: BTreeSet<String>,
+    archive_tasks: Vec<state_store::TaskRecord>,
+}
+
+fn task_prune_status_is_live(status: &str) -> bool {
+    matches!(status, "open" | "in_progress")
+}
+
+fn task_prune_parent_children(rows: &[state_store::TaskRecord]) -> BTreeMap<String, Vec<String>> {
+    let mut children = BTreeMap::<String, Vec<String>>::new();
+    for task in rows {
+        if let Some(parent_id) = StateStore::parent_id_for_task(task) {
+            children.entry(parent_id).or_default().push(task.id.clone());
+        }
+    }
+    children
+}
+
+fn collect_task_prune_descendants(
+    task_id: &str,
+    children_by_parent: &BTreeMap<String, Vec<String>>,
+    descendants: &mut BTreeSet<String>,
+) {
+    let Some(children) = children_by_parent.get(task_id) else {
+        return;
+    };
+    for child_id in children {
+        if descendants.insert(child_id.clone()) {
+            collect_task_prune_descendants(child_id, children_by_parent, descendants);
+        }
+    }
+}
+
+fn retained_task_refs_to_prune_subtree(
+    rows: &[state_store::TaskRecord],
+    subtree_ids: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut referrers = BTreeSet::<String>::new();
+    for task in rows {
+        if subtree_ids.contains(&task.id) {
+            continue;
+        }
+        if task
+            .dependencies
+            .iter()
+            .any(|dependency| subtree_ids.contains(&dependency.depends_on_id))
+        {
+            referrers.insert(task.id.clone());
+        }
+    }
+    referrers.into_iter().collect()
+}
+
+fn task_prune_row(
+    task: &state_store::TaskRecord,
+    reason: impl Into<String>,
+) -> TaskPruneClosedEpicsRow {
+    TaskPruneClosedEpicsRow {
+        task_id: task.id.clone(),
+        title: task.title.clone(),
+        status: task.status.clone(),
+        issue_type: task.issue_type.clone(),
+        reason: reason.into(),
+    }
+}
+
+fn task_prune_protected_row(
+    task: &state_store::TaskRecord,
+    reason: impl Into<String>,
+    blocking_task_ids: Vec<String>,
+) -> TaskPruneProtectedRow {
+    TaskPruneProtectedRow {
+        task_id: task.id.clone(),
+        title: task.title.clone(),
+        status: task.status.clone(),
+        issue_type: task.issue_type.clone(),
+        reason: reason.into(),
+        blocking_task_ids,
+    }
+}
+
+fn build_task_prune_closed_epics_plan(
+    rows: &[state_store::TaskRecord],
+    dry_run: bool,
+    state_dir: &std::path::Path,
+    archive_path: Option<&std::path::Path>,
+) -> TaskPruneClosedEpicsPlan {
+    let children_by_parent = task_prune_parent_children(rows);
+    let by_id = rows
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect::<BTreeMap<_, _>>();
+    let mut candidate_ids = BTreeSet::<String>::new();
+    let mut candidate_reasons = BTreeMap::<String, String>::new();
+    let mut protected = Vec::<TaskPruneProtectedRow>::new();
+
+    for task in rows
+        .iter()
+        .filter(|task| crate::state_store::work_item_is_program_container(&task.issue_type))
+    {
+        if task_prune_status_is_live(&task.status) {
+            protected.push(task_prune_protected_row(
+                task,
+                "open_or_in_progress_container",
+                Vec::new(),
+            ));
+            continue;
+        }
+        if !StateStore::task_status_is_closed_like(&task.status) {
+            continue;
+        }
+
+        let mut subtree_ids = BTreeSet::<String>::new();
+        subtree_ids.insert(task.id.clone());
+        collect_task_prune_descendants(&task.id, &children_by_parent, &mut subtree_ids);
+
+        let non_closed_descendants = subtree_ids
+            .iter()
+            .filter(|task_id| task_id.as_str() != task.id.as_str())
+            .filter_map(|task_id| by_id.get(task_id.as_str()).copied())
+            .filter(|descendant| !StateStore::task_status_is_closed_like(&descendant.status))
+            .map(|descendant| descendant.id.clone())
+            .collect::<Vec<_>>();
+        if !non_closed_descendants.is_empty() {
+            protected.push(task_prune_protected_row(
+                task,
+                "non_closed_descendant",
+                non_closed_descendants,
+            ));
+            continue;
+        }
+
+        let retained_refs = retained_task_refs_to_prune_subtree(rows, &subtree_ids);
+        if !retained_refs.is_empty() {
+            protected.push(task_prune_protected_row(
+                task,
+                "referenced_by_retained_task",
+                retained_refs,
+            ));
+            continue;
+        }
+
+        let root_reason = if children_by_parent
+            .get(&task.id)
+            .map_or(true, |children| children.is_empty())
+        {
+            "closed_empty_container"
+        } else {
+            "closed_epic_subtree"
+        };
+        for task_id in subtree_ids {
+            let reason = if task_id == task.id {
+                root_reason
+            } else {
+                "closed_descendant_of_pruned_epic"
+            };
+            candidate_ids.insert(task_id.clone());
+            candidate_reasons
+                .entry(task_id)
+                .or_insert(reason.to_string());
+        }
+    }
+
+    let mut archive_tasks = rows
+        .iter()
+        .filter(|task| candidate_ids.contains(&task.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    archive_tasks.sort_by(|left, right| left.id.cmp(&right.id));
+    let candidates = archive_tasks
+        .iter()
+        .map(|task| {
+            task_prune_row(
+                task,
+                candidate_reasons
+                    .get(&task.id)
+                    .cloned()
+                    .unwrap_or_else(|| "closed_epic_task".to_string()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let remaining_rows = rows
+        .iter()
+        .filter(|task| !candidate_ids.contains(&task.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let graph_issues =
+        StateStore::validate_task_graph_rows_for_mutation(rows, &remaining_rows, &candidate_ids);
+    let blocked = !graph_issues.is_empty();
+    let blocker_codes = if blocked {
+        vec!["task_prune_graph_integrity_blocked".to_string()]
+    } else {
+        Vec::new()
+    };
+    let next_actions = if blocked {
+        vec![
+            "Run vida task validate-graph and resolve graph issues before pruning task rows."
+                .to_string(),
+        ]
+    } else if dry_run && !candidate_ids.is_empty() {
+        vec![
+            "Run vida task prune-closed-epics --apply to archive and prune eligible task rows."
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
+    };
+
+    let receipt = TaskPruneClosedEpicsReceipt {
+        surface: TASK_PRUNE_CLOSED_EPICS_SURFACE,
+        status: if blocked { "blocked" } else { "pass" }.to_string(),
+        dry_run,
+        state_dir: state_dir.display().to_string(),
+        archive_path: archive_path.map(|path| path.display().to_string()),
+        inspected_task_count: rows.len(),
+        candidate_count: candidates.len(),
+        archived_count: 0,
+        pruned_count: 0,
+        protected_count: protected.len(),
+        candidates,
+        protected,
+        blocker_codes,
+        next_actions,
+        graph_issues,
+    };
+
+    TaskPruneClosedEpicsPlan {
+        receipt,
+        candidate_ids,
+        archive_tasks,
+    }
+}
+
+fn task_prune_archive_timestamp() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn task_prune_archive_path(
+    state_dir: &std::path::Path,
+    archive_dir: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    let base = archive_dir
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| state_dir.join("task-archives"));
+    base.join(format!(
+        "prune-closed-epics-{}.jsonl",
+        task_prune_archive_timestamp()
+    ))
+}
+
+fn write_task_prune_archive(
+    archive_path: &std::path::Path,
+    tasks: &[state_store::TaskRecord],
+) -> Result<(), String> {
+    use std::io::Write as _;
+
+    if let Some(parent) = archive_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create archive directory `{}`: {error}", parent.display()))?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(archive_path)
+        .map_err(|error| format!("create archive file `{}`: {error}", archive_path.display()))?;
+    for task in tasks {
+        let line = serde_json::to_string(task)
+            .map_err(|error| format!("serialize task `{}` for archive: {error}", task.id))?;
+        writeln!(file, "{line}")
+            .map_err(|error| format!("write archive file `{}`: {error}", archive_path.display()))?;
+    }
+    Ok(())
+}
+
+fn print_task_prune_closed_epics_receipt(
+    render: RenderMode,
+    receipt: &TaskPruneClosedEpicsReceipt,
+    as_json: bool,
+) {
+    let payload =
+        serde_json::to_value(receipt).expect("task prune closed epics receipt should serialize");
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else if matches!(render, crate::RenderMode::Plain) {
+        println!(
+            "{}",
+            taskflow_format_toon::render_value_section(TASK_PRUNE_CLOSED_EPICS_SURFACE, &payload)
+        );
+    } else {
+        print_surface_header(render, TASK_PRUNE_CLOSED_EPICS_SURFACE);
+        print_surface_line(render, "status", &receipt.status);
+        print_surface_line(
+            render,
+            "mode",
+            if receipt.dry_run { "dry-run" } else { "apply" },
+        );
+        print_surface_line(render, "candidates", &receipt.candidate_count.to_string());
+        print_surface_line(render, "pruned", &receipt.pruned_count.to_string());
+        print_surface_line(render, "protected", &receipt.protected_count.to_string());
+        if let Some(path) = receipt.archive_path.as_deref() {
+            print_surface_line(render, "archive", path);
+        }
+        if let Some(action) = receipt.next_actions.first() {
+            print_surface_line(render, "next", action);
+        }
+    }
+}
+
+async fn run_task_prune_closed_epics(command: TaskPruneClosedEpicsArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    match StateStore::open_existing(state_dir.clone()).await {
+        Ok(store) => {
+            let rows = match store.all_tasks().await {
+                Ok(rows) => rows,
+                Err(error) => {
+                    eprintln!("Failed to read task rows for prune: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let archive_path = command
+                .apply
+                .then(|| task_prune_archive_path(&state_dir, command.archive_dir.as_deref()));
+            let mut plan = build_task_prune_closed_epics_plan(
+                &rows,
+                !command.apply,
+                &state_dir,
+                archive_path.as_deref(),
+            );
+            if plan.receipt.status == "blocked" {
+                print_task_prune_closed_epics_receipt(command.render, &plan.receipt, command.json);
+                return ExitCode::from(1);
+            }
+
+            if command.apply && !plan.candidate_ids.is_empty() {
+                let archive_path = archive_path.expect("apply with candidates should have archive");
+                if let Err(error) = write_task_prune_archive(&archive_path, &plan.archive_tasks) {
+                    plan.receipt.status = "blocked".to_string();
+                    plan.receipt.blocker_codes =
+                        vec!["task_prune_archive_write_failed".to_string()];
+                    plan.receipt.next_actions = vec![
+                        "Resolve archive directory permissions and rerun vida task prune-closed-epics --apply."
+                            .to_string(),
+                    ];
+                    plan.receipt.archive_path = Some(archive_path.display().to_string());
+                    plan.receipt.graph_issues = Vec::new();
+                    if command.json {
+                        let mut payload = serde_json::to_value(&plan.receipt)
+                            .expect("blocked task prune receipt should serialize");
+                        payload["archive_error"] = serde_json::json!(error);
+                        crate::print_json_pretty(&payload);
+                    } else {
+                        eprintln!("Failed to archive pruned task rows: {error}");
+                    }
+                    return ExitCode::from(1);
+                }
+
+                let mut pruned_count = 0usize;
+                for task_id in &plan.candidate_ids {
+                    if let Err(error) = store.delete_task_record(task_id).await {
+                        plan.receipt.status = "blocked".to_string();
+                        plan.receipt.blocker_codes =
+                            vec!["task_prune_delete_failed_after_archive".to_string()];
+                        plan.receipt.next_actions = vec![format!(
+                            "Inspect archive `{}` before retrying; task prune stopped on `{}`.",
+                            archive_path.display(),
+                            task_id
+                        )];
+                        plan.receipt.archive_path = Some(archive_path.display().to_string());
+                        plan.receipt.archived_count = plan.archive_tasks.len();
+                        plan.receipt.pruned_count = pruned_count;
+                        if command.json {
+                            let mut payload = serde_json::to_value(&plan.receipt)
+                                .expect("blocked task prune receipt should serialize");
+                            payload["delete_error"] = serde_json::json!(error.to_string());
+                            crate::print_json_pretty(&payload);
+                        } else {
+                            eprintln!("Failed to delete pruned task row `{task_id}`: {error}");
+                        }
+                        return ExitCode::from(1);
+                    }
+                    pruned_count += 1;
+                }
+                if let Err(error) = store.refresh_task_snapshot().await {
+                    eprintln!("Failed to refresh task snapshot after prune: {error}");
+                    return ExitCode::from(1);
+                }
+                plan.receipt.archive_path = Some(archive_path.display().to_string());
+                plan.receipt.archived_count = plan.archive_tasks.len();
+                plan.receipt.pruned_count = pruned_count;
+            }
+
+            print_task_prune_closed_epics_receipt(command.render, &plan.receipt, command.json);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct TaskProofTargetStatus {
     target: String,
@@ -8634,6 +9083,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 | "ensure"
                 | "update"
                 | "close"
+                | "prune-closed-epics"
                 | "split"
                 | "spawn-blocker"
                 | "list"
@@ -10854,6 +11304,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::PruneClosedEpics(command) => run_task_prune_closed_epics(command).await,
         TaskCommand::Deps(command) => {
             let state_dir = command
                 .state_dir

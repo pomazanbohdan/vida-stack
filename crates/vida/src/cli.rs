@@ -48,6 +48,10 @@ const TASK_VERIFY_ABOUT: &str =
     "record partial verification evidence on one task without closing it";
 const TASK_VERIFY_LONG_ABOUT: &str = "Record partial verification evidence on one task without closing it.\n\nUse this when source changes and tests are verified but browser, API, or external proof remains unavailable due to a runtime condition. The command leaves the task open, appends structured verification notes, updates proof-blocking labels, and emits source_fixed/tests_green/proof_blocked fields in JSON.";
 const TASK_VERIFY_AFTER_HELP: &str = "Examples:\n  vida task verify <task-id> --source-fixed --tests-green --proof-blocked --proof-blocker \"browser proof unavailable\" --evidence \"cargo test -p vida task_verify\" --json\n\nOptions:\n  --source-fixed          Record that the source fix is complete\n  --tests-green           Record that focused tests passed\n  --proof-blocked         Record that final proof is pending on runtime/external conditions\n  --proof-blocker <text>  Human-readable proof blocker reason\n  --evidence <text>       Evidence command, file, receipt, or observation; accepts repeated flags\n  --state-dir <path>      Override the TaskFlow state directory\n  --json                  Emit machine-readable JSON output";
+const TASK_PRUNE_CLOSED_EPICS_ABOUT: &str =
+    "archive and prune closed epic task rows without touching runtime receipts";
+const TASK_PRUNE_CLOSED_EPICS_LONG_ABOUT: &str = "Archive and prune only TaskFlow task rows for closed epic/container subtrees.\n\nThe command previews by default. Use --apply to write a JSONL archive of pruned task rows and then delete only those task rows plus their owned task_dependency rows. Runtime receipts, run-graph state, lane state, and non-task runtime state are never removed by this surface.";
+const TASK_PRUNE_CLOSED_EPICS_AFTER_HELP: &str = "Examples:\n  vida task prune-closed-epics\n  vida task prune-closed-epics --apply\n  vida task prune-closed-epics --apply --archive-dir .vida/data/state/task-archives --json\n\nOptions:\n  --apply                Archive and prune eligible closed epic/container task rows; default previews only\n  --archive-dir <path>   Directory for JSONL task-row archives when --apply is set\n  --state-dir <path>     Override the TaskFlow state directory\n  --json                 Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators. Use --json for machine-readable automation.";
 const TASK_ATTEMPT_AFTER_HELP: &str = "Examples:\n  vida task attempt dispatch <task-id> --stage-id analysis\n  vida task attempt status <task-id> --stage-id analysis\n  vida task attempt collect <task-id> --stage-id analysis --attempt-id <attempt-id> --artifact-ref report.json --status produced\n  vida task attempt record <task-id> --stage-id analysis --backend vibe --model-profile medium --isolation readonly --freshness snapshot-2026-06-05 --status submitted --artifact-ref report.json\n  vida task attempt transition <attempt-id> --task-id <task-id> --stage-id analysis --status accepted --consolidation-receipt receipt-1\n  vida task attempt summary <task-id> --stage-id analysis\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation.";
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
@@ -929,6 +933,13 @@ pub(crate) enum TaskCommand {
     Reconcile(TaskReconcileArgs),
     #[command(about = "retire historical run-graph rows for already-closed tasks")]
     ReconcileClosedRuns(TaskReconcileClosedRunsArgs),
+    #[command(
+        name = "prune-closed-epics",
+        about = TASK_PRUNE_CLOSED_EPICS_ABOUT,
+        long_about = TASK_PRUNE_CLOSED_EPICS_LONG_ABOUT,
+        after_help = TASK_PRUNE_CLOSED_EPICS_AFTER_HELP
+    )]
+    PruneClosedEpics(TaskPruneClosedEpicsArgs),
     #[command(about = "split one oversized task into bounded child tasks")]
     Split(TaskSplitArgs),
     #[command(about = "create a blocker/dependency task linked to one blocked source task")]
@@ -2579,6 +2590,30 @@ pub(crate) struct TaskCloseArgs {
 pub(crate) struct TaskReconcileClosedRunsArgs {
     #[arg(long = "limit", default_value_t = 100)]
     pub(crate) limit: usize,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskPruneClosedEpicsArgs {
+    #[arg(
+        long = "apply",
+        help = "Archive and prune eligible closed epic/container task rows; default previews only"
+    )]
+    pub(crate) apply: bool,
+
+    #[arg(
+        long = "archive-dir",
+        help = "Directory for JSONL task-row archives when --apply is set"
+    )]
+    pub(crate) archive_dir: Option<PathBuf>,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,

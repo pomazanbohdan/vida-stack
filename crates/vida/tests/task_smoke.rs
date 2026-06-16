@@ -338,6 +338,35 @@ fn create_epic_parent(state_dir: &str, parent_id: &str, title: &str, status: &st
     assert_eq!(parent["status"], "pass");
 }
 
+fn create_task_fixture_row(
+    state_dir: &str,
+    task_id: &str,
+    title: &str,
+    issue_type: &str,
+    status: &str,
+    parent_id: Option<&str>,
+) {
+    let mut args = vec![
+        "task",
+        "create",
+        task_id,
+        title,
+        "--type",
+        issue_type,
+        "--status",
+        status,
+        "--priority",
+        "1",
+    ];
+    if let Some(parent_id) = parent_id {
+        args.push("--parent-id");
+        args.push(parent_id);
+    }
+    args.push("--json");
+    let task = run_command_json(&args, state_dir);
+    assert_eq!(task["status"], "pass");
+}
+
 fn init_git_repo(path: &str) {
     fs::create_dir_all(path).expect("create git repo dir");
     let output = Command::new("git")
@@ -350,6 +379,145 @@ fn init_git_repo(path: &str) {
         "git init failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn task_prune_closed_epics_help_and_default_output_preview_scope() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    create_task_fixture_row(
+        &state_dir,
+        "prune-help-closed-empty",
+        "Closed empty prune preview",
+        "epic",
+        "closed",
+        None,
+    );
+
+    let help = run_and_assert_success(&["task", "prune-closed-epics", "--help"], &state_dir);
+    assert!(help.contains("--apply"));
+    assert!(help.contains("--archive-dir"));
+    assert!(help.contains("--json"));
+    assert!(help.contains("previews by default"));
+    assert!(help.contains("Runtime receipts"));
+
+    let output = run_and_assert_success(&["task", "prune-closed-epics"], &state_dir);
+    assert!(output.starts_with("vida task prune-closed-epics\n"));
+    assert!(output.contains("dry_run: true"));
+    assert!(output.contains("candidate_count: 1"));
+    assert!(output.contains("pruned_count: 0"));
+    assert!(output.contains("Run vida task prune-closed-epics --apply"));
+    assert!(!output.trim_start().starts_with('{'));
+
+    let list = run_command_json(&["task", "list", "--all", "--json"], &state_dir);
+    let task_ids = list["tasks"]
+        .as_array()
+        .expect("tasks should be an array")
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(task_ids.contains(&"prune-help-closed-empty"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    create_task_fixture_row(
+        &state_dir,
+        "prune-open-live-epic",
+        "Open live epic",
+        "epic",
+        "open",
+        None,
+    );
+    create_task_fixture_row(
+        &state_dir,
+        "prune-in-progress-live-epic",
+        "In progress live epic",
+        "epic",
+        "in_progress",
+        None,
+    );
+    create_task_fixture_row(
+        &state_dir,
+        "prune-closed-empty-epic",
+        "Closed empty epic",
+        "epic",
+        "closed",
+        None,
+    );
+    create_task_fixture_row(
+        &state_dir,
+        "prune-closed-subtree-epic",
+        "Closed subtree epic",
+        "epic",
+        "closed",
+        None,
+    );
+    create_task_fixture_row(
+        &state_dir,
+        "prune-closed-subtree-task",
+        "Closed subtree task",
+        "task",
+        "closed",
+        Some("prune-closed-subtree-epic"),
+    );
+    let runtime_sentinel = format!("{state_dir}/runtime-receipts/keep.json");
+    fs::create_dir_all(format!("{state_dir}/runtime-receipts"))
+        .expect("create runtime sentinel dir");
+    fs::write(&runtime_sentinel, "{\"keep\":true}\n").expect("write runtime sentinel");
+
+    let payload = run_command_json(
+        &["task", "prune-closed-epics", "--apply", "--json"],
+        &state_dir,
+    );
+
+    assert_eq!(payload["surface"], "vida task prune-closed-epics");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["dry_run"], false);
+    assert_eq!(payload["candidate_count"], 3);
+    assert_eq!(payload["archived_count"], 3);
+    assert_eq!(payload["pruned_count"], 3);
+    assert_eq!(payload["protected_count"], 2);
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    let protected_ids = payload["protected"]
+        .as_array()
+        .expect("protected rows should be an array")
+        .iter()
+        .filter_map(|task| task["task_id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(protected_ids.contains(&"prune-open-live-epic"));
+    assert!(protected_ids.contains(&"prune-in-progress-live-epic"));
+
+    let archive_path = payload["archive_path"]
+        .as_str()
+        .expect("archive path should be present");
+    let archive = fs::read_to_string(archive_path).expect("archive should read");
+    assert!(archive.contains("prune-closed-empty-epic"));
+    assert!(archive.contains("prune-closed-subtree-epic"));
+    assert!(archive.contains("prune-closed-subtree-task"));
+
+    let list = run_command_json(&["task", "list", "--all", "--json"], &state_dir);
+    let task_ids = list["tasks"]
+        .as_array()
+        .expect("tasks should be an array")
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(task_ids.contains(&"prune-open-live-epic"));
+    assert!(task_ids.contains(&"prune-in-progress-live-epic"));
+    assert!(!task_ids.contains(&"prune-closed-empty-epic"));
+    assert!(!task_ids.contains(&"prune-closed-subtree-epic"));
+    assert!(!task_ids.contains(&"prune-closed-subtree-task"));
+    assert!(
+        fs::metadata(&runtime_sentinel).is_ok(),
+        "task prune must not remove non-task runtime state"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]
