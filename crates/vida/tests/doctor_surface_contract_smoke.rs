@@ -477,10 +477,8 @@ fn doctor_json_emits_operator_contract_fields() {
         .iter()
         .any(|code| code.as_str() == Some("recovery_readiness_blocked"));
     let has_recovery_readiness_next_action = next_actions.iter().any(|action| {
-            action.as_str()
-            == Some(
-                "inspect `vida taskflow recovery latest`, then run `vida taskflow consume continue` after `recovery_ready=true` is proven for resume/rollback handoff.",
-            )
+        let action = action.as_str().unwrap_or_default();
+        action.contains("recovery_ready=true") || action.contains("no validated run_id")
     });
     let has_unsupported_architecture_reserved_boundary_blocker = blocker_codes.iter().any(|code| {
         code.as_str() == Some(UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER)

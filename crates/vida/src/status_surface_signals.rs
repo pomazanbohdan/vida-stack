@@ -184,6 +184,13 @@ mod tests {
         assert!(targeted_recovery.contains("vida taskflow recovery status run-7"));
         assert!(targeted_recovery.contains("vida taskflow consume continue --run-id run-7"));
         assert!(!targeted_recovery.contains("--json"));
+
+        let untargeted_recovery = recovery_readiness_blocked_next_action_for_run(None);
+        assert!(untargeted_recovery.contains("no validated run_id"));
+        assert!(untargeted_recovery.contains("vida status"));
+        assert!(!untargeted_recovery.contains("vida taskflow recovery latest"));
+        assert!(!untargeted_recovery.contains("vida taskflow consume continue"));
+        assert!(!untargeted_recovery.contains("--json"));
     }
 
     #[test]
@@ -277,13 +284,21 @@ pub(crate) fn recovery_readiness_blocked_next_action() -> String {
 
 pub(crate) fn recovery_readiness_blocked_next_action_for_run(run_id: Option<&str>) -> String {
     let run_id = run_id.map(str::trim).filter(|value| !value.is_empty());
-    let recovery_command = run_id
-        .map(next_actions::human_recovery_status_command)
-        .unwrap_or_else(next_actions::recovery_latest_command);
-    let continue_command = next_actions::consume_continue_command(run_id);
-    format!(
-        "Inspect `{recovery_command}`, then run `{continue_command}` after `recovery_ready=true` is proven for resume/rollback handoff."
-    )
+    match run_id {
+        Some(run_id) => {
+            let recovery_command = next_actions::human_recovery_status_command(run_id);
+            let continue_command = next_actions::consume_continue_command(Some(run_id));
+            format!(
+                "Inspect `{recovery_command}`, then run `{continue_command}` after `recovery_ready=true` is proven for resume/rollback handoff."
+            )
+        }
+        None => {
+            let status_command = next_actions::status_command();
+            format!(
+                "Recovery readiness is blocked but no validated run_id is available; inspect `{status_command}` and repair the runtime projection before running recovery or continue commands."
+            )
+        }
+    }
 }
 
 pub(crate) fn task_validate_graph_next_action() -> String {

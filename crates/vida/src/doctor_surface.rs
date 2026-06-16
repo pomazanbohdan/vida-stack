@@ -586,6 +586,40 @@ fn doctor_operator_next_actions(
     operator_next_actions
 }
 
+fn recovery_readiness_target_evidence(
+    recovery_readiness_blocked: bool,
+    latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> serde_json::Value {
+    if !recovery_readiness_blocked {
+        return serde_json::json!({
+            "status": "not_blocked",
+            "reason": "recovery_readiness_blocked is not present"
+        });
+    }
+
+    match latest_run_graph_recovery {
+        Some(summary) if !summary.run_id.trim().is_empty() => serde_json::json!({
+            "status": "target_validated",
+            "run_id": summary.run_id.clone(),
+            "task_id": summary.task_id.clone(),
+            "active_node": summary.active_node.clone(),
+            "lifecycle_stage": summary.lifecycle_stage.clone(),
+            "resume_status": summary.resume_status.clone(),
+            "resume_target": summary.resume_target.clone(),
+            "recovery_ready": summary.recovery_ready,
+            "delegated_cycle_open": summary.delegation_gate.delegated_cycle_open,
+            "delegated_cycle_state": summary.delegation_gate.delegated_cycle_state.clone(),
+            "blocker_code": summary.delegation_gate.blocker_code.clone(),
+        }),
+        _ => serde_json::json!({
+            "status": "no_target",
+            "run_id": serde_json::Value::Null,
+            "task_id": serde_json::Value::Null,
+            "reason": "recovery_readiness_blocked has no validated run_id; recovery and continue commands require concrete run/task evidence"
+        }),
+    }
+}
+
 fn select_current_session_run_graph_dispatch_receipt<'a>(
     status_dispatch_receipt: Option<&'a crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_dispatch_receipt: Option<&'a crate::state_store::RunGraphDispatchReceiptSummary>,
@@ -1216,6 +1250,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     unresolved_closed_task_active_run,
                     trace_evidence_blocker_codes,
                 );
+                let recovery_readiness_blocked = operator_blocker_codes
+                    .iter()
+                    .any(|code| code == blocker_code_str(BlockerCode::RecoveryReadinessBlocked));
                 let mut operator_next_actions = doctor_operator_next_actions(
                     &operator_blocker_codes,
                     &boot_compatibility,
@@ -1293,6 +1330,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         .map(|receipt| receipt.run_id.clone()),
                     "protocol_binding_latest_receipt_id": protocol_binding.latest_receipt_id,
                     "retrieval_trust_signal": retrieval_trust_signal,
+                    "recovery_readiness_target": recovery_readiness_target_evidence(
+                        recovery_readiness_blocked,
+                        latest_run_graph_recovery.as_ref()
+                    ),
                     "latest_task_reconciliation_receipt_id": latest_task_reconciliation
                         .as_ref()
                         .map(|receipt| receipt.receipt_id.clone()),
@@ -2405,9 +2446,12 @@ mod tests {
         assert!(next_actions
             .iter()
             .any(|action| action.contains("vida taskflow consume bundle check")));
-        assert!(next_actions
+        let no_target_recovery_action = next_actions
             .iter()
-            .any(|action| action.contains("vida taskflow recovery latest")));
+            .find(|action| action.contains("no validated run_id"))
+            .expect("recovery readiness without target should produce no-target action");
+        assert!(!no_target_recovery_action.contains("vida taskflow recovery latest"));
+        assert!(!no_target_recovery_action.contains("vida taskflow consume continue"));
         assert!(next_actions
             .iter()
             .any(|action| action.contains("vida task reconcile-closed-runs --limit 25")));
@@ -2473,6 +2517,53 @@ mod tests {
             .iter()
             .any(|action| action.contains("vida taskflow consume continue --run-id run-doctor")));
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
+    }
+
+    #[test]
+    fn doctor_recovery_readiness_evidence_explains_missing_target() {
+        let evidence = super::recovery_readiness_target_evidence(true, None);
+
+        assert_eq!(evidence["status"], "no_target");
+        assert_eq!(evidence["run_id"], serde_json::Value::Null);
+        assert_eq!(evidence["task_id"], serde_json::Value::Null);
+        assert!(evidence["reason"]
+            .as_str()
+            .expect("reason should be string")
+            .contains("no validated run_id"));
+    }
+
+    #[test]
+    fn doctor_recovery_readiness_evidence_exposes_validated_target() {
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-doctor".to_string(),
+            task_id: "task-doctor".to_string(),
+            active_node: "analyst".to_string(),
+            lifecycle_stage: "analyst_blocked".to_string(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "dispatch.analyst".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "analyst".to_string(),
+                lifecycle_stage: "analyst_blocked".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "handoff_pending".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+            },
+        };
+        let evidence = super::recovery_readiness_target_evidence(true, Some(&recovery));
+
+        assert_eq!(evidence["status"], "target_validated");
+        assert_eq!(evidence["run_id"], "run-doctor");
+        assert_eq!(evidence["task_id"], "task-doctor");
+        assert_eq!(evidence["resume_target"], "dispatch.analyst");
+        assert_eq!(evidence["blocker_code"], "open_delegated_cycle");
     }
 
     #[test]
