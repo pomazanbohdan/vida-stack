@@ -25,9 +25,8 @@ use taskflow_host_bridge::{
     host_bridge_normalized_implementation_artifact_path, host_bridge_operator_fields,
     host_bridge_provenance_public_blocker_code, host_bridge_request_implementation_artifacts,
     host_bridge_request_owned_paths, host_bridge_request_requires_implementation_artifacts,
-    host_bridge_request_string, host_bridge_result_pass_allowed_next_node,
-    normalize_host_bridge_provenance_for_completion, normalized_host_bridge_attempt_id,
-    normalized_host_bridge_consolidation_receipt_id,
+    host_bridge_request_string, normalize_host_bridge_provenance_for_completion,
+    normalized_host_bridge_attempt_id, normalized_host_bridge_consolidation_receipt_id,
     push_unique_host_bridge_implementation_artifact,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
     validate_host_bridge_request_provenance, validate_implementation_artifact_scope,
@@ -645,43 +644,6 @@ fn retryable_host_bridge_completion_request(
         })
 }
 
-fn host_bridge_packet_declared_next_node(
-    request_path: &Path,
-    request: &serde_json::Value,
-    state_root: Option<&Path>,
-) -> Option<String> {
-    let packet_path = host_bridge_request_string(request, "packet_path")?;
-    let state_root = state_root
-        .map(Path::to_path_buf)
-        .or_else(|| infer_host_bridge_state_root_from_request_path(request_path))?;
-    let packet_path = canonical_state_artifact_path(&state_root, packet_path, true).ok()?;
-    let packet =
-        read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet").ok()?;
-    let dispatch_target = host_bridge_request_string(request, "dispatch_target");
-    ["downstream_dispatch_target", "next_node"]
-        .iter()
-        .find_map(|field| {
-            packet
-                .get(*field)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .filter(|value| dispatch_target != Some(*value))
-                .map(ToOwned::to_owned)
-        })
-}
-
-fn host_bridge_completion_pass_allowed_next_node(
-    request_path: &Path,
-    request: &serde_json::Value,
-    typed_request: &HostBridgeRequest,
-    state_root: Option<&Path>,
-) -> String {
-    host_bridge_packet_declared_next_node(request_path, request, state_root).unwrap_or_else(|| {
-        host_bridge_result_pass_allowed_next_node(&typed_request.dispatch_target).to_string()
-    })
-}
-
 fn host_bridge_adapter_payload(
     request_path: &Path,
     request: &serde_json::Value,
@@ -698,19 +660,12 @@ fn host_bridge_adapter_payload(
             let dispatch_target = request.dispatch_target.as_str();
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
-        let allowed_next_node = host_bridge_completion_pass_allowed_next_node(
-            request_path,
-            &effective_request,
-            request,
-            state_root,
-        );
         format!(
-            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --decision pass --verdict implemented --allowed-next-node {} --blocker-codes [] --host-bridge-summary {}",
+            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-summary {}",
             crate::shell_quote(&request.run_id),
             crate::shell_quote(&receipt_id),
             crate::shell_quote(&request_path.display().to_string()),
             crate::shell_quote("<host-agent-id>"),
-            crate::shell_quote(&allowed_next_node),
             crate::shell_quote("parent host adapter completed receipt-backed execution")
         )
     } else {
@@ -782,13 +737,6 @@ fn host_bridge_completion_lane_args(
     payload: &serde_json::Value,
     host_agent_id: &str,
     summary: Option<&str>,
-    decision: Option<&str>,
-    verdict: Option<&str>,
-    allowed_next_node: Option<&str>,
-    blocker_codes: Option<&str>,
-    blocker_code: &[String],
-    rework_target: Option<&str>,
-    result_file: Option<&Path>,
     receipt_id_override: Option<&str>,
     state_dir: Option<&Path>,
 ) -> Result<Vec<String>, String> {
@@ -818,53 +766,10 @@ fn host_bridge_completion_lane_args(
         "--host-bridge-summary".to_string(),
         summary.to_string(),
     ];
-    if let Some(result_file) = result_file {
-        args.push("--host-bridge-result-file".to_string());
-        args.push(result_file.display().to_string());
-    }
-    if let Some(value) = decision.map(str::trim).filter(|value| !value.is_empty()) {
-        args.push("--decision".to_string());
-        args.push(value.to_string());
-    }
-    if let Some(value) = verdict.map(str::trim).filter(|value| !value.is_empty()) {
-        args.push("--verdict".to_string());
-        args.push(value.to_string());
-    }
-    if let Some(value) = allowed_next_node
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        args.push("--allowed-next-node".to_string());
-        args.push(value.to_string());
-    }
-    if let Some(value) = blocker_codes
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        args.push("--blocker-codes".to_string());
-        args.push(value.to_string());
-    }
-    for value in blocker_code
-        .iter()
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        args.push("--blocker-code".to_string());
-        args.push(value.to_string());
-    }
-    if let Some(value) = rework_target
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        args.push("--rework-target".to_string());
-        args.push(value.to_string());
-    }
     if let Some(state_dir) = state_dir {
         args.push("--state-dir".to_string());
         args.push(state_dir.display().to_string());
     }
-    args.push("--json".to_string());
     Ok(args)
 }
 
@@ -4098,13 +4003,6 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     &payload,
                     host_agent_id,
                     command.summary.as_deref(),
-                    command.decision.as_deref(),
-                    command.verdict.as_deref(),
-                    command.allowed_next_node.as_deref(),
-                    command.blocker_codes.as_deref(),
-                    &command.blocker_code,
-                    command.rework_target.as_deref(),
-                    command.result_file.as_deref(),
                     command.receipt_id.as_deref(),
                     command.state_dir.as_deref(),
                 ) {
@@ -4871,11 +4769,11 @@ mod tests {
         assert!(payload["host_bridge"]["completion_command"]
             .as_str()
             .unwrap()
-            .contains("--decision pass --verdict implemented"));
-        assert!(payload["host_bridge"]["completion_command"]
+            .contains("--host-bridge-summary"));
+        assert!(!payload["host_bridge"]["completion_command"]
             .as_str()
             .unwrap()
-            .contains("--allowed-next-node coach --blocker-codes []"));
+            .contains("--json"));
         let calls = payload["host_bridge"]["host_tool_calls"]
             .as_array()
             .expect("host tool calls should render");
@@ -5842,13 +5740,6 @@ mod tests {
             &payload,
             "agent-1",
             Some("completed"),
-            Some("pass"),
-            Some("implemented"),
-            Some("coach"),
-            Some("[]"),
-            &[],
-            None,
-            None,
             Some("receipt-1"),
             Some(std::path::Path::new("state-dir")),
         )
@@ -5867,17 +5758,8 @@ mod tests {
                 "agent-1",
                 "--host-bridge-summary",
                 "completed",
-                "--decision",
-                "pass",
-                "--verdict",
-                "implemented",
-                "--allowed-next-node",
-                "coach",
-                "--blocker-codes",
-                "[]",
                 "--state-dir",
                 "state-dir",
-                "--json"
             ]
         );
     }

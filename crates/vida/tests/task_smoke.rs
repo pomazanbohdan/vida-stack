@@ -3064,8 +3064,8 @@ fn agent_dispatch_preview_aligns_with_scheduler_selected_tasks_and_routing_truth
             "dispatch command should include task id {task_id}: {dispatch_command}"
         );
         assert!(
-            dispatch_command.contains("--json"),
-            "dispatch command should request json receipt surface: {dispatch_command}"
+            !dispatch_command.contains("--json"),
+            "dispatch command should use default human surface: {dispatch_command}"
         );
         assert!(
             dispatch_command.contains("--state-dir"),
@@ -3104,10 +3104,10 @@ fn agent_dispatch_preview_aligns_with_scheduler_selected_tasks_and_routing_truth
     );
     assert!(source_surfaces
         .iter()
-        .any(|surface| surface == "vida taskflow scheduler dispatch --json"));
+        .any(|surface| surface == "vida taskflow scheduler dispatch"));
     assert!(source_surfaces
         .iter()
-        .any(|surface| surface == "vida agent-init --role <runtime-role> <task-id> --json"));
+        .any(|surface| surface == "vida agent-init --role <runtime-role> <task-id>"));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -4601,9 +4601,12 @@ fn taskflow_defect_loop_routes_repair_and_gates_parent_closure() {
         dispatch_command.contains("vida agent-init")
             && dispatch_command.contains("--role worker")
             && dispatch_command.contains(defect_task_id)
-            && dispatch_command.contains("--state-dir")
-            && dispatch_command.contains("--json"),
+            && dispatch_command.contains("--state-dir"),
         "repair dispatch should route through vida agent-init: {dispatch_command}"
+    );
+    assert!(
+        !dispatch_command.contains("--json"),
+        "repair dispatch should use default human surface: {dispatch_command}"
     );
     let source_surfaces = require_json_string_array(
         &dispatch_preview["source_surfaces"],
@@ -4611,7 +4614,7 @@ fn taskflow_defect_loop_routes_repair_and_gates_parent_closure() {
     );
     assert!(source_surfaces
         .iter()
-        .any(|surface| surface == "vida agent-init --role <runtime-role> <task-id> --json"));
+        .any(|surface| surface == "vida agent-init --role <runtime-role> <task-id>"));
 
     let rejected_parent_close = run_command_capture(
         &[
