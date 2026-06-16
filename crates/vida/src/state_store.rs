@@ -230,6 +230,18 @@ pub struct StateStore {
     root: PathBuf,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StateResetSummary {
+    pub surface: &'static str,
+    pub status: &'static str,
+    pub state_dir: PathBuf,
+    pub archive_path: Option<PathBuf>,
+    pub archive_created: bool,
+    pub reinitialized: bool,
+    pub task_count: usize,
+    pub state_spine_manifest_present: bool,
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
 pub struct TaskDependencyRecord {
     pub issue_id: String,
@@ -293,6 +305,9 @@ pub enum StateStoreError {
         reason: String,
     },
     InvalidStateSpineManifest {
+        reason: String,
+    },
+    InvalidStateReset {
         reason: String,
     },
     #[allow(dead_code)]
@@ -383,6 +398,9 @@ impl std::fmt::Display for StateStoreError {
                     STATE_STORE_RECOVERY_HINT
                 )
             }
+            Self::InvalidStateReset { reason } => {
+                write!(f, "invalid state reset request: {reason}")
+            }
             Self::InvalidCanonicalTaskflowExport { reason } => {
                 write!(f, "canonical taskflow export is invalid: {reason}")
             }
@@ -432,6 +450,102 @@ impl From<surrealdb::Error> for StateStoreError {
     }
 }
 
+impl StateStore {
+    pub async fn archive_and_reinit_state_root(
+        root: PathBuf,
+        archive: bool,
+        reinit: bool,
+    ) -> Result<StateResetSummary, StateStoreError> {
+        if !archive {
+            return Err(StateStoreError::InvalidStateReset {
+                reason:
+                    "`vida state reset` requires --archive so the current state root is preserved"
+                        .to_string(),
+            });
+        }
+
+        let archive_path = if root.exists() {
+            if state_reset_dir_has_existing_datastore_payload(&root)? {
+                let store = Self::open_existing_with_timeout(
+                    root.clone(),
+                    std::time::Duration::from_secs(10),
+                )
+                .await?;
+                store.close().await;
+            }
+            let archive_path = Self::next_state_archive_path(&root);
+            fs::rename(&root, &archive_path)?;
+            Some(archive_path)
+        } else {
+            None
+        };
+
+        let mut summary = StateResetSummary {
+            surface: "vida state reset",
+            status: "pass",
+            state_dir: root.clone(),
+            archive_created: archive_path.is_some(),
+            archive_path,
+            reinitialized: false,
+            task_count: 0,
+            state_spine_manifest_present: false,
+        };
+
+        if reinit {
+            let store = Self::open(root.clone()).await?;
+            let task_store = store.task_store_summary().await?;
+            let _state_spine = store.state_spine_summary().await?;
+            summary.reinitialized = true;
+            summary.task_count = task_store.total_count;
+            summary.state_spine_manifest_present = true;
+            store.close().await;
+        }
+
+        Ok(summary)
+    }
+
+    fn next_state_archive_path(root: &Path) -> PathBuf {
+        let parent = root.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "state".to_string());
+        for suffix in 0..1000u16 {
+            let archive_name = if suffix == 0 {
+                format!("{file_name}.archive.{}", unix_timestamp_nanos())
+            } else {
+                format!("{file_name}.archive.{}-{suffix}", unix_timestamp_nanos())
+            };
+            let candidate = parent.join(archive_name);
+            if !candidate.exists() {
+                return candidate;
+            }
+        }
+        parent.join(format!(
+            "{file_name}.archive.{}-{}",
+            unix_timestamp_nanos(),
+            std::process::id()
+        ))
+    }
+}
+
+fn state_reset_dir_has_existing_datastore_payload(root: &Path) -> Result<bool, StateStoreError> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if matches!(
+            file_name.as_ref(),
+            ".vida-authoritative-open.guard" | "LOCK" | ".operator-projection-cache-state-marker"
+        ) {
+            continue;
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +559,55 @@ mod tests {
             r#"{"id":"vida-d","title":"Task D","description":"done","status":"closed","priority":5,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","closed_at":"2026-03-08T00:10:00Z","close_reason":"done","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[]}"#,
         ]
         .join("\n")
+    }
+
+    #[tokio::test]
+    async fn state_reset_archives_and_reinitializes_empty_spine() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-archive-reinit-{}-{nanos}",
+            std::process::id()
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store.close().await;
+
+        let summary = StateStore::archive_and_reinit_state_root(root.clone(), true, true)
+            .await
+            .expect("state reset should archive and reinit");
+
+        assert!(summary.archive_created);
+        assert!(summary
+            .archive_path
+            .as_ref()
+            .is_some_and(|path| path.exists()));
+        assert!(root.exists());
+        assert!(summary.reinitialized);
+        assert_eq!(summary.task_count, 0);
+        assert!(summary.state_spine_manifest_present);
+
+        let _ = fs::remove_dir_all(&root);
+        if let Some(archive_path) = summary.archive_path {
+            let _ = fs::remove_dir_all(archive_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn state_reset_requires_archive_guard() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-requires-archive-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+
+        let error = StateStore::archive_and_reinit_state_root(root, false, true)
+            .await
+            .expect_err("reset without archive should fail closed");
+
+        assert!(matches!(error, StateStoreError::InvalidStateReset { .. }));
     }
 
     fn unique_temp_root(prefix: &str) -> PathBuf {

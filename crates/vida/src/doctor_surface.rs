@@ -422,6 +422,7 @@ fn doctor_operator_next_actions(
     operator_blocker_codes: &[String],
     boot_compatibility: &crate::state_store::BootCompatibilitySummary,
     migration_preflight: &crate::state_store::MigrationPreflightSummary,
+    latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
     memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
 ) -> Vec<String> {
@@ -516,8 +517,11 @@ fn doctor_operator_next_actions(
         .iter()
         .any(|code| code == blocker_code_str(BlockerCode::RecoveryReadinessBlocked))
     {
-        operator_next_actions
-            .push(crate::status_surface_signals::recovery_readiness_blocked_next_action());
+        operator_next_actions.push(
+            crate::status_surface_signals::recovery_readiness_blocked_next_action_for_run(
+                latest_run_graph_recovery.map(|summary| summary.run_id.as_str()),
+            ),
+        );
     }
     if operator_blocker_codes
         .iter()
@@ -570,6 +574,18 @@ fn doctor_operator_next_actions(
         ),
     );
     operator_next_actions
+}
+
+fn select_current_session_run_graph_dispatch_receipt<'a>(
+    status_dispatch_receipt: Option<&'a crate::state_store::RunGraphDispatchReceiptSummary>,
+    latest_dispatch_receipt: Option<&'a crate::state_store::RunGraphDispatchReceiptSummary>,
+    active_exception_takeover_dispatch_receipt: Option<
+        &'a crate::state_store::RunGraphDispatchReceiptSummary,
+    >,
+) -> Option<&'a crate::state_store::RunGraphDispatchReceiptSummary> {
+    status_dispatch_receipt
+        .or(latest_dispatch_receipt)
+        .or(active_exception_takeover_dispatch_receipt)
 }
 
 pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
@@ -762,47 +778,82 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 .as_ref()
                 .map(|status| status.run_id.as_str());
             let mut current_session_run_graph_dispatch_receipt_checkpoint_leakage = false;
-            let current_session_run_graph_dispatch_receipt = match current_session_run_graph_status
-                .as_ref()
-            {
-                Some(status) => match store
-                    .run_graph_dispatch_receipt_summary_for_status(status)
-                    .await
+            let current_session_run_graph_status_dispatch_receipt =
+                match current_session_run_graph_status.as_ref() {
+                    Some(status) => match store
+                        .run_graph_dispatch_receipt_summary_for_status(status)
+                        .await
+                    {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            if error
+                                .to_string()
+                                .contains("latest checkpoint evidence must share the same run_id")
+                            {
+                                current_session_run_graph_dispatch_receipt_checkpoint_leakage =
+                                    true;
+                                None
+                            } else {
+                                eprintln!(
+                                    "current-session run graph dispatch receipt: failed ({error})"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    },
+                    None => None,
+                };
+            let latest_run_graph_dispatch_receipt =
+                match store.latest_run_graph_dispatch_receipt_summary().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("latest run graph dispatch receipt: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                };
+            let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
+                match crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root())
                 {
                     Ok(summary) => summary,
                     Err(error) => {
-                        if error
-                            .to_string()
-                            .contains("latest checkpoint evidence must share the same run_id")
-                        {
-                            current_session_run_graph_dispatch_receipt_checkpoint_leakage = true;
-                            None
-                        } else {
+                        eprintln!(
+                            "latest runtime-consumption dispatch receipt fallback: failed ({error})"
+                        );
+                        return ExitCode::from(1);
+                    }
+                }
+            } else {
+                latest_run_graph_dispatch_receipt
+            };
+            let active_exception_takeover_dispatch_receipt =
+                if current_session_run_graph_status_dispatch_receipt.is_none()
+                    && latest_run_graph_dispatch_receipt.is_none()
+                {
+                    match store
+                        .latest_active_exception_takeover_dispatch_receipt()
+                        .await
+                    {
+                        Ok(receipt) => receipt
+                            .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt),
+                        Err(error) => {
                             eprintln!(
-                                "current-session run graph dispatch receipt: failed ({error})"
+                                "latest active exception takeover dispatch receipt: failed ({error})"
                             );
                             return ExitCode::from(1);
                         }
                     }
-                },
-                None => match store
-                    .latest_active_exception_takeover_dispatch_receipt()
-                    .await
-                {
-                    Ok(receipt) => receipt
-                        .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt),
-                    Err(error) => {
-                        eprintln!(
-                            "latest active exception takeover dispatch receipt: failed ({error})"
-                        );
-                        return ExitCode::from(1);
-                    }
-                },
-            };
+                } else {
+                    None
+                };
+            let current_session_run_graph_dispatch_receipt =
+                select_current_session_run_graph_dispatch_receipt(
+                    current_session_run_graph_status_dispatch_receipt.as_ref(),
+                    latest_run_graph_dispatch_receipt.as_ref(),
+                    active_exception_takeover_dispatch_receipt.as_ref(),
+                );
             let current_session_effective_run_graph_run_id = current_session_run_graph_run_id
                 .or_else(|| {
                     current_session_run_graph_dispatch_receipt
-                        .as_ref()
                         .map(|receipt| receipt.run_id.as_str())
                 });
             let current_session_run_graph_checkpoint =
@@ -870,28 +921,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let latest_run_graph_dispatch_receipt =
-                match store.latest_run_graph_dispatch_receipt_summary().await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("latest run graph dispatch receipt: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                };
-            let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
-                match crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root())
-                {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!(
-                            "latest runtime-consumption dispatch receipt fallback: failed ({error})"
-                        );
-                        return ExitCode::from(1);
-                    }
-                }
-            } else {
-                latest_run_graph_dispatch_receipt
-            };
             let latest_run_graph_snapshot_inconsistent =
                 !current_session_run_graph_dispatch_receipt_checkpoint_leakage
                     && !crate::state_store::latest_run_graph_evidence_snapshot_is_consistent(
@@ -906,7 +935,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             .as_ref()
                             .map(|summary| summary.run_id.as_str()),
                         current_session_run_graph_dispatch_receipt
-                            .as_ref()
                             .map(|receipt| receipt.run_id.as_str()),
                     );
             let (
@@ -1179,13 +1207,13 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     &operator_blocker_codes,
                     &boot_compatibility,
                     &migration_preflight,
+                    latest_run_graph_recovery.as_ref(),
                     latest_principal_delegation.as_ref(),
                     latest_memory_governance.as_ref(),
                 );
                 operator_next_actions.extend(trace_evidence_next_actions);
                 let current_session_run_graph_dispatch_packet_path =
                     current_session_run_graph_dispatch_receipt
-                        .as_ref()
                         .and_then(|receipt| receipt.dispatch_packet_path.as_deref());
                 let current_session_run_graph_packet_refs =
                     crate::status_surface::status_dispatch_packet_refs(
@@ -1204,7 +1232,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     ),
                     (
                         current_session_run_graph_dispatch_receipt
-                            .as_ref()
                             .map(|receipt| receipt.run_id.as_str()),
                         StatusRunGraphArtifactSource::DispatchReceipt,
                     ),
@@ -1246,7 +1273,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         .as_ref()
                         .map(|summary| summary.run_id.clone()),
                     "current_session_run_graph_dispatch_receipt_id": current_session_run_graph_dispatch_receipt
-                        .as_ref()
                         .map(|receipt| receipt.run_id.clone()),
                     "current_session_run_graph_dispatch_packet_path": current_session_run_graph_dispatch_packet_path,
                     "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
@@ -1673,6 +1699,72 @@ mod tests {
             "doctor-summary-v2-latest"
         );
         assert_eq!(doctor_json_projection_name(false), "doctor-full-latest");
+    }
+
+    #[test]
+    fn doctor_current_session_dispatch_receipt_prefers_status_receipt() {
+        let status_receipt = dispatch_receipt_summary_for_test("current-session-run");
+        let final_receipt = dispatch_receipt_summary_for_test("final-runtime-consumption-run");
+        let selected = super::select_current_session_run_graph_dispatch_receipt(
+            Some(&status_receipt),
+            Some(&final_receipt),
+            None,
+        )
+        .expect("current-session status receipt should be selected");
+
+        assert_eq!(selected.run_id, "current-session-run");
+    }
+
+    #[test]
+    fn doctor_current_session_dispatch_receipt_prefers_latest_dispatch_before_exception() {
+        let latest_receipt = dispatch_receipt_summary_for_test("latest-dispatch-run");
+        let exception_receipt = dispatch_receipt_summary_for_test("stale-active-exception-run");
+        let selected = super::select_current_session_run_graph_dispatch_receipt(
+            None,
+            Some(&latest_receipt),
+            Some(&exception_receipt),
+        )
+        .expect("latest persisted dispatch receipt should be selected");
+
+        assert_eq!(selected.run_id, "latest-dispatch-run");
+    }
+
+    fn dispatch_receipt_summary_for_test(
+        run_id: &str,
+    ) -> crate::state_store::RunGraphDispatchReceiptSummary {
+        crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: run_id.to_string(),
+            dispatch_target: "orchestrator".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "runtime".to_string(),
+            dispatch_surface: None,
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: None,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "0".to_string(),
+        }
     }
 
     #[test]
@@ -2162,6 +2254,7 @@ mod tests {
             },
             None,
             None,
+            None,
         );
 
         assert!(next_actions
@@ -2240,6 +2333,7 @@ mod tests {
             },
             None,
             None,
+            None,
         );
 
         assert!(next_actions
@@ -2289,6 +2383,7 @@ mod tests {
             },
             None,
             None,
+            None,
         );
 
         assert!(next_actions
@@ -2308,6 +2403,63 @@ mod tests {
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
             None
         );
+    }
+
+    #[test]
+    fn doctor_operator_next_actions_target_recovery_readiness_run() {
+        let blocker_codes =
+            vec![crate::blocker_code_str(crate::BlockerCode::RecoveryReadinessBlocked).to_string()];
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-doctor".to_string(),
+            task_id: "task-doctor".to_string(),
+            active_node: "analyst".to_string(),
+            lifecycle_stage: "analyst_blocked".to_string(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "dispatch.analyst".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "analyst".to_string(),
+                lifecycle_stage: "analyst_blocked".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "handoff_pending".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+            },
+        };
+        let next_actions = super::doctor_operator_next_actions(
+            &blocker_codes,
+            &crate::state_store::BootCompatibilitySummary {
+                classification: "backward_compatible".to_string(),
+                reasons: vec![],
+                next_step: "none".to_string(),
+            },
+            &crate::state_store::MigrationPreflightSummary {
+                contract_type: "operator_contracts".to_string(),
+                schema_version: "release-1-v1".to_string(),
+                compatibility_classification: "backward_compatible".to_string(),
+                migration_state: "no_migration_required".to_string(),
+                blockers: vec![],
+                source_version_tuple: vec![],
+                next_step: "none".to_string(),
+            },
+            Some(&recovery),
+            None,
+            None,
+        );
+
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow recovery status run-doctor")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow consume continue --run-id run-doctor")));
+        assert!(next_actions.iter().all(|action| !action.contains("--json")));
     }
 
     #[test]

@@ -1044,8 +1044,55 @@ pub(crate) fn runtime_consumption_run_id(
     let slug = infer_feature_request_slug(&role_selection.request);
     if slug.trim().is_empty() {
         "runtime-consume-request".to_string()
+    } else if slug == "runtime" || slug.starts_with("runtime-") {
+        slug
     } else {
         format!("runtime-{slug}")
+    }
+}
+
+#[cfg(test)]
+mod runtime_consumption_run_id_tests {
+    use super::*;
+
+    fn selection_with_request(request: &str) -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: request.to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "fallback".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn runtime_consumption_run_id_does_not_double_prefix_runtime_task_ids() {
+        let selection = selection_with_request("runtime-doctor-release-admission-trace-evidence");
+
+        assert_eq!(
+            runtime_consumption_run_id(&selection),
+            "runtime-doctor-release-admission-trace-evidence"
+        );
+    }
+
+    #[test]
+    fn runtime_consumption_run_id_prefixes_non_runtime_requests() {
+        let selection = selection_with_request("ship dispatch evidence");
+
+        assert_eq!(
+            runtime_consumption_run_id(&selection),
+            "runtime-ship-dispatch-evidence"
+        );
     }
 }
 

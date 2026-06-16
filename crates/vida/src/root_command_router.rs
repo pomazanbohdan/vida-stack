@@ -6,7 +6,8 @@ use super::{
     orchestrator_session_surface, print_root_help, project_activator_surface, proof_surface,
     protocol_surface, quality_surface, release_surface, run_taskflow_proxy, runtime_web_surface,
     service_client_cli, session_surface, status_surface, task_surface, AgentArgs, AgentCommand,
-    Cli, CoderCommand, Command, ReleaseCommand, SessionArgs, SessionCommand, TaskArgs, TaskCommand,
+    Cli, CoderCommand, Command, ReleaseCommand, SessionArgs, SessionCommand, StateArgs,
+    StateCommand, StateResetArgs, TaskArgs, TaskCommand,
 };
 use crate::root_state_binding::{
     bind_runtime_state_dir_for_project_bound_command,
@@ -61,6 +62,7 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::Task(args)) => task_surface::run_task(args).await,
         Some(Command::Memory(args)) => memory_surface::run_memory(args).await,
         Some(Command::Status(args)) => status_surface::run_status(args).await,
+        Some(Command::State(args)) => run_state(args).await,
         Some(Command::Runtime(args)) => runtime_web_surface::run_runtime(args).await,
         Some(Command::Doctor(args)) => doctor_surface::run_doctor(args).await,
         Some(Command::Diagnostics(args)) => diagnostics_surface::run_diagnostics(args).await,
@@ -108,6 +110,72 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
     exit_code
 }
 
+async fn run_state(args: StateArgs) -> ExitCode {
+    match args.command {
+        StateCommand::Reset(command) => run_state_reset(command).await,
+    }
+}
+
+async fn run_state_reset(command: StateResetArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .unwrap_or_else(crate::state_store::default_state_dir);
+    let result = crate::state_store::StateStore::archive_and_reinit_state_root(
+        state_dir,
+        command.archive,
+        command.reinit,
+    )
+    .await;
+
+    match result {
+        Ok(summary) => {
+            if command.json {
+                match serde_json::to_string_pretty(&summary) {
+                    Ok(rendered) => println!("{rendered}"),
+                    Err(error) => {
+                        eprintln!("failed to render state reset summary as JSON: {error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            } else {
+                println!("status: pass");
+                println!("state_dir: {}", summary.state_dir.display());
+                println!("archive_created: {}", summary.archive_created);
+                if let Some(path) = &summary.archive_path {
+                    println!("archive_path: {}", path.display());
+                }
+                println!("reinitialized: {}", summary.reinitialized);
+                println!("task_count: {}", summary.task_count);
+                println!(
+                    "state_spine_manifest_present: {}",
+                    summary.state_spine_manifest_present
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            if command.json {
+                let payload = serde_json::json!({
+                    "surface": "vida state reset",
+                    "status": "blocked",
+                    "blocker_codes": ["state_reset_failed"],
+                    "error": error.to_string(),
+                    "next_actions": [
+                        "retry with `vida state reset --archive --reinit` after the state root is no longer in use"
+                    ],
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
+                );
+            } else {
+                eprintln!("state reset failed: {error}");
+            }
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn command_label(command: &Option<Command>) -> String {
     match command {
         None => "vida".to_string(),
@@ -123,6 +191,7 @@ fn command_label(command: &Option<Command>) -> String {
         Some(Command::Task(_)) => "vida task".to_string(),
         Some(Command::Memory(_)) => "vida memory".to_string(),
         Some(Command::Status(_)) => "vida status".to_string(),
+        Some(Command::State(_)) => "vida state".to_string(),
         Some(Command::Runtime(_)) => "vida runtime".to_string(),
         Some(Command::Doctor(_)) => "vida doctor".to_string(),
         Some(Command::Diagnostics(_)) => "vida diagnostics".to_string(),
@@ -262,6 +331,16 @@ fn session_command_needs_project_root(args: &SessionArgs) -> bool {
     !session_command_has_explicit_state_dir(args)
 }
 
+fn state_command_explicit_state_dir(args: &StateArgs) -> Option<&std::path::Path> {
+    match &args.command {
+        StateCommand::Reset(command) => command.state_dir.as_deref(),
+    }
+}
+
+fn state_command_needs_project_root(args: &StateArgs) -> bool {
+    state_command_explicit_state_dir(args).is_none()
+}
+
 fn proxy_args_request_help_or_version(args: &[String]) -> bool {
     args.iter()
         .any(|arg| matches!(arg.as_str(), "help" | "--help" | "-h" | "--version" | "-V"))
@@ -289,6 +368,7 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
         Some(Command::ProjectActivator(args)) => args.state_dir.is_none(),
         Some(Command::Memory(args)) => args.state_dir.is_none(),
         Some(Command::Status(args)) => args.state_dir.is_none(),
+        Some(Command::State(args)) => state_command_needs_project_root(args),
         Some(Command::Diagnostics(args)) => diagnostics_command_explicit_state_dir(args).is_none(),
         Some(Command::OrchestratorSession(args)) => {
             orchestrator_session_command_explicit_state_dir(args).is_none()
@@ -380,6 +460,7 @@ fn command_explicit_state_dir(command: &Option<Command>) -> Option<&std::path::P
         Some(Command::ProjectActivator(command)) => command.state_dir.as_deref(),
         Some(Command::Memory(command)) => command.state_dir.as_deref(),
         Some(Command::Status(command)) => command.state_dir.as_deref(),
+        Some(Command::State(command)) => state_command_explicit_state_dir(command),
         Some(Command::Doctor(command)) => command.state_dir.as_deref(),
         Some(Command::Diagnostics(command)) => diagnostics_command_explicit_state_dir(command),
         Some(Command::OrchestratorSession(command)) => {
@@ -396,6 +477,7 @@ fn command_preserves_explicit_env_state_dir(command: &Option<Command>) -> bool {
     matches!(
         command,
         Some(Command::Status(_) | Command::Taskflow(_))
+            | Some(Command::State(_))
             | Some(Command::Consume(_) | Command::Recovery(_) | Command::Route(_))
             | Some(Command::Lane(_) | Command::Approval(_))
             | Some(Command::OrchestratorInit(_))
@@ -438,6 +520,7 @@ fn raw_args_need_project_root_state_dir(args: &[OsString]) -> bool {
             | "task"
             | "memory"
             | "status"
+            | "state"
             | "runtime"
             | "doctor"
             | "diagnostics"
@@ -478,6 +561,7 @@ fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
             | "project-activator"
             | "memory"
             | "status"
+            | "state"
             | "doctor"
             | "diagnostics"
             | "orchestrator-session"
@@ -629,6 +713,28 @@ mod tests {
     }
 
     #[test]
+    fn prepare_runtime_state_dir_normalizes_project_bound_state_reset_surface() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        make_project_root(harness.path());
+        fs::create_dir_all(harness.path().join(crate::state_store::default_state_dir()))
+            .expect("canonical state dir should exist");
+        let _cwd = crate::test_cli_support::guard_current_dir(harness.path());
+        let _env_guard = EnvVarGuard::unset("VIDA_STATE_DIR");
+        let cli = Cli::try_parse_from(["vida", "state", "reset", "--archive", "--reinit"])
+            .expect("state reset cli should parse");
+
+        assert!(command_needs_project_root_state_dir(&cli.command));
+        let guard =
+            prepare_runtime_state_dir(&cli.command).expect("state dir preparation should succeed");
+        assert!(guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(harness.path().join(crate::state_store::default_state_dir()))
+        );
+    }
+
+    #[test]
     fn prepare_runtime_state_dir_preserves_explicit_env_for_status_surface() {
         let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let harness = TempStateHarness::new().expect("temp harness should initialize");
@@ -661,6 +767,33 @@ mod tests {
         let args = [
             std::ffi::OsString::from("vida"),
             std::ffi::OsString::from("status"),
+        ];
+
+        let guard = prepare_runtime_state_dir_for_parse(&args)
+            .expect("pre-parse state dir preparation should succeed");
+
+        assert!(guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(explicit_state_dir)
+        );
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_for_parse_preserves_explicit_env_for_state_reset_surface() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        make_project_root(harness.path());
+        let explicit_state_dir = harness.path().join("explicit-state");
+        fs::create_dir_all(&explicit_state_dir).expect("explicit state dir should exist");
+        let _cwd = crate::test_cli_support::guard_current_dir(harness.path());
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &explicit_state_dir);
+        let args = [
+            std::ffi::OsString::from("vida"),
+            std::ffi::OsString::from("state"),
+            std::ffi::OsString::from("reset"),
+            std::ffi::OsString::from("--archive"),
+            std::ffi::OsString::from("--reinit"),
         ];
 
         let guard = prepare_runtime_state_dir_for_parse(&args)

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida route explain --json\n  vida docflow help\n  vida docs update --json";
+const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida route explain --json\n  vida state reset --archive --reinit --json\n  vida docflow help\n  vida docs update --json";
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
@@ -28,6 +28,7 @@ const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json
 const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
 const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  vida session triage --task <task-id>\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
+const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive --reinit\n  vida state reset --archive --reinit --json\n  vida state reset --archive --reinit --state-dir <path> --json\n\nOptions:\n  --archive             Rename the current state root to a timestamped sibling archive before reset\n  --reinit              Recreate the authoritative state spine after archive\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators.\n  Use --json for machine-readable automation.";
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
@@ -128,6 +129,11 @@ pub(crate) enum Command {
     Memory(MemoryArgs),
     #[command(about = "inspect backend, state spine, and latest receipts")]
     Status(StatusArgs),
+    #[command(
+        about = "archive and reinitialize authoritative runtime state",
+        after_help = STATE_AFTER_HELP
+    )]
+    State(StateArgs),
     #[command(about = "operate runtime-owned local development services")]
     Runtime(RuntimeArgs),
     #[command(about = "run bounded runtime integrity checks")]
@@ -314,6 +320,53 @@ pub(crate) struct QualityGateArgs {
     #[arg(
         long = "json",
         help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct StateArgs {
+    #[command(subcommand)]
+    pub(crate) command: StateCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum StateCommand {
+    #[command(
+        about = "archive the current state root and optionally recreate an empty authoritative spine",
+        after_help = STATE_AFTER_HELP
+    )]
+    Reset(StateResetArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct StateResetArgs {
+    #[arg(
+        long = "archive",
+        help = "Rename the current state root to a timestamped sibling archive before reset"
+    )]
+    pub(crate) archive: bool,
+
+    #[arg(
+        long = "reinit",
+        help = "Recreate the authoritative state spine after archive"
+    )]
+    pub(crate) reinit: bool,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render mode for human output")]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact text"
     )]
     pub(crate) json: bool,
 }

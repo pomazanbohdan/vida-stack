@@ -146,7 +146,8 @@ mod tests {
     use super::{
         blocked_run_graph_status_next_actions, consume_continue_command,
         open_delegated_cycle_continue_next_action, recovery_latest_command,
-        recovery_resume_target_missing_next_action, runtime_binding_task_missing_next_action,
+        recovery_readiness_blocked_next_action_for_run, recovery_resume_target_missing_next_action,
+        runtime_binding_task_missing_next_action,
         terminal_next_action_requires_authoritative_run_state,
     };
 
@@ -179,6 +180,10 @@ mod tests {
             "Continue the active bound run with `vida taskflow consume continue --run-id run-6` before considering backlog ready-head work."
         );
         assert_eq!(recovery_latest_command(), "vida taskflow recovery latest");
+        let targeted_recovery = recovery_readiness_blocked_next_action_for_run(Some("run-7"));
+        assert!(targeted_recovery.contains("vida taskflow recovery status run-7"));
+        assert!(targeted_recovery.contains("vida taskflow consume continue --run-id run-7"));
+        assert!(!targeted_recovery.contains("--json"));
     }
 
     #[test]
@@ -267,8 +272,15 @@ pub(crate) fn missing_root_session_write_guard_next_action() -> String {
 }
 
 pub(crate) fn recovery_readiness_blocked_next_action() -> String {
-    let recovery_command = next_actions::recovery_latest_command();
-    let continue_command = next_actions::consume_continue_command(None);
+    recovery_readiness_blocked_next_action_for_run(None)
+}
+
+pub(crate) fn recovery_readiness_blocked_next_action_for_run(run_id: Option<&str>) -> String {
+    let run_id = run_id.map(str::trim).filter(|value| !value.is_empty());
+    let recovery_command = run_id
+        .map(next_actions::human_recovery_status_command)
+        .unwrap_or_else(next_actions::recovery_latest_command);
+    let continue_command = next_actions::consume_continue_command(run_id);
     format!(
         "Inspect `{recovery_command}`, then run `{continue_command}` after `recovery_ready=true` is proven for resume/rollback handoff."
     )
