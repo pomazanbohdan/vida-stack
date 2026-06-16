@@ -88,12 +88,12 @@ pub(crate) fn print_taskflow_pricing_help() {
     println!();
     println!("Commands:");
     println!("  vida taskflow pricing status [--summary] [--json]");
-    println!("  vida taskflow pricing providers --json");
-    println!("  vida taskflow pricing models --provider <provider-id> --json");
-    println!("  vida taskflow pricing receipt <receipt-id> --json");
-    println!("  vida taskflow pricing receipts latest --json");
-    println!("  vida taskflow pricing import --source-file <path> --dry-run --json");
-    println!("  vida taskflow pricing import --source-file <path> --apply --json");
+    println!("  vida taskflow pricing providers [--json]");
+    println!("  vida taskflow pricing models --provider <provider-id> [--json]");
+    println!("  vida taskflow pricing receipt <receipt-id> [--json]");
+    println!("  vida taskflow pricing receipts latest [--json]");
+    println!("  vida taskflow pricing import --source-file <path> --dry-run [--json]");
+    println!("  vida taskflow pricing import --source-file <path> --apply [--json]");
     println!();
     println!("Rules:");
     println!("  `--dry-run` and `--apply` are mutually exclusive.");
@@ -110,7 +110,7 @@ fn run_pricing_status(args: &[String]) -> ExitCode {
         print_json(&payload);
     } else {
         println!("VIDA price catalog readiness: profile-local compatibility mode");
-        println!("Use `vida taskflow pricing status --json` for readiness fields.");
+        println!("Use `vida taskflow pricing status` for operator readiness; machine-readable fields are explicit opt-in.");
     }
     ExitCode::SUCCESS
 }
@@ -125,7 +125,7 @@ fn run_pricing_providers(args: &[String]) -> ExitCode {
         "price_catalog_readiness": pricing_readiness_payload(),
         "validity_scope": diagnostic_validity_scope(),
         "next_actions": [
-            "Import a provider snapshot with `vida taskflow pricing import --source-file <path> --dry-run --json`."
+            "Import a provider snapshot with `vida taskflow pricing import --source-file <path> --dry-run`."
         ]
     });
     print_or_summarize(
@@ -156,7 +156,7 @@ fn run_pricing_models(args: &[String]) -> ExitCode {
         "price_catalog_readiness": pricing_readiness_payload(),
         "validity_scope": diagnostic_validity_scope(),
         "next_actions": [
-            "Import a provider snapshot with `vida taskflow pricing import --source-file <path> --dry-run --json`."
+            "Import a provider snapshot with `vida taskflow pricing import --source-file <path> --dry-run`."
         ]
     });
     print_or_summarize(
@@ -175,7 +175,7 @@ fn run_pricing_receipt(args: &[String]) -> ExitCode {
             json_output,
             "vida taskflow pricing receipt",
             vec!["pricing_receipt_id_required"],
-            vec!["Provide `vida taskflow pricing receipt <receipt-id> --json`.".to_string()],
+            vec!["Provide `vida taskflow pricing receipt <receipt-id>`.".to_string()],
         );
     }
     fail_closed(
@@ -196,7 +196,7 @@ fn run_pricing_receipts(args: &[String]) -> ExitCode {
             json_output,
             "vida taskflow pricing receipts",
             vec!["unsupported_pricing_receipts_command"],
-            vec!["Use `vida taskflow pricing receipts latest --json`.".to_string()],
+            vec!["Use `vida taskflow pricing receipts latest`.".to_string()],
         );
     }
     let payload = json!({
@@ -207,7 +207,7 @@ fn run_pricing_receipts(args: &[String]) -> ExitCode {
         "price_catalog_readiness": pricing_readiness_payload(),
         "validity_scope": diagnostic_validity_scope(),
         "next_actions": [
-            "Run `vida taskflow pricing import --source-file <path> --dry-run --json` to emit a dry-run receipt."
+            "Run `vida taskflow pricing import --source-file <path> --dry-run` to emit a dry-run receipt."
         ]
     });
     print_or_summarize(json_output, &payload, "VIDA price catalog receipts: none");
@@ -273,7 +273,7 @@ fn run_pricing_import(args: &[String]) -> ExitCode {
             "VIDA price catalog import {}",
             payload["status"].as_str().unwrap_or("blocked")
         );
-        println!("Use `--json` for receipt details.");
+        println!("Machine-readable receipt details are explicit opt-in.");
     }
 
     if payload["status"] == "blocked" {
@@ -405,7 +405,7 @@ pub(crate) fn pricing_readiness_payload() -> serde_json::Value {
             "active_price_catalog_snapshot_missing"
         ],
         "next_actions": [
-            "Use `vida taskflow pricing import --source-file <path> --dry-run --json` to preview external provider snapshot evidence."
+            "Use `vida taskflow pricing import --source-file <path> --dry-run` to preview external provider snapshot evidence."
         ]
     })
 }
@@ -591,7 +591,7 @@ fn print_or_summarize(json_output: bool, payload: &serde_json::Value, summary: &
         print_json(payload);
     } else {
         println!("{summary}");
-        println!("Use `--json` for machine-readable pricing diagnostics.");
+        println!("Machine-readable pricing diagnostics are explicit opt-in.");
     }
 }
 

@@ -72,7 +72,7 @@ pub enum Command {
     #[command(
         about = "print agent bootstrap instructions or initialize a canonical markdown artifact",
         long_about = "Print DocFlow agent bootstrap instructions or initialize a canonical markdown artifact.\n\nWithout positional arguments, `docflow init` prints the utility contract, safe first commands, read-first docs, and next actions for an agent.\nWith four positional arguments, `docflow init <markdown_file> <artifact_path> <artifact_type> <change_note>` creates a canonical markdown artifact with footer metadata and changelog linkage.",
-        after_help = "Examples:\n  docflow init\n  docflow init --json\n  docflow init docs/process/example.md process/example process_doc \"initialize docs artifact\"\n  docflow init docs/process/example.md process/example process_doc \"initialize docs artifact\" --json"
+        after_help = "Examples:\n  docflow init\n  docflow init docs/process/example.md process/example process_doc \"initialize docs artifact\"\n  docflow init docs/process/example.md process/example process_doc \"initialize docs artifact\" --json\n\nMachine-readable mode:\n  explicit JSON output is opt-in for stable machine payloads"
     )]
     Init(InitArgs),
     MigrateLinks(MigrateLinksArgs),
@@ -3695,9 +3695,9 @@ fn render_init_info(json: bool) -> Result<String, String> {
                 "docs/project-root-map.md",
                 "docs/process/documentation-tooling-map.md"
             ],
-            "preferred_machine_mode": "--json",
+            "output_mode": "default_human; machine-readable output is explicit opt-in",
             "safe_first_commands": [
-                "docflow init --json",
+                "docflow init",
                 "docflow doctor --root .",
                 "docflow check-file --path <file>",
                 "docflow readiness-check --profile active-canon",
@@ -3771,7 +3771,7 @@ fn render_init_info(json: bool) -> Result<String, String> {
         serde_json::to_string(&payload).map_err(|error| error.to_string())
     } else {
         Ok(format!(
-            "docflow init\n  mode: agent_bootstrap\n  status: ready\n  purpose: {}\n  runtime_root: {}\n  read_first:\n    - AGENTS.md\n    - AGENTS.sidecar.md\n    - docs/project-root-map.md\n    - docs/process/documentation-tooling-map.md\n  safe_first_commands:\n    - docflow init --json\n    - docflow doctor --root .\n    - docflow check-file --path <file> --json\n    - docflow readiness-check --profile active-canon\n  artifact_init:\n    command: {}\n  agent_instructions:\n    1) Read bootstrap docs before mutation.\n    2) Prefer --json for handoff, blockers, and next_actions.\n    3) Validate/readiness-check touched docs before closure.\n    4) Use artifact init mode only for new canonical markdown artifacts.\n  next_actions:\n    - docflow doctor --root .\n    - docflow readiness-check --profile active-canon\n    - docflow help",
+            "docflow init\n  mode: agent_bootstrap\n  status: ready\n  purpose: {}\n  runtime_root: {}\n  read_first:\n    - AGENTS.md\n    - AGENTS.sidecar.md\n    - docs/project-root-map.md\n    - docs/process/documentation-tooling-map.md\n  safe_first_commands:\n    - docflow init\n    - docflow doctor --root .\n    - docflow check-file --path <file>\n    - docflow readiness-check --profile active-canon\n  artifact_init:\n    command: {}\n  agent_instructions:\n    1) Read bootstrap docs before mutation.\n    2) Use default human output for handoff, blockers, and next_actions; machine-readable output is explicit opt-in.\n    3) Validate/readiness-check touched docs before closure.\n    4) Use artifact init mode only for new canonical markdown artifacts.\n  next_actions:\n    - docflow doctor --root .\n    - docflow readiness-check --profile active-canon\n    - docflow help",
             payload["purpose"]
                 .as_str()
                 .unwrap_or("DocFlow documentation utility."),

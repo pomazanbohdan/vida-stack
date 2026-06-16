@@ -59,6 +59,10 @@ fn init_prints_agent_bootstrap_instructions() {
     assert!(stdout.contains("mode: agent_bootstrap"));
     assert!(stdout.contains("AGENTS.sidecar.md"));
     assert!(stdout.contains("docflow readiness-check --profile active-canon"));
+    assert!(stdout.contains("machine-readable output is explicit opt-in"));
+    assert!(!stdout.contains("docflow init --json"));
+    assert!(!stdout.contains("docflow check-file --path <file> --json"));
+    assert!(!stdout.contains("Prefer --json"));
 }
 
 #[test]
@@ -74,6 +78,22 @@ fn init_json_prints_machine_readable_agent_bootstrap() {
     assert!(stdout.contains("\"mode\":\"agent_bootstrap\""));
     assert!(stdout.contains("\"safe_first_commands\""));
     assert!(stdout.contains("\"next_actions\""));
+}
+
+#[test]
+fn init_help_keeps_json_as_explicit_machine_mode() {
+    let context = vida_test_support::CommandContext::empty();
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args(["init", "--help"])
+        .output()
+        .expect("docflow init help should run");
+
+    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("docflow init"));
+    assert!(stdout.contains("Machine-readable mode:"));
+    assert!(stdout.contains("explicit JSON output is opt-in for stable machine payloads"));
+    assert!(!stdout.contains("docflow init --json"));
 }
 
 #[test]

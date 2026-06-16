@@ -8163,7 +8163,7 @@ pub(crate) async fn derive_advanced_run_graph_status(
         })?;
     if active_exception_takeover_receipt_matches_status(&existing, dispatch_receipt.as_ref()) {
         return Err(format!(
-            "run-graph advance blocked: run `{}` is in active exception takeover for `{}`; finish the scoped local work allowed by `vida lane takeover-ready {} --json`, then close the bounded task before advancing another runtime lane.",
+            "run-graph advance blocked: run `{}` is in active exception takeover for `{}`; finish the scoped local work allowed by `vida lane takeover-ready {}`, then close the bounded task before advancing another runtime lane.",
             existing.run_id, existing.active_node, existing.run_id
         ));
     }
@@ -11447,7 +11447,7 @@ mod tests {
             projection_vs_receipt_parity: "aligned".to_string(),
             stale_state_suspected: false,
             next_lawful_operator_action: Some(format!(
-                "vida taskflow run-graph status {} --json",
+                "vida taskflow run-graph status {}",
                 status.run_id
             )),
             dispatch_receipt: Some(receipt),

@@ -1360,7 +1360,7 @@ async fn task_takeover_status_receipt(
                 vec![format!(
                     "Inspect the lane receipt and exception metadata: `{}`.",
                     operator_output::command_text::human_command(&format!(
-                        "vida lane show {} --json",
+                "vida lane show {}",
                         crate::shell_quote(&status.run_id)
                     ))
                 )],
@@ -1375,7 +1375,7 @@ async fn task_takeover_status_receipt(
             )
         } else {
             let command = format!(
-                "vida lane takeover-ready {} --json",
+                "vida lane takeover-ready {}",
                 crate::shell_quote(&status.run_id)
             );
             (
@@ -7135,15 +7135,15 @@ fn select_task_next_lawful_binding<'a>(
                 (true, true) => {}
             }
             let recovery_command = operator_output::command_text::human_command(&format!(
-                "vida taskflow recovery status {} --json",
+                "vida taskflow recovery status {}",
                 crate::shell_quote(&current.run_id)
             ));
             let lane_show_command = operator_output::command_text::human_command(&format!(
-                "vida lane show {} --json",
+                "vida lane show {}",
                 crate::shell_quote(&current.run_id)
             ));
             let explicit_status_command = operator_output::command_text::human_command(&format!(
-                "vida taskflow run-graph status {} --json",
+                "vida taskflow run-graph status {}",
                 crate::shell_quote(&explicit.run_id)
             ));
             Err(blocked_task_next_lawful_receipt(
@@ -7651,7 +7651,7 @@ fn pass_completed_lane_task_next_lawful_receipt(
         "sequential_only_completed_lane_reconciled",
         ready_task_candidates,
         format!(
-            "Continue `{}` after completed delegated lane reconciliation; inspect `vida taskflow run-graph status {} --json` if downstream binding is still expected.",
+            "Continue `{}` after completed delegated lane reconciliation; inspect `vida taskflow run-graph status {}` if downstream binding is still expected.",
             binding.task_id,
             crate::shell_quote(&binding.run_id)
         ),
@@ -13487,7 +13487,8 @@ mod tests {
         let receipt = task_close_automation_receipt(
             &crate::TaskCloseArgs {
                 task_id: "task-owned".to_string(),
-                reason: "done".to_string(),
+                reason: Some("done".to_string()),
+                reason_file: None,
                 source: None,
                 release: false,
                 install: false,
@@ -15794,7 +15795,8 @@ mod tests {
         let receipt = task_close_automation_receipt(
             &crate::TaskCloseArgs {
                 task_id: "audit-p1-task-close-release-options".to_string(),
-                reason: "close bounded task".to_string(),
+                reason: Some("close bounded task".to_string()),
+                reason_file: None,
                 source: None,
                 release: false,
                 install: false,
@@ -15828,7 +15830,8 @@ mod tests {
         let receipt = task_close_automation_receipt(
             &crate::TaskCloseArgs {
                 task_id: "audit-p1-task-close-release-options".to_string(),
-                reason: "close bounded task".to_string(),
+                reason: Some("close bounded task".to_string()),
+                reason_file: None,
                 source: None,
                 release: false,
                 install: false,
@@ -16535,7 +16538,8 @@ mod tests {
             runtime.block_on(super::run_task(crate::TaskArgs {
                 command: crate::TaskCommand::Close(crate::TaskCloseArgs {
                     task_id: "child-todo".to_string(),
-                    reason: "implementation proof passed".to_string(),
+                    reason: Some("implementation proof passed".to_string()),
+                    reason_file: None,
                     source: Some("task_close_child_regression".to_string()),
                     release: false,
                     install: false,
@@ -16605,7 +16609,8 @@ mod tests {
             runtime.block_on(super::run_task(crate::TaskArgs {
                 command: crate::TaskCommand::Close(crate::TaskCloseArgs {
                     task_id: "close-with-push-blocked".to_string(),
-                    reason: "implementation proof passed".to_string(),
+                    reason: Some("implementation proof passed".to_string()),
+                    reason_file: None,
                     source: Some("task_close_automation_regression".to_string()),
                     release: false,
                     install: false,

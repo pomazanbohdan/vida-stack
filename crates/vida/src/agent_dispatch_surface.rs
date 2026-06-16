@@ -25,8 +25,9 @@ use taskflow_host_bridge::{
     host_bridge_normalized_implementation_artifact_path, host_bridge_operator_fields,
     host_bridge_provenance_public_blocker_code, host_bridge_request_implementation_artifacts,
     host_bridge_request_owned_paths, host_bridge_request_requires_implementation_artifacts,
-    host_bridge_request_string, normalize_host_bridge_provenance_for_completion,
-    normalized_host_bridge_attempt_id, normalized_host_bridge_consolidation_receipt_id,
+    host_bridge_request_string, host_bridge_result_pass_allowed_next_node,
+    normalize_host_bridge_provenance_for_completion, normalized_host_bridge_attempt_id,
+    normalized_host_bridge_consolidation_receipt_id,
     push_unique_host_bridge_implementation_artifact,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
     validate_host_bridge_request_provenance, validate_implementation_artifact_scope,
@@ -130,13 +131,13 @@ fn agent_dispatch_source_surfaces() -> Vec<String> {
     vec![
         "vida agent dispatch-next".to_string(),
         "StateStore::scheduling_projection_scoped".to_string(),
-        "vida taskflow graph-summary --json".to_string(),
-        "vida taskflow scheduler dispatch --json".to_string(),
-        "vida agent select --runtime-role <role> --task-class <class> --json".to_string(),
+        "vida taskflow graph-summary".to_string(),
+        "vida taskflow scheduler dispatch".to_string(),
+        "vida agent select --runtime-role <role> --task-class <class>".to_string(),
         "build_taskflow_consume_bundle_payload.activation_bundle.agent_system.max_parallel_agents"
             .to_string(),
-        "vida agent-init --role worker <task-id> --json".to_string(),
-        "vida agent-init --role <runtime-role> <task-id> --json".to_string(),
+        "vida agent-init --role worker <task-id>".to_string(),
+        "vida agent-init --role <runtime-role> <task-id>".to_string(),
     ]
 }
 
@@ -644,6 +645,43 @@ fn retryable_host_bridge_completion_request(
         })
 }
 
+fn host_bridge_packet_declared_next_node(
+    request_path: &Path,
+    request: &serde_json::Value,
+    state_root: Option<&Path>,
+) -> Option<String> {
+    let packet_path = host_bridge_request_string(request, "packet_path")?;
+    let state_root = state_root
+        .map(Path::to_path_buf)
+        .or_else(|| infer_host_bridge_state_root_from_request_path(request_path))?;
+    let packet_path = canonical_state_artifact_path(&state_root, packet_path, true).ok()?;
+    let packet =
+        read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet").ok()?;
+    let dispatch_target = host_bridge_request_string(request, "dispatch_target");
+    ["downstream_dispatch_target", "next_node"]
+        .iter()
+        .find_map(|field| {
+            packet
+                .get(*field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .filter(|value| dispatch_target != Some(*value))
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn host_bridge_completion_pass_allowed_next_node(
+    request_path: &Path,
+    request: &serde_json::Value,
+    typed_request: &HostBridgeRequest,
+    state_root: Option<&Path>,
+) -> String {
+    host_bridge_packet_declared_next_node(request_path, request, state_root).unwrap_or_else(|| {
+        host_bridge_result_pass_allowed_next_node(&typed_request.dispatch_target).to_string()
+    })
+}
+
 fn host_bridge_adapter_payload(
     request_path: &Path,
     request: &serde_json::Value,
@@ -660,12 +698,19 @@ fn host_bridge_adapter_payload(
             let dispatch_target = request.dispatch_target.as_str();
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
+        let allowed_next_node = host_bridge_completion_pass_allowed_next_node(
+            request_path,
+            &effective_request,
+            request,
+            state_root,
+        );
         format!(
-            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-summary {} --json",
+            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --decision pass --verdict implemented --allowed-next-node {} --blocker-codes [] --host-bridge-summary {}",
             crate::shell_quote(&request.run_id),
             crate::shell_quote(&receipt_id),
             crate::shell_quote(&request_path.display().to_string()),
             crate::shell_quote("<host-agent-id>"),
+            crate::shell_quote(&allowed_next_node),
             crate::shell_quote("parent host adapter completed receipt-backed execution")
         )
     } else {
@@ -737,6 +782,13 @@ fn host_bridge_completion_lane_args(
     payload: &serde_json::Value,
     host_agent_id: &str,
     summary: Option<&str>,
+    decision: Option<&str>,
+    verdict: Option<&str>,
+    allowed_next_node: Option<&str>,
+    blocker_codes: Option<&str>,
+    blocker_code: &[String],
+    rework_target: Option<&str>,
+    result_file: Option<&Path>,
     receipt_id_override: Option<&str>,
     state_dir: Option<&Path>,
 ) -> Result<Vec<String>, String> {
@@ -766,6 +818,48 @@ fn host_bridge_completion_lane_args(
         "--host-bridge-summary".to_string(),
         summary.to_string(),
     ];
+    if let Some(result_file) = result_file {
+        args.push("--host-bridge-result-file".to_string());
+        args.push(result_file.display().to_string());
+    }
+    if let Some(value) = decision.map(str::trim).filter(|value| !value.is_empty()) {
+        args.push("--decision".to_string());
+        args.push(value.to_string());
+    }
+    if let Some(value) = verdict.map(str::trim).filter(|value| !value.is_empty()) {
+        args.push("--verdict".to_string());
+        args.push(value.to_string());
+    }
+    if let Some(value) = allowed_next_node
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--allowed-next-node".to_string());
+        args.push(value.to_string());
+    }
+    if let Some(value) = blocker_codes
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--blocker-codes".to_string());
+        args.push(value.to_string());
+    }
+    for value in blocker_code
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--blocker-code".to_string());
+        args.push(value.to_string());
+    }
+    if let Some(value) = rework_target
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--rework-target".to_string());
+        args.push(value.to_string());
+    }
     if let Some(state_dir) = state_dir {
         args.push("--state-dir".to_string());
         args.push(state_dir.display().to_string());
@@ -1070,7 +1164,7 @@ async fn attach_host_bridge_implementation_artifacts(
         .as_str()
         .map(human_command)
         .unwrap_or_else(|| {
-            "vida lane complete <run-id> --host-bridge-request <request-path>".to_string()
+            "vida lane complete <run-id> --host-bridge-request <request-path> --decision <decision> --verdict <verdict> --allowed-next-node <node> --blocker-codes <json-or-list>".to_string()
         });
     let artifact_refs_payload = serde_json::json!({
         "request_path": command.request.display().to_string(),
@@ -1249,7 +1343,8 @@ fn build_carrier_selection_api_descriptor(
                 "selection_surface": "vida agent select",
                 "selection_materialized": false,
                 "selection_reason": "dispatch_next_preview_exposes_selection_api_without_embedding_full_assignment",
-                "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
+                "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class}"),
+                "machine_command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
             }))
         })
         .collect::<Vec<_>>();
@@ -1288,7 +1383,8 @@ fn build_carrier_selection_api_descriptor(
                     "selection_surface": "vida agent select",
                     "selection_materialized": false,
                     "selection_reason": "dispatch_next_preview_exposes_selection_api_without_embedding_full_assignment",
-                    "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
+                    "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class}"),
+                    "machine_command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
                 }))
             })
             .collect::<Vec<_>>()
@@ -1517,7 +1613,7 @@ fn agent_init_command(
         runtime_role
     };
     let mut command = format!(
-        "vida agent-init --role {} {} --json",
+        "vida agent-init --role {} {}",
         crate::shell_quote(runtime_role),
         crate::shell_quote(task_id)
     );
@@ -1530,7 +1626,7 @@ fn agent_init_command(
 
 fn receipt_backed_execution_command_hint(task_id: &str) -> String {
     format!(
-        "vida taskflow run-graph dispatch-init {} --json, then vida agent-init --dispatch-packet <packet-path> --execute-dispatch --json",
+        "vida taskflow run-graph dispatch-init {}, then vida agent-init --dispatch-packet <packet-path> --execute-dispatch",
         crate::shell_quote(task_id)
     )
 }
@@ -1961,7 +2057,7 @@ fn build_agent_dispatch_next_preview_standard(
         blocker_codes.push("no_ready_task_candidates".to_string());
         next_actions.push(format!(
             "Inspect `{}` and resolve blockers before previewing agent dispatch.",
-            human_command("vida task ready --json")
+            human_command("vida task ready")
         ));
         for candidate in &projection.blocked {
             blocked_candidates.push(blocked_candidate(
@@ -2315,7 +2411,7 @@ fn build_agent_dispatch_next_preview_dev_team(
         blocker_codes.push("no_ready_task_candidates".to_string());
         next_actions.push(format!(
             "Inspect `{}` and resolve blockers before previewing dev-team dispatch.",
-            human_command("vida task ready --json")
+            human_command("vida task ready")
         ));
         for candidate in &projection.blocked {
             blocked_candidates.push(blocked_candidate(
@@ -4002,6 +4098,13 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     &payload,
                     host_agent_id,
                     command.summary.as_deref(),
+                    command.decision.as_deref(),
+                    command.verdict.as_deref(),
+                    command.allowed_next_node.as_deref(),
+                    command.blocker_codes.as_deref(),
+                    &command.blocker_code,
+                    command.rework_target.as_deref(),
+                    command.result_file.as_deref(),
                     command.receipt_id.as_deref(),
                     command.state_dir.as_deref(),
                 ) {
@@ -4545,7 +4648,7 @@ mod tests {
             role_label: role_label.to_string(),
             runtime_role: "coach".to_string(),
             task_class: "coach".to_string(),
-            dispatch_command: format!("vida agent-init --role coach {task_id} --json"),
+            dispatch_command: format!("vida agent-init --role coach {task_id}"),
             dispatch_command_kind: "startup_activation_view_only".to_string(),
             receipt_backed_execution_command: format!(
                 "vida agent-init --dispatch-packet {task_id}.json --execute-dispatch"
@@ -4765,6 +4868,14 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("--host-bridge-request request.json"));
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .unwrap()
+            .contains("--decision pass --verdict implemented"));
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .unwrap()
+            .contains("--allowed-next-node coach --blocker-codes []"));
         let calls = payload["host_bridge"]["host_tool_calls"]
             .as_array()
             .expect("host tool calls should render");
@@ -4787,6 +4898,69 @@ mod tests {
             payload["host_bridge"]["adapter_capacity"]["blocked_result_code"],
             "host_agent_capacity_unavailable"
         );
+    }
+
+    #[test]
+    fn host_bridge_adapter_completion_command_uses_packet_next_target() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-packet-next-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-analyst",
+                "dispatch_target": "analyst",
+                "downstream_dispatch_target": "designer",
+                "downstream_dispatch_active_target": "analyst"
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-analyst",
+            "run_id": "run-analyst",
+            "task_id": "run-analyst",
+            "dispatch_target": "analyst",
+            "packet_path": packet_path.display().to_string(),
+            "runtime_role": "business_analyst",
+            "task_class": "specification",
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path.display().to_string(),
+            "result_path": state_root.join("host-tool-bridge/results/result.json").display().to_string(),
+            "receipt_path": state_root.join("host-tool-bridge/receipts/receipt.json").display().to_string()
+        });
+        std::fs::write(&request_path, request.to_string()).expect("write request");
+
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
+
+        assert_eq!(payload["status"], "pass");
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--allowed-next-node designer --blocker-codes []"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -5164,6 +5338,13 @@ mod tests {
             complete: false,
             host_agent_id: None,
             summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            result_file: None,
             receipt_id: None,
             json: true,
             state_dir: Some(trusted_state_root.clone()),
@@ -5307,6 +5488,13 @@ mod tests {
             complete: false,
             host_agent_id: None,
             summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            result_file: None,
             receipt_id: None,
             json: true,
             state_dir: Some(state_root.clone()),
@@ -5543,6 +5731,10 @@ mod tests {
             .as_str()
             .expect("completion command")
             .starts_with("vida lane complete run-retry "));
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--decision pass --verdict implemented"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -5569,7 +5761,7 @@ mod tests {
             serde_json::to_vec_pretty(&serde_json::json!({
                 "artifact_kind": "host_tool_bridge_receipt",
                 "status": "blocked",
-                "blocker_codes": ["host_agent_execution_failed"]
+                "blocker_codes": ["host_agent_contract_violation"]
             }))
             .expect("receipt should serialize"),
         )
@@ -5581,7 +5773,7 @@ mod tests {
                 "status": "blocked",
                 "decision": "rework_required",
                 "verdict": "rework_required",
-                "blocker_codes": ["host_agent_execution_failed"],
+                "blocker_codes": ["host_agent_contract_violation"],
                 "rework_target": "developer",
                 "allowed_next_node": "developer_rework"
             }))
@@ -5650,6 +5842,13 @@ mod tests {
             &payload,
             "agent-1",
             Some("completed"),
+            Some("pass"),
+            Some("implemented"),
+            Some("coach"),
+            Some("[]"),
+            &[],
+            None,
+            None,
             Some("receipt-1"),
             Some(std::path::Path::new("state-dir")),
         )
@@ -5668,6 +5867,14 @@ mod tests {
                 "agent-1",
                 "--host-bridge-summary",
                 "completed",
+                "--decision",
+                "pass",
+                "--verdict",
+                "implemented",
+                "--allowed-next-node",
+                "coach",
+                "--blocker-codes",
+                "[]",
                 "--state-dir",
                 "state-dir",
                 "--json"
@@ -5843,6 +6050,13 @@ mod tests {
             complete: false,
             host_agent_id: None,
             summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            result_file: None,
             receipt_id: None,
             json: true,
             state_dir: Some(root.clone()),
@@ -6024,6 +6238,13 @@ mod tests {
             complete: false,
             host_agent_id: None,
             summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            result_file: None,
             receipt_id: None,
             json: true,
             state_dir: Some(root.clone()),
@@ -6218,6 +6439,13 @@ mod tests {
             complete: false,
             host_agent_id: None,
             summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            result_file: None,
             receipt_id: None,
             json: true,
             state_dir: Some(root.clone()),
@@ -6330,6 +6558,13 @@ mod tests {
             complete: false,
             host_agent_id: None,
             summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            result_file: None,
             receipt_id: None,
             json: true,
             state_dir: Some(root.clone()),
@@ -6449,6 +6684,13 @@ mod tests {
             complete: false,
             host_agent_id: None,
             summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            result_file: None,
             receipt_id: None,
             json: true,
             state_dir: Some(root.clone()),
@@ -7954,7 +8196,10 @@ mod tests {
         assert_eq!(preview.selected_lanes[0].task_id, "zzz-bound");
         assert!(preview.selected_lanes[0]
             .dispatch_command
-            .contains("vida agent-init --role business_analyst zzz-bound --json"));
+            .contains("vida agent-init --role business_analyst zzz-bound"));
+        assert!(!preview.selected_lanes[0]
+            .dispatch_command
+            .contains("--json"));
     }
 
     #[test]
@@ -8376,11 +8621,12 @@ mod tests {
             "gpt-5.3"
         );
         assert_eq!(preview.selected_lanes[3].selection_truth.rate, 4);
-        assert!(
-            preview.selected_lanes[0]
-                .dispatch_command
-                .contains("vida agent-init --role business_analyst task-analyst --json --state-dir /tmp/vida-state")
-        );
+        assert!(preview.selected_lanes[0].dispatch_command.contains(
+            "vida agent-init --role business_analyst task-analyst --state-dir /tmp/vida-state"
+        ));
+        assert!(!preview.selected_lanes[0]
+            .dispatch_command
+            .contains("--json"));
     }
 
     #[test]
@@ -8617,8 +8863,8 @@ mod tests {
 
         assert_eq!(preview.status, "pass");
         assert!(preview.source_surfaces.iter().any(|surface| {
-            surface == "vida taskflow graph-summary --json"
-                || surface == "vida taskflow scheduler dispatch --json"
+            surface == "vida taskflow graph-summary"
+                || surface == "vida taskflow scheduler dispatch"
         }));
         assert!(
             preview.source_surfaces.iter().any(
@@ -8629,7 +8875,7 @@ mod tests {
         assert!(preview
             .source_surfaces
             .iter()
-            .any(|surface| surface == "vida agent-init --role worker <task-id> --json"));
+            .any(|surface| surface == "vida agent-init --role worker <task-id>"));
     }
 
     #[test]

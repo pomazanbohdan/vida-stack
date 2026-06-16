@@ -86,7 +86,7 @@ impl DispatchAliasProjectionParity {
             self.extra_runtime_aliases.join(", ")
         };
         format!(
-            "{} runtime projection is stale: configured source `{}` has {} rows, runtime projection `{}` has {} rows; missing runtime ids: {missing}; extra runtime ids: {extra}; run `vida project-activator --repair --json` to refresh the generated base projection",
+            "{} runtime projection is stale: configured source `{}` has {} rows, runtime projection `{}` has {} rows; missing runtime ids: {missing}; extra runtime ids: {extra}; run `vida project-activator --repair` to refresh the generated base projection",
             self.registry_label,
             self.configured_source_path,
             self.source_alias_count,

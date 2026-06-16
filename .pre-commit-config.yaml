@@ -34,7 +34,7 @@ repos:
     hooks:
       - id: vida-script-check
         name: VIDA script/diff hygiene gate
-        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json
+        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check
         language: system
         pass_filenames: false
         always_run: true
@@ -42,7 +42,7 @@ repos:
 
       - id: vida-rust-quick
         name: VIDA Rust quick gate (manual)
-        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
+        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick
         language: system
         pass_filenames: false
         always_run: true

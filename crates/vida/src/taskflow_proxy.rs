@@ -969,9 +969,8 @@ fn extend_graph_summary_next_actions(
     } else if decision.primary_ready_task.is_some() {
         if let Some(task_id) = ready_task_id {
             let task_id = shell_quote_arg(task_id);
-            let show_command = operator_output::command_text::human_command(&format!(
-                "vida task show {task_id} --json"
-            ));
+            let show_command =
+                operator_output::command_text::human_command(&format!("vida task show {task_id}"));
             next_actions.push(format!(
                 "Inspect the primary ready task with `{show_command}` before dispatch."
             ));
@@ -979,16 +978,15 @@ fn extend_graph_summary_next_actions(
     }
     if let Some(task_id) = blocked_task_id {
         let task_id = shell_quote_arg(task_id);
-        let deps_command = operator_output::command_text::human_command(&format!(
-            "vida task deps {task_id} --json"
-        ));
+        let deps_command =
+            operator_output::command_text::human_command(&format!("vida task deps {task_id}"));
         next_actions.push(format!(
             "Inspect the highest-priority blocked task with `{deps_command}` before resequencing."
         ));
     }
     if critical_path_length > 0 {
         let critical_path_command =
-            operator_output::command_text::human_command("vida task critical-path --json");
+            operator_output::command_text::human_command("vida task critical-path");
         next_actions.push(format!(
             "Inspect the current graph bottleneck with `{critical_path_command}` before parallelizing additional work."
         ));
@@ -1038,12 +1036,10 @@ fn apply_closed_task_active_run_projection_mismatch_to_graph_summary(
         blocker_codes.push(code);
     }
     next_actions.clear();
-    let reconcile_command = operator_output::command_text::human_command(
-        "vida task reconcile-closed-runs --limit 25 --json",
-    );
-    let inspect_command = operator_output::command_text::human_command(
-        "vida taskflow run-graph status <run-id> --json",
-    );
+    let reconcile_command =
+        operator_output::command_text::human_command("vida task reconcile-closed-runs --limit 25");
+    let inspect_command =
+        operator_output::command_text::human_command("vida taskflow run-graph status <run-id>");
     next_actions.push(format!(
         "Run `{reconcile_command}` and inspect skipped runs with `{inspect_command}`; closed tasks must not remain projected as active runtime work."
     ));
@@ -1164,12 +1160,12 @@ fn sanitize_graph_summary_recommendation(
 fn authoritative_run_state_action(run_id: Option<&str>, reason: &str) -> TaskflowNextAction {
     match run_id.filter(|value| !value.trim().is_empty()) {
         Some(run_id) => TaskflowNextAction {
-            command: format!("vida taskflow run-graph status {run_id} --json"),
+            command: format!("vida taskflow run-graph status {run_id}"),
             surface: "vida taskflow run-graph status".to_string(),
             reason: reason.to_string(),
         },
         None => TaskflowNextAction {
-            command: "vida status --json".to_string(),
+            command: "vida status".to_string(),
             surface: "vida status".to_string(),
             reason: reason.to_string(),
         },
@@ -1179,12 +1175,12 @@ fn authoritative_run_state_action(run_id: Option<&str>, reason: &str) -> Taskflo
 fn blocked_recovery_action(run_id: Option<&str>, reason: &str) -> TaskflowNextAction {
     match run_id.filter(|value| !value.trim().is_empty()) {
         Some(run_id) => TaskflowNextAction {
-            command: format!("vida taskflow recovery status {run_id} --json"),
+            command: format!("vida taskflow recovery status {run_id}"),
             surface: "vida taskflow recovery status".to_string(),
             reason: reason.to_string(),
         },
         None => TaskflowNextAction {
-            command: "vida taskflow recovery latest --json".to_string(),
+            command: "vida taskflow recovery latest".to_string(),
             surface: "vida taskflow recovery latest".to_string(),
             reason: reason.to_string(),
         },
@@ -1241,7 +1237,7 @@ fn scheduler_reservation_preview(
         launch_index,
         conflict_domain: task.conflict_domain.clone(),
         command: format!(
-            "vida agent-init --role worker {} --state-dir {} --json",
+            "vida agent-init --role worker {} --state-dir {}",
             crate::shell_quote(&task.id),
             crate::shell_quote(&state_dir.display().to_string())
         ),
@@ -1365,21 +1361,21 @@ fn apply_scheduler_execute_runtime_gate_blockers(
     }
     if signals.open_delegated_cycle {
         let recovery_latest =
-            operator_output::command_text::human_command("vida taskflow recovery latest --json");
+            operator_output::command_text::human_command("vida taskflow recovery latest");
         plan.next_actions.push(format!(
             "Resolve the open delegated-cycle gate before scheduler execute by inspecting `{recovery_latest}` and the active continuation state."
         ));
     }
     if signals.active_reservation {
         let consume_continue =
-            operator_output::command_text::human_command("vida taskflow consume continue --json");
+            operator_output::command_text::human_command("vida taskflow consume continue");
         plan.next_actions.push(format!(
             "An active scheduler reservation is already running; resume or close it with `{consume_continue}` before creating new execution reservations."
         ));
     }
     if !signals.open_delegated_cycle && !signals.active_reservation {
         let recovery_latest =
-            operator_output::command_text::human_command("vida taskflow recovery latest --json");
+            operator_output::command_text::human_command("vida taskflow recovery latest");
         plan.next_actions.push(format!(
             "Resolve scheduler dispatch blockers and retry after `{recovery_latest}` reports a clear gate."
         ));
@@ -2634,7 +2630,7 @@ fn build_taskflow_scheduler_dispatch_plan(
         }
         next_actions.push(format!(
             "Inspect `{}` before attempting scheduler dispatch.",
-            operator_output::command_text::human_command("vida taskflow graph-summary --json")
+            operator_output::command_text::human_command("vida taskflow graph-summary")
         ));
     }
     let execute_requested_with_selection = execute_requested && selected_primary_task.is_some();
@@ -2642,17 +2638,14 @@ fn build_taskflow_scheduler_dispatch_plan(
         let task_id = shell_quote_arg(&task.id);
         next_actions.push(format!(
             "Inspect the selected primary task with `{}` before delegated launch.",
-            operator_output::command_text::human_command(&format!(
-                "vida task show {} --json",
-                task_id
-            ))
+            operator_output::command_text::human_command(&format!("vida task show {}", task_id))
         ));
     }
     if let Some(task) = selected_parallel_tasks.first() {
         next_actions.push(format!(
             "Verify co-scheduling safety for `{}` with `{}` before parallel launch.",
             task.id,
-            operator_output::command_text::human_command("vida taskflow graph-summary --json")
+            operator_output::command_text::human_command("vida taskflow graph-summary")
         ));
     }
 
@@ -2731,9 +2724,9 @@ fn build_taskflow_scheduler_dispatch_plan(
         receipt_persisted: false,
         dispatch_surface: "vida taskflow scheduler dispatch".to_string(),
         dispatch_command: if execute_requested {
-            "vida taskflow scheduler dispatch --execute --json"
+            "vida taskflow scheduler dispatch --execute"
         } else {
-            "vida taskflow scheduler dispatch --json"
+            "vida taskflow scheduler dispatch"
         }
         .to_string(),
         dispatch_status: status.clone(),
@@ -3553,7 +3546,7 @@ fn build_taskflow_next_decision(
             let task_id = latest_run_graph_status.map(|status| status.task_id.as_str());
             let retire_command = run_id.map(|run_id| {
                 operator_output::command_text::human_command(&format!(
-                    "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json",
+                    "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"",
                     shell_quote_arg(run_id),
                     shell_quote_arg(run_id)
                 ))
@@ -3561,7 +3554,7 @@ fn build_taskflow_next_decision(
             let next_action = TaskflowNextAction {
                 command: retire_command
                     .clone()
-                    .unwrap_or_else(|| operator_output::command_text::human_command("vida taskflow recovery latest --json")),
+                    .unwrap_or_else(|| operator_output::command_text::human_command("vida taskflow recovery latest")),
                 surface: if retire_command.is_some() {
                     "vida lane retire".to_string()
                 } else {
@@ -3619,12 +3612,12 @@ fn build_taskflow_next_decision(
                     .or_else(|| latest_run_graph_status.map(|status| status.run_id.as_str()))
                     .filter(|run_id| !run_id.trim().is_empty())
                     .map(|run_id| TaskflowNextAction {
-                        command: format!("vida lane show {} --json", shell_quote_arg(run_id)),
+                        command: format!("vida lane show {}", shell_quote_arg(run_id)),
                         surface: "vida lane show".to_string(),
                         reason: "the delegated cycle is still open and the active dispatch receipt has unresolved blocker evidence; inspect the lane envelope before retrying continuation".to_string(),
                     })
                     .unwrap_or_else(|| TaskflowNextAction {
-                        command: "vida taskflow recovery latest --json".to_string(),
+                        command: "vida taskflow recovery latest".to_string(),
                         surface: "vida taskflow recovery latest".to_string(),
                         reason: "the delegated cycle is still open and the active dispatch receipt has unresolved blocker evidence, but no concrete run id is available yet; inspect the latest recovery truth before retrying continuation".to_string(),
                     });
@@ -3672,7 +3665,7 @@ fn build_taskflow_next_decision(
                 )
             } else {
                 let next_action = TaskflowNextAction {
-                    command: "vida taskflow recovery latest --json".to_string(),
+                    command: "vida taskflow recovery latest".to_string(),
                     surface: "vida taskflow recovery latest".to_string(),
                     reason: "the delegated cycle is open and execution-preparation evidence is not yet finalized".to_string(),
                 };
@@ -3816,10 +3809,10 @@ fn build_taskflow_next_decision(
                 "Another orchestrator session holds an active exclusive claim on the same task, run, conflict domain, or intersecting paths. Wait for that session to complete or explicitly reclaim/supersede the claim before continuing.".to_string(),
             );
             next_actions.push(
-                "Inspect active sessions and claims with `vida orchestrator-session show --json` to identify the conflicting session.".to_string(),
+                "Inspect active sessions and claims with `vida orchestrator-session show` to identify the conflicting session.".to_string(),
             );
             let next_action = TaskflowNextAction {
-                command: "vida orchestrator-session show --json".to_string(),
+                command: "vida orchestrator-session show".to_string(),
                 surface: "vida orchestrator-session show".to_string(),
                 reason: "another live session holds a conflicting exclusive claim; inspect session ownership before continuing".to_string(),
             };
@@ -3837,9 +3830,8 @@ fn build_taskflow_next_decision(
             )
         } else if let Some(task) = ready_head.clone() {
             let task_id = shell_quote_arg(&task.id);
-            let task_show_command = operator_output::command_text::human_command(&format!(
-                "vida task show {task_id} --json"
-            ));
+            let task_show_command =
+                operator_output::command_text::human_command(&format!("vida task show {task_id}"));
             let next_action = TaskflowNextAction {
                 command: task_show_command.clone(),
                 surface: "vida task show".to_string(),
@@ -3858,7 +3850,7 @@ fn build_taskflow_next_decision(
             )
         } else if recovery_present && latest_runtime_consumption_kind == Some("final") {
             let next_action = TaskflowNextAction {
-                command: "vida taskflow consume continue --json".to_string(),
+                command: "vida taskflow consume continue".to_string(),
                 surface: "vida taskflow consume continue".to_string(),
                 reason: "no ready backlog slice exists, but the latest lawful delegated chain can still continue".to_string(),
             };
@@ -3880,9 +3872,9 @@ fn build_taskflow_next_decision(
                 blocker_codes.push(code);
             }
             let ready_command = if let Some(task_id) = scope_task_id {
-                format!("vida task ready --scope {task_id} --json")
+                format!("vida task ready --scope {task_id}")
             } else {
-                "vida task ready --json".to_string()
+                "vida task ready".to_string()
             };
             let next_action = TaskflowNextAction {
                 command: ready_command.clone(),
@@ -3927,7 +3919,7 @@ fn build_taskflow_next_decision(
             blocker_codes.push(code);
         }
         next_actions.push(
-            "Materialize final execution-preparation evidence with `vida taskflow consume final \"<request>\" --json` before attempting continuation."
+            "Materialize final execution-preparation evidence with `vida taskflow consume final \"<request>\"` before attempting continuation."
                 .to_string(),
         );
     }
@@ -4637,12 +4629,12 @@ async fn run_taskflow_settle(args: &[String]) -> ExitCode {
             .map(|skipped| skipped.reason.as_str())
             .unwrap_or("not_scanned_with_current_limit");
         next_actions.push(format!(
-            "Inspect unresolved closed-task active run with `vida taskflow run-graph status {} --json`; settle skipped reason={skipped_reason}.",
+            "Inspect unresolved closed-task active run with `vida taskflow run-graph status {}`; settle skipped reason={skipped_reason}.",
             shell_quote_arg(&run.run_id)
         ));
         if summary.scanned_count >= limit {
             next_actions.push(format!(
-                "If the unresolved run was outside the scan window, rerun `vida taskflow settle --limit {} --json`.",
+                "If the unresolved run was outside the scan window, rerun `vida taskflow settle --limit {}`.",
                 limit.saturating_mul(2).max(limit + 1)
             ));
         }
@@ -5701,7 +5693,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             blocker_codes.push(code);
         }
         next_actions.push(
-            "No active execution graph is present; inspect `vida task list --all --json` before sequencing new work."
+            "No active execution graph is present; inspect `vida task list --all` before sequencing new work."
                 .to_string(),
         );
     }
@@ -5960,21 +5952,21 @@ fn build_taskflow_graph_explain_payload(
         if candidate.ready_now {
             serde_json::json!({
                 "surface": "vida taskflow scheduler dispatch",
-                "command": "vida taskflow scheduler dispatch --json",
+                "command": "vida taskflow scheduler dispatch",
                 "reason": "task is graph-ready; use scheduler dispatch to select the next bounded launch set"
             })
         } else {
             let task_id = shell_quote_arg(&candidate.task.id);
             serde_json::json!({
                 "surface": "vida task deps",
-                "command": format!("vida task deps {task_id} --json"),
+                "command": format!("vida task deps {task_id}"),
                 "reason": "task is blocked by open graph dependencies"
             })
         }
     } else {
         serde_json::json!({
             "surface": "vida task ready",
-            "command": "vida task ready --json",
+            "command": "vida task ready",
             "reason": "no explainable target was found in the scoped projection"
         })
     };
@@ -6154,7 +6146,7 @@ async fn build_taskflow_scheduling_actualize_plan(
             candidates: Vec::new(),
             blocker_codes: vec!["scope_task_missing".to_string()],
             next_actions: vec![format!(
-                "Inspect available tasks with `vida task list --all --json` and retry scheduling actualize with an existing scope task id instead of {}.",
+                "Inspect available tasks with `vida task list --all` and retry scheduling actualize with an existing scope task id instead of {}.",
                 shell_quote_arg(scope)
             )],
         });
@@ -6206,11 +6198,11 @@ async fn build_taskflow_scheduling_actualize_plan(
     } else if apply {
         vec![format!(
             "Re-run `{}` to inspect refreshed scheduling projection.",
-            operator_output::command_text::human_command("vida taskflow graph-summary --json")
+            operator_output::command_text::human_command("vida taskflow graph-summary")
         )]
     } else {
         let apply_command = operator_output::command_text::human_command(&format!(
-            "vida taskflow scheduling actualize --scope {} --apply --json",
+            "vida taskflow scheduling actualize --scope {} --apply",
             shell_quote_arg(scope)
         ));
         vec![format!("Apply with `{apply_command}`.",)]
@@ -6820,7 +6812,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
                     .execution_blocker_codes
                     .push("execution_preparation_gate_blocked".to_string());
                 plan.next_actions.push(
-                    "An active scheduler reservation already owns the selected task or conflict domain; inspect `vida taskflow scheduler reservations --json` before retrying."
+                    "An active scheduler reservation already owns the selected task or conflict domain; inspect `vida taskflow scheduler reservations` before retrying."
                         .to_string(),
                 );
             } else {
@@ -7274,7 +7266,7 @@ fn normalize_taskflow_route_diagnostic_payload(
 ) -> Result<serde_json::Value, String> {
     normalize_taskflow_diagnostic_operator_contract_payload(
         payload,
-        "inspect route diagnostic blockers with `vida taskflow route explain --json` or `vida taskflow validate-routing --json`",
+        "inspect route diagnostic blockers with `vida taskflow route explain` or `vida taskflow validate-routing`",
     )
 }
 
@@ -7365,14 +7357,14 @@ fn route_assignment_reseed_next_actions(run_id: &str, task_id: &str) -> Vec<Stri
         format!(
             "Refresh the stale route assignment by reseeding dispatch context with `{}`.",
             operator_output::command_text::human_command(&format!(
-                "vida taskflow run-graph dispatch-init {} --json",
+                "vida taskflow run-graph dispatch-init {}",
                 crate::shell_quote(task_id)
             ))
         ),
         format!(
             "Re-check the active route with `{}`.",
             operator_output::command_text::human_command(&format!(
-                "vida taskflow route explain --run-id {} --json",
+                "vida taskflow route explain --run-id {}",
                 crate::shell_quote(run_id)
             ))
         ),
@@ -7651,7 +7643,7 @@ fn route_payload_for_dispatch_target(
             object.insert(
                 "next_actions".to_string(),
                 serde_json::json!([
-                    "refresh the run graph dispatch context with `vida taskflow run-graph dispatch-init <task-id> --json` or reseed the route assignment from the current carrier catalog before trusting routing diagnostics"
+                    "refresh the run graph dispatch context with `vida taskflow run-graph dispatch-init <task-id>` or reseed the route assignment from the current carrier catalog before trusting routing diagnostics"
                 ]),
             );
         }
@@ -7669,8 +7661,8 @@ fn attach_pricing_diagnostics(payload: &mut serde_json::Value) {
         "active_snapshot_id": serde_json::Value::Null,
         "refresh_or_import_attempted": false,
         "next_actions": [
-            "Use `vida taskflow pricing status --json` for catalog readiness.",
-            "Use `vida taskflow pricing import --source-file <path> --dry-run --json` for provider snapshot preview receipts."
+            "Use `vida taskflow pricing status` for catalog readiness.",
+            "Use `vida taskflow pricing import --source-file <path> --dry-run` for provider snapshot preview receipts."
         ]
     });
 
@@ -9652,7 +9644,7 @@ mod tests {
         assert_eq!(plan.reservations[0].launch_index, 0);
         assert_eq!(
             plan.reservations[0].command,
-            "vida agent-init --role worker critical-ready --state-dir /tmp/vida-scheduler-state --json"
+            "vida agent-init --role worker critical-ready --state-dir /tmp/vida-scheduler-state"
         );
         assert_eq!(plan.reservations[0].state_dir, "/tmp/vida-scheduler-state");
         assert_eq!(
@@ -9815,7 +9807,7 @@ mod tests {
             requested_current_task_id: None,
             selection_source: "test".to_string(),
             max_parallel_agents: 2,
-            command: "vida agent-init --json".to_string(),
+            command: "vida agent-init".to_string(),
             state_dir: "/tmp/vida-scheduler-state".to_string(),
             lease_owner: "test".to_string(),
             lease_token: "token".to_string(),
@@ -10019,7 +10011,7 @@ mod tests {
         assert_eq!(payload["reservations"][0]["task_id"], "critical-ready");
         assert_eq!(
             payload["reservations"][0]["command"],
-            "vida agent-init --role worker critical-ready --state-dir /tmp/vida-scheduler-state --json"
+            "vida agent-init --role worker critical-ready --state-dir /tmp/vida-scheduler-state"
         );
         assert_eq!(
             payload["reservations"][0]["state_dir"],
@@ -10823,7 +10815,7 @@ mod tests {
         assert_eq!(
             normalized["next_actions"],
             serde_json::json!([
-                "inspect route diagnostic blockers with `vida taskflow route explain --json` or `vida taskflow validate-routing --json`"
+                "inspect route diagnostic blockers with `vida taskflow route explain` or `vida taskflow validate-routing`"
             ])
         );
         assert_eq!(normalized["shared_fields"]["status"], normalized["status"]);
@@ -12314,14 +12306,13 @@ agent_system:
                 .next_action
                 .as_ref()
                 .map(|value| value.command.as_str()),
-            Some("vida taskflow recovery latest --json")
+            Some("vida taskflow recovery latest")
         );
         assert!(
             decision
                 .next_actions
                 .iter()
-                .all(|action| !action.contains("vida taskflow recovery latest --json")
-                    && !action.contains("vida taskflow consume continue --json")),
+                .all(|action| !action.contains("--json")),
             "human next_actions should not bias default continuation/recovery guidance toward --json: {:?}",
             decision.next_actions
         );
@@ -12591,7 +12582,7 @@ agent_system:
                 .next_action
                 .as_ref()
                 .map(|value| value.command.as_str()),
-            Some("vida lane show run-1 --json")
+            Some("vida lane show run-1")
         );
         assert_eq!(
             decision.recommended_surface.as_deref(),
@@ -12600,7 +12591,7 @@ agent_system:
         assert!(!decision
             .next_actions
             .iter()
-            .any(|action| action.contains("vida taskflow consume continue --json")));
+            .any(|action| action.contains("--json")));
         assert!(
             decision
                 .next_actions
@@ -12616,7 +12607,7 @@ agent_system:
         assert!(decision
             .blocker_codes
             .iter()
-            .any(|code| code == "tool_execution_failed"));
+            .any(|code| code == "internal_dispatch_timeout_without_receipt"));
     }
 
     #[test]
@@ -12677,7 +12668,7 @@ agent_system:
                 .next_action
                 .as_ref()
                 .map(|value| value.command.as_str()),
-            Some("vida taskflow recovery status run-blocked --json")
+            Some("vida taskflow recovery status run-blocked")
         );
 
         let (shared_fields, operator_contracts, artifact_refs) =
@@ -12928,7 +12919,7 @@ agent_system:
                 .as_ref()
                 .map(|value| value.command.as_str()),
             Some(
-                "vida taskflow consume continue --run-id runtime-audit-state-store-init-lock-timeout --json"
+                "vida taskflow consume continue --run-id runtime-audit-state-store-init-lock-timeout"
             )
         );
         assert_eq!(
@@ -12944,9 +12935,7 @@ agent_system:
                 .next_action
                 .as_ref()
                 .map(|value| value.command.as_str()),
-            Some(
-                "vida taskflow run-graph status runtime-audit-state-store-init-lock-timeout --json"
-            )
+            Some("vida taskflow run-graph status runtime-audit-state-store-init-lock-timeout")
         );
         assert!(decision
             .next_actions
@@ -13195,16 +13184,13 @@ agent_system:
             super::sanitize_graph_summary_recommendation(
                 Some(&status),
                 None,
-                Some(
-                    "vida taskflow continuation bind <task-id> --run-id <run-id> --json"
-                        .to_string(),
-                ),
+                Some("vida taskflow continuation bind <task-id> --run-id <run-id>".to_string()),
                 Some("vida taskflow continuation bind".to_string()),
             );
 
         assert_eq!(
             recommended_command.as_deref(),
-            Some("vida taskflow run-graph status run-terminal-bind --json")
+            Some("vida taskflow run-graph status run-terminal-bind")
         );
         assert_eq!(
             recommended_surface.as_deref(),
@@ -13218,14 +13204,11 @@ agent_system:
             super::sanitize_graph_summary_recommendation(
                 None,
                 None,
-                Some(
-                    "vida taskflow continuation bind <task-id> --run-id <run-id> --json"
-                        .to_string(),
-                ),
+                Some("vida taskflow continuation bind <task-id> --run-id <run-id>".to_string()),
                 Some("vida taskflow continuation bind".to_string()),
             );
 
-        assert_eq!(recommended_command.as_deref(), Some("vida status --json"));
+        assert_eq!(recommended_command.as_deref(), Some("vida status"));
         assert_eq!(recommended_surface.as_deref(), Some("vida status"));
     }
 
@@ -13246,7 +13229,7 @@ agent_system:
             .any(|code| code == "closed_task_active_run_projection_mismatch"));
         assert!(next_actions.iter().any(|action| {
             action.contains("vida task reconcile-closed-runs --limit 25")
-                && !action.contains("vida task reconcile-closed-runs --limit 25 --json")
+                && !action.contains("vida task reconcile-closed-runs --limit 25")
                 && action.contains("closed tasks must not remain projected as active runtime work")
         }));
         assert_eq!(next_actions.len(), 1);
@@ -13328,7 +13311,7 @@ agent_system:
                 .next_action
                 .as_ref()
                 .map(|value| value.command.as_str()),
-            Some("vida task ready --scope epic-1 --json")
+            Some("vida task ready --scope epic-1")
         );
         assert!(decision
             .blocker_codes
@@ -13621,9 +13604,8 @@ agent_system:
             crate::taskflow_run_graph::default_run_graph_status("run-1", "task-1", "analysis");
         latest_status.status = "blocked".to_string();
         let blocker_codes = vec!["open_delegated_cycle".to_string()];
-        let next_actions = vec![
-            "inspect recovery truth with `vida taskflow recovery status run-1 --json`.".to_string(),
-        ];
+        let next_actions =
+            vec!["inspect recovery truth with `vida taskflow recovery status run-1`.".to_string()];
 
         let (shared_fields, operator_contracts, artifact_refs) =
             super::taskflow_graph_summary_operator_contracts(
@@ -13699,7 +13681,7 @@ agent_system:
                 .next_action
                 .as_ref()
                 .map(|value| value.command.as_str()),
-            Some("vida taskflow run-graph status run-closure --json")
+            Some("vida taskflow run-graph status run-closure")
         );
         assert_eq!(
             decision.recommended_surface.as_deref(),
