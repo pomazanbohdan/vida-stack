@@ -644,6 +644,55 @@ pub(crate) struct AgentHostBridgeArgs {
     pub(crate) summary: Option<String>,
 
     #[arg(
+        long = "decision",
+        requires = "complete",
+        help = "Host bridge completion decision passed through to lane completion"
+    )]
+    pub(crate) decision: Option<String>,
+
+    #[arg(
+        long = "verdict",
+        requires = "complete",
+        help = "Host bridge completion verdict passed through to lane completion"
+    )]
+    pub(crate) verdict: Option<String>,
+
+    #[arg(
+        long = "allowed-next-node",
+        requires = "complete",
+        help = "Next workflow node allowed by the host bridge completion result"
+    )]
+    pub(crate) allowed_next_node: Option<String>,
+
+    #[arg(
+        long = "blocker-codes",
+        requires = "complete",
+        help = "Completion blocker codes as a JSON array or compact list"
+    )]
+    pub(crate) blocker_codes: Option<String>,
+
+    #[arg(
+        long = "blocker-code",
+        requires = "complete",
+        help = "Completion blocker code; accepts repeated flags"
+    )]
+    pub(crate) blocker_code: Vec<String>,
+
+    #[arg(
+        long = "rework-target",
+        requires = "complete",
+        help = "Workflow target that should receive rework when completion is blocked"
+    )]
+    pub(crate) rework_target: Option<String>,
+
+    #[arg(
+        long = "host-bridge-result-file",
+        requires = "complete",
+        help = "Path to the parent host bridge result file used for completion"
+    )]
+    pub(crate) result_file: Option<PathBuf>,
+
+    #[arg(
         long = "receipt-id",
         requires = "complete",
         help = "Optional completion receipt id; defaults from request run and dispatch target"
