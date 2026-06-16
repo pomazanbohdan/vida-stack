@@ -586,7 +586,21 @@ pub fn host_bridge_request_status_after_completion(blocker_codes: &[String]) -> 
 
 #[must_use]
 pub fn host_bridge_completion_requires_implementation_artifacts(dispatch_target: &str) -> bool {
+    host_bridge_request_requires_implementation_artifacts(dispatch_target, None)
+}
+
+#[must_use]
+pub fn host_bridge_request_requires_implementation_artifacts(
+    dispatch_target: &str,
+    task_class: Option<&str>,
+) -> bool {
     matches!(dispatch_target.trim(), "implementer" | "implementation")
+        || task_class.map(str::trim).is_some_and(|value| {
+            matches!(
+                value,
+                "implementation" | "delivery_task" | "execution_block" | "writer"
+            )
+        })
 }
 
 #[must_use]
@@ -993,12 +1007,24 @@ mod tests {
     }
 
     #[test]
-    fn implementation_artifacts_are_required_only_for_implementation_targets() {
+    fn implementation_artifacts_are_required_for_implementation_targets_or_task_classes() {
         assert!(host_bridge_completion_requires_implementation_artifacts(
             "implementer"
         ));
         assert!(host_bridge_completion_requires_implementation_artifacts(
             " implementation "
+        ));
+        assert!(host_bridge_request_requires_implementation_artifacts(
+            "developer",
+            Some("implementation")
+        ));
+        assert!(host_bridge_request_requires_implementation_artifacts(
+            "developer",
+            Some(" delivery_task ")
+        ));
+        assert!(!host_bridge_request_requires_implementation_artifacts(
+            "developer",
+            Some("coach")
         ));
         assert!(!host_bridge_completion_requires_implementation_artifacts(
             "verification"

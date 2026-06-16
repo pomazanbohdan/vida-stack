@@ -10,7 +10,10 @@ use operator_output::{
 use serde_json::Value;
 use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 
-use crate::completion::host_bridge_request_status_allows_parent_completion;
+use crate::completion::{
+    host_bridge_request_requires_implementation_artifacts,
+    host_bridge_request_status_allows_parent_completion,
+};
 use crate::request::{
     HostBridgeRequest, default_host_bridge_required_result_fields, effective_host_bridge_request,
     host_bridge_request_string, legacy_internal_subagents_host_bridge_request,
@@ -117,6 +120,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         .as_ref()
         .ok()
         .map(|request| request.dispatch_target.as_str());
+    let task_class = host_bridge_request_string(request, "task_class");
     let packet_path = typed_request
         .as_ref()
         .ok()
@@ -208,8 +212,9 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         }
         _ => "host-bridge-receipt".to_string(),
     };
-    let requires_implementation_artifacts =
-        dispatch_target.is_some_and(|target| matches!(target, "implementer" | "implementation"));
+    let requires_implementation_artifacts = dispatch_target.is_some_and(|target| {
+        host_bridge_request_requires_implementation_artifacts(target, task_class)
+    });
     let implementation_artifacts_present = request
         .get("implementation_artifacts")
         .and_then(Value::as_array)
@@ -368,12 +373,13 @@ mod tests {
     }
 
     fn payload_for(request: &Value) -> Value {
+        let dispatch_target = request["dispatch_target"].as_str().unwrap_or("implementer");
         build_host_bridge_adapter_payload(HostBridgeAdapterPayloadInput {
             request_path: Path::new("request.json"),
             request,
             provenance_blockers: Vec::new(),
             retryable_completion_request: false,
-            completion_command: "vida lane complete run-1 --receipt-id run-1-implementer-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-summary completed --json".to_string(),
+            completion_command: format!("vida lane complete run-1 --receipt-id run-1-{dispatch_target}-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-summary completed --json"),
             artifact_attach_command: Some("vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal".to_string()),
         })
     }
@@ -424,6 +430,31 @@ mod tests {
         assert_eq!(
             payload["host_bridge"]["blocked_result_contract"]["decision"],
             "rework_required"
+        );
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_advertises_attach_for_developer_implementation_request() {
+        let mut request = request();
+        request["dispatch_target"] = json!("developer");
+        request["task_class"] = json!("implementation");
+
+        let payload = payload_for(&request);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["host_bridge"]["dispatch_target"], "developer");
+        assert_eq!(payload["host_bridge"]["artifact_attach_required"], true);
+        assert_eq!(
+            payload["host_bridge"]["artifact_attach_command"],
+            "vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal"
+        );
+        assert!(
+            payload["shared_fields"]["next_actions"]
+                .as_array()
+                .expect("next actions")
+                .first()
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|action| action.contains("--attach-artifact"))
         );
     }
 
