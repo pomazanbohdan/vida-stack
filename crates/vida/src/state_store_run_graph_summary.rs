@@ -312,10 +312,11 @@ struct BlockedSourceLane {
 fn downstream_rework_route_from_completion_result(
     receipt: &RunGraphDispatchReceiptStored,
 ) -> Option<crate::runtime_dispatch_result_evidence::DispatchReworkRoute> {
-    crate::runtime_dispatch_result_evidence::dispatch_rework_route_from_receipt_fields(
+    crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
         receipt.downstream_dispatch_result_path.as_deref(),
         receipt.dispatch_result_path.as_deref(),
         receipt.dispatch_packet_path.as_deref(),
+        &receipt.dispatch_target,
     )
 }
 
@@ -4583,7 +4584,26 @@ mod tests {
                 "downstream_dispatch_ready": false,
                 "downstream_dispatch_blockers": ["verification_rework_required"],
                 "downstream_dispatch_target": "tester",
-                "downstream_dispatch_result_path": result_path.display().to_string()
+                "downstream_dispatch_result_path": result_path.display().to_string(),
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "lane_catalog": {
+                                    "developer": {
+                                        "dispatch_target": "developer",
+                                        "task_class": "implementation"
+                                    },
+                                    "tester": {
+                                        "dispatch_target": "tester",
+                                        "task_class": "verification"
+                                    }
+                                },
+                                "execution_lane_sequence": ["developer", "tester"]
+                            }
+                        }
+                    }
+                }
             }))
             .expect("serialize packet"),
         )
