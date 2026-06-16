@@ -505,6 +505,8 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         );
     }
     if let Some(host_agents) = inputs.host_agents {
+        let host_agents =
+            crate::status_surface_host_agents::host_agent_status_view(Some(host_agents), false);
         crate::surface_render::print_surface_line(
             inputs.render,
             "host agents",
@@ -520,11 +522,42 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         );
         crate::surface_render::print_surface_line(
             inputs.render,
-            "host agent events",
-            &host_agents["budget"]["event_count"]
-                .as_u64()
-                .unwrap_or_default()
-                .to_string(),
+            "host agent current state",
+            &format!(
+                "configured_agents={} configured_backends={} active_agents={} current_feedback_events={} capacity_observable={}",
+                host_agents["current_state"]["configured_agent_count"]
+                    .as_u64()
+                    .unwrap_or_default(),
+                host_agents["current_state"]["configured_subagent_backend_count"]
+                    .as_u64()
+                    .unwrap_or_default(),
+                host_agents["current_state"]["active_agents_count"]
+                    .as_u64()
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                host_agents["current_state"]["current_feedback_event_count"]
+                    .as_u64()
+                    .unwrap_or_default(),
+                host_agents["current_state"]["capacity_observable"]
+                    .as_bool()
+                    .unwrap_or(false),
+            ),
+        );
+        crate::surface_render::print_surface_line(
+            inputs.render,
+            "host agent historical evidence",
+            &format!(
+                "preserved={} event_count={} recent_events_included={}",
+                host_agents["historical_evidence"]["preserved"]
+                    .as_bool()
+                    .unwrap_or(false),
+                host_agents["historical_evidence"]["event_count"]
+                    .as_u64()
+                    .unwrap_or_default(),
+                host_agents["historical_evidence"]["recent_events_included"]
+                    .as_bool()
+                    .unwrap_or(false),
+            ),
         );
         crate::surface_render::print_surface_line(
             inputs.render,

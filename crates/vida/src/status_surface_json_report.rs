@@ -125,7 +125,7 @@ pub(crate) fn build_status_json_report(
             },
             "project_activation": project_activation,
             "runtime_consumption": inputs.runtime_consumption,
-            "host_agents": host_agents_json_value(inputs.host_agents),
+            "host_agents": host_agents_json_value(inputs.host_agents, false),
             "protocol_binding": inputs.protocol_binding,
             "root_session_write_guard": inputs.root_session_write_guard,
             "continuation_binding": inputs.continuation_binding,
@@ -202,7 +202,7 @@ pub(crate) fn build_status_json_report(
             "runtime_consumption": inputs.runtime_consumption,
             "protocol_binding": inputs.protocol_binding,
             "project_activation": project_activation,
-            "host_agents": host_agents_json_value(inputs.host_agents),
+            "host_agents": host_agents_json_value(inputs.host_agents, true),
             "root_session_write_guard": inputs.root_session_write_guard,
             "continuation_binding": inputs.continuation_binding,
             "latest_run_graph_status": latest_run_graph_status.clone(),
@@ -274,10 +274,14 @@ pub(crate) fn build_status_json_report(
     Ok(summary_json)
 }
 
-fn host_agents_json_value(host_agents: Option<&serde_json::Value>) -> serde_json::Value {
-    host_agents
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}))
+fn host_agents_json_value(
+    host_agents: Option<&serde_json::Value>,
+    include_historical_evidence: bool,
+) -> serde_json::Value {
+    crate::status_surface_host_agents::host_agent_status_view(
+        host_agents,
+        include_historical_evidence,
+    )
 }
 
 pub(crate) fn enrich_run_graph_status(
@@ -617,6 +621,23 @@ mod tests {
             "global_blockers": ["live_other_orchestrator_owner"],
             "claim_conflicts": [{"claim_id": "claim-conflict"}],
         });
+        let host_agents = serde_json::json!({
+            "budget": {
+                "event_count": 1,
+                "latest_event_at": "2026-06-16T10:00:00Z",
+                "by_task_id": {"closed-task": 5}
+            },
+            "recent_events": [
+                {"task_id": "closed-task", "feedback_event": {"outcome": "blocked"}}
+            ],
+            "latest_feedback_event": {"outcome": "blocked"},
+            "agents": {
+                "worker": {"feedback_count": 1, "last_feedback_outcome": "blocked"}
+            },
+            "subagent_backends": {
+                "internal_subagents": {"status": "ready"}
+            }
+        });
         let launcher_runtime_paths =
             crate::doctor_launcher_summary_for_root(std::path::Path::new("/tmp/project"))
                 .expect("launcher summary should build");
@@ -641,7 +662,7 @@ mod tests {
             activation_truth: None,
             project_activation_status: Some("pending"),
             project_activation_pending: true,
-            host_agents: None,
+            host_agents: Some(&host_agents),
             root_session_write_guard: &root_session_write_guard,
             operator_session_projection: &operator_session_projection,
             continuation_binding: &continuation_binding,
@@ -678,7 +699,7 @@ mod tests {
             activation_truth: None,
             project_activation_status: Some("pending"),
             project_activation_pending: true,
-            host_agents: None,
+            host_agents: Some(&host_agents),
             root_session_write_guard: &root_session_write_guard,
             operator_session_projection: &operator_session_projection,
             continuation_binding: &continuation_binding,
@@ -727,6 +748,30 @@ mod tests {
         assert_eq!(
             summary_json["current_session"]["session_id"],
             "session-current"
+        );
+        assert_eq!(
+            summary_json["host_agents"]["current_state"]["current_feedback_event_count"],
+            0
+        );
+        assert_eq!(
+            summary_json["host_agents"]["historical_evidence"]["event_count"],
+            1
+        );
+        assert_eq!(
+            summary_json["host_agents"]["historical_evidence"]["recent_events_included"],
+            false
+        );
+        assert!(summary_json["host_agents"].get("recent_events").is_none());
+        assert!(summary_json["host_agents"]
+            .get("latest_feedback_event")
+            .is_none());
+        assert_eq!(
+            full_json["host_agents"]["historical_evidence"]["recent_events_included"],
+            true
+        );
+        assert_eq!(
+            full_json["host_agents"]["recent_events"][0]["task_id"],
+            "closed-task"
         );
         assert_eq!(
             full_json["project_foreign_runs"][0]["run_id"],

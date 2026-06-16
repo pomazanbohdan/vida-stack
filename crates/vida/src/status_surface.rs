@@ -1648,30 +1648,14 @@ fn compact_status_projection_for_fast_operator_render(payload: &mut serde_json::
         .get_mut("host_agents")
         .and_then(serde_json::Value::as_object_mut)
     {
-        let agent_count = host_agents
-            .get("agents")
-            .and_then(serde_json::Value::as_object)
-            .map(serde_json::Map::len)
-            .unwrap_or(0);
-        let backend_count = host_agents
-            .get("subagent_backends")
-            .and_then(serde_json::Value::as_object)
-            .map(serde_json::Map::len)
-            .unwrap_or(0);
-        host_agents.insert(
-            "agents".to_string(),
-            serde_json::json!({
-                "count": agent_count,
-                "detail": "omitted_from_cached_operator_compact_status"
-            }),
+        let mut host_agents_value = serde_json::Value::Object(std::mem::take(host_agents));
+        crate::status_surface_host_agents::apply_host_agent_status_history_gate(
+            &mut host_agents_value,
+            false,
         );
-        host_agents.insert(
-            "subagent_backends".to_string(),
-            serde_json::json!({
-                "count": backend_count,
-                "detail": "omitted_from_cached_operator_compact_status"
-            }),
-        );
+        if let serde_json::Value::Object(gated_host_agents) = host_agents_value {
+            *host_agents = gated_host_agents;
+        }
     }
     if let Some(runtime_owner_evidence) = object
         .get_mut("operator_session_projection")
@@ -2936,9 +2920,20 @@ mod tests {
             "surface": "vida status",
             "status": "pass",
             "host_agents": {
+                "budget": {
+                    "event_count": 1,
+                    "latest_event_at": "2026-06-16T10:00:00Z",
+                    "by_task_id": {"old-task": 4}
+                },
+                "recent_events": [
+                    {"task_id": "old-task", "feedback_event": {"outcome": "blocked"}}
+                ],
+                "latest_feedback_event": {"outcome": "blocked"},
                 "agents": {
                     "worker": {
-                        "status": "ready"
+                        "status": "ready",
+                        "feedback_count": 1,
+                        "last_feedback_outcome": "blocked"
                     }
                 },
                 "subagent_backends": {
@@ -2965,6 +2960,23 @@ mod tests {
         assert_eq!(payload["view"], "operator_compact");
         assert_eq!(payload["host_agents"]["agents"]["count"], 1);
         assert_eq!(payload["host_agents"]["subagent_backends"]["count"], 1);
+        assert_eq!(
+            payload["host_agents"]["current_state"]["current_feedback_event_count"],
+            0
+        );
+        assert_eq!(
+            payload["host_agents"]["historical_evidence"]["event_count"],
+            1
+        );
+        assert_eq!(
+            payload["host_agents"]["historical_evidence"]["recent_events_included"],
+            false
+        );
+        assert!(payload["host_agents"].get("recent_events").is_none());
+        assert!(payload["host_agents"]
+            .get("latest_feedback_event")
+            .is_none());
+        assert!(payload["host_agents"]["budget"].get("by_task_id").is_none());
         assert_eq!(
             payload["operator_session_projection"]["runtime_owner_evidence"]["stale_sessions"]
                 ["count"],

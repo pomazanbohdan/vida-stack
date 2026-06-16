@@ -457,9 +457,127 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
     Some(serde_json::Value::Object(payload))
 }
 
+pub(crate) fn host_agent_status_view(
+    host_agents: Option<&serde_json::Value>,
+    include_historical_evidence: bool,
+) -> serde_json::Value {
+    let mut value = host_agents
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    apply_host_agent_status_history_gate(&mut value, include_historical_evidence);
+    value
+}
+
+pub(crate) fn apply_host_agent_status_history_gate(
+    host_agents: &mut serde_json::Value,
+    include_historical_evidence: bool,
+) {
+    let Some(object) = host_agents.as_object_mut() else {
+        return;
+    };
+    let configured_agent_count = object
+        .get("agents")
+        .and_then(serde_json::Value::as_object)
+        .map(serde_json::Map::len)
+        .unwrap_or(0);
+    let configured_subagent_backend_count = object
+        .get("subagent_backends")
+        .and_then(serde_json::Value::as_object)
+        .map(serde_json::Map::len)
+        .unwrap_or(0);
+    let event_count = object
+        .get("budget")
+        .and_then(|budget| budget.get("event_count"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let latest_event_at = object
+        .get("budget")
+        .and_then(|budget| budget.get("latest_event_at"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let active_agents_count = object
+        .get("host_bridge_capacity")
+        .and_then(|capacity| capacity.get("active_agents_count"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let active_lanes_count = object
+        .get("host_bridge_capacity")
+        .and_then(|capacity| capacity.get("active_lanes_count"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let capacity_observable = object
+        .get("host_bridge_capacity")
+        .and_then(|capacity| capacity.get("capacity_observable"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    object.insert(
+        "current_state".to_string(),
+        serde_json::json!({
+            "configured_agent_count": configured_agent_count,
+            "configured_subagent_backend_count": configured_subagent_backend_count,
+            "active_agents_count": active_agents_count,
+            "active_lanes_count": active_lanes_count,
+            "capacity_observable": capacity_observable,
+            "current_feedback_event_count": 0,
+            "feedback_history_included": include_historical_evidence,
+            "source": "configured_runtime_and_live_capacity_probe",
+        }),
+    );
+    object.insert(
+        "historical_evidence".to_string(),
+        serde_json::json!({
+            "preserved": event_count > 0,
+            "event_count": event_count,
+            "latest_event_at": latest_event_at,
+            "recent_events_included": include_historical_evidence,
+            "detail": if include_historical_evidence {
+                "included_by_full_status_view"
+            } else {
+                "omitted_from_default_current_status"
+            },
+            "source": crate::HOST_AGENT_OBSERVABILITY_STATE,
+        }),
+    );
+    if include_historical_evidence {
+        return;
+    }
+    object.remove("recent_events");
+    object.remove("latest_feedback_event");
+    object.remove("latest_evaluation_baseline");
+    object.remove("latest_prompt_lifecycle_baseline");
+    object.remove("latest_safety_baseline");
+    object.insert(
+        "agents".to_string(),
+        serde_json::json!({
+            "count": configured_agent_count,
+            "detail": "omitted_from_default_current_status",
+        }),
+    );
+    object.insert(
+        "subagent_backends".to_string(),
+        serde_json::json!({
+            "count": configured_subagent_backend_count,
+            "detail": "omitted_from_default_current_status",
+        }),
+    );
+    if let Some(budget) = object
+        .get_mut("budget")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        budget.remove("by_agent_id");
+        budget.remove("by_carrier_id");
+        budget.remove("by_selected_tier");
+        budget.remove("by_task_class");
+        budget.remove("by_task_id");
+        budget.remove("by_runtime_role");
+        budget.remove("by_source");
+        budget.remove("by_session_id");
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::build_host_agent_status_summary;
+    use super::{build_host_agent_status_summary, host_agent_status_view};
     use std::path::{Path, PathBuf};
 
     fn repo_root() -> PathBuf {
@@ -620,5 +738,88 @@ mod tests {
                 .all(|(_, write_scope)| write_scope == "none"),
             "enabled external CLI backends must be advisory/read-only unless explicitly selected through guarded config"
         );
+    }
+
+    #[test]
+    fn default_host_agent_status_view_separates_current_state_from_preserved_history() {
+        let summary = serde_json::json!({
+            "host_cli_system": "codex",
+            "budget": {
+                "total_estimated_units": 8,
+                "event_count": 2,
+                "latest_event_at": "2026-06-16T10:00:00Z",
+                "by_task_id": {"old-task": 8}
+            },
+            "recent_events": [
+                {"task_id": "old-task", "feedback_event": {"outcome": "blocked"}}
+            ],
+            "latest_feedback_event": {"outcome": "blocked"},
+            "latest_evaluation_baseline": {"score": 1},
+            "latest_prompt_lifecycle_baseline": {"status": "recorded"},
+            "latest_safety_baseline": {"status": "recorded"},
+            "agents": {
+                "worker": {
+                    "status": "ready",
+                    "feedback_count": 2,
+                    "last_feedback_outcome": "blocked"
+                }
+            },
+            "subagent_backends": {
+                "internal_subagents": {"status": "ready"}
+            },
+            "host_bridge_capacity": {
+                "capacity_observable": false,
+                "active_agents_count": serde_json::Value::Null,
+                "active_lanes_count": serde_json::Value::Null
+            }
+        });
+
+        let current = host_agent_status_view(Some(&summary), false);
+
+        assert_eq!(current["current_state"]["configured_agent_count"], 1);
+        assert_eq!(
+            current["current_state"]["configured_subagent_backend_count"],
+            1
+        );
+        assert_eq!(current["current_state"]["current_feedback_event_count"], 0);
+        assert_eq!(current["current_state"]["feedback_history_included"], false);
+        assert_eq!(current["historical_evidence"]["preserved"], true);
+        assert_eq!(current["historical_evidence"]["event_count"], 2);
+        assert_eq!(
+            current["historical_evidence"]["recent_events_included"],
+            false
+        );
+        assert!(current.get("recent_events").is_none());
+        assert!(current.get("latest_feedback_event").is_none());
+        assert!(current["budget"].get("by_task_id").is_none());
+        assert_eq!(current["agents"]["count"], 1);
+        assert_eq!(current["subagent_backends"]["count"], 1);
+    }
+
+    #[test]
+    fn full_host_agent_status_view_includes_history_when_explicitly_requested() {
+        let summary = serde_json::json!({
+            "budget": {
+                "event_count": 1,
+                "latest_event_at": "2026-06-16T10:00:00Z",
+                "by_task_id": {"old-task": 3}
+            },
+            "recent_events": [
+                {"task_id": "old-task", "feedback_event": {"outcome": "pass"}}
+            ],
+            "latest_feedback_event": {"outcome": "pass"},
+            "agents": {
+                "worker": {"feedback_count": 1}
+            },
+            "subagent_backends": {}
+        });
+
+        let full = host_agent_status_view(Some(&summary), true);
+
+        assert_eq!(full["current_state"]["feedback_history_included"], true);
+        assert_eq!(full["historical_evidence"]["recent_events_included"], true);
+        assert_eq!(full["recent_events"][0]["task_id"], "old-task");
+        assert_eq!(full["latest_feedback_event"]["outcome"], "pass");
+        assert_eq!(full["budget"]["by_task_id"]["old-task"], 3);
     }
 }
