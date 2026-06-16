@@ -1069,7 +1069,7 @@ async fn attach_host_bridge_implementation_artifacts(
         .as_str()
         .map(human_command)
         .unwrap_or_else(|| {
-            "vida lane complete <run-id> --host-bridge-request <request-path> --decision <decision> --verdict <verdict> --allowed-next-node <node> --blocker-codes <json-or-list>".to_string()
+            "vida lane complete <run-id> --receipt-id <receipt-id> --host-bridge-request <request-path> --host-agent-id <host-agent-id> --host-bridge-summary <summary>".to_string()
         });
     let artifact_refs_payload = serde_json::json!({
         "request_path": command.request.display().to_string(),
@@ -4799,7 +4799,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_adapter_completion_command_uses_packet_next_target() {
+    fn host_bridge_adapter_completion_command_uses_supported_receipt_command() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -4854,10 +4854,16 @@ mod tests {
             host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
 
         assert_eq!(payload["status"], "pass");
-        assert!(payload["host_bridge"]["completion_command"]
+        let completion_command = payload["host_bridge"]["completion_command"]
             .as_str()
-            .expect("completion command")
-            .contains("--allowed-next-node designer --blocker-codes []"));
+            .expect("completion command");
+        assert!(completion_command.starts_with("vida lane complete run-analyst "));
+        assert!(completion_command.contains("--receipt-id run-analyst-analyst-host-bridge-receipt"));
+        assert!(completion_command.contains("--host-bridge-request"));
+        assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
+        assert!(completion_command.contains("--host-bridge-summary"));
+        assert!(!completion_command.contains("--allowed-next-node"));
+        assert!(!completion_command.contains("--blocker-codes"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
