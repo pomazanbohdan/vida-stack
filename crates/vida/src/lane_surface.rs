@@ -2640,10 +2640,9 @@ fn host_bridge_packet_confirms_active_request(
         .get("downstream_dispatch_status")
         .and_then(serde_json::Value::as_str)
         .map(str::trim);
-    (direct_target == Some(dispatch_target)
+    direct_target == Some(dispatch_target)
         && downstream_active_target == Some(dispatch_target)
-        && downstream_status == Some("blocked"))
-        || (direct_target == Some(dispatch_target) && downstream_status.is_none())
+        && downstream_status == Some("blocked")
 }
 
 fn host_bridge_request_is_retryable_completion_state(request: &serde_json::Value) -> bool {
@@ -5159,6 +5158,55 @@ mod tests {
         lane_surface_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn host_bridge_packet_requires_blocked_downstream_status_to_confirm_active_request() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-packet-confirmation-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&root).expect("create packet confirmation fixture dir");
+        let packet_path = root.join("dispatch-packet.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-1",
+                "dispatch_target": "implementer",
+                "downstream_dispatch_active_target": "implementer"
+            })
+            .to_string(),
+        )
+        .expect("write status-less dispatch packet");
+
+        assert!(
+            !host_bridge_packet_confirms_active_request(&packet_path, "run-1", "implementer"),
+            "a matching dispatch packet without blocked downstream status is not sufficient retryable completion evidence"
+        );
+
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-1",
+                "dispatch_target": "implementer",
+                "downstream_dispatch_active_target": "implementer",
+                "downstream_dispatch_status": "blocked"
+            })
+            .to_string(),
+        )
+        .expect("write blocked dispatch packet");
+
+        assert!(
+            host_bridge_packet_confirms_active_request(&packet_path, "run-1", "implementer"),
+            "a matching blocked downstream dispatch packet remains valid evidence"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn lane_complete_role_selection(dev_task_id: &str) -> crate::RuntimeConsumptionLaneSelection {
