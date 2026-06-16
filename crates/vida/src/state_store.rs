@@ -465,6 +465,7 @@ impl StateStore {
         }
 
         let archive_path = if root.exists() {
+            validate_state_reset_existing_root(&root)?;
             if state_reset_dir_has_existing_datastore_payload(&root)? {
                 let store = Self::open_existing_with_timeout(
                     root.clone(),
@@ -528,6 +529,42 @@ impl StateStore {
             std::process::id()
         ))
     }
+}
+
+fn validate_state_reset_existing_root(root: &Path) -> Result<(), StateStoreError> {
+    let metadata = fs::symlink_metadata(root)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(StateStoreError::InvalidStateReset {
+            reason: format!(
+                "`vida state reset` can only archive an existing VIDA state directory; `{}` is not a plain directory",
+                root.display()
+            ),
+        });
+    }
+
+    let required_entries = [
+        ".vida-authoritative-open.guard",
+        "manifest",
+        "sstables",
+        "vlog",
+        "wal",
+    ];
+    let missing_entries = required_entries
+        .iter()
+        .filter(|entry| !root.join(entry).exists())
+        .copied()
+        .collect::<Vec<_>>();
+    if !missing_entries.is_empty() {
+        return Err(StateStoreError::InvalidStateReset {
+            reason: format!(
+                "`vida state reset` refused to archive `{}` because it is not a validated VIDA state root; missing required datastore entries: {}",
+                root.display(),
+                missing_entries.join(", ")
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 fn state_reset_dir_has_existing_datastore_payload(root: &Path) -> Result<bool, StateStoreError> {
@@ -608,6 +645,40 @@ mod tests {
             .expect_err("reset without archive should fail closed");
 
         assert!(matches!(error, StateStoreError::InvalidStateReset { .. }));
+    }
+
+    #[tokio::test]
+    async fn state_reset_rejects_existing_non_state_directory_before_archive() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-rejects-non-state-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create non-state dir");
+        fs::write(root.join("report.txt"), "keep me").expect("write non-state payload");
+
+        let error = StateStore::archive_and_reinit_state_root(root.clone(), true, true)
+            .await
+            .expect_err("non-state directory should fail closed");
+
+        match error {
+            StateStoreError::InvalidStateReset { reason } => {
+                assert!(reason.contains("not a validated VIDA state root"));
+                assert!(reason.contains("missing required datastore entries"));
+            }
+            other => panic!("expected invalid reset error, got {other:?}"),
+        }
+        assert!(root.join("report.txt").exists());
+        assert!(fs::read_dir(root.parent().expect("temp parent"))
+            .expect("read temp parent")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .all(
+                |name| !name.starts_with("vida-state-reset-rejects-non-state-")
+                    || !name.contains(".archive.")
+            ));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn unique_temp_root(prefix: &str) -> PathBuf {
