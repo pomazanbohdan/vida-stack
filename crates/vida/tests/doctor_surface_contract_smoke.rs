@@ -4100,6 +4100,94 @@ fn bundle_check_retrieval_trust_evidence_clears_status_and_doctor_retrieval_bloc
 }
 
 #[test]
+fn consume_bundle_check_fresh_reinit_materializes_retrieval_trust_baseline() {
+    let (_project_root, state_dir) = project_bound_state_dir();
+
+    let reset = vida()
+        .args(["state", "reset", "--archive", "--reinit", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("state reset should run");
+    assert!(
+        reset.status.success(),
+        "state reset should succeed: {}",
+        String::from_utf8_lossy(&reset.stderr)
+    );
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run after state reset");
+    assert!(
+        boot.status.success(),
+        "boot should succeed after state reset: stdout={} stderr={}",
+        String::from_utf8_lossy(&boot.stdout),
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    sync_protocol_binding(&state_dir);
+
+    let bundle_check = vida()
+        .args(["taskflow", "consume", "bundle", "check", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("bundle check should run");
+    assert!(
+        !bundle_check.stdout.is_empty(),
+        "bundle check should emit JSON even when the minimal fixture has unrelated activation blockers: stderr={}",
+        String::from_utf8_lossy(&bundle_check.stderr)
+    );
+    let bundle_check_json: serde_json::Value =
+        serde_json::from_slice(&bundle_check.stdout).expect("bundle check json should parse");
+    let blocker_codes = bundle_check_json["blocker_codes"]
+        .as_array()
+        .expect("blocker_codes should be an array");
+    assert!(
+        blocker_codes.iter().all(|code| !code
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("missing_retrieval_trust")),
+        "fresh reinit bundle check must not emit retrieval-trust blockers: {blocker_codes:?}"
+    );
+
+    let snapshot_path = bundle_check_json["snapshot_path"]
+        .as_str()
+        .expect("bundle check should write a snapshot");
+    let snapshot_body =
+        std::fs::read_to_string(snapshot_path).expect("bundle check snapshot should be readable");
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&snapshot_body).expect("bundle check snapshot should parse");
+    let evidence = &snapshot["bundle"]["cache_delivery_contract"]["retrieval_trust_evidence"];
+    assert_eq!(
+        evidence["source"],
+        serde_json::json!("runtime_consumption_snapshot_index")
+    );
+    assert_eq!(
+        evidence["source_registry_ref"],
+        serde_json::json!("runtime_consumption_snapshot_registry:fresh_reinit_baseline")
+    );
+    assert_eq!(
+        evidence["freshness_posture"],
+        serde_json::json!("fresh_reinit_protocol_binding_baseline")
+    );
+    for key in [
+        "citation",
+        "freshness",
+        "acl",
+        "acl_context",
+        "acl_propagation",
+    ] {
+        assert!(
+            evidence[key]
+                .as_str()
+                .is_some_and(|value| !value.trim().is_empty()),
+            "retrieval trust evidence field `{key}` must be populated: {evidence}"
+        );
+    }
+}
+
+#[test]
 fn status_and_doctor_accept_runtime_closure_admission_after_bundle_check() {
     let (_project_root, state_dir) = project_bound_state_dir();
 

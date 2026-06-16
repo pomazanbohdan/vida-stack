@@ -500,7 +500,7 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
         .any(|code| code.starts_with("missing_retrieval_trust_evidence_field:"))
     {
         next_actions.push(
-            "Run `vida taskflow protocol-binding sync --json`, then `vida taskflow consume bundle check --json` to materialize retrieval-trust source/citation/freshness/ACL evidence."
+            "Run `vida taskflow protocol-binding sync --json` to materialize protocol-bound retrieval-trust source/citation/freshness/ACL evidence; rerun `vida taskflow consume bundle check --json` only to verify the blocker set changed."
                 .to_string(),
         );
     }
@@ -3342,9 +3342,14 @@ dev_team:
         assert!(actions
             .iter()
             .any(|action| action.contains("vida taskflow protocol-binding sync --json")));
-        assert!(actions
-            .iter()
-            .any(|action| action.contains("vida taskflow consume bundle check --json")));
+        assert!(actions.iter().any(|action| action
+            .contains("rerun `vida taskflow consume bundle check --json` only to verify")));
+        assert!(
+            !actions.iter().any(|action| action.contains(
+                "then `vida taskflow consume bundle check --json` to materialize"
+            )),
+            "bundle check must not recommend itself as the command that materializes missing retrieval trust evidence"
+        );
     }
 
     #[test]
