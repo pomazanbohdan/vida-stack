@@ -142,6 +142,16 @@ mod tests {
         assert_eq!(body["completion_verdict"], "rework_required");
         assert_eq!(body["blocker_code"], "coach_rework_required");
         assert_eq!(body["closure_ready"], false);
+        assert_eq!(
+            body["summary"],
+            "coach decision=blocked; scheduledAt missing"
+        );
+        assert_eq!(
+            body["blocker_details"][0]["message"],
+            "coach decision=blocked; scheduledAt missing"
+        );
+        assert_eq!(body["rework_target"], "developer");
+        assert_eq!(body["allowed_next_node"], "developer_rework");
 
         let _ = fs::remove_dir_all(&state_root);
     }
@@ -251,8 +261,11 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary(
     let result_path = result_dir.join(format!("{safe_run_id}-{ts}.json"));
     let blocker_code = runtime_lane_completion_summary_blocker_code(completed_target, summary);
     let blocker_codes = blocker_code.iter().cloned().collect::<Vec<_>>();
-    let verdict_fields =
-        taskflow_host_bridge::host_bridge_result_verdict_fields(&blocker_codes, None);
+    let verdict_fields = taskflow_host_bridge::host_bridge_result_verdict_fields_for_gate(
+        completed_target,
+        &blocker_codes,
+        None,
+    );
     let execution_state = if blocker_code.is_some() {
         "blocked"
     } else {
@@ -288,6 +301,13 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary(
     if let Some(blocker_code) = blocker_code {
         body["blocker_code"] = serde_json::json!(blocker_code);
         body["blockers"] = body["blocker_codes"].clone();
+        if let Some(summary) = summary.map(str::trim).filter(|value| !value.is_empty()) {
+            body["blocker_details"] = serde_json::json!([{
+                "code": body["blocker_code"].clone(),
+                "message": summary,
+                "completed_target": completed_target
+            }]);
+        }
     }
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode lane completion result: {error}"))?;

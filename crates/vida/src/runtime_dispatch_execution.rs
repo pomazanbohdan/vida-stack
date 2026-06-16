@@ -16,6 +16,7 @@ use taskflow_host_bridge::{
     default_host_bridge_required_result_fields,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
+    host_bridge_completed_result_status_is_admissible,
     host_bridge_existing_request_status_is_admissible,
     host_bridge_result_verdict_contract_blockers, validate_dispatch_receipt_binding,
     DispatchReceiptBindingInput, HostBridgeRequest,
@@ -2941,9 +2942,9 @@ fn validate_completed_host_bridge_artifacts(
     if !result
         .get("status")
         .and_then(serde_json::Value::as_str)
-        .is_some_and(host_bridge_completed_artifact_status_is_admissible)
+        .is_some_and(host_bridge_completed_result_status_is_admissible)
     {
-        return Err("Host bridge result status is not pass.".into());
+        return Err("Host bridge result status is not pass or blocked.".into());
     }
     if !bridge_receipt
         .get("status")
@@ -3097,10 +3098,23 @@ fn ingest_completed_host_bridge_result(
     let body = result
         .as_object_mut()
         .ok_or_else(|| "Host bridge result must be a JSON object.".to_string())?;
+    let blocker_code = body
+        .get("blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            body.get("blocker_codes")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|codes| codes.iter().find_map(serde_json::Value::as_str))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        });
     body.insert("surface".to_string(), serde_json::json!("vida agent-init"));
-    body.insert("status".to_string(), serde_json::json!("pass"));
-    body.insert("execution_state".to_string(), serde_json::json!("executed"));
-    body.insert("blocker_code".to_string(), serde_json::Value::Null);
+    body.entry("blocker_code".to_string())
+        .or_insert_with(|| blocker_code.map_or(serde_json::Value::Null, serde_json::Value::String));
     body.insert("host_runtime".to_string(), host_runtime.clone());
     body.insert("host_tool_bridge_request".to_string(), request.clone());
     body.insert(
@@ -3573,15 +3587,24 @@ fn mark_dispatch_result_execution_evidence(
             "treat this result as receipt-backed delegated-lane execution evidence and continue through runtime downstream progression"
         ),
     );
-    body.insert(
-        "execution_evidence".to_string(),
-        serde_json::json!({
-            "status": "recorded",
-            "evidence_kind": evidence_kind,
-            "backend_id": backend_id,
-            "receipt_backed": true,
-            "records_dispatch_result": true,
-        }),
+    let execution_evidence = body
+        .entry("execution_evidence".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let execution_evidence = execution_evidence
+        .as_object_mut()
+        .expect("execution_evidence should serialize to an object");
+    execution_evidence
+        .entry("status".to_string())
+        .or_insert_with(|| serde_json::json!("recorded"));
+    execution_evidence.insert(
+        "evidence_kind".to_string(),
+        serde_json::json!(evidence_kind),
+    );
+    execution_evidence.insert("backend_id".to_string(), serde_json::json!(backend_id));
+    execution_evidence.insert("receipt_backed".to_string(), serde_json::json!(true));
+    execution_evidence.insert(
+        "records_dispatch_result".to_string(),
+        serde_json::json!(true),
     );
     if let Some(posture) = body
         .get_mut("effective_execution_posture")
@@ -6317,6 +6340,256 @@ agent_system:
         assert_eq!(
             result["backend_dispatch"]["backend_id"],
             "internal_subagents"
+        );
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn internal_host_tool_bridge_preserves_blocked_coach_product_rework_result() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-coach-blocked-result-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = project_root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("create state root");
+        let dispatch_packet_path = project_root.join(".vida/coach-dispatch.json");
+        std::fs::create_dir_all(dispatch_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(
+            &dispatch_packet_path,
+            r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"],"proof_target":"cargo test -p vida internal_host_tool_bridge_preserves_blocked_coach_product_rework_result"}"#,
+        )
+        .expect("write dispatch packet");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
+      host_tool_bridge:
+        adapter_kind: codex_host_tools
+        adapter_capability_id: codex.multi_agent_v1
+        invocation_mode: parent_host_tool_api
+      carriers:
+        middle:
+          model: gpt-5.5
+          model_reasoning_effort: medium
+          sandbox_mode: read-only
+          runtime_roles: [coach]
+          task_classes: [coach]
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      default_model_profile: coach_fast
+      model_profiles:
+        coach_fast:
+          provider: openai
+          model_ref: gpt-5.5
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          write_scope: orchestrator_native
+          runtime_roles: [coach]
+          task_classes: [coach]
+"#,
+        )
+        .expect("write overlay");
+        let mut role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "coach": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "coach": {
+                    "executor_backend": "internal_subagents"
+                }
+            },
+            "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "selected_tier": "middle",
+                "selected_model_profile_id": "coach_fast"
+            }
+        }));
+        role_selection.selected_role = "coach".to_string();
+        let overlay =
+            crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
+                .expect("project overlay should load");
+        let (selected_cli_system, selected_cli_entry) =
+            crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
+        assert_eq!(selected_cli_system, "codex");
+        let selected_cli_entry = selected_cli_entry.expect("codex cli entry should be selected");
+        let mut receipt = internal_codex_fallback_receipt(
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        receipt.dispatch_target = "coach".to_string();
+        receipt.activation_runtime_role = Some("coach".to_string());
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            &project_root.join(".vida/data/state"),
+            Some(&selected_cli_entry),
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("host bridge request should materialize");
+        let result_path = PathBuf::from(
+            request["result_path"]
+                .as_str()
+                .expect("request result path should render"),
+        );
+        let receipt_path = PathBuf::from(
+            request["receipt_path"]
+                .as_str()
+                .expect("request receipt path should render"),
+        );
+        let request_id = request["request_id"]
+            .as_str()
+            .expect("request id should render");
+        let request_path = request["request_path"]
+            .as_str()
+            .expect("request path should render");
+        let packet_path = request["packet_path"]
+            .as_str()
+            .expect("packet path should render");
+        let blocker_text =
+            "coach decision=blocked; Meeting scheduledAt missing for non-all-day meeting";
+        std::fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "blocked",
+                "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "request_id": request_id,
+                "run_id": receipt.run_id,
+                "dispatch_target": receipt.dispatch_target,
+                "completion_receipt_id": "host-bridge-coach-blocked-test",
+                "blocker_code": "coach_rework_required",
+                "blocker_codes": ["coach_rework_required"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework",
+                "summary": blocker_text,
+                "blocker_details": [{
+                    "code": "coach_rework_required",
+                    "message": blocker_text,
+                    "completed_target": "coach"
+                }],
+                "source_dispatch_packet_path": packet_path,
+                "activation_semantics": {
+                    "activation_kind": "execution_evidence",
+                    "view_only": false,
+                    "executes_packet": true,
+                    "records_completion_receipt": true
+                },
+                "execution_evidence": {
+                    "status": "recorded",
+                    "backend_id": "internal_subagents",
+                    "receipt_backed": true
+                }
+            }))
+            .expect("encode blocked host bridge result"),
+        )
+        .expect("write blocked host bridge result");
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_receipt",
+                "schema_version": 1,
+                "status": "pass",
+                "receipt_backed": true,
+                "request_id": request_id,
+                "run_id": receipt.run_id,
+                "dispatch_target": receipt.dispatch_target,
+                "completion_receipt_id": "host-bridge-coach-blocked-test",
+                "request_path": request_path,
+                "result_path": result_path.display().to_string(),
+                "source_dispatch_packet_path": packet_path
+            }))
+            .expect("encode host bridge receipt"),
+        )
+        .expect("write host bridge receipt");
+        let mut completed_request = request.clone();
+        let completed_request_body = completed_request
+            .as_object_mut()
+            .expect("request should be an object");
+        completed_request_body.insert("status".to_string(), serde_json::json!("completed"));
+        completed_request_body.insert(
+            "completion_receipt_id".to_string(),
+            serde_json::json!("host-bridge-coach-blocked-test"),
+        );
+        std::fs::write(
+            request_path,
+            serde_json::to_string_pretty(&completed_request).expect("encode completed request"),
+        )
+        .expect("write completed bridge request");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                super::execute_internal_agent_lane_dispatch(
+                    &state_root,
+                    &project_root,
+                    dispatch_packet_path
+                        .to_str()
+                        .expect("dispatch packet path should render"),
+                    Some("internal_subagents"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "internal",
+                        "selected_cli_system": "codex"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return")
+            .expect("blocked bridge result should return execution evidence");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["decision"], "rework_required");
+        assert_eq!(result["verdict"], "rework_required");
+        assert_eq!(result["blocker_code"], "coach_rework_required");
+        assert_eq!(
+            result["blocker_codes"],
+            serde_json::json!(["coach_rework_required"])
+        );
+        assert_eq!(result["rework_target"], "developer");
+        assert_eq!(result["allowed_next_node"], "developer_rework");
+        assert_ne!(result["allowed_next_node"], "verification");
+        assert_eq!(result["summary"], blocker_text);
+        assert_eq!(result["blocker_details"][0]["message"], blocker_text);
+        assert_eq!(result["execution_evidence"]["receipt_backed"], true);
+        assert_eq!(
+            result["backend_dispatch"]["dispatch_transport"],
+            "host_tool_bridge"
         );
 
         let _ = std::fs::remove_dir_all(&project_root);

@@ -4542,10 +4542,10 @@ mod tests {
         let mut status = sample_run_graph_status();
         status.run_id = "run-coach-rework-route".to_string();
         status.task_id = "coach-blocked-developer-rework-routing".to_string();
-        status.active_node = "tester".to_string();
+        status.active_node = "coach".to_string();
         status.next_node = None;
         status.status = "blocked".to_string();
-        status.lifecycle_stage = "tester_blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
         status.recovery_ready = false;
 
         let root = temp_run_graph_root("coach-rework-route");
@@ -4560,11 +4560,17 @@ mod tests {
                 "execution_state": "blocked",
                 "decision": "rework_required",
                 "verdict": "rework_required",
-                "blocker_code": "verification_rework_required",
-                "blocker_codes": ["verification_rework_required"],
+                "blocker_code": "coach_rework_required",
+                "blocker_codes": ["coach_rework_required"],
                 "rework_target": "developer",
                 "allowed_next_node": "developer_rework",
-                "completion_verdict": "rework_required"
+                "completion_verdict": "rework_required",
+                "summary": "coach decision=blocked; Meeting scheduledAt missing for non-all-day meeting",
+                "blocker_details": [{
+                    "code": "coach_rework_required",
+                    "message": "coach decision=blocked; Meeting scheduledAt missing for non-all-day meeting",
+                    "completed_target": "coach"
+                }]
             }))
             .expect("serialize result"),
         )
@@ -4579,10 +4585,10 @@ mod tests {
             serde_json::to_string(&serde_json::json!({
                 "source_dispatch_target": "coach_implementation_gate",
                 "source_dispatch_status": "blocked",
-                "source_blocker_code": "verification_rework_required",
+                "source_blocker_code": "coach_rework_required",
                 "downstream_dispatch_ready": false,
-                "downstream_dispatch_blockers": ["verification_rework_required"],
-                "downstream_dispatch_target": "tester",
+                "downstream_dispatch_blockers": ["coach_rework_required"],
+                "downstream_dispatch_target": "verification",
                 "downstream_dispatch_result_path": result_path.display().to_string()
             }))
             .expect("serialize packet"),
@@ -4590,10 +4596,10 @@ mod tests {
         .expect("write packet");
 
         let mut receipt = sample_dispatch_receipt(&status.run_id);
-        receipt.dispatch_target = "tester".to_string();
+        receipt.dispatch_target = "coach".to_string();
         receipt.dispatch_status = "blocked".to_string();
         receipt.lane_status = "lane_blocked".to_string();
-        receipt.blocker_code = Some("verification_rework_required".to_string());
+        receipt.blocker_code = Some("coach_rework_required".to_string());
         receipt.dispatch_packet_path = Some(packet_path.display().to_string());
 
         let stored_receipt = RunGraphDispatchReceiptStored::from(receipt);
@@ -4603,8 +4609,10 @@ mod tests {
 
         assert_eq!(projected.status, "ready");
         assert!(projected.recovery_ready);
-        assert_eq!(projected.active_node, "tester");
+        assert_eq!(projected.active_node, "coach");
         assert_eq!(projected.next_node.as_deref(), Some("developer_rework"));
+        assert_ne!(projected.next_node.as_deref(), Some("verification"));
+        assert_eq!(projected.policy_gate, "coach_rework_required");
         assert_eq!(projected.handoff_state, "awaiting_developer_rework");
         assert_eq!(projected.resume_target, "dispatch.developer_rework");
 

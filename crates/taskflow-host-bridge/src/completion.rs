@@ -354,8 +354,18 @@ pub fn host_bridge_completed_artifact_status_is_admissible(status: &str) -> bool
 }
 
 #[must_use]
+pub fn host_bridge_completed_result_status_is_admissible(status: &str) -> bool {
+    matches!(
+        taskflow_contracts::canonical_release1_contract_status_str(status),
+        Some(status)
+            if status == Release1ContractStatus::Pass.as_str()
+                || status == Release1ContractStatus::Blocked.as_str()
+    )
+}
+
+#[must_use]
 pub fn host_bridge_completed_result_execution_state_is_admissible(execution_state: &str) -> bool {
-    execution_state == "executed"
+    matches!(execution_state, "executed" | "blocked")
 }
 
 #[must_use]
@@ -496,11 +506,10 @@ pub fn host_bridge_result_verdict_contract_blockers(
             .get("execution_state")
             .and_then(Value::as_str)
             .is_some_and(|state| state == "executed");
+    let pass_verdict =
+        decision == Some("approve") && verdict == Some(Release1ContractStatus::Pass.as_str());
     if pass_result {
-        let decision_mismatch = decision.is_some() && decision != Some("approve");
-        let verdict_mismatch =
-            verdict.is_some() && verdict != Some(Release1ContractStatus::Pass.as_str());
-        if decision_mismatch || verdict_mismatch {
+        if !pass_verdict {
             push_unique_blocker(
                 &mut blockers,
                 "host_bridge_result_decision_verdict_mismatch",
@@ -511,9 +520,35 @@ pub fn host_bridge_result_verdict_contract_blockers(
         }
     }
 
+    let blocked_result = result
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status == Release1ContractStatus::Blocked.as_str())
+        && result
+            .get("execution_state")
+            .and_then(Value::as_str)
+            .is_some_and(|state| state == Release1ContractStatus::Blocked.as_str());
     let rework_verdict = matches!(decision, Some("rework_required") | Some("blocked"))
         || matches!(verdict, Some("rework_required") | Some("blocked"));
+    if pass_verdict && !pass_result {
+        push_unique_blocker(
+            &mut blockers,
+            "host_bridge_result_decision_verdict_mismatch",
+        );
+    }
+    if blocked_result && !rework_verdict {
+        push_unique_blocker(
+            &mut blockers,
+            "host_bridge_result_decision_verdict_mismatch",
+        );
+    }
     if rework_verdict {
+        if !blocked_result {
+            push_unique_blocker(
+                &mut blockers,
+                "host_bridge_result_decision_verdict_mismatch",
+            );
+        }
         if blocker_codes.is_none_or(|codes| codes.is_empty()) {
             push_unique_blocker(&mut blockers, "host_bridge_result_blocker_codes_missing");
         }
@@ -822,6 +857,30 @@ mod tests {
             (
                 serde_json::json!({
                     "status": "pass",
+                    "execution_state": "blocked",
+                    "decision": "approve",
+                    "verdict": "pass",
+                    "blocker_codes": [],
+                    "rework_target": null,
+                    "allowed_next_node": "next"
+                }),
+                "host_bridge_result_decision_verdict_mismatch",
+            ),
+            (
+                serde_json::json!({
+                    "status": "blocked",
+                    "execution_state": "blocked",
+                    "decision": "approve",
+                    "verdict": "pass",
+                    "blocker_codes": [],
+                    "rework_target": null,
+                    "allowed_next_node": "next"
+                }),
+                "host_bridge_result_decision_verdict_mismatch",
+            ),
+            (
+                serde_json::json!({
+                    "status": "pass",
                     "execution_state": "executed",
                     "decision": "rework_required",
                     "verdict": "pass",
@@ -924,8 +983,12 @@ mod tests {
             "blocked"
         ));
         assert!(host_bridge_completed_artifact_status_is_admissible("pass"));
+        assert!(host_bridge_completed_result_status_is_admissible("blocked"));
         assert!(host_bridge_completed_result_execution_state_is_admissible(
             "executed"
+        ));
+        assert!(host_bridge_completed_result_execution_state_is_admissible(
+            "blocked"
         ));
     }
 
