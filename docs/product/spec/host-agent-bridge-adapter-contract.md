@@ -193,11 +193,11 @@ Minimum successful result:
   "backend_id": "internal_subagents",
   "carrier_id": "junior",
   "execution_state": "executed",
-  "decision": "pass",
-  "verdict": "completed",
+  "decision": "approve",
+  "verdict": "pass",
   "blocker_codes": [],
   "rework_target": null,
-  "allowed_next_node": "vida_lane_complete",
+  "allowed_next_node": "next",
   "host_agent_id": "...",
   "summary": "..."
 }
