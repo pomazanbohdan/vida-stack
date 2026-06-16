@@ -13487,7 +13487,8 @@ mod tests {
         let receipt = task_close_automation_receipt(
             &crate::TaskCloseArgs {
                 task_id: "task-owned".to_string(),
-                reason: "done".to_string(),
+                reason: Some("done".to_string()),
+                reason_file: None,
                 source: None,
                 release: false,
                 install: false,
@@ -15794,7 +15795,8 @@ mod tests {
         let receipt = task_close_automation_receipt(
             &crate::TaskCloseArgs {
                 task_id: "audit-p1-task-close-release-options".to_string(),
-                reason: "close bounded task".to_string(),
+                reason: Some("close bounded task".to_string()),
+                reason_file: None,
                 source: None,
                 release: false,
                 install: false,
@@ -15828,7 +15830,8 @@ mod tests {
         let receipt = task_close_automation_receipt(
             &crate::TaskCloseArgs {
                 task_id: "audit-p1-task-close-release-options".to_string(),
-                reason: "close bounded task".to_string(),
+                reason: Some("close bounded task".to_string()),
+                reason_file: None,
                 source: None,
                 release: false,
                 install: false,
@@ -16535,7 +16538,8 @@ mod tests {
             runtime.block_on(super::run_task(crate::TaskArgs {
                 command: crate::TaskCommand::Close(crate::TaskCloseArgs {
                     task_id: "child-todo".to_string(),
-                    reason: "implementation proof passed".to_string(),
+                    reason: Some("implementation proof passed".to_string()),
+                    reason_file: None,
                     source: Some("task_close_child_regression".to_string()),
                     release: false,
                     install: false,
@@ -16605,7 +16609,8 @@ mod tests {
             runtime.block_on(super::run_task(crate::TaskArgs {
                 command: crate::TaskCommand::Close(crate::TaskCloseArgs {
                     task_id: "close-with-push-blocked".to_string(),
-                    reason: "implementation proof passed".to_string(),
+                    reason: Some("implementation proof passed".to_string()),
+                    reason_file: None,
                     source: Some("task_close_automation_regression".to_string()),
                     release: false,
                     install: false,
