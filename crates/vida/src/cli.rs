@@ -2675,6 +2675,12 @@ pub(crate) struct TaskProgressArgs {
     #[arg(long = "all", help = "Include closed epics when used with --epics")]
     pub(crate) all: bool,
 
+    #[arg(
+        long = "counts-only",
+        help = "Emit compact counts-only progress totals without task or epic rows"
+    )]
+    pub(crate) counts_only: bool,
+
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
 
@@ -3032,7 +3038,7 @@ pub(crate) struct StatusArgs {
 
     #[arg(
         long = "fields",
-        help = "Comma-separated top-level status fields to include, for example status,blocker_codes,next_actions"
+        help = "Comma-separated top-level status fields to include, for example status,blocker_codes,next_actions,taskflow_counts"
     )]
     pub(crate) fields: Option<String>,
 

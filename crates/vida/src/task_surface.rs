@@ -2186,13 +2186,37 @@ fn print_task_epic_progress_summary(
     render: RenderMode,
     summary: &TaskEpicProgressSummary,
     as_json: bool,
+    counts_only: bool,
 ) {
-    let payload = crate::task_cli_render::build_pass_operator_surface_payload(
-        "vida task progress --epics",
-        serde_json::json!({
-            "epic_progress_summary": summary,
-        }),
-    );
+    let payload = if counts_only {
+        crate::task_cli_render::build_pass_operator_surface_payload(
+            "vida task progress --epics",
+            serde_json::json!({
+                "epic_progress_counts": {
+                    "epic_count": summary.epic_count,
+                    "open_count": summary.open_count,
+                    "in_progress_count": summary.in_progress_count,
+                    "closed_count": summary.closed_count,
+                    "total_descendant_count": summary.total_descendant_count,
+                    "total_open_descendant_count": summary.total_open_descendant_count,
+                    "total_in_progress_descendant_count": summary.total_in_progress_descendant_count,
+                    "total_closed_descendant_count": summary.total_closed_descendant_count,
+                    "percent_closed": summary.percent_closed,
+                    "include_closed_epics": summary.include_closed_epics,
+                    "progress_basis": summary.progress_basis,
+                    "epic_filter": summary.epic_filter,
+                    "read_metadata": summary.read_metadata,
+                },
+            }),
+        )
+    } else {
+        crate::task_cli_render::build_pass_operator_surface_payload(
+            "vida task progress --epics",
+            serde_json::json!({
+                "epic_progress_summary": summary,
+            }),
+        )
+    };
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -2202,6 +2226,43 @@ fn print_task_epic_progress_summary(
     }
 
     print_surface_header(render, "vida task progress --epics");
+    if counts_only {
+        print_surface_line(render, "epics", &summary.epic_count.to_string());
+        print_surface_line(render, "open epics", &summary.open_count.to_string());
+        print_surface_line(
+            render,
+            "in progress epics",
+            &summary.in_progress_count.to_string(),
+        );
+        print_surface_line(render, "closed epics", &summary.closed_count.to_string());
+        print_surface_line(
+            render,
+            "descendants",
+            &summary.total_descendant_count.to_string(),
+        );
+        print_surface_line(
+            render,
+            "open descendants",
+            &summary.total_open_descendant_count.to_string(),
+        );
+        print_surface_line(
+            render,
+            "in progress descendants",
+            &summary.total_in_progress_descendant_count.to_string(),
+        );
+        print_surface_line(
+            render,
+            "closed descendants",
+            &summary.total_closed_descendant_count.to_string(),
+        );
+        print_surface_line(
+            render,
+            "percent complete",
+            &format!("{:.2}%", summary.percent_closed),
+        );
+        return;
+    }
+
     print_surface_line(render, "epics", &summary.epic_count.to_string());
     print_surface_line(render, "open epics", &summary.open_count.to_string());
     print_surface_line(
@@ -7967,6 +8028,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     command.render,
                                     &summary,
                                     command.json,
+                                    command.counts_only,
                                 );
                                 ExitCode::SUCCESS
                             }
@@ -8008,6 +8070,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                         &summary,
                                         stage_ensemble,
                                         command.json,
+                                        command.counts_only,
                                     );
                                     ExitCode::SUCCESS
                                 }
@@ -8035,6 +8098,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     &summary,
                                     stage_ensemble,
                                     command.json,
+                                    command.counts_only,
                                 );
                                 ExitCode::SUCCESS
                             }
@@ -8065,6 +8129,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                         &summary,
                                         stage_ensemble,
                                         command.json,
+                                        command.counts_only,
                                     );
                                     ExitCode::SUCCESS
                                 }

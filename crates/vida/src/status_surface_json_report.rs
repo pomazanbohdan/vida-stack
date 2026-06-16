@@ -16,6 +16,7 @@ pub(crate) struct StatusJsonReportInputs<'a> {
     pub(crate) latest_task_reconciliation:
         Option<&'a crate::state_store::TaskReconciliationSummary>,
     pub(crate) task_reconciliation_rollup: &'a crate::state_store::TaskReconciliationRollup,
+    pub(crate) task_store: &'a crate::state_store::TaskStoreSummary,
     pub(crate) snapshot_bridge: &'a crate::state_store::TaskflowSnapshotBridgeSummary,
     pub(crate) runtime_consumption: &'a crate::runtime_consumption_state::RuntimeConsumptionSummary,
     pub(crate) protocol_binding: &'a crate::state_store::ProtocolBindingSummary,
@@ -43,6 +44,7 @@ pub(crate) struct StatusJsonReportInputs<'a> {
 pub(crate) fn build_status_json_report(
     inputs: StatusJsonReportInputs<'_>,
 ) -> Result<serde_json::Value, String> {
+    let taskflow_counts = taskflow_counts_value(inputs.task_store);
     let latest_run_graph_dispatch_compact_summary =
         crate::taskflow_run_graph::build_run_graph_dispatch_compact_summary(
             inputs.state_dir,
@@ -118,6 +120,7 @@ pub(crate) fn build_status_json_report(
             "operator_contracts": inputs.operator_contracts,
             "backend_summary": inputs.backend_summary,
             "launcher_runtime_paths": inputs.launcher_runtime_paths,
+            "taskflow_counts": taskflow_counts.clone(),
             "state_spine": {
                 "state_schema_version": inputs.state_spine.state_schema_version,
                 "entity_surface_count": inputs.state_spine.entity_surface_count,
@@ -168,6 +171,7 @@ pub(crate) fn build_status_json_report(
             },
             "backend_summary": inputs.backend_summary,
             "launcher_runtime_paths": inputs.launcher_runtime_paths,
+            "taskflow_counts": taskflow_counts.clone(),
             "state_spine": {
                 "state_schema_version": inputs.state_spine.state_schema_version,
                 "entity_surface_count": inputs.state_spine.entity_surface_count,
@@ -272,6 +276,17 @@ pub(crate) fn build_status_json_report(
     }
 
     Ok(summary_json)
+}
+
+fn taskflow_counts_value(task_store: &crate::state_store::TaskStoreSummary) -> serde_json::Value {
+    serde_json::json!({
+        "total_count": task_store.total_count,
+        "open_count": task_store.open_count,
+        "in_progress_count": task_store.in_progress_count,
+        "closed_count": task_store.closed_count,
+        "epic_count": task_store.epic_count,
+        "ready_count": task_store.ready_count,
+    })
 }
 
 fn host_agents_json_value(
@@ -548,6 +563,14 @@ mod tests {
             latest_recorded_at: Some("2026-04-11T00:00:00Z".to_string()),
             primary_state_authority: Some("state-root".to_string()),
         };
+        let task_store = crate::state_store::TaskStoreSummary {
+            total_count: 4,
+            open_count: 1,
+            in_progress_count: 1,
+            closed_count: 2,
+            epic_count: 1,
+            ready_count: 1,
+        };
         let run_status = crate::state_store::RunGraphStatus {
             run_id: "run-1".to_string(),
             task_id: "task-1".to_string(),
@@ -656,6 +679,7 @@ mod tests {
             migration_receipts: &migration_receipts,
             latest_task_reconciliation: Some(&task_reconciliation),
             task_reconciliation_rollup: &task_reconciliation_rollup,
+            task_store: &task_store,
             snapshot_bridge: &snapshot_bridge,
             runtime_consumption: &runtime_consumption,
             protocol_binding: &protocol_binding,
@@ -693,6 +717,7 @@ mod tests {
             migration_receipts: &migration_receipts,
             latest_task_reconciliation: Some(&task_reconciliation),
             task_reconciliation_rollup: &task_reconciliation_rollup,
+            task_store: &task_store,
             snapshot_bridge: &snapshot_bridge,
             runtime_consumption: &runtime_consumption,
             protocol_binding: &protocol_binding,
@@ -749,6 +774,8 @@ mod tests {
             summary_json["current_session"]["session_id"],
             "session-current"
         );
+        assert_eq!(summary_json["taskflow_counts"]["total_count"], 4);
+        assert_eq!(full_json["taskflow_counts"]["closed_count"], 2);
         assert_eq!(
             summary_json["host_agents"]["current_state"]["current_feedback_event_count"],
             0
@@ -898,6 +925,14 @@ mod tests {
             latest_recorded_at: None,
             primary_state_authority: None,
         };
+        let task_store = crate::state_store::TaskStoreSummary {
+            total_count: 2,
+            open_count: 1,
+            in_progress_count: 1,
+            closed_count: 0,
+            epic_count: 1,
+            ready_count: 1,
+        };
         let run_status = crate::state_store::RunGraphStatus {
             run_id: "run-2".to_string(),
             task_id: "task-2".to_string(),
@@ -951,6 +986,7 @@ mod tests {
             migration_receipts: &migration_receipts,
             latest_task_reconciliation: None,
             task_reconciliation_rollup: &task_reconciliation_rollup,
+            task_store: &task_store,
             snapshot_bridge: &snapshot_bridge,
             runtime_consumption: &runtime_consumption,
             protocol_binding: &protocol_binding,

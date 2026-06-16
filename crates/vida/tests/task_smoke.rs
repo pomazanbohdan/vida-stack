@@ -7587,6 +7587,98 @@ fn task_progress_and_closure_ready_direct_children_json_contract() {
         "Continue or close remaining direct children before closing the parent."
     );
 
+    let progress_counts_stdout = run_and_assert_success(
+        &[
+            "task",
+            "progress",
+            "direct-parent",
+            "--basis",
+            "direct-children",
+            "--counts-only",
+        ],
+        &state_dir,
+    );
+    assert!(progress_counts_stdout.starts_with("vida task progress\n"));
+    assert!(progress_counts_stdout.contains("counts: closed=1 open=1 in_progress=0 total=2"));
+    assert!(!progress_counts_stdout.contains("Direct parent"));
+
+    let progress_counts = run_command_json(
+        &[
+            "task",
+            "progress",
+            "direct-parent",
+            "--basis",
+            "direct-children",
+            "--counts-only",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(progress_counts["status"], "pass");
+    assert_eq!(
+        progress_counts["progress_counts"]["progress_basis"],
+        "direct_children"
+    );
+    assert_eq!(progress_counts["progress_counts"]["descendant_count"], 2);
+    assert_eq!(progress_counts["progress_counts"]["closed_count"], 1);
+    assert!(progress_counts.get("progress").is_none());
+    assert!(progress_counts["progress_counts"]
+        .get("root_task")
+        .is_none());
+
+    let epic_counts_stdout = run_and_assert_success(
+        &["task", "progress", "--epics", "--counts-only"],
+        &state_dir,
+    );
+    assert!(epic_counts_stdout.starts_with("vida task progress --epics\n"));
+    assert!(epic_counts_stdout.contains("epics: 1"));
+    assert!(epic_counts_stdout.contains("closed descendants: 1"));
+    assert!(!epic_counts_stdout.contains("epic direct-parent"));
+
+    let epic_counts = run_command_json(
+        &["task", "progress", "--epics", "--counts-only", "--json"],
+        &state_dir,
+    );
+    assert_eq!(epic_counts["status"], "pass");
+    assert_eq!(epic_counts["epic_progress_counts"]["epic_count"], 1);
+    assert_eq!(
+        epic_counts["epic_progress_counts"]["total_descendant_count"],
+        2
+    );
+    assert_eq!(
+        epic_counts["epic_progress_counts"]["total_closed_descendant_count"],
+        1
+    );
+    assert!(epic_counts.get("epic_progress_summary").is_none());
+    assert!(epic_counts["epic_progress_counts"].get("epics").is_none());
+
+    let status_counts_stdout =
+        run_and_assert_success(&["status", "--fields", "taskflow_counts"], &state_dir);
+    assert!(status_counts_stdout.starts_with("vida status\n"));
+    assert!(status_counts_stdout.contains("taskflow_counts:"));
+    assert!(!status_counts_stdout.contains("host_agents"));
+
+    let status_counts = run_command_json(
+        &["status", "--fields", "taskflow_counts", "--json"],
+        &state_dir,
+    );
+    assert_eq!(status_counts["taskflow_counts"]["total_count"], 3);
+    assert_eq!(status_counts["taskflow_counts"]["open_count"], 2);
+    assert_eq!(status_counts["taskflow_counts"]["closed_count"], 1);
+    assert_eq!(status_counts["taskflow_counts"]["epic_count"], 1);
+    assert!(status_counts.get("host_agents").is_none());
+    assert!(status_counts
+        .get("latest_run_graph_dispatch_receipt")
+        .is_none());
+
+    let progress_help = run_and_assert_success(&["task", "progress", "--help"], &state_dir);
+    assert!(progress_help.contains("--counts-only"));
+    assert!(progress_help.contains("--json"));
+
+    let status_help = run_and_assert_success(&["status", "--help"], &state_dir);
+    assert!(status_help.contains("taskflow_counts"));
+    assert!(status_help.contains("--fields"));
+
     let closure_ready = run_command_json(
         &[
             "task",

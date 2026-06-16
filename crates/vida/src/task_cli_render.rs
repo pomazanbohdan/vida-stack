@@ -466,6 +466,26 @@ pub(crate) fn task_progress_value(summary: &TaskProgressSummary) -> serde_json::
     })
 }
 
+pub(crate) fn task_progress_counts_value(summary: &TaskProgressSummary) -> serde_json::Value {
+    serde_json::json!({
+        "task_id": summary.root_task.id,
+        "root_status": summary.root_task.status,
+        "root_work_item_kind": task_work_item_kind_value(&summary.root_task.issue_type),
+        "progress_basis": summary.progress_basis,
+        "direct_child_count": summary.direct_child_count,
+        "descendant_count": summary.descendant_count,
+        "open_count": summary.open_count,
+        "in_progress_count": summary.in_progress_count,
+        "closed_count": summary.closed_count,
+        "epic_count": summary.epic_count,
+        "status_counts": summary.status_counts,
+        "percent_closed": summary.percent_closed,
+        "ready_for_close": summary.ready_for_close,
+        "closure_candidate": summary.closure_candidate,
+        "closure_candidate_state": summary.closure_candidate_state,
+    })
+}
+
 pub(crate) fn task_progress_payload(summary: &TaskProgressSummary) -> serde_json::Value {
     build_pass_operator_surface_payload(
         "vida task progress",
@@ -473,6 +493,17 @@ pub(crate) fn task_progress_payload(summary: &TaskProgressSummary) -> serde_json
             "task_id": summary.root_task.id,
             "root_work_item_kind": task_work_item_kind_value(&summary.root_task.issue_type),
             "progress": task_progress_value(summary),
+        }),
+    )
+}
+
+pub(crate) fn task_progress_counts_payload(summary: &TaskProgressSummary) -> serde_json::Value {
+    build_pass_operator_surface_payload(
+        "vida task progress",
+        serde_json::json!({
+            "task_id": summary.root_task.id,
+            "root_work_item_kind": task_work_item_kind_value(&summary.root_task.issue_type),
+            "progress_counts": task_progress_counts_value(summary),
         }),
     )
 }
@@ -491,6 +522,31 @@ pub(crate) fn task_progress_payload_with_stage_ensemble(
 
 pub(crate) fn task_progress_toon_text(surface: &str, summary: &TaskProgressSummary) -> String {
     task_progress_toon_text_with_stage_ensemble(surface, summary, None)
+}
+
+pub(crate) fn task_progress_counts_toon_text(
+    surface: &str,
+    summary: &TaskProgressSummary,
+) -> String {
+    let toon_scalar = taskflow_format_toon::sanitize_toon_scalar;
+    let lines = [
+        format!("task: {}", toon_scalar(&summary.root_task.id)),
+        format!("kind: {}", toon_scalar(&summary.root_task.issue_type)),
+        format!("basis: {}", toon_scalar(&summary.progress_basis)),
+        format!(
+            "counts: closed={} open={} in_progress={} total={}",
+            summary.closed_count,
+            summary.open_count,
+            summary.in_progress_count,
+            summary.descendant_count
+        ),
+        format!("direct_children: {}", summary.direct_child_count),
+        format!("epics: {}", summary.epic_count),
+        format!("percent_closed: {:.2}", summary.percent_closed),
+        format!("ready_for_close: {}", summary.ready_for_close),
+        format!("state: {}", toon_scalar(&summary.closure_candidate_state)),
+    ];
+    taskflow_format_toon::render_section(surface, &lines.join("\n  "))
 }
 
 pub(crate) fn task_progress_toon_text_with_stage_ensemble(
@@ -553,7 +609,7 @@ pub(crate) fn print_task_progress(
     summary: &TaskProgressSummary,
     as_json: bool,
 ) {
-    print_task_progress_with_stage_ensemble(render, summary, None, as_json);
+    print_task_progress_with_stage_ensemble(render, summary, None, as_json, false);
 }
 
 pub(crate) fn print_task_progress_with_stage_ensemble(
@@ -561,7 +617,56 @@ pub(crate) fn print_task_progress_with_stage_ensemble(
     summary: &TaskProgressSummary,
     stage_ensemble: Option<serde_json::Value>,
     as_json: bool,
+    counts_only: bool,
 ) {
+    if counts_only {
+        let payload = task_progress_counts_payload(summary);
+        if crate::surface_render::print_surface_json(
+            &payload,
+            as_json,
+            "task progress counts should render as json",
+        ) {
+            return;
+        }
+
+        if matches!(render, RenderMode::Plain) {
+            println!(
+                "{}",
+                task_progress_counts_toon_text("vida task progress", summary)
+            );
+            return;
+        }
+
+        print_surface_header(render, "vida task progress");
+        print_surface_line(render, "task", &summary.root_task.id);
+        print_surface_line(render, "basis", &summary.progress_basis);
+        print_surface_line(
+            render,
+            "direct children",
+            &summary.direct_child_count.to_string(),
+        );
+        print_surface_line(render, "descendants", &summary.descendant_count.to_string());
+        print_surface_line(render, "open", &summary.open_count.to_string());
+        print_surface_line(
+            render,
+            "in progress",
+            &summary.in_progress_count.to_string(),
+        );
+        print_surface_line(render, "closed", &summary.closed_count.to_string());
+        print_surface_line(render, "epics", &summary.epic_count.to_string());
+        print_surface_line(
+            render,
+            "percent closed",
+            &format!("{:.2}", summary.percent_closed),
+        );
+        print_surface_line(
+            render,
+            "ready for close",
+            &summary.ready_for_close.to_string(),
+        );
+        return;
+    }
+
     let payload = task_progress_payload_with_stage_ensemble(summary, stage_ensemble.clone());
     if crate::surface_render::print_surface_json(
         &payload,

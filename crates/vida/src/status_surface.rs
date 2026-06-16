@@ -1285,6 +1285,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         migration_receipts: &migration_receipts,
                         latest_task_reconciliation: latest_task_reconciliation.as_ref(),
                         task_reconciliation_rollup: &task_reconciliation_rollup,
+                        task_store: &task_store,
                         snapshot_bridge: &snapshot_bridge,
                         runtime_consumption: &runtime_consumption,
                         protocol_binding: &protocol_binding,
