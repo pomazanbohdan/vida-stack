@@ -5182,10 +5182,11 @@ async fn maybe_resume_inputs_from_rework_result(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<Option<ResumeInputs>, String> {
     let Some(rework_route) =
-        crate::runtime_dispatch_result_evidence::dispatch_rework_route_from_receipt_fields(
+        crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
             receipt.downstream_dispatch_result_path.as_deref(),
             receipt.dispatch_result_path.as_deref(),
             receipt.dispatch_packet_path.as_deref(),
+            &receipt.dispatch_target,
         )
     else {
         return Ok(None);
@@ -5320,15 +5321,12 @@ fn rework_resume_dispatch_target(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     rework_route: &crate::runtime_dispatch_result_evidence::DispatchReworkRoute,
 ) -> String {
-    if crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
+    crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
         &role_selection.execution_plan,
-        &rework_route.allowed_next_node,
+        &rework_route.rework_target,
     )
-    .is_some()
-    {
-        return rework_route.allowed_next_node.clone();
-    }
-    rework_route.rework_target.clone()
+    .map(|resolution| resolution.dispatch_target)
+    .unwrap_or_else(|| rework_route.rework_target.clone())
 }
 
 async fn sync_run_graph_after_resumed_execution(
