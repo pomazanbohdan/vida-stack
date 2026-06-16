@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
@@ -34,6 +34,93 @@ pub(crate) const HOST_CLI_PLACEHOLDER: &str = "__HOST_CLI_SYSTEM__";
 pub(crate) const HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE: &str = "codex_toml_catalog_render";
 pub(crate) const PI_AGENT_PROJECTION_RENDER_MODE: &str = "pi_agent_projection_render";
 const PROJECT_ACTIVATOR_ACTIVATION_OPEN_TIMEOUT_SECONDS: u64 = 30;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MaterializationSurfaceReport {
+    surface: String,
+    potential_scope: String,
+    changed_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ProjectActivatorMaterializationReport {
+    potential_materialization_scope: Vec<String>,
+    materialized_surfaces: Vec<MaterializationSurfaceReport>,
+}
+
+#[derive(Debug, Clone)]
+struct MaterializationSurfaceScope {
+    surface: String,
+    potential_scope: String,
+    roots: Vec<PathBuf>,
+}
+
+impl ProjectActivatorMaterializationReport {
+    fn extend(&mut self, other: ProjectActivatorMaterializationReport) {
+        for scope in other.potential_materialization_scope {
+            if !self.potential_materialization_scope.contains(&scope) {
+                self.potential_materialization_scope.push(scope);
+            }
+        }
+        for incoming in other.materialized_surfaces {
+            if let Some(existing) = self.materialized_surfaces.iter_mut().find(|surface| {
+                surface.surface == incoming.surface
+                    && surface.potential_scope == incoming.potential_scope
+            }) {
+                existing.changed_files.extend(incoming.changed_files);
+                existing.changed_files.sort();
+                existing.changed_files.dedup();
+            } else {
+                self.materialized_surfaces.push(incoming);
+            }
+        }
+        self.potential_materialization_scope.sort();
+        self.materialized_surfaces.sort_by(|left, right| {
+            left.surface
+                .cmp(&right.surface)
+                .then_with(|| left.potential_scope.cmp(&right.potential_scope))
+        });
+    }
+
+    fn changed_files(&self) -> Vec<String> {
+        let mut files = BTreeSet::new();
+        for surface in &self.materialized_surfaces {
+            files.extend(surface.changed_files.iter().cloned());
+        }
+        files.into_iter().collect()
+    }
+
+    fn no_changes(&self) -> bool {
+        !self.materialized_surfaces.is_empty() && self.changed_files().is_empty()
+    }
+
+    fn has_changed_surface_prefix(&self, prefix: &str) -> bool {
+        self.materialized_surfaces
+            .iter()
+            .any(|surface| surface.surface.starts_with(prefix) && !surface.changed_files.is_empty())
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        let changed_files = self.changed_files();
+        serde_json::json!({
+            "potential_materialization_scope": self.potential_materialization_scope,
+            "materialized_surfaces": self.materialized_surfaces.iter().map(|surface| {
+                serde_json::json!({
+                    "surface": surface.surface,
+                    "potential_scope": surface.potential_scope,
+                    "changed_files": surface.changed_files,
+                    "changed_file_count": surface.changed_files.len(),
+                    "status": if surface.changed_files.is_empty() { "no_change" } else { "changed" },
+                })
+            }).collect::<Vec<_>>(),
+            "observed": {
+                "changed_files": changed_files,
+                "changed_file_count": changed_files.len(),
+                "no_change": self.no_changes(),
+            }
+        })
+    }
+}
 
 fn yaml_scalar(value: &str) -> String {
     if value
@@ -1255,6 +1342,206 @@ fn validate_project_activator_mutation_state_dir(
     Ok(resolved_state_dir)
 }
 
+fn project_relative_report_path(project_root: &Path, path: &Path) -> String {
+    path.strip_prefix(project_root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+        .replace('\\', "/")
+}
+
+fn collect_file_snapshot(
+    project_root: &Path,
+    roots: &[PathBuf],
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let mut snapshot = BTreeMap::new();
+    for root in roots {
+        collect_file_snapshot_entry(project_root, root, &mut snapshot)?;
+    }
+    Ok(snapshot)
+}
+
+fn collect_file_snapshot_entry(
+    project_root: &Path,
+    path: &Path,
+    snapshot: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))?;
+    if metadata.is_file() {
+        let contents = fs::read(path)
+            .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
+        snapshot.insert(project_relative_report_path(project_root, path), contents);
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(path)
+        .map_err(|error| format!("Failed to read {}: {error}", path.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to iterate {}: {error}", path.display()))?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        collect_file_snapshot_entry(project_root, &entry.path(), snapshot)?;
+    }
+    Ok(())
+}
+
+fn changed_files_between_snapshots(
+    before: &BTreeMap<String, Vec<u8>>,
+    after: &BTreeMap<String, Vec<u8>>,
+) -> Vec<String> {
+    let keys = before
+        .keys()
+        .chain(after.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    keys.into_iter()
+        .filter(|path| before.get(path) != after.get(path))
+        .collect()
+}
+
+fn materialization_report_from_scopes(
+    project_root: &Path,
+    scopes: &[MaterializationSurfaceScope],
+    before: &BTreeMap<String, Vec<u8>>,
+    after: &BTreeMap<String, Vec<u8>>,
+) -> ProjectActivatorMaterializationReport {
+    let mut report = ProjectActivatorMaterializationReport::default();
+    for scope in scopes {
+        if !report
+            .potential_materialization_scope
+            .contains(&scope.potential_scope)
+        {
+            report
+                .potential_materialization_scope
+                .push(scope.potential_scope.clone());
+        }
+        let before_scope = collect_file_snapshot_from_snapshot(project_root, before, &scope.roots);
+        let after_scope = collect_file_snapshot_from_snapshot(project_root, after, &scope.roots);
+        report
+            .materialized_surfaces
+            .push(MaterializationSurfaceReport {
+                surface: scope.surface.clone(),
+                potential_scope: scope.potential_scope.clone(),
+                changed_files: changed_files_between_snapshots(&before_scope, &after_scope),
+            });
+    }
+    report.potential_materialization_scope.sort();
+    report.materialized_surfaces.sort_by(|left, right| {
+        left.surface
+            .cmp(&right.surface)
+            .then_with(|| left.potential_scope.cmp(&right.potential_scope))
+    });
+    report
+}
+
+fn collect_file_snapshot_from_snapshot(
+    project_root: &Path,
+    snapshot: &BTreeMap<String, Vec<u8>>,
+    roots: &[PathBuf],
+) -> BTreeMap<String, Vec<u8>> {
+    let root_prefixes = roots
+        .iter()
+        .map(|root| project_relative_report_path(project_root, root))
+        .collect::<Vec<_>>();
+    snapshot
+        .iter()
+        .filter(|(path, _)| {
+            root_prefixes.iter().any(|root| {
+                path.as_str() == root
+                    || path.starts_with(&format!("{}/", root.trim_end_matches('/')))
+            })
+        })
+        .map(|(path, contents)| (path.clone(), contents.clone()))
+        .collect()
+}
+
+fn record_materialization_result<T>(
+    project_root: &Path,
+    scopes: Vec<MaterializationSurfaceScope>,
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<(T, ProjectActivatorMaterializationReport), String> {
+    let roots = scopes
+        .iter()
+        .flat_map(|scope| scope.roots.iter().cloned())
+        .collect::<Vec<_>>();
+    let before = collect_file_snapshot(project_root, &roots)?;
+    let value = action()?;
+    let after = collect_file_snapshot(project_root, &roots)?;
+    Ok((
+        value,
+        materialization_report_from_scopes(project_root, &scopes, &before, &after),
+    ))
+}
+
+fn repair_materialization_scopes(project_root: &Path) -> Vec<MaterializationSurfaceScope> {
+    vec![
+        MaterializationSurfaceScope {
+            surface: "framework_instruction_bundles".to_string(),
+            potential_scope: "vida/config/instructions/bundles/**".to_string(),
+            roots: vec![
+                PathBuf::from(super::state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT),
+                PathBuf::from(super::state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT),
+            ],
+        },
+        MaterializationSurfaceScope {
+            surface: "runtime_home_and_agent_extensions".to_string(),
+            potential_scope: ".vida/**".to_string(),
+            roots: vec![
+                PathBuf::from(".vida/project/agent-extensions"),
+                PathBuf::from(".vida/receipts/agent-extensions-bootstrap.json"),
+            ],
+        },
+        MaterializationSurfaceScope {
+            surface: "project_docs_scaffold".to_string(),
+            potential_scope: "README.md + docs/**".to_string(),
+            roots: vec![PathBuf::from("README.md"), PathBuf::from("docs")],
+        },
+    ]
+    .into_iter()
+    .map(|mut scope| {
+        scope.roots = scope
+            .roots
+            .into_iter()
+            .map(|root| project_root.join(root))
+            .collect();
+        scope
+    })
+    .collect()
+}
+
+fn host_cli_materialization_scopes(
+    project_root: &Path,
+    runtime_surface: &str,
+) -> Vec<MaterializationSurfaceScope> {
+    vec![
+        MaterializationSurfaceScope {
+            surface: "host_cli_selection".to_string(),
+            potential_scope: "vida.config.yaml".to_string(),
+            roots: vec![project_root.join("vida.config.yaml")],
+        },
+        MaterializationSurfaceScope {
+            surface: "host_cli_runtime_template".to_string(),
+            potential_scope: format!("{}/**", runtime_surface.trim_end_matches('/')),
+            roots: vec![project_root.join(runtime_surface)],
+        },
+        MaterializationSurfaceScope {
+            surface: "host_cli_runtime_state".to_string(),
+            potential_scope: ".vida/state/{worker-scorecards.json,worker-strategy.json}"
+                .to_string(),
+            roots: vec![
+                project_root.join(WORKER_SCORECARDS_STATE),
+                project_root.join(WORKER_STRATEGY_STATE),
+            ],
+        },
+    ]
+}
+
 fn repair_project_activation_assets(project_root: &Path) -> Result<(), String> {
     let bootstrap_source_root = super::init_surfaces::resolve_init_bootstrap_source_root();
     let (instruction_source_root, framework_memory_source_root) =
@@ -1268,6 +1555,17 @@ fn repair_project_activation_assets(project_root: &Path) -> Result<(), String> {
     .and_then(|()| super::init_surfaces::write_runtime_agent_extension_projections(project_root))
     .and_then(|()| repair_runtime_agent_extension_projections(project_root))
     .and_then(|()| super::init_surfaces::materialize_project_docs_scaffold(project_root))
+}
+
+fn repair_project_activation_assets_with_report(
+    project_root: &Path,
+) -> Result<ProjectActivatorMaterializationReport, String> {
+    let (_, report) = record_materialization_result(
+        project_root,
+        repair_materialization_scopes(project_root),
+        || repair_project_activation_assets(project_root),
+    )?;
+    Ok(report)
 }
 
 fn repair_runtime_agent_extension_projections(project_root: &Path) -> Result<(), String> {
@@ -1304,6 +1602,7 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         || args.reasoning_language.is_some()
         || args.documentation_language.is_some()
         || args.todo_protocol_language.is_some();
+    let mut materialization_report = ProjectActivatorMaterializationReport::default();
     let mut repaired_before_state_bootstrap = false;
     let activation_store = if activation_mutation_requested {
         let state_dir = args
@@ -1319,11 +1618,14 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
                 }
             };
         if args.repair {
-            if let Err(error) = repair_project_activation_assets(&project_root) {
-                eprintln!(
-                    "Project activation repair failed closed after state-dir validation: {error}"
-                );
-                return ExitCode::from(1);
+            match repair_project_activation_assets_with_report(&project_root) {
+                Ok(report) => materialization_report.extend(report),
+                Err(error) => {
+                    eprintln!(
+                        "Project activation repair failed closed after state-dir validation: {error}"
+                    );
+                    return ExitCode::from(1);
+                }
             }
             repaired_before_state_bootstrap = true;
         }
@@ -1425,30 +1727,31 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
                 return ExitCode::from(2);
             }
         };
-        let runtime_root =
-            match apply_host_cli_selection(&project_root, &normalized_host_cli_system).and_then(
-                |()| {
-                    materialize_host_cli_template(
-                        &project_root,
-                        &normalized_host_cli_system,
-                        Some(host_cli_entry),
-                    )
-                },
-            ) {
-                Ok(root) => root,
-                Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::from(1);
-                }
-            };
+        let runtime_surface =
+            host_cli_system_runtime_surface(host_cli_entry, &normalized_host_cli_system);
+        let (_runtime_root, host_materialization_report) = match record_materialization_result(
+            &project_root,
+            host_cli_materialization_scopes(&project_root, &runtime_surface),
+            || {
+                apply_host_cli_selection(&project_root, &normalized_host_cli_system).and_then(
+                    |()| {
+                        materialize_host_cli_template(
+                            &project_root,
+                            &normalized_host_cli_system,
+                            Some(host_cli_entry),
+                        )
+                    },
+                )
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+        };
+        materialization_report.extend(host_materialization_report);
         host_cli_activated = Some(normalized_host_cli_system.to_string());
-        changed_files.push("vida.config.yaml".to_string());
-        let relative_runtime_root = runtime_root
-            .strip_prefix(&project_root)
-            .unwrap_or_else(|_| runtime_root.as_path())
-            .to_string_lossy()
-            .to_string();
-        changed_files.push(format!("{relative_runtime_root}/**"));
     }
 
     if let Some(answers) = activation_answers.as_ref() {
@@ -1465,24 +1768,27 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             || host_cli_activated.is_some()
             || activation_answers.is_some()
         {
-            if let Err(error) = repair_project_activation_assets(&project_root) {
-                eprintln!("Project activation repair failed closed: {error}");
-                return ExitCode::from(1);
+            match repair_project_activation_assets_with_report(&project_root) {
+                Ok(report) => materialization_report.extend(report),
+                Err(error) => {
+                    eprintln!("Project activation repair failed closed: {error}");
+                    return ExitCode::from(1);
+                }
             }
         }
-        changed_files.push("vida/config/instructions/bundles/**".to_string());
-        changed_files.push(".vida/**".to_string());
-        changed_files.push("docs/**".to_string());
     }
 
+    changed_files.extend(materialization_report.changed_files());
     changed_files.sort();
     changed_files.dedup();
-    let host_template_materialized = host_cli_activated.is_some();
+    let host_template_materialized = host_cli_activated.is_some()
+        && materialization_report.has_changed_surface_prefix("host_cli");
     let activation_receipt_path = match write_project_activation_receipt(
         &project_root,
         activation_answers.as_ref(),
         host_cli_activated.as_deref(),
         &changed_files,
+        &materialization_report,
         host_template_materialized,
     ) {
         Ok(path) => path,
@@ -1541,10 +1847,14 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         None
     };
 
+    let changed_file_count = changed_files.len();
     let mut view = build_project_activator_view(&project_root);
     view["repair"] = serde_json::json!({
         "requested": args.repair,
         "changed_files": changed_files.clone(),
+        "changed_file_count": changed_file_count,
+        "no_change": args.repair && changed_files.is_empty(),
+        "materialization_report": materialization_report.to_json(),
         "next_action": if args.repair {
             "Rerun `vida project-activator --json` and `vida orchestrator-init --json` to confirm ready-enough posture."
         } else {
@@ -1555,6 +1865,8 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         let mut activation_log = serde_json::json!({
             "receipt_path": path,
             "changed_files": changed_files,
+            "changed_file_count": changed_file_count,
+            "materialization_report": materialization_report.to_json(),
         });
         if let Some(sync) = activation_truth_sync {
             activation_log["db_first_activation_truth"] = sync;
@@ -1563,7 +1875,7 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
     }
     let host_cli_restart_target = host_cli_activated.as_deref().map(host_cli_display_name);
     if args.json {
-        let payload = if host_cli_activated.is_some() {
+        let payload = if host_template_materialized {
             serde_json::json!({
                 "surface": "vida project-activator",
                 "post_init_restart_required": true,
@@ -1667,7 +1979,7 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
     if let Some(path) = activation_receipt_path.as_deref() {
         println!("  - activation log: {path}");
     }
-    if host_cli_activated.is_some() {
+    if host_template_materialized {
         println!(
             "  - close and restart {} so the newly activated agent template becomes visible to the runtime environment",
             host_cli_restart_target
@@ -2152,11 +2464,12 @@ pub(crate) fn merge_project_activation_into_init_view(
     init_view
 }
 
-pub(crate) fn write_project_activation_receipt(
+fn write_project_activation_receipt(
     project_root: &Path,
     answers: Option<&ProjectActivationAnswers>,
     host_cli_system: Option<&str>,
     changed_files: &[String],
+    materialization_report: &ProjectActivatorMaterializationReport,
     host_template_materialized: bool,
 ) -> Result<Option<String>, String> {
     if changed_files.is_empty() && answers.is_none() && !host_template_materialized {
@@ -2205,6 +2518,8 @@ pub(crate) fn write_project_activation_receipt(
         "host_template_materialized": host_template_materialized,
         "default_host_agent_templates": default_agent_templates,
         "changed_files": changed_files,
+        "changed_file_count": changed_files.len(),
+        "materialization_report": materialization_report.to_json(),
         "log_note": "Use `vida docflow` for subsequent documentation validation/readiness work; project activation itself is a bounded onboarding/configuration path, not TaskFlow execution.",
     });
     let body =
@@ -3082,6 +3397,105 @@ host_environment:
             runtime.block_on(run(cli(&["project-activator", "--json"]))),
             ExitCode::SUCCESS
         );
+    }
+
+    fn materialized_surface<'a>(
+        report: &'a serde_json::Value,
+        surface: &str,
+    ) -> &'a serde_json::Value {
+        report["materialized_surfaces"]
+            .as_array()
+            .expect("materialized surfaces should render")
+            .iter()
+            .find(|entry| entry["surface"].as_str() == Some(surface))
+            .unwrap_or_else(|| panic!("materialized surface `{surface}` should exist"))
+    }
+
+    #[test]
+    fn project_activator_repair_report_lists_exact_changed_files_by_surface() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::unset("VIDA_ROOT");
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        fs::remove_file(harness.path().join("docs/project-root-map.md"))
+            .expect("project root map fixture should be removable");
+        fs::remove_file(
+            harness
+                .path()
+                .join(".vida/project/agent-extensions/index.md"),
+        )
+        .expect("agent extension index fixture should be removable");
+
+        let report = super::repair_project_activation_assets_with_report(harness.path())
+            .expect("repair should report observed materialization changes");
+        let changed_files = report.changed_files();
+
+        assert_eq!(
+            changed_files,
+            vec![
+                ".vida/project/agent-extensions/index.md".to_string(),
+                "docs/project-root-map.md".to_string()
+            ]
+        );
+        assert!(changed_files.iter().all(|path| !path.contains("**")));
+
+        let rendered = report.to_json();
+        assert_eq!(rendered["observed"]["changed_files"], json!(changed_files));
+        assert_eq!(rendered["observed"]["changed_file_count"], 2);
+        assert_eq!(rendered["observed"]["no_change"], false);
+        assert_eq!(
+            materialized_surface(&rendered, "runtime_home_and_agent_extensions")["changed_files"],
+            json!([".vida/project/agent-extensions/index.md"])
+        );
+        assert_eq!(
+            materialized_surface(&rendered, "project_docs_scaffold")["changed_files"],
+            json!(["docs/project-root-map.md"])
+        );
+        assert_eq!(
+            materialized_surface(&rendered, "framework_instruction_bundles")["status"],
+            "no_change"
+        );
+        assert!(rendered["potential_materialization_scope"]
+            .as_array()
+            .expect("potential scope should render")
+            .iter()
+            .any(|scope| scope
+                .as_str()
+                .is_some_and(|scope| scope.contains("docs/**"))));
+    }
+
+    #[test]
+    fn project_activator_repair_report_is_explicit_when_materialization_has_no_changes() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::unset("VIDA_ROOT");
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let report = super::repair_project_activation_assets_with_report(harness.path())
+            .expect("repair should report no-change materialization");
+        let rendered = report.to_json();
+
+        assert!(report.changed_files().is_empty());
+        assert_eq!(rendered["observed"]["changed_files"], json!([]));
+        assert_eq!(rendered["observed"]["changed_file_count"], 0);
+        assert_eq!(rendered["observed"]["no_change"], true);
+        for surface in rendered["materialized_surfaces"]
+            .as_array()
+            .expect("materialized surfaces should render")
+        {
+            assert_eq!(surface["changed_files"], json!([]));
+            assert_eq!(surface["changed_file_count"], 0);
+            assert_eq!(surface["status"], "no_change");
+        }
+        assert!(rendered["potential_materialization_scope"]
+            .as_array()
+            .expect("potential scope should render")
+            .iter()
+            .any(|scope| scope.as_str() == Some(".vida/**")));
     }
 
     #[test]
