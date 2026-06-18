@@ -192,7 +192,7 @@ fn active_exception_takeover_next_actions(
 ) -> Vec<String> {
     if exception_takeover_continuation_resumable(status) {
         let command = operator_output::command_text::human_command(&format!(
-            "vida taskflow consume continue --run-id {} --json",
+            "vida taskflow consume continue --run-id {}",
             status.run_id
         ));
         return vec![format!(
@@ -201,7 +201,7 @@ fn active_exception_takeover_next_actions(
     }
     if status.resume_target == "none" || !status.resume_target.starts_with("dispatch.") {
         let recovery_command = operator_output::command_text::human_command(&format!(
-            "vida taskflow recovery status {} --json",
+            "vida taskflow recovery status {}",
             status.run_id
         ));
         return vec![
@@ -214,12 +214,10 @@ fn active_exception_takeover_next_actions(
             ),
         ];
     }
-    let lane_command = operator_output::command_text::human_command(&format!(
-        "vida lane show {} --json",
-        status.run_id
-    ));
+    let lane_command =
+        operator_output::command_text::human_command(&format!("vida lane show {}", status.run_id));
     let continue_command = operator_output::command_text::human_command(&format!(
-        "vida taskflow consume continue --run-id {} --json",
+        "vida taskflow consume continue --run-id {}",
         status.run_id
     ));
     vec![
@@ -353,15 +351,14 @@ fn continuation_next_actions_for_run(
             let command = operator_output::command_text::human_command(&command);
             next_actions.push(format!("Continue the downstream handoff with `{command}`."));
         } else {
-            let command = operator_output::command_text::human_command(&format!(
-                "vida lane show {run_id} --json"
-            ));
+            let command =
+                operator_output::command_text::human_command(&format!("vida lane show {run_id}"));
             next_actions.push(format!(
                 "Inspect the active delegated lane with `{command}`."
             ));
         }
         let recovery_command = operator_output::command_text::human_command(&format!(
-            "vida taskflow recovery status {run_id} --json"
+            "vida taskflow recovery status {run_id}"
         ));
         next_actions.push(format!(
             "Inspect the live delegated-cycle recovery state with `{recovery_command}` if routing context is needed before the next step."
@@ -373,14 +370,13 @@ fn continuation_next_actions_for_run(
             receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some()
         })
     {
-        let lane_command = operator_output::command_text::human_command(&format!(
-            "vida lane show {run_id} --json"
-        ));
+        let lane_command =
+            operator_output::command_text::human_command(&format!("vida lane show {run_id}"));
         next_actions.push(format!(
             "Inspect the exception-backed lane with `{lane_command}` and close or settle the run before continuing."
         ));
         let continue_command = operator_output::command_text::human_command(&format!(
-            "vida taskflow consume continue --run-id {run_id} --json"
+            "vida taskflow consume continue --run-id {run_id}"
         ));
         next_actions.push(format!(
             "Do not rerun `{continue_command}` until recovery exposes a concrete downstream target."
@@ -388,13 +384,13 @@ fn continuation_next_actions_for_run(
         return next_actions;
     }
     let continue_command = operator_output::command_text::human_command(&format!(
-        "vida taskflow consume continue --run-id {run_id} --json"
+        "vida taskflow consume continue --run-id {run_id}"
     ));
     next_actions.push(format!(
         "Continue the active bounded unit with `{continue_command}`."
     ));
     let recovery_command = operator_output::command_text::human_command(&format!(
-        "vida taskflow recovery status {run_id} --json"
+        "vida taskflow recovery status {run_id}"
     ));
     next_actions.push(format!(
         "Inspect the live delegated-cycle recovery state with `{recovery_command}` if routing context is needed before the next step."
@@ -415,7 +411,7 @@ pub(crate) fn downstream_dispatch_command_from_parts(
 
     packet_path.map(|path| {
         format!(
-            "vida agent-init --downstream-packet {} --execute-dispatch --json",
+            "vida agent-init --downstream-packet {} --execute-dispatch",
             crate::shell_quote(path)
         )
     })
@@ -444,6 +440,10 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
     let active_run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
     let delegated_cycle_open = latest_run_graph_recovery
         .is_some_and(|recovery| recovery.delegation_gate.delegated_cycle_open);
+    let terminal_retired_runtime_run =
+        crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
+            latest_run_graph_recovery,
+        );
     let exception_takeover_is_resumable =
         latest_run_graph_status.is_none_or(exception_takeover_continuation_resumable);
     let active_exception_takeover_not_resumable = latest_run_graph_status
@@ -471,6 +471,21 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
         })
         .unwrap_or_default();
     if let Some(status) = latest_run_graph_status {
+        if latest_run_graph_task_missing && terminal_retired_runtime_run {
+            return serde_json::json!({
+                "status": "idle",
+                "continuation_allowed": false,
+                "continuation_required_now": false,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": "Latest runtime run is terminally retired and no longer binds active TaskFlow work.",
+                "primary_path": "idle_project_ready",
+                "sequential_vs_parallel_posture": "not_applicable_no_active_work",
+                "pause_boundary_gate": "allowed_no_active_work",
+                "ambiguity_reason": serde_json::Value::Null,
+                "next_actions": []
+            });
+        }
         if latest_run_graph_task_missing {
             return serde_json::json!({
                 "status": "idle",
@@ -553,6 +568,14 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                         status,
                         continuation_required_now,
                         pause_boundary_gate,
+                    );
+                }
+                if explicit_binding_is_admissible_for_status(binding, status) {
+                    return binding_summary_json(
+                        binding,
+                        continuation_required_now,
+                        pause_boundary_gate,
+                        continuation_next_actions.clone(),
                     );
                 }
             }
@@ -955,6 +978,8 @@ pub(crate) fn taskflow_active_candidates_from_tasks(
                 "status": task.status,
                 "issue_type": task.issue_type,
                 "title": task.title,
+                "conflict_domain": task.execution_semantics.conflict_domain.clone(),
+                "owned_paths": task.planner_metadata.owned_paths.clone(),
             })
         })
         .collect()
@@ -1219,6 +1244,224 @@ pub(crate) fn add_taskflow_active_work_truth(
     summary
 }
 
+pub(crate) fn taskflow_active_work_binding_is_authoritative(summary: &serde_json::Value) -> bool {
+    summary.get("status").and_then(serde_json::Value::as_str) == Some("bound")
+        && summary
+            .get("binding_source")
+            .and_then(serde_json::Value::as_str)
+            == Some("taskflow_single_in_progress")
+        && summary
+            .get("active_bounded_unit")
+            .is_some_and(|unit| unit.is_object())
+}
+
+pub(crate) fn add_taskflow_active_work_truth_with_session_claims(
+    summary: serde_json::Value,
+    taskflow_active_candidates: Vec<serde_json::Value>,
+    active_claims: &[crate::state_store::OrchestratorClaim],
+    current_session_id: &str,
+) -> serde_json::Value {
+    let summary_active_unit_missing = summary
+        .get("active_bounded_unit")
+        .map_or(true, serde_json::Value::is_null);
+    if summary_active_unit_missing && taskflow_active_candidates.len() > 1 {
+        if let Some(candidate) = current_session_taskflow_candidate(
+            &taskflow_active_candidates,
+            active_claims,
+            current_session_id,
+        ) {
+            return bind_taskflow_active_candidate(
+                summary,
+                candidate,
+                "taskflow_current_session_claim",
+                "Current orchestrator session owns one active TaskFlow bounded unit; other active TaskFlow units are claim-owned by independent sessions.",
+                "parallel_safe_current_session_taskflow_claim",
+                "forbidden_while_current_session_task_active",
+                serde_json::json!([
+                    "Continue or close the current session's claimed TaskFlow bounded unit; independent foreign-session active tasks remain non-blocking unless their claims overlap this scope."
+                ]),
+            );
+        }
+    }
+
+    add_taskflow_active_work_truth(summary, taskflow_active_candidates)
+}
+
+fn bind_taskflow_active_candidate(
+    mut summary: serde_json::Value,
+    candidate: &serde_json::Value,
+    binding_source: &str,
+    why_this_unit: &str,
+    sequential_vs_parallel_posture: &str,
+    pause_boundary_gate: &str,
+    next_actions: serde_json::Value,
+) -> serde_json::Value {
+    if let serde_json::Value::Object(object) = &mut summary {
+        object.insert(
+            "status".to_string(),
+            serde_json::Value::String("bound".to_string()),
+        );
+        object.insert(
+            "continuation_allowed".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        object.insert(
+            "continuation_required_now".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert(
+            "active_bounded_unit".to_string(),
+            serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": candidate.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
+                "task_status": candidate.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                "issue_type": candidate.get("issue_type").cloned().unwrap_or(serde_json::Value::Null),
+                "title": candidate.get("title").cloned().unwrap_or(serde_json::Value::Null),
+            }),
+        );
+        object.insert(
+            "binding_source".to_string(),
+            serde_json::Value::String(binding_source.to_string()),
+        );
+        object.insert(
+            "binding_scope".to_string(),
+            serde_json::Value::String("taskflow_active".to_string()),
+        );
+        object.insert(
+            "why_this_unit".to_string(),
+            serde_json::Value::String(why_this_unit.to_string()),
+        );
+        object.insert(
+            "primary_path".to_string(),
+            serde_json::Value::String("taskflow_selection_path".to_string()),
+        );
+        object.insert(
+            "sequential_vs_parallel_posture".to_string(),
+            serde_json::Value::String(sequential_vs_parallel_posture.to_string()),
+        );
+        object.insert(
+            "pause_boundary_gate".to_string(),
+            serde_json::Value::String(pause_boundary_gate.to_string()),
+        );
+        object.insert("ambiguity_reason".to_string(), serde_json::Value::Null);
+        object.insert("next_actions".to_string(), next_actions);
+    }
+    summary
+}
+
+fn current_session_taskflow_candidate<'a>(
+    candidates: &'a [serde_json::Value],
+    active_claims: &[crate::state_store::OrchestratorClaim],
+    current_session_id: &str,
+) -> Option<&'a serde_json::Value> {
+    let current_session_id = current_session_id.trim();
+    if current_session_id.is_empty() {
+        return None;
+    }
+    let current_claimed_candidates = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate_task_id(candidate).is_some_and(|task_id| {
+                active_claims.iter().any(|claim| {
+                    claim.orchestrator_session_id == current_session_id
+                        && claim.task_id.as_deref() == Some(task_id)
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let [selected_candidate] = current_claimed_candidates.as_slice() else {
+        return None;
+    };
+    let selected_task_id = candidate_task_id(selected_candidate)?;
+    let selected_claims = active_claims
+        .iter()
+        .filter(|claim| {
+            claim.orchestrator_session_id == current_session_id
+                && claim.task_id.as_deref() == Some(selected_task_id)
+        })
+        .collect::<Vec<_>>();
+    if selected_claims.is_empty() {
+        return None;
+    }
+
+    for candidate in candidates {
+        let Some(task_id) = candidate_task_id(candidate) else {
+            return None;
+        };
+        if task_id == selected_task_id {
+            continue;
+        }
+        let owner_claims = active_claims
+            .iter()
+            .filter(|claim| claim.task_id.as_deref() == Some(task_id))
+            .collect::<Vec<_>>();
+        if owner_claims.is_empty()
+            || owner_claims
+                .iter()
+                .any(|claim| claim.orchestrator_session_id == current_session_id)
+        {
+            return None;
+        }
+        if selected_claims.iter().any(|selected| {
+            owner_claims
+                .iter()
+                .any(|owner| orchestrator_claims_overlap(selected, owner))
+        }) {
+            return None;
+        }
+    }
+
+    Some(*selected_candidate)
+}
+
+fn candidate_task_id(candidate: &serde_json::Value) -> Option<&str> {
+    candidate
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn orchestrator_claims_overlap(
+    left: &crate::state_store::OrchestratorClaim,
+    right: &crate::state_store::OrchestratorClaim,
+) -> bool {
+    if left
+        .task_id
+        .as_deref()
+        .zip(right.task_id.as_deref())
+        .is_some_and(|(left, right)| !left.trim().is_empty() && left == right)
+    {
+        return true;
+    }
+    if left
+        .run_id
+        .as_deref()
+        .zip(right.run_id.as_deref())
+        .is_some_and(|(left, right)| !left.trim().is_empty() && left == right)
+    {
+        return true;
+    }
+    if left
+        .conflict_domain
+        .as_deref()
+        .zip(right.conflict_domain.as_deref())
+        .is_some_and(|(left, right)| !left.trim().is_empty() && left == right)
+    {
+        return true;
+    }
+    left.owned_paths
+        .iter()
+        .chain(left.read_only_paths.iter())
+        .any(|left_path| {
+            right
+                .owned_paths
+                .iter()
+                .chain(right.read_only_paths.iter())
+                .any(|right_path| crate::state_store::claim_paths_intersect(left_path, right_path))
+        })
+}
+
 pub(crate) fn add_stale_missing_task_run_graph_status(
     mut continuation_binding: serde_json::Value,
     status: &crate::state_store::RunGraphStatus,
@@ -1285,8 +1528,9 @@ pub(crate) fn apply_closed_task_active_run_projection_mismatch_gate(
 #[cfg(test)]
 mod tests {
     use super::{
-        add_taskflow_active_work_truth, build_continuation_binding_summary,
-        build_continuation_binding_summary_with_idle_policy, taskflow_active_candidates_from_tasks,
+        add_taskflow_active_work_truth, add_taskflow_active_work_truth_with_session_claims,
+        build_continuation_binding_summary, build_continuation_binding_summary_with_idle_policy,
+        taskflow_active_candidates_from_tasks, taskflow_active_work_binding_is_authoritative,
     };
 
     fn task_record(task_id: &str, status: &str) -> crate::state_store::TaskRecord {
@@ -1332,6 +1576,38 @@ mod tests {
                 thread_id: String::new(),
             });
         task
+    }
+
+    fn active_claim(
+        claim_id: &str,
+        session_id: &str,
+        task_id: &str,
+        conflict_domain: &str,
+        owned_paths: &[&str],
+    ) -> crate::state_store::OrchestratorClaim {
+        crate::state_store::OrchestratorClaim {
+            claim_id: claim_id.to_string(),
+            state_root_id: "state-root".to_string(),
+            worktree_environment_id: "worktree".to_string(),
+            orchestrator_session_id: session_id.to_string(),
+            process_id: None,
+            task_id: Some(task_id.to_string()),
+            run_id: None,
+            lane_id: None,
+            claim_kind: "active_task_session_claim".to_string(),
+            conflict_domain: Some(conflict_domain.to_string()),
+            owned_paths: owned_paths.iter().map(|path| path.to_string()).collect(),
+            read_only_paths: Vec::new(),
+            lease_mode: crate::state_store::LeaseMode::Observe.as_str().to_string(),
+            status: "active".to_string(),
+            created_at: "2026-04-24T00:00:00Z".to_string(),
+            lease_expires_at: "2026-04-24T01:00:00Z".to_string(),
+            last_heartbeat_at: "2026-04-24T00:00:00Z".to_string(),
+            released_at: None,
+            release_reason: None,
+            resource_revision: 1,
+            blocker_codes: Vec::new(),
+        }
     }
 
     fn exception_takeover_dispatch(
@@ -1440,9 +1716,7 @@ mod tests {
                 Some("packets/downstream packet.json"),
             )
             .as_deref(),
-            Some(
-                "vida agent-init --downstream-packet 'packets/downstream packet.json' --execute-dispatch --json"
-            )
+            Some("vida agent-init --downstream-packet 'packets/downstream packet.json' --execute-dispatch")
         );
     }
 
@@ -1680,6 +1954,7 @@ mod tests {
             "sequential_only_taskflow_active"
         );
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+        assert!(taskflow_active_work_binding_is_authoritative(&summary));
     }
 
     #[test]
@@ -1727,6 +2002,27 @@ mod tests {
     }
 
     #[test]
+    fn taskflow_active_candidates_include_scope_metadata() {
+        let mut active_task = task_record("scoped-runtime-task", "in_progress");
+        active_task.execution_semantics.conflict_domain =
+            Some("path:crates/vida/src/continuation_binding_summary.rs".to_string());
+        active_task.planner_metadata.owned_paths =
+            vec!["crates/vida/src/continuation_binding_summary.rs".to_string()];
+
+        let candidates = taskflow_active_candidates_from_tasks(&[active_task]);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0]["conflict_domain"],
+            "path:crates/vida/src/continuation_binding_summary.rs"
+        );
+        assert_eq!(
+            candidates[0]["owned_paths"],
+            serde_json::json!(["crates/vida/src/continuation_binding_summary.rs"])
+        );
+    }
+
+    #[test]
     fn taskflow_active_work_truth_keeps_unrelated_active_tasks_ambiguous() {
         let runtime_summary = serde_json::json!({
             "status": "ambiguous",
@@ -1754,6 +2050,119 @@ mod tests {
         assert_eq!(taskflow_candidates.len(), 2);
 
         let summary = add_taskflow_active_work_truth(runtime_summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(
+            summary["ambiguity_reason"],
+            "multiple_taskflow_active_work_candidates"
+        );
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_binds_current_session_claim_when_foreign_tasks_are_disjoint() {
+        let runtime_summary = serde_json::json!({
+            "status": "ambiguous",
+            "continuation_allowed": false,
+            "continuation_required_now": false,
+            "active_bounded_unit": serde_json::Value::Null,
+            "binding_source": serde_json::Value::Null,
+            "why_this_unit": serde_json::Value::Null,
+            "primary_path": "diagnosis_path",
+            "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_while_ambiguous",
+            "ambiguity_reason": "runtime_evidence_ambiguous",
+            "next_actions": []
+        });
+        let first = task_record(
+            "runtime-default-toon-multisession-independent-task-routing",
+            "in_progress",
+        );
+        let second = task_record("foreign-session-independent-runtime-fix", "in_progress");
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[first, second]);
+        let claims = vec![
+            active_claim(
+                "claim-current",
+                "session-current",
+                "runtime-default-toon-multisession-independent-task-routing",
+                "task:runtime-default-toon-multisession-independent-task-routing",
+                &["crates/vida/src/continuation_binding_summary.rs"],
+            ),
+            active_claim(
+                "claim-foreign",
+                "session-foreign",
+                "foreign-session-independent-runtime-fix",
+                "task:foreign-session-independent-runtime-fix",
+                &["crates/vida/src/status_surface.rs"],
+            ),
+        ];
+
+        let summary = add_taskflow_active_work_truth_with_session_claims(
+            runtime_summary,
+            taskflow_candidates,
+            &claims,
+            "session-current",
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(summary["binding_source"], "taskflow_current_session_claim");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "runtime-default-toon-multisession-independent-task-routing"
+        );
+        assert_eq!(
+            summary["sequential_vs_parallel_posture"],
+            "parallel_safe_current_session_taskflow_claim"
+        );
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_keeps_overlapping_session_claims_ambiguous() {
+        let runtime_summary = serde_json::json!({
+            "status": "ambiguous",
+            "continuation_allowed": false,
+            "continuation_required_now": false,
+            "active_bounded_unit": serde_json::Value::Null,
+            "binding_source": serde_json::Value::Null,
+            "why_this_unit": serde_json::Value::Null,
+            "primary_path": "diagnosis_path",
+            "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_while_ambiguous",
+            "ambiguity_reason": "runtime_evidence_ambiguous",
+            "next_actions": []
+        });
+        let first = task_record(
+            "runtime-default-toon-multisession-independent-task-routing",
+            "in_progress",
+        );
+        let second = task_record("foreign-session-overlapping-runtime-fix", "in_progress");
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[first, second]);
+        let claims = vec![
+            active_claim(
+                "claim-current",
+                "session-current",
+                "runtime-default-toon-multisession-independent-task-routing",
+                "path:crates/vida/src",
+                &["crates/vida/src"],
+            ),
+            active_claim(
+                "claim-foreign",
+                "session-foreign",
+                "foreign-session-overlapping-runtime-fix",
+                "path:crates/vida/src",
+                &["crates/vida/src/status_surface.rs"],
+            ),
+        ];
+
+        let summary = add_taskflow_active_work_truth_with_session_claims(
+            runtime_summary,
+            taskflow_candidates,
+            &claims,
+            "session-current",
+        );
 
         assert_eq!(summary["status"], "ambiguous");
         assert_eq!(summary["continuation_allowed"], false);
@@ -2629,6 +3038,51 @@ mod tests {
             summary["active_bounded_unit"]["task_id"],
             "tf-post-r1-main-carveout"
         );
+    }
+
+    #[test]
+    fn ambiguous_runtime_evidence_preserves_admissible_explicit_task_graph_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "task-1",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "closure".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "task-1".to_string(),
+            task_id: "task-next".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": "task-next",
+                "run_id": "task-1",
+                "task_status": "ready",
+                "issue_type": "task"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "operator explicitly selected the next task".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("continue task-next".to_string()),
+            recorded_at: "2026-06-16T09:00:00Z".to_string(),
+        };
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            true,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
+        assert_eq!(summary["active_bounded_unit"]["task_id"], "task-next");
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }
 
     #[test]
