@@ -4033,6 +4033,28 @@ impl StateStore {
             .await
     }
 
+    pub(crate) async fn run_graph_status_is_stale_for_task_continuation_binding(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<bool, StateStoreError> {
+        self.run_graph_status_is_stale_for_task_continuation_binding_from_task_rows(status, &[])
+            .await
+    }
+
+    pub(crate) async fn run_graph_status_is_stale_for_task_continuation_binding_from_task_rows(
+        &self,
+        status: &RunGraphStatus,
+        task_rows: &[TaskRecord],
+    ) -> Result<bool, StateStoreError> {
+        if Self::run_graph_status_is_reconciled_terminal_closure(status) {
+            return Ok(true);
+        }
+        self.run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+            status, task_rows,
+        )
+        .await
+    }
+
     pub(crate) async fn run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
         &self,
         status: &RunGraphStatus,
@@ -4568,6 +4590,35 @@ mod tests {
             )
             .await
             .expect("task row lookup should succeed"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn task_continuation_binding_stale_classifier_retires_reconciled_terminal_closure() {
+        let root = temp_run_graph_root("vida-terminal-closure-stale-binding");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let mut status = sample_run_graph_status();
+        status.run_id = "terminal-closure-run".to_string();
+        status.task_id = "closed-runtime-task".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.next_node = None;
+        status.resume_target = "none".to_string();
+        status.policy_gate = "historical_closed_task_stale_run_retired".to_string();
+
+        assert!(store
+            .run_graph_status_is_stale_for_task_continuation_binding(&status)
+            .await
+            .expect("terminal closure classifier should succeed"));
+
+        let mut open_status = sample_run_graph_status();
+        open_status.run_id = "active-run".to_string();
+        open_status.task_id = "active-runtime-task".to_string();
+        assert!(!store
+            .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
+            .await
+            .expect("active status classifier should succeed"));
 
         let _ = fs::remove_dir_all(&root);
     }

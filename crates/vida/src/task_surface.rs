@@ -10245,7 +10245,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     };
                     let current_binding = match latest_run_graph_status.as_ref() {
                         Some(status) => match store
-                            .run_graph_status_is_stale_after_release_admission_complete(status)
+                            .run_graph_status_is_stale_for_task_continuation_binding(status)
                             .await
                         {
                             Ok(true) => None,
@@ -10262,7 +10262,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             }
                             Err(error) => {
                                 eprintln!(
-                                    "Failed to classify release-admitted stale run-graph status: {error}"
+                                    "Failed to classify stale run-graph status for task continuation: {error}"
                                 );
                                 return ExitCode::from(1);
                             }
@@ -15548,6 +15548,107 @@ mod tests {
         assert_eq!(
             projection["active_bounded_unit"]["task_id"],
             "taskflow-case-11-actual-agent-autonomy"
+        );
+        assert_eq!(projection["binding_source"], serde_json::Value::Null);
+        assert!(projection["blocker_codes"]
+            .as_array()
+            .expect("blockers should be an array")
+            .is_empty());
+    }
+
+    #[test]
+    fn task_next_lawful_command_ignores_reconciled_terminal_closure_latest_run() {
+        run_on_runtime_stack_for_test(
+            task_next_lawful_command_ignores_reconciled_terminal_closure_latest_run_body,
+        );
+    }
+
+    fn task_next_lawful_command_ignores_reconciled_terminal_closure_latest_run_body() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "task-ready-after-stale-closure",
+                "Ready after stale closure",
+                "task",
+                "open",
+                2,
+                Some("parent-epic"),
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "closed-runtime-task",
+                "Closed runtime task",
+                "task",
+                "closed",
+                1,
+                Some("parent-epic"),
+            )
+            .await;
+            store
+                .record_run_graph_status(&crate::state_store::RunGraphStatus {
+                    run_id: "terminal-closure-run".to_string(),
+                    task_id: "closed-runtime-task".to_string(),
+                    task_class: "worker".to_string(),
+                    active_node: "closure".to_string(),
+                    next_node: None,
+                    status: "completed".to_string(),
+                    route_task_class: "implementation".to_string(),
+                    selected_backend: "taskflow_state_store".to_string(),
+                    lane_id: "closure_lane".to_string(),
+                    lifecycle_stage: "closure_complete".to_string(),
+                    policy_gate: "historical_closed_task_stale_run_retired".to_string(),
+                    handoff_state: "none".to_string(),
+                    context_state: "sealed".to_string(),
+                    checkpoint_kind: "execution_cursor".to_string(),
+                    resume_target: "none".to_string(),
+                    recovery_ready: false,
+                })
+                .await
+                .expect("run graph status should record");
+            let binding = test_continuation_binding(
+                "terminal-closure-run",
+                "closed-runtime-task",
+                "consume_continue_after_downstream_chain",
+                "run_graph_task",
+            );
+            store
+                .record_run_graph_continuation_binding(&binding)
+                .await
+                .expect("continuation binding should record");
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("snapshot should refresh");
+        });
+
+        let code = runtime.block_on(crate::run(cli(&[
+            "task",
+            "next-lawful",
+            "--state-dir",
+            harness.path().to_str().expect("state path should be utf8"),
+            "--json",
+        ])));
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        let projection_path = harness
+            .path()
+            .join("operator-projections")
+            .join("task-next-lawful-latest.json");
+        let projection: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(projection_path).expect("next-lawful projection should be written"),
+        )
+        .expect("next-lawful projection should parse");
+        assert_eq!(projection["status"], task_json_success_status());
+        assert_eq!(
+            projection["active_bounded_unit"]["task_id"],
+            "task-ready-after-stale-closure"
         );
         assert_eq!(projection["binding_source"], serde_json::Value::Null);
         assert!(projection["blocker_codes"]

@@ -3094,13 +3094,13 @@ async fn scoped_latest_run_graph_for_explicit_ready_task(
         Some(status)
             if ready_head.is_some()
                 && store
-                    .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+                    .run_graph_status_is_stale_for_task_continuation_binding_from_task_rows(
                         &status, all_tasks,
                     )
                     .await
                     .map_err(|error| {
                         format!(
-                            "Failed to classify release-admitted stale run-graph status: {error}"
+                            "Failed to classify stale run-graph status for task continuation: {error}"
                         )
                     })? =>
         {
@@ -9139,6 +9139,163 @@ mod tests {
 
         assert_eq!(scoped.run_id, "run-current");
         assert_eq!(scoped.task_id, "task-current");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn scoped_latest_run_graph_ignores_reconciled_terminal_closure_for_ready_task() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-terminal-closure-latest-run-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let ready = task("task-ready", "task", "open", 1, &[], Vec::new());
+        let closed = task("task-closed", "task", "closed", 2, &[], Vec::new());
+        let mut stale = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal-closure",
+            "implementation",
+            "implementation",
+        );
+        stale.task_id = "task-closed".to_string();
+        stale.status = "completed".to_string();
+        stale.lifecycle_stage = "closure_complete".to_string();
+        stale.next_node = None;
+        stale.resume_target = "none".to_string();
+        stale.policy_gate = "historical_closed_task_stale_run_retired".to_string();
+        store
+            .record_run_graph_status(&stale)
+            .await
+            .expect("record terminal closure status");
+
+        let global_latest = store
+            .latest_run_graph_status()
+            .await
+            .expect("read global latest")
+            .expect("global latest exists");
+        assert_eq!(global_latest.run_id, "run-terminal-closure");
+
+        let scoped = super::scoped_latest_run_graph_for_explicit_ready_task(
+            &store,
+            Some(global_latest),
+            None,
+            Some(&ready),
+            &[ready.clone(), closed],
+        )
+        .await
+        .expect("resolve scoped latest");
+
+        assert!(scoped.is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn taskflow_next_surface_selects_ready_task_over_reconciled_terminal_closure() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::current_dir()
+            .expect("current dir should resolve")
+            .join(".vida")
+            .join("tmp")
+            .join(format!(
+                "taskflow-next-terminal-closure-{}-{}",
+                std::process::id(),
+                nanos
+            ));
+        fs::create_dir_all(&root).expect("test state root should be writable");
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "task-ready-after-terminal-closure",
+                title: "Ready after terminal closure",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create ready task");
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "closed-runtime-task",
+                title: "Closed runtime task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 2,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create closed task");
+        let mut stale = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal-closure",
+            "implementation",
+            "implementation",
+        );
+        stale.task_id = "closed-runtime-task".to_string();
+        stale.status = "completed".to_string();
+        stale.lifecycle_stage = "closure_complete".to_string();
+        stale.next_node = None;
+        stale.resume_target = "none".to_string();
+        stale.policy_gate = "historical_closed_task_stale_run_retired".to_string();
+        store
+            .record_run_graph_status(&stale)
+            .await
+            .expect("record terminal closure status");
+        store
+            .refresh_task_snapshot()
+            .await
+            .expect("refresh snapshot");
+        drop(store);
+
+        let code = super::run_taskflow_next_surface(&[
+            "next".to_string(),
+            "--state-dir".to_string(),
+            root.to_str()
+                .expect("state root should be utf8")
+                .to_string(),
+            "--json".to_string(),
+        ])
+        .await;
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        let projection_path = root
+            .join("operator-projections")
+            .join(format!("{}.json", super::TASKFLOW_NEXT_PROJECTION_NAME));
+        let projection: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(projection_path).expect("taskflow next projection should exist"),
+        )
+        .expect("taskflow next projection should parse");
+        assert_eq!(projection["status"], "pass");
+        assert_eq!(
+            projection["primary_ready_task"]["id"],
+            "task-ready-after-terminal-closure"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
