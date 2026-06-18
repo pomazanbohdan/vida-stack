@@ -1647,7 +1647,7 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
         let Ok(task) = store.show_task(task_id).await else {
             return false;
         };
-        if task.status == "closed" {
+        if crate::state_store::StateStore::task_status_is_closed_like(&task.status) {
             return false;
         }
     }
@@ -1664,7 +1664,7 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     let Ok(latest_task) = store.show_task(&latest_run_graph_status.task_id).await else {
         return false;
     };
-    !(latest_task.status == "closed"
+    !(crate::state_store::StateStore::task_status_is_closed_like(&latest_task.status)
         && !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
             &latest_run_graph_status,
         ))

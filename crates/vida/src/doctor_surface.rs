@@ -1145,7 +1145,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             true
                         } else {
                             match store.show_task(&status.task_id).await {
-                                Ok(task) => task.status == "closed",
+                                Ok(task) => {
+                                    crate::state_store::StateStore::task_status_is_closed_like(
+                                        &task.status,
+                                    )
+                                }
                                 Err(crate::state_store::StateStoreError::MissingTask { .. }) => {
                                     false
                                 }
@@ -1825,7 +1829,7 @@ mod tests {
     fn release1_operator_contracts_consistency_accepts_blocked_with_actions() {
         let blocker_codes = vec!["recovery_readiness_blocked".to_string()];
         let next_actions = vec![
-            "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.".to_string(),
+            "Inspect `vida taskflow recovery latest`, then run `vida taskflow consume continue` after `recovery_ready=true` is proven for resume/rollback handoff.".to_string(),
         ];
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -1924,7 +1928,7 @@ mod tests {
             operator_contracts_consistency_error(
                 " blocked ",
                 &["recovery_readiness_blocked".to_string()],
-                &["Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.".to_string()],
+                &["Inspect `vida taskflow recovery latest`, then run `vida taskflow consume continue` after `recovery_ready=true` is proven for resume/rollback handoff.".to_string()],
             ),
             None
         );
@@ -2676,7 +2680,7 @@ mod tests {
             "operator_contracts": {
                 "status": "blocked",
                 "blocker_codes": ["protocol_binding_blocking_issues"],
-                "next_actions": ["Run `vida taskflow protocol-binding check --json` and clear blockers."]
+                "next_actions": ["Run `vida taskflow protocol-binding check` and clear blockers."]
             }
         });
         assert_eq!(
@@ -2715,16 +2719,16 @@ mod tests {
         let summary_json = serde_json::json!({
             "status": "blocked",
             "blocker_codes": ["recovery_readiness_blocked"],
-            "next_actions": ["  Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.  "],
+            "next_actions": ["  Inspect `vida taskflow recovery latest`, then run `vida taskflow consume continue` after `recovery_ready=true` is proven for resume/rollback handoff.  "],
             "shared_fields": {
                 "status": "blocked",
                 "blocker_codes": ["recovery_readiness_blocked"],
-                "next_actions": ["inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff."]
+                "next_actions": ["inspect `vida taskflow recovery latest`, then run `vida taskflow consume continue` after `recovery_ready=true` is proven for resume/rollback handoff."]
             },
             "operator_contracts": {
                 "status": "blocked",
                 "blocker_codes": ["recovery_readiness_blocked"],
-                "next_actions": ["INSPECT `VIDA TASKFLOW RECOVERY LATEST --JSON`, THEN RUN `VIDA TASKFLOW CONSUME CONTINUE --JSON` AFTER `RECOVERY_READY=TRUE` IS PROVEN FOR RESUME/ROLLBACK HANDOFF."]
+                "next_actions": ["INSPECT `VIDA TASKFLOW RECOVERY LATEST`, THEN RUN `VIDA TASKFLOW CONSUME CONTINUE` AFTER `RECOVERY_READY=TRUE` IS PROVEN FOR RESUME/ROLLBACK HANDOFF."]
             }
         });
         assert_eq!(
@@ -2763,16 +2767,16 @@ mod tests {
         let summary_json = serde_json::json!({
             "status": "blocked",
             "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
-            "next_actions": ["Run `vida taskflow protocol-binding sync --json`"],
+            "next_actions": ["Run `vida taskflow protocol-binding sync`"],
             "shared_fields": {
                 "status": "blocked",
                 "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
-                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
+                "next_actions": ["Run `vida taskflow protocol-binding sync`"]
             },
             "operator_contracts": {
                 "status": "blocked",
                 "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
-                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
+                "next_actions": ["Run `vida taskflow protocol-binding sync`"]
             }
         });
         assert_eq!(

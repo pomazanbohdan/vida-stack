@@ -26,7 +26,9 @@ impl RunGraphTaskAuthorityVerdict {
     }
 
     pub(crate) fn task_closed(&self) -> bool {
-        self.task_status.as_deref() == Some("closed")
+        self.task_status
+            .as_deref()
+            .is_some_and(StateStore::task_status_is_closed_like)
             || matches!(
                 self.kind,
                 RunGraphTaskAuthorityKind::ClosedTaskStaleRun
@@ -83,12 +85,14 @@ async fn authoritative_present_task(
     task_id: &str,
 ) -> Result<Option<RunGraphTaskAuthorityVerdict>, StateStoreError> {
     match store.show_task(task_id).await {
-        Ok(task) if task.status != "closed" => Ok(Some(RunGraphTaskAuthorityVerdict {
-            kind: RunGraphTaskAuthorityKind::AuthoritativeTaskPresent,
-            run_id: status.run_id.clone(),
-            task_id: task.id,
-            task_status: Some(task.status),
-        })),
+        Ok(task) if !StateStore::task_status_is_closed_like(&task.status) => {
+            Ok(Some(RunGraphTaskAuthorityVerdict {
+                kind: RunGraphTaskAuthorityKind::AuthoritativeTaskPresent,
+                run_id: status.run_id.clone(),
+                task_id: task.id,
+                task_status: Some(task.status),
+            }))
+        }
         Ok(_) | Err(StateStoreError::MissingTask { .. }) => Ok(None),
         Err(error) => Err(error),
     }
@@ -121,12 +125,14 @@ pub(crate) async fn run_graph_task_authority_verdict(
     }
 
     match store.show_task(&status.task_id).await {
-        Ok(task) if task.status == "closed" => Ok(RunGraphTaskAuthorityVerdict {
-            kind: RunGraphTaskAuthorityKind::ClosedTaskStaleRun,
-            run_id: status.run_id.clone(),
-            task_id: status.task_id.clone(),
-            task_status: Some(task.status),
-        }),
+        Ok(task) if StateStore::task_status_is_closed_like(&task.status) => {
+            Ok(RunGraphTaskAuthorityVerdict {
+                kind: RunGraphTaskAuthorityKind::ClosedTaskStaleRun,
+                run_id: status.run_id.clone(),
+                task_id: status.task_id.clone(),
+                task_status: Some(task.status),
+            })
+        }
         Ok(task) => Ok(RunGraphTaskAuthorityVerdict {
             kind: RunGraphTaskAuthorityKind::AuthoritativeTaskPresent,
             run_id: status.run_id.clone(),
@@ -140,5 +146,86 @@ pub(crate) async fn run_graph_task_authority_verdict(
             task_status: None,
         }),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state_store::{TaskExecutionSemantics, TaskPlannerMetadata, TaskRecord};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_authority_root(prefix: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+    }
+
+    fn test_task_record(task_id: &str, status: &str) -> TaskRecord {
+        TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: task_id.to_string(),
+            description: task_id.to_string(),
+            status: status.to_string(),
+            priority: 1,
+            issue_type: "task".to_string(),
+            created_at: "2026-06-18T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "2026-06-18T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: TaskExecutionSemantics::default(),
+            planner_metadata: TaskPlannerMetadata::default(),
+            provider_mapping: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn authority_verdict_task_closed_uses_canonical_aliases() {
+        for alias in ["closed", "completed", "done", "resolved", "merged"] {
+            let verdict = RunGraphTaskAuthorityVerdict {
+                kind: RunGraphTaskAuthorityKind::AuthoritativeTaskPresent,
+                run_id: "run-alias".to_string(),
+                task_id: "task-alias".to_string(),
+                task_status: Some(alias.to_string()),
+            };
+            assert!(verdict.task_closed(), "{alias} should be closed-like");
+        }
+    }
+
+    #[tokio::test]
+    async fn authority_verdict_treats_closed_alias_task_as_stale_run() {
+        let root = temp_authority_root("vida-run-graph-authority-status-alias");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("alias-task", "resolved"))
+            .await
+            .expect("persist task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-alias",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "alias-task".to_string();
+        status.status = "blocked".to_string();
+
+        let verdict = run_graph_task_authority_verdict(&store, &status)
+            .await
+            .expect("authority verdict");
+        assert_eq!(verdict.kind, RunGraphTaskAuthorityKind::ClosedTaskStaleRun);
+        assert_eq!(verdict.task_status.as_deref(), Some("resolved"));
+        assert!(verdict.task_closed());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

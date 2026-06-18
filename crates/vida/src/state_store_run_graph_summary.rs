@@ -624,7 +624,7 @@ fn terminal_closure_supersedes_stale_handoff_receipt(
 }
 
 fn task_status_is_terminal_for_continuation(status: &str) -> bool {
-    matches!(status.trim(), "closed" | "completed")
+    taskflow_core::task_status_is_closed_like(status)
 }
 
 fn terminal_closure_status_has_explicit_receipt_override(
@@ -4055,7 +4055,7 @@ impl StateStore {
         }
         if task_rows.is_empty() {
             match self.show_task(&status.task_id).await {
-                Ok(task) => Ok(task.status == "closed"),
+                Ok(task) => Ok(Self::task_status_is_closed_like(&task.status)),
                 Err(StateStoreError::MissingTask { .. }) => Ok(true),
                 Err(error) => Err(error),
             }
@@ -4063,7 +4063,7 @@ impl StateStore {
             Ok(task_rows
                 .iter()
                 .find(|task| task.id == status.task_id)
-                .map(|task| task.status == "closed")
+                .map(|task| Self::task_status_is_closed_like(&task.status))
                 .unwrap_or(true))
         }
     }
@@ -4290,7 +4290,7 @@ mod tests {
                     .then(|| format!("{task_id}-fixture-parent"));
                 if let Some(parent_task_id) = generated_parent_id.as_deref() {
                     let parent_labels: Vec<String> = Vec::new();
-                    let parent_status = if matches!(status.trim(), "closed" | "completed") {
+                    let parent_status = if StateStore::task_status_is_closed_like(status) {
                         "closed"
                     } else {
                         "open"
@@ -4438,6 +4438,138 @@ mod tests {
             provider_mapping: None,
             dependencies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn continuation_terminal_task_status_uses_canonical_closed_aliases() {
+        for alias in ["closed", "completed", "done", "resolved", "merged"] {
+            assert!(
+                task_status_is_terminal_for_continuation(alias),
+                "{alias} should be terminal for run-graph continuation"
+            );
+        }
+        for non_terminal in ["open", "in_progress", "paused", "cancelled"] {
+            assert!(
+                !task_status_is_terminal_for_continuation(non_terminal),
+                "{non_terminal} should not be terminal for run-graph continuation"
+            );
+        }
+    }
+
+    fn write_release_admission_snapshot(state_root: &std::path::Path, run_id: &str) {
+        let runtime_dir = state_root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+        fs::write(
+            runtime_dir.join("final-recorded-with-release-admission.json"),
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "source_run_id": run_id,
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                },
+                "shared_fields": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                },
+                "payload": {
+                    "closure_admission": {
+                        "status": "pass",
+                        "admitted": true,
+                        "closure_decision": "closed",
+                        "decision_owner": "release-owner",
+                        "decision_at": "2026-05-19T00:00:00Z",
+                        "evidence_bundle_refs": ["evidence-bundle-case10"],
+                        "open_risk_acceptance_ids": ["risk-acceptance-case10"],
+                        "blockers": [],
+                        "proof_surfaces": ["vida taskflow consume final"],
+                        "evidence_table": [
+                            {
+                                "evidence_class": "closure_decision_record",
+                                "status": "pass",
+                                "evidence_refs": ["closure-record-case10"]
+                            },
+                            {
+                                "evidence_class": "runtime_consumption_final_snapshot",
+                                "status": "pass",
+                                "evidence_refs": ["final-snapshot-case10"]
+                            },
+                            {
+                                "evidence_class": "docflow_readiness_and_proof_receipts",
+                                "status": "pass",
+                                "evidence_refs": ["docflow-readiness-case10", "docflow-proof-case10"]
+                            },
+                            {
+                                "evidence_class": "lane_execution_and_handoff_receipts",
+                                "status": "pass",
+                                "evidence_refs": ["lane-execution-case10", "handoff-case10"]
+                            },
+                            {
+                                "evidence_class": "replay_checkpoint_lineage_artifacts",
+                                "status": "pass",
+                                "evidence_refs": ["checkpoint-case10", "replay-case10"]
+                            },
+                            {
+                                "evidence_class": "risk_acceptance_artifacts",
+                                "status": "pass",
+                                "evidence_refs": ["risk-acceptance-case10"]
+                            },
+                            {
+                                "evidence_class": "evidence_bundle_linkage",
+                                "status": "pass",
+                                "evidence_refs": ["evidence-bundle-case10"]
+                            }
+                        ]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("release-admission snapshot should be writable");
+    }
+
+    #[tokio::test]
+    async fn stale_after_release_admission_treats_closed_alias_task_as_closed() {
+        let root = temp_run_graph_root("vida-release-admission-closed-alias");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("alias-task", "resolved"))
+            .await
+            .expect("seed alias task");
+        write_release_admission_snapshot(store.root(), "run-alias");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-alias".to_string();
+        status.task_id = "alias-task".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "implementer_blocked".to_string();
+
+        assert!(
+            store
+                .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+                    &status,
+                    &[],
+                )
+                .await
+                .expect("live task lookup should succeed")
+        );
+
+        let rows = vec![test_task_record("alias-task", "merged")];
+        assert!(store
+            .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+                &status, &rows,
+            )
+            .await
+            .expect("task row lookup should succeed"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

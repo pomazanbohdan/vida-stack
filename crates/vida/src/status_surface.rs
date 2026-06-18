@@ -795,7 +795,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         !has_truth
                             && all_tasks
                                 .iter()
-                                .any(|task| task.id == status.task_id && task.status == "closed")
+                                .any(|task| {
+                                    task.id == status.task_id
+                                        && crate::state_store::StateStore::task_status_is_closed_like(
+                                            &task.status,
+                                        )
+                                })
                     }
                     _ => false,
                 };
@@ -1623,7 +1628,7 @@ async fn cached_status_projection_current_runtime_admissible(
     };
     !all_tasks.iter().any(|task| {
         task.id == latest_run_graph_status.task_id
-            && task.status == "closed"
+            && crate::state_store::StateStore::task_status_is_closed_like(&task.status)
             && !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                 &latest_run_graph_status,
             )
@@ -2073,9 +2078,10 @@ async fn refresh_cached_status_projection_runtime_fields(
                 .run_graph_terminal_closure_has_task_close_truth(status)
                 .await
                 .ok()?
-                && all_tasks
-                    .iter()
-                    .any(|task| task.id == status.task_id && task.status == "closed")
+                && all_tasks.iter().any(|task| {
+                    task.id == status.task_id
+                        && crate::state_store::StateStore::task_status_is_closed_like(&task.status)
+                })
         }
         _ => false,
     };

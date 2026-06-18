@@ -56,12 +56,20 @@ impl StateStore {
 
     pub async fn task_store_summary(&self) -> Result<TaskStoreSummary, StateStoreError> {
         let tasks = self.all_tasks().await?;
-        let open_count = tasks.iter().filter(|task| task.status == "open").count();
+        let open_count = tasks
+            .iter()
+            .filter(|task| taskflow_core::canonical_task_status(&task.status) == Some("open"))
+            .count();
         let in_progress_count = tasks
             .iter()
-            .filter(|task| task.status == "in_progress")
+            .filter(|task| {
+                taskflow_core::canonical_task_status(&task.status) == Some("in_progress")
+            })
             .count();
-        let closed_count = tasks.iter().filter(|task| task.status == "closed").count();
+        let closed_count = tasks
+            .iter()
+            .filter(|task| Self::task_status_is_closed_like(&task.status))
+            .count();
         let epic_count = tasks
             .iter()
             .filter(|task| task.issue_type == "epic")
@@ -433,6 +441,55 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn task_store_summary_counts_canonical_status_aliases() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-store-summary-status-aliases-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, status) in [
+            ("open-alias", "todo"),
+            ("started-alias", "started"),
+            ("closed-alias", "resolved"),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title: task_id,
+                    display_id: None,
+                    description: "",
+                    issue_type: "epic",
+                    status,
+                    priority: 1,
+                    parent_id: None,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create task");
+        }
+
+        let summary = store
+            .task_store_summary()
+            .await
+            .expect("load task store summary");
+        assert_eq!(summary.open_count, 1);
+        assert_eq!(summary.in_progress_count, 1);
+        assert_eq!(summary.closed_count, 1);
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[tokio::test]
     async fn import_taskflow_snapshot_replaces_dependencies_for_updated_tasks_without_removing_unrelated_tasks(
