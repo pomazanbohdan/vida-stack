@@ -9,6 +9,8 @@ pub mod consume;
 pub mod path_policy;
 /// TaskFlow run-graph skeletons for future core extraction.
 pub mod run_graph;
+/// Shared runtime packet identity and receipt pairing policy.
+pub mod runtime_packet_identity;
 /// TaskFlow scheduling skeletons for future core extraction.
 pub mod scheduling;
 /// TaskFlow task command skeletons for future core extraction.
