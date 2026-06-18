@@ -75,7 +75,7 @@ pub(crate) use state_store_instruction_bundle::{
 pub use state_store_launcher_activation::LauncherActivationSnapshot;
 #[allow(unused_imports)]
 pub(crate) use state_store_orchestrator_claim::{
-    AcquireOrchestratorClaimRequest, LeaseMode, OrchestratorClaim,
+    claim_paths_intersect, AcquireOrchestratorClaimRequest, LeaseMode, OrchestratorClaim,
     OrchestratorClaimCompatibilityConflict, OrchestratorClaimStatus,
 };
 use state_store_patching::{

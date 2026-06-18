@@ -212,7 +212,7 @@ fn normalize_claim_path(path: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn claim_paths_intersect(left: &str, right: &str) -> bool {
+pub(crate) fn claim_paths_intersect(left: &str, right: &str) -> bool {
     let Some(left) = normalize_claim_path(left) else {
         return false;
     };
