@@ -6,6 +6,78 @@ pub struct ReadyTaskSelection<'a> {
     pub active_critical_path: bool,
 }
 
+pub const PARALLEL_BLOCKER_NO_CURRENT_TASK_REFERENCE: &str = "no_current_task_reference";
+pub const PARALLEL_BLOCKER_CURRENT_TASK_REFERENCE: &str = "current_task_reference";
+pub const PARALLEL_BLOCKER_EXECUTION_MODE_NOT_PARALLEL_SAFE: &str =
+    "execution_mode_not_parallel_safe";
+pub const PARALLEL_BLOCKER_CURRENT_EXECUTION_MODE_NOT_PARALLEL_SAFE: &str =
+    "current_execution_mode_not_parallel_safe";
+pub const PARALLEL_BLOCKER_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION: &str =
+    "missing_owned_paths_for_parallel_execution";
+pub const PARALLEL_BLOCKER_CURRENT_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION: &str =
+    "current_missing_owned_paths_for_parallel_execution";
+pub const PARALLEL_BLOCKER_ORDER_BUCKET_MISMATCH_OR_MISSING: &str =
+    "order_bucket_mismatch_or_missing";
+pub const PARALLEL_BLOCKER_CONFLICT_DOMAIN_COLLISION: &str = "conflict_domain_collision";
+pub const PARALLEL_BLOCKER_MISSING_CONFLICT_DOMAIN: &str = "missing_conflict_domain";
+pub const PARALLEL_BLOCKER_PARALLEL_GROUP_MISMATCH: &str = "parallel_group_mismatch";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelSafetyInput<'a> {
+    pub task_id: &'a str,
+    pub execution_mode: Option<&'a str>,
+    pub order_bucket: Option<&'a str>,
+    pub parallel_group: Option<&'a str>,
+    pub conflict_domain: Option<&'a str>,
+    pub has_owned_paths: bool,
+}
+
+pub fn parallel_blockers_against_current(
+    candidate: ParallelSafetyInput<'_>,
+    current: Option<ParallelSafetyInput<'_>>,
+) -> Vec<String> {
+    let Some(current) = current else {
+        return vec![PARALLEL_BLOCKER_NO_CURRENT_TASK_REFERENCE.to_string()];
+    };
+    if candidate.task_id == current.task_id {
+        return vec![PARALLEL_BLOCKER_CURRENT_TASK_REFERENCE.to_string()];
+    }
+
+    let mut blockers = Vec::new();
+    if candidate.execution_mode != Some("parallel_safe") {
+        blockers.push(PARALLEL_BLOCKER_EXECUTION_MODE_NOT_PARALLEL_SAFE.to_string());
+    }
+    if current.execution_mode != Some("parallel_safe") {
+        blockers.push(PARALLEL_BLOCKER_CURRENT_EXECUTION_MODE_NOT_PARALLEL_SAFE.to_string());
+    }
+    if candidate.execution_mode == Some("parallel_safe") && !candidate.has_owned_paths {
+        blockers.push(PARALLEL_BLOCKER_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION.to_string());
+    }
+    if current.execution_mode == Some("parallel_safe") && !current.has_owned_paths {
+        blockers
+            .push(PARALLEL_BLOCKER_CURRENT_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION.to_string());
+    }
+
+    match (candidate.order_bucket, current.order_bucket) {
+        (Some(left), Some(right)) if left == right => {}
+        _ => blockers.push(PARALLEL_BLOCKER_ORDER_BUCKET_MISMATCH_OR_MISSING.to_string()),
+    }
+
+    match (candidate.conflict_domain, current.conflict_domain) {
+        (Some(left), Some(right)) if left != right => {}
+        (Some(_), Some(_)) => blockers.push(PARALLEL_BLOCKER_CONFLICT_DOMAIN_COLLISION.to_string()),
+        _ => blockers.push(PARALLEL_BLOCKER_MISSING_CONFLICT_DOMAIN.to_string()),
+    }
+
+    match (candidate.parallel_group, current.parallel_group) {
+        (None, None) => {}
+        (Some(left), Some(right)) if left == right => {}
+        _ => blockers.push(PARALLEL_BLOCKER_PARALLEL_GROUP_MISMATCH.to_string()),
+    }
+
+    blockers
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrimaryReadySelection {
     pub index: Option<usize>,
@@ -175,6 +247,24 @@ mod tests {
         }
     }
 
+    fn parallel_input(
+        task_id: &'static str,
+        execution_mode: Option<&'static str>,
+        order_bucket: Option<&'static str>,
+        parallel_group: Option<&'static str>,
+        conflict_domain: Option<&'static str>,
+        has_owned_paths: bool,
+    ) -> ParallelSafetyInput<'static> {
+        ParallelSafetyInput {
+            task_id,
+            execution_mode,
+            order_bucket,
+            parallel_group,
+            conflict_domain,
+            has_owned_paths,
+        }
+    }
+
     #[test]
     fn effective_parallel_limit_clamps_to_configured_positive_limit() {
         assert_eq!(effective_parallel_limit(0, None), 1);
@@ -206,6 +296,39 @@ mod tests {
         assert_eq!(
             critical.source,
             PrimaryReadySelectionSource::CriticalPathReadyHead
+        );
+    }
+
+    #[test]
+    fn parallel_blockers_against_current_reports_canonical_codes() {
+        let blockers = parallel_blockers_against_current(
+            parallel_input(
+                "candidate",
+                Some("parallel_safe"),
+                Some("wave-a"),
+                Some("writers"),
+                Some("shared-domain"),
+                false,
+            ),
+            Some(parallel_input(
+                "current",
+                Some("parallel_safe"),
+                Some("wave-b"),
+                Some("readers"),
+                Some("shared-domain"),
+                false,
+            )),
+        );
+
+        assert_eq!(
+            blockers,
+            vec![
+                PARALLEL_BLOCKER_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION,
+                PARALLEL_BLOCKER_CURRENT_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION,
+                PARALLEL_BLOCKER_ORDER_BUCKET_MISMATCH_OR_MISSING,
+                PARALLEL_BLOCKER_CONFLICT_DOMAIN_COLLISION,
+                PARALLEL_BLOCKER_PARALLEL_GROUP_MISMATCH,
+            ]
         );
     }
 
