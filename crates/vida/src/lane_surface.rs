@@ -134,6 +134,13 @@ enum LaneCommand<'a> {
         host_bridge_request: Option<&'a str>,
         host_agent_id: Option<&'a str>,
         host_bridge_summary: Option<&'a str>,
+        host_bridge_result_file: Option<&'a str>,
+        decision: Option<&'a str>,
+        verdict: Option<&'a str>,
+        allowed_next_node: Option<&'a str>,
+        blocker_codes: Option<&'a str>,
+        blocker_code: Vec<&'a str>,
+        rework_target: Option<&'a str>,
         state_dir: Option<&'a str>,
         as_json: bool,
     },
@@ -508,15 +515,6 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                     _ => return Err(lane_usage().to_string()),
                 }
             }
-            let _ = (
-                host_bridge_result_file,
-                decision,
-                verdict,
-                allowed_next_node,
-                blocker_codes,
-                blocker_code,
-                rework_target,
-            );
             let Some(receipt_id) = receipt_id else {
                 return Err(lane_usage().to_string());
             };
@@ -526,6 +524,13 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                 host_bridge_request,
                 host_agent_id,
                 host_bridge_summary,
+                host_bridge_result_file,
+                decision,
+                verdict,
+                allowed_next_node,
+                blocker_codes,
+                blocker_code,
+                rework_target,
                 state_dir,
                 as_json,
             })
@@ -2609,6 +2614,153 @@ struct HostBridgeTaskflowImplementationEvidence {
     blocker_codes: Vec<String>,
 }
 
+#[derive(Default)]
+struct HostBridgeCompletionResultArgs<'a> {
+    result_file: Option<&'a str>,
+    decision: Option<&'a str>,
+    verdict: Option<&'a str>,
+    allowed_next_node: Option<&'a str>,
+    blocker_codes: Option<&'a str>,
+    blocker_code: Vec<&'a str>,
+    rework_target: Option<&'a str>,
+}
+
+impl HostBridgeCompletionResultArgs<'_> {
+    fn explicit_blocker_codes(&self) -> Vec<String> {
+        let mut codes = Vec::new();
+        if let Some(blocker_codes) = self.blocker_codes {
+            codes.extend(parse_host_bridge_completion_blocker_codes(blocker_codes));
+        }
+        codes.extend(
+            self.blocker_code
+                .iter()
+                .flat_map(|code| parse_host_bridge_completion_blocker_codes(code)),
+        );
+        canonicalize_supplied_host_bridge_blocker_codes(codes)
+    }
+
+    fn indicates_blocked(&self) -> bool {
+        [self.decision, self.verdict]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .any(host_bridge_completion_result_value_is_blocked)
+            || self
+                .rework_target
+                .is_some_and(|value| !value.trim().is_empty())
+            || !self.explicit_blocker_codes().is_empty()
+    }
+}
+
+fn parse_host_bridge_completion_blocker_codes(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if let Ok(values) = serde_json::from_str::<Vec<String>>(trimmed) {
+        return values;
+    }
+    trimmed
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn canonicalize_supplied_host_bridge_blocker_codes<I>(codes: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut codes = codes
+        .into_iter()
+        .map(|code| code.trim().to_string())
+        .filter(|code| !code.is_empty())
+        .collect::<Vec<_>>();
+    codes.sort();
+    codes.dedup();
+    codes
+}
+
+fn host_bridge_completion_result_value_is_blocked(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "blocked"
+            | "failed"
+            | "failure"
+            | "error"
+            | "rework"
+            | "rework_required"
+            | "retry"
+            | "retry_required"
+    )
+}
+
+fn read_supplied_host_bridge_completion_result(
+    state_root: &Path,
+    result_file: Option<&str>,
+) -> Result<Option<serde_json::Value>, String> {
+    let Some(result_file) = result_file.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let normalized_path =
+        crate::runtime_dispatch_state::normalize_persisted_runtime_path(result_file);
+    let canonical_path = canonicalize_existing_state_path(
+        state_root,
+        Path::new(&normalized_path),
+        "host bridge result",
+    )?;
+    read_host_bridge_json_artifact_at_path(&canonical_path).map(Some)
+}
+
+fn supplied_host_bridge_completion_result_blocker_codes(
+    args: &HostBridgeCompletionResultArgs<'_>,
+    result: Option<&serde_json::Value>,
+) -> Vec<String> {
+    let mut codes = args.explicit_blocker_codes();
+    if let Some(result) = result {
+        if let Some(code) = result
+            .get("blocker_code")
+            .and_then(serde_json::Value::as_str)
+        {
+            codes.extend(parse_host_bridge_completion_blocker_codes(code));
+        }
+        if let Some(values) = result
+            .get("blocker_codes")
+            .and_then(serde_json::Value::as_array)
+        {
+            codes.extend(
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string),
+            );
+        }
+    }
+    canonicalize_supplied_host_bridge_blocker_codes(codes)
+}
+
+fn supplied_host_bridge_completion_result_is_blocked(
+    args: &HostBridgeCompletionResultArgs<'_>,
+    result: Option<&serde_json::Value>,
+) -> bool {
+    if args.indicates_blocked() {
+        return true;
+    }
+    let Some(result) = result else {
+        return false;
+    };
+    ["status", "execution_state", "decision", "verdict"]
+        .into_iter()
+        .filter_map(|field| result.get(field).and_then(serde_json::Value::as_str))
+        .any(host_bridge_completion_result_value_is_blocked)
+        || result
+            .get("rework_target")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        || !supplied_host_bridge_completion_result_blocker_codes(args, Some(result)).is_empty()
+}
+
 struct HostBridgeReceiptPaths {
     request_path: PathBuf,
     packet_path: Option<PathBuf>,
@@ -4241,6 +4393,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             host_bridge_request,
             host_agent_id,
             host_bridge_summary,
+            host_bridge_result_file,
+            decision,
+            verdict,
+            allowed_next_node,
+            blocker_codes: supplied_blocker_codes,
+            blocker_code: supplied_blocker_code,
+            rework_target,
             state_dir: complete_state_dir,
             as_json,
         } => {
@@ -4375,6 +4534,34 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 eprintln!("{error}");
                 return ExitCode::from(2);
             }
+            let supplied_completion_result_args = HostBridgeCompletionResultArgs {
+                result_file: host_bridge_result_file,
+                decision,
+                verdict,
+                allowed_next_node,
+                blocker_codes: supplied_blocker_codes,
+                blocker_code: supplied_blocker_code,
+                rework_target,
+            };
+            let supplied_completion_result = match read_supplied_host_bridge_completion_result(
+                store.root(),
+                supplied_completion_result_args.result_file,
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let supplied_completion_blocker_codes =
+                supplied_host_bridge_completion_result_blocker_codes(
+                    &supplied_completion_result_args,
+                    supplied_completion_result.as_ref(),
+                );
+            let supplied_completion_blocked = supplied_host_bridge_completion_result_is_blocked(
+                &supplied_completion_result_args,
+                supplied_completion_result.as_ref(),
+            );
             let host_bridge_evidence = if let Some(request_path) = host_bridge_request {
                 let retrying_summary_guard = receipt.dispatch_status == "blocked"
                     && (receipt
@@ -4474,6 +4661,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .iter()
                 .any(|blocker| blocker == "missing_owned_write_scope");
             let completion_blocked = completion_blocker_code.is_some()
+                || supplied_completion_blocked
                 || host_bridge_evidence
                     .as_ref()
                     .is_some_and(|evidence| evidence.execution_state == "blocked");
@@ -4482,11 +4670,19 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 if let Some(evidence) = host_bridge_evidence.as_ref() {
                     blocker_codes.extend(evidence.blocker_codes.clone());
                 }
+                blocker_codes.extend(supplied_completion_blocker_codes.clone());
                 if let Some(completion_blocker_code) = completion_blocker_code.clone() {
                     blocker_codes.push(completion_blocker_code);
                 }
                 if blocker_codes.is_empty() {
-                    blocker_codes.push("lane_completion_blocked_by_summary".to_string());
+                    blocker_codes.push(
+                        if supplied_completion_blocked {
+                            "host_bridge_completion_result_blocked"
+                        } else {
+                            "lane_completion_blocked_by_summary"
+                        }
+                        .to_string(),
+                    );
                 }
                 blocker_codes.sort();
                 blocker_codes.dedup();
@@ -5435,7 +5631,8 @@ mod tests {
                 host_agent_id: None,
                 host_bridge_summary: None,
                 state_dir: None,
-                as_json: true
+                as_json: true,
+                ..
             }
         ));
     }
@@ -5469,7 +5666,8 @@ mod tests {
                 host_agent_id: Some("agent-1"),
                 host_bridge_summary: Some("agent completed"),
                 state_dir: Some(".vida/data/state"),
-                as_json: true
+                as_json: true,
+                ..
             }
         ));
     }
@@ -5511,9 +5709,51 @@ mod tests {
                     ".vida/data/state/host-tool-bridge/requests/request-1.json"
                 ),
                 host_agent_id: Some("agent-1"),
+                decision: Some("pass"),
+                verdict: Some("implemented"),
+                allowed_next_node: Some("coach"),
+                blocker_codes: Some("[]"),
+                blocker_code,
+                rework_target: Some("developer"),
+                host_bridge_result_file: Some(
+                    ".vida/data/state/host-tool-bridge/results/result-1.json"
+                ),
                 ..
-            }
+            } if blocker_code == vec!["implementation_artifacts_missing"]
         ));
+    }
+
+    #[test]
+    fn supplied_host_bridge_completion_result_flags_mark_completion_blocked() {
+        let args = HostBridgeCompletionResultArgs {
+            result_file: None,
+            decision: Some("blocked"),
+            verdict: Some("rework_required"),
+            allowed_next_node: Some("developer"),
+            blocker_codes: Some(r#"["operator_supplied_blocker"]"#),
+            blocker_code: vec!["another_operator_blocker"],
+            rework_target: Some("developer"),
+        };
+
+        let result = serde_json::json!({
+            "status": "blocked",
+            "execution_state": "blocked",
+            "blocker_codes": ["result_file_blocker"]
+        });
+
+        assert!(supplied_host_bridge_completion_result_is_blocked(
+            &args,
+            Some(&result)
+        ));
+        assert_eq!(
+            supplied_host_bridge_completion_result_blocker_codes(&args, Some(&result)),
+            vec![
+                "another_operator_blocker",
+                "operator_supplied_blocker",
+                "result_file_blocker"
+            ]
+        );
+        assert_eq!(args.allowed_next_node, Some("developer"));
     }
 
     #[test]

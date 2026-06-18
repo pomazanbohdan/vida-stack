@@ -739,6 +739,13 @@ fn host_bridge_completion_lane_args(
     summary: Option<&str>,
     receipt_id_override: Option<&str>,
     state_dir: Option<&Path>,
+    result_file: Option<&Path>,
+    decision: Option<&str>,
+    verdict: Option<&str>,
+    allowed_next_node: Option<&str>,
+    blocker_codes: Option<&str>,
+    blocker_code: &[String],
+    rework_target: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let run_id = payload["host_bridge"]["run_id"]
         .as_str()
@@ -766,6 +773,48 @@ fn host_bridge_completion_lane_args(
         "--host-bridge-summary".to_string(),
         summary.to_string(),
     ];
+    if let Some(result_file) = result_file {
+        args.push("--host-bridge-result-file".to_string());
+        args.push(result_file.display().to_string());
+    }
+    if let Some(decision) = decision.map(str::trim).filter(|value| !value.is_empty()) {
+        args.push("--decision".to_string());
+        args.push(decision.to_string());
+    }
+    if let Some(verdict) = verdict.map(str::trim).filter(|value| !value.is_empty()) {
+        args.push("--verdict".to_string());
+        args.push(verdict.to_string());
+    }
+    if let Some(allowed_next_node) = allowed_next_node
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--allowed-next-node".to_string());
+        args.push(allowed_next_node.to_string());
+    }
+    if let Some(blocker_codes) = blocker_codes
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--blocker-codes".to_string());
+        args.push(blocker_codes.to_string());
+    }
+    for blocker_code in blocker_code
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--blocker-code".to_string());
+        args.push(blocker_code.to_string());
+    }
+    if let Some(rework_target) = rework_target
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--rework-target".to_string());
+        args.push(rework_target.to_string());
+    }
     if let Some(state_dir) = state_dir {
         args.push("--state-dir".to_string());
         args.push(state_dir.display().to_string());
@@ -4005,6 +4054,13 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     command.summary.as_deref(),
                     command.receipt_id.as_deref(),
                     command.state_dir.as_deref(),
+                    command.result_file.as_deref(),
+                    command.decision.as_deref(),
+                    command.verdict.as_deref(),
+                    command.allowed_next_node.as_deref(),
+                    command.blocker_codes.as_deref(),
+                    &command.blocker_code,
+                    command.rework_target.as_deref(),
                 ) {
                     Ok(args) => args,
                     Err(error) => {
@@ -5748,6 +5804,13 @@ mod tests {
             Some("completed"),
             Some("receipt-1"),
             Some(std::path::Path::new("state-dir")),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
         )
         .expect("completion lane args should render");
 
