@@ -2,7 +2,9 @@ use super::*;
 use crate::launcher_task_commands::shell_quote;
 use crate::state_store::state_store_task_models::{
     task_is_spec_first_feature_parent, task_is_spec_pack_child, task_is_work_pool_pack_child,
+    task_status_is_closed_like, task_status_is_open_like,
 };
+use taskflow_core::scheduling::scheduler_dispatch::{self, ParallelSafetyInput};
 
 const TASK_TREE_MAX_DEPTH: usize = 64;
 const TASK_TREE_MAX_NODE_VISITS: usize = 10_000;
@@ -44,8 +46,7 @@ impl StateStore {
     }
 
     fn task_is_open_like(task: &TaskRecord) -> bool {
-        (task.status == "open" || task.status == "in_progress")
-            && !work_item_is_program_container(&task.issue_type)
+        task_status_is_open_like(&task.status) && !work_item_is_program_container(&task.issue_type)
     }
 
     fn task_blockers(
@@ -57,9 +58,7 @@ impl StateStore {
             .iter()
             .filter(|dependency| dependency.edge_type != "parent-child")
             .filter_map(|dependency| match by_id.get(&dependency.depends_on_id) {
-                Some(blocker_task) if Self::task_status_is_closed_like(&blocker_task.status) => {
-                    None
-                }
+                Some(blocker_task) if task_status_is_closed_like(&blocker_task.status) => None,
                 Some(blocker_task) => Some(TaskDependencyStatus {
                     issue_id: dependency.issue_id.clone(),
                     depends_on_id: dependency.depends_on_id.clone(),
@@ -84,14 +83,21 @@ impl StateStore {
         blockers
     }
 
-    fn compatible_parallel_group(task: &TaskRecord, current: &TaskRecord) -> Result<(), String> {
-        match (
-            task.execution_semantics.parallel_group.as_deref(),
-            current.execution_semantics.parallel_group.as_deref(),
-        ) {
-            (None, None) => Ok(()),
-            (Some(left), Some(right)) if left == right => Ok(()),
-            _ => Err("parallel_group_mismatch".to_string()),
+    fn task_has_owned_paths(task: &TaskRecord) -> bool {
+        task.planner_metadata
+            .owned_paths
+            .iter()
+            .any(|path| !path.trim().is_empty())
+    }
+
+    fn parallel_safety_input(task: &TaskRecord) -> ParallelSafetyInput<'_> {
+        ParallelSafetyInput {
+            task_id: task.id.as_str(),
+            execution_mode: task.execution_semantics.execution_mode.as_deref(),
+            order_bucket: task.execution_semantics.order_bucket.as_deref(),
+            parallel_group: task.execution_semantics.parallel_group.as_deref(),
+            conflict_domain: task.execution_semantics.conflict_domain.as_deref(),
+            has_owned_paths: Self::task_has_owned_paths(task),
         }
     }
 
@@ -99,43 +105,10 @@ impl StateStore {
         task: &TaskRecord,
         current: Option<&TaskRecord>,
     ) -> Vec<String> {
-        let Some(current) = current else {
-            return vec!["no_current_task_reference".to_string()];
-        };
-        if task.id == current.id {
-            return vec!["current_task_reference".to_string()];
-        }
-
-        let mut blockers = Vec::new();
-        if task.execution_semantics.execution_mode.as_deref() != Some("parallel_safe") {
-            blockers.push("execution_mode_not_parallel_safe".to_string());
-        }
-        if current.execution_semantics.execution_mode.as_deref() != Some("parallel_safe") {
-            blockers.push("current_execution_mode_not_parallel_safe".to_string());
-        }
-
-        match (
-            task.execution_semantics.order_bucket.as_deref(),
-            current.execution_semantics.order_bucket.as_deref(),
-        ) {
-            (Some(left), Some(right)) if left == right => {}
-            _ => blockers.push("order_bucket_mismatch_or_missing".to_string()),
-        }
-
-        match (
-            task.execution_semantics.conflict_domain.as_deref(),
-            current.execution_semantics.conflict_domain.as_deref(),
-        ) {
-            (Some(left), Some(right)) if left != right => {}
-            (Some(_), Some(_)) => blockers.push("conflict_domain_collision".to_string()),
-            _ => blockers.push("missing_conflict_domain".to_string()),
-        }
-
-        if let Err(blocker) = Self::compatible_parallel_group(task, current) {
-            blockers.push(blocker);
-        }
-
-        blockers
+        scheduler_dispatch::parallel_blockers_against_current(
+            Self::parallel_safety_input(task),
+            current.map(Self::parallel_safety_input),
+        )
     }
 
     fn task_is_container_only(task: &TaskRecord) -> bool {
@@ -641,7 +614,7 @@ impl StateStore {
         let active_ids = tasks
             .iter()
             .filter(|task| {
-                (task.status == "open" || task.status == "in_progress")
+                task_status_is_open_like(&task.status)
                     && !work_item_is_program_container(&task.issue_type)
             })
             .map(|task| task.id.clone())
@@ -712,7 +685,7 @@ impl StateStore {
                 });
             }
             if work_item_requires_parent(&task.issue_type)
-                && !Self::task_status_is_closed_like(&task.status)
+                && !task_status_is_closed_like(&task.status)
                 && parent_edges.is_empty()
             {
                 issues.push(TaskGraphIssue {
@@ -784,12 +757,12 @@ impl StateStore {
             let Some(children) = parent_children.get(&task.id) else {
                 continue;
             };
-            if Self::task_status_is_closed_like(&task.status) {
+            if task_status_is_closed_like(&task.status) {
                 for child_id in children {
                     let Some(child) = by_id.get(child_id) else {
                         continue;
                     };
-                    if !Self::task_status_is_closed_like(&child.status) {
+                    if !task_status_is_closed_like(&child.status) {
                         issues.push(TaskGraphIssue {
                             issue_type: "closed_parent_has_non_closed_child".to_string(),
                             issue_id: task.id.clone(),
@@ -802,13 +775,13 @@ impl StateStore {
                         });
                     }
                 }
-            } else if (task.status == "open" || task.status == "in_progress")
+            } else if task_status_is_open_like(&task.status)
                 && work_item_is_program_container(&task.issue_type)
             {
                 let has_non_closed_child = children.iter().any(|child_id| {
                     by_id
                         .get(child_id)
-                        .map(|child| !Self::task_status_is_closed_like(&child.status))
+                        .map(|child| !task_status_is_closed_like(&child.status))
                         .unwrap_or(false)
                 });
                 let has_unresolved_non_parent_dependency = task
@@ -819,7 +792,7 @@ impl StateStore {
                         by_id
                             .get(&dependency.depends_on_id)
                             .map(|dependency_task| {
-                                !Self::task_status_is_closed_like(&dependency_task.status)
+                                !task_status_is_closed_like(&dependency_task.status)
                             })
                             .unwrap_or(true)
                     });
@@ -932,7 +905,7 @@ impl StateStore {
             let Some(dep_task) = by_id.get(&dependency.depends_on_id) else {
                 continue;
             };
-            if Self::task_status_is_closed_like(&dep_task.status)
+            if task_status_is_closed_like(&dep_task.status)
                 || work_item_is_program_container(&dep_task.issue_type)
             {
                 continue;
@@ -1005,6 +978,32 @@ mod tests {
         parallel_group: Option<&str>,
         conflict_domain: Option<&str>,
     ) {
+        let owned_paths = if execution_mode == Some("parallel_safe") {
+            vec![format!("crates/test/{task_id}")]
+        } else {
+            Vec::new()
+        };
+        create_task_with_semantics_and_owned_paths(
+            store,
+            task_id,
+            execution_mode,
+            order_bucket,
+            parallel_group,
+            conflict_domain,
+            owned_paths,
+        )
+        .await;
+    }
+
+    async fn create_task_with_semantics_and_owned_paths(
+        store: &StateStore,
+        task_id: &str,
+        execution_mode: Option<&str>,
+        order_bucket: Option<&str>,
+        parallel_group: Option<&str>,
+        conflict_domain: Option<&str>,
+        owned_paths: Vec<String>,
+    ) {
         let parent_id = format!("{task_id}-parent");
         store
             .create_task(CreateTaskRequest {
@@ -1041,7 +1040,10 @@ mod tests {
                     parallel_group: parallel_group.map(ToOwned::to_owned),
                     conflict_domain: conflict_domain.map(ToOwned::to_owned),
                 },
-                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths,
+                    ..Default::default()
+                },
                 created_by: "test",
                 source_repo: ".",
             })
@@ -1169,6 +1171,66 @@ mod tests {
     }
 
     #[test]
+    fn validate_task_graph_treats_external_closed_aliases_as_closed_like() {
+        let merged_child = task_record("merged-child", "merged");
+        let orphan_issues = StateStore::validate_task_graph_rows(&[merged_child]);
+        assert!(
+            orphan_issues
+                .iter()
+                .all(|issue| issue.issue_type != "missing_required_parent_edge"),
+            "closed-like aliases must not be treated as open required-parent work: {orphan_issues:?}"
+        );
+
+        let parent = task_record("done-parent", "done");
+        let mut child = task_record("open-child", "open");
+        child
+            .dependencies
+            .push(parent_child_dependency("open-child", "done-parent"));
+        let issues = StateStore::validate_task_graph_rows(&[parent, child]);
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "closed_parent_has_non_closed_child"
+                && issue.issue_id == "done-parent"
+                && issue.depends_on_id.as_deref() == Some("open-child")
+        }));
+    }
+
+    #[test]
+    fn scheduling_projection_uses_closed_aliases_for_blockers_and_ready_work() {
+        let done_task = task_record("done-task", "done");
+        let blocker = task_record("resolved-blocker", "resolved");
+        let mut ready = task_record("ready-task", "open");
+        ready.dependencies.push(TaskDependencyRecord {
+            issue_id: "ready-task".to_string(),
+            depends_on_id: "resolved-blocker".to_string(),
+            edge_type: "blocks".to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        });
+
+        let projection = StateStore::scheduling_projection_scoped_from_rows(
+            &[done_task, blocker, ready],
+            None,
+            None,
+            &BTreeSet::new(),
+        )
+        .expect("scheduling projection should build");
+
+        assert!(projection.ready.iter().any(|candidate| {
+            candidate.task.id == "ready-task" && candidate.blocked_by.is_empty()
+        }));
+        assert!(
+            projection
+                .ready
+                .iter()
+                .all(|candidate| candidate.task.id != "done-task"),
+            "done aliases must not be executable ready work"
+        );
+    }
+
+    #[test]
     fn validate_task_graph_mutation_ignores_unrelated_existing_orphan() {
         let existing_orphan = task_record("existing-orphan", "open");
         let mut parent = task_record("parent", "open");
@@ -1265,7 +1327,8 @@ mod tests {
 
     #[test]
     fn validate_task_graph_flags_in_progress_parent_with_no_open_child() {
-        let parent = task_record("parent", "in_progress");
+        let mut parent = task_record("parent", "in_progress");
+        parent.issue_type = "epic".to_string();
         let mut child = task_record("child", "closed");
         child
             .dependencies
@@ -1466,6 +1529,54 @@ mod tests {
             .parallel_blockers
             .iter()
             .any(|value| value == "execution_mode_not_parallel_safe"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn scheduling_projection_rejects_parallel_safe_tasks_without_owned_paths() {
+        let root = temp_root("task-scheduling-missing-owned-paths");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        create_task_with_semantics_and_owned_paths(
+            &store,
+            "task-current",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("current-domain"),
+            vec!["crates/current".to_string()],
+        )
+        .await;
+        create_task_with_semantics_and_owned_paths(
+            &store,
+            "task-empty-owned-paths",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("candidate-domain"),
+            Vec::new(),
+        )
+        .await;
+
+        let projection = store
+            .scheduling_projection_scoped(None, Some("task-current"))
+            .await
+            .expect("projection should render");
+        let candidate = projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == "task-empty-owned-paths")
+            .expect("empty-owned task should remain graph-ready");
+
+        assert!(candidate.ready_now);
+        assert!(!candidate.ready_parallel_safe);
+        assert!(candidate.parallel_blockers.iter().any(|value| value
+            == scheduler_dispatch::PARALLEL_BLOCKER_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION));
+        assert!(projection
+            .parallel_candidates_after_current
+            .iter()
+            .all(|task| task.id != "task-empty-owned-paths"));
 
         let _ = fs::remove_dir_all(root);
     }

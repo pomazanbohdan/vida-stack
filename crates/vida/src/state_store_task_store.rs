@@ -35,6 +35,13 @@ pub(crate) struct ClosedTaskRunReconciliationSkipped {
     pub(crate) inspect_command: String,
 }
 
+fn run_graph_status_json_command(run_id: &str) -> String {
+    format!(
+        "vida taskflow run-graph status {} --json",
+        crate::shell_quote(run_id.trim())
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpecFirstDevHandoffGate {
     pub(crate) feature_id: String,
@@ -54,7 +61,16 @@ pub(crate) struct ClosedTaskRunReconciliationSummary {
 
 impl StateStore {
     pub(crate) fn task_status_is_closed_like(status: &str) -> bool {
-        matches!(status, "closed" | "completed")
+        taskflow_core::task_status_is_closed_like(status)
+    }
+
+    pub(crate) fn task_status_matches_filter(actual: &str, expected: &str) -> bool {
+        let expected = expected.trim();
+        if let Some(expected_canonical) = taskflow_core::canonical_task_status(expected) {
+            return taskflow_core::canonical_task_status(actual)
+                .is_some_and(|actual_canonical| actual_canonical == expected_canonical);
+        }
+        actual == expected
     }
 
     pub(crate) fn run_graph_status_is_terminal_closure(status: &RunGraphStatus) -> bool {
@@ -754,9 +770,12 @@ impl StateStore {
         closed_task_id: &str,
     ) -> Result<Option<crate::state_store::RunGraphContinuationBinding>, StateStoreError> {
         if status.task_id == closed_task_id
-            && self
+            && (self
                 .task_close_reconcile_has_persisted_receipt_truth(&status.run_id, closed_task_id)
                 .await?
+                || self
+                    .task_close_reconcile_has_closed_task_execution_truth(status, closed_task_id)
+                    .await?)
         {
             return Ok(Some(crate::state_store::RunGraphContinuationBinding {
                 run_id: status.run_id.clone(),
@@ -813,6 +832,35 @@ impl StateStore {
         }
 
         Ok(None)
+    }
+
+    async fn task_close_reconcile_has_closed_task_execution_truth(
+        &self,
+        status: &RunGraphStatus,
+        closed_task_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let active_resume_target = format!("dispatch.{}", status.active_node.replace('-', "_"));
+        let active_lane_resume_target = format!("{active_resume_target}_lane");
+        let resume_target_is_terminal_or_same_lane = status.resume_target == "none"
+            || status.resume_target == active_resume_target
+            || status.resume_target == active_lane_resume_target;
+        if status.task_id != closed_task_id
+            || status.next_node.is_some()
+            || status.handoff_state != "none"
+            || !resume_target_is_terminal_or_same_lane
+        {
+            return Ok(false);
+        }
+        let task = match self.show_task(closed_task_id).await {
+            Ok(task) => task,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if !Self::task_has_canonical_close_truth(&task) {
+            return Ok(false);
+        }
+        self.run_graph_dispatch_has_receipt_backed_execution_truth(&status.run_id)
+            .await
     }
 
     pub(crate) fn run_graph_status_allows_task_close_closure_binding(
@@ -1132,7 +1180,7 @@ impl StateStore {
             .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         receipt.downstream_dispatch_target = Some("closure".to_string());
         receipt.downstream_dispatch_command = Some(format!(
-            "vida taskflow consume continue --run-id {} --json",
+            "vida taskflow consume continue --run-id {}",
             status.run_id
         ));
         receipt.downstream_dispatch_note =
@@ -1257,8 +1305,10 @@ impl StateStore {
         let all_bindings: Vec<crate::state_store::RunGraphContinuationBinding> =
             all_binding_query.take(0)?;
         for binding in all_bindings {
-            if binding.active_bounded_unit["kind"].as_str() == Some("task_graph_task")
-                && binding.active_bounded_unit["task_id"].as_str() == Some(task_id)
+            if matches!(
+                binding.active_bounded_unit["kind"].as_str(),
+                Some("task_graph_task" | "run_graph_task")
+            ) && binding.active_bounded_unit["task_id"].as_str() == Some(task_id)
             {
                 affected_run_ids.insert(binding.run_id);
             }
@@ -1329,10 +1379,7 @@ impl StateStore {
                         Err(StateStoreError::MissingTask { .. }) => {
                             skipped_count += 1;
                             skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                                inspect_command: format!(
-                                    "vida taskflow run-graph status {} --json",
-                                    crate::shell_quote(row.run_id.trim())
-                                ),
+                                inspect_command: run_graph_status_json_command(&row.run_id),
                                 run_id: row.run_id,
                                 task_id: row.task_id,
                                 status: row.status,
@@ -1366,10 +1413,7 @@ impl StateStore {
                     }
                     skipped_count += 1;
                     skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                        inspect_command: format!(
-                            "vida taskflow run-graph status {} --json",
-                            crate::shell_quote(row.run_id.trim())
-                        ),
+                        inspect_command: run_graph_status_json_command(&row.run_id),
                         run_id: row.run_id,
                         task_id: row.task_id,
                         status: row.status,
@@ -1381,10 +1425,7 @@ impl StateStore {
                 }
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                    inspect_command: format!(
-                        "vida taskflow run-graph status {} --json",
-                        crate::shell_quote(row.run_id.trim())
-                    ),
+                    inspect_command: run_graph_status_json_command(&row.run_id),
                     run_id: row.run_id,
                     task_id: row.task_id,
                     status: row.status,
@@ -1397,10 +1438,7 @@ impl StateStore {
                 Err(StateStoreError::MissingTask { .. }) => {
                     skipped_count += 1;
                     skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                        inspect_command: format!(
-                            "vida taskflow run-graph status {} --json",
-                            crate::shell_quote(row.run_id.trim())
-                        ),
+                        inspect_command: run_graph_status_json_command(&row.run_id),
                         run_id: row.run_id,
                         task_id: row.task_id,
                         status: row.status,
@@ -1413,10 +1451,7 @@ impl StateStore {
             if !Self::task_status_is_closed_like(&task.status) {
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                    inspect_command: format!(
-                        "vida taskflow run-graph status {} --json",
-                        crate::shell_quote(row.run_id.trim())
-                    ),
+                    inspect_command: run_graph_status_json_command(&row.run_id),
                     run_id: row.run_id,
                     task_id: row.task_id,
                     status: row.status,
@@ -1431,10 +1466,7 @@ impl StateStore {
             {
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                    inspect_command: format!(
-                        "vida taskflow run-graph status {} --json",
-                        crate::shell_quote(row.run_id.trim())
-                    ),
+                    inspect_command: run_graph_status_json_command(&row.run_id),
                     run_id: row.run_id,
                     task_id: row.task_id,
                     status: row.status,
@@ -1800,11 +1832,11 @@ impl StateStore {
     ) -> Result<Vec<TaskRecord>, StateStoreError> {
         let mut rows = self.all_tasks().await?;
         rows.retain(|task| {
-            if !include_closed && task.status == "closed" {
+            if !include_closed && Self::task_status_is_closed_like(&task.status) {
                 return false;
             }
             match status {
-                Some(expected) => task.status == expected,
+                Some(expected) => Self::task_status_matches_filter(&task.status, expected),
                 None => true,
             }
         });
@@ -2024,7 +2056,7 @@ impl StateStore {
 
         let mut blocked = tasks
             .into_iter()
-            .filter(|task| task.status == "open" || task.status == "in_progress")
+            .filter(|task| taskflow_core::task_status_is_open_like(&task.status))
             .filter(|task| !work_item_is_program_container(&task.issue_type))
             .filter_map(|task| {
                 let blockers = task
@@ -2033,7 +2065,7 @@ impl StateStore {
                     .filter(|dependency| dependency.edge_type != "parent-child")
                     .filter_map(|dependency| {
                         let blocker_task = by_id.get(&dependency.depends_on_id)?;
-                        if blocker_task.status == "closed" {
+                        if Self::task_status_is_closed_like(&blocker_task.status) {
                             return None;
                         }
                         Some(TaskDependencyStatus {
@@ -2064,7 +2096,7 @@ impl StateStore {
         let mut blocked = rows
             .iter()
             .cloned()
-            .filter(|task| task.status == "open" || task.status == "in_progress")
+            .filter(|task| taskflow_core::task_status_is_open_like(&task.status))
             .filter(|task| !work_item_is_program_container(&task.issue_type))
             .filter_map(|task| {
                 let blockers = task
@@ -2073,7 +2105,7 @@ impl StateStore {
                     .filter(|dependency| dependency.edge_type != "parent-child")
                     .filter_map(|dependency| {
                         let blocker_task = by_id.get(&dependency.depends_on_id)?;
-                        if blocker_task.status == "closed" {
+                        if Self::task_status_is_closed_like(&blocker_task.status) {
                             return None;
                         }
                         Some(TaskDependencyStatus {
@@ -2485,11 +2517,11 @@ impl StateStore {
             provider_mapping: None,
             dependencies,
         };
-        if status == "closed" {
+        if Self::task_status_is_closed_like(status) {
             task.closed_at = Some(now.clone());
         }
 
-        let reopened_parents = if task.status != "closed" {
+        let reopened_parents = if !Self::task_status_is_closed_like(&task.status) {
             Self::reopen_closed_parent_chain_for_extension(
                 &mut tasks,
                 normalized_parent_id.as_deref(),
@@ -2615,7 +2647,8 @@ impl StateStore {
             task.title = trimmed.to_string();
         }
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
-            if status == "closed" {
+            let requested_status_is_closed = Self::task_status_is_closed_like(status);
+            if requested_status_is_closed {
                 let tasks = self.all_tasks().await?;
                 let non_closed_children = tasks
                     .iter()
@@ -2639,7 +2672,7 @@ impl StateStore {
                 }
             }
             task.status = status.to_string();
-            if status == "closed" {
+            if requested_status_is_closed {
                 if task.closed_at.is_none() {
                     task.closed_at = Some(unix_timestamp_nanos().to_string());
                 }
@@ -2753,7 +2786,8 @@ impl StateStore {
             .position(|existing| existing.id == task.id)
             .expect("updated task should exist in authoritative state");
         tasks[task_index] = task.clone();
-        let (reopened_parents, closed_parents) = if task.status == "closed" {
+        let task_is_closed = Self::task_status_is_closed_like(&task.status);
+        let (reopened_parents, closed_parents) = if task_is_closed {
             let parent_id = Self::parent_id_for_task(&task);
             (
                 Vec::new(),
@@ -2804,7 +2838,7 @@ impl StateStore {
             self.refresh_run_graph_continuation_after_task_close(&parent.id)
                 .await?;
         }
-        if task.status == "closed" {
+        if task_is_closed {
             self.refresh_run_graph_continuation_after_task_close(task_id)
                 .await?;
         }
@@ -3351,6 +3385,21 @@ mod tests {
         std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
     }
 
+    struct TestProxyStateDirOverrideGuard;
+
+    impl TestProxyStateDirOverrideGuard {
+        fn install(path: PathBuf) -> Self {
+            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(path));
+            Self
+        }
+    }
+
+    impl Drop for TestProxyStateDirOverrideGuard {
+        fn drop(&mut self) {
+            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        }
+    }
+
     fn test_task_record(task_id: &str, issue_type: &str, status: &str) -> TaskRecord {
         TaskRecord {
             id: task_id.to_string(),
@@ -3375,6 +3424,128 @@ mod tests {
             provider_mapping: None,
             dependencies: Vec::new(),
         }
+    }
+
+    fn test_task_dependency(
+        issue_id: &str,
+        depends_on_id: &str,
+        edge_type: &str,
+    ) -> TaskDependencyRecord {
+        TaskDependencyRecord {
+            issue_id: issue_id.to_string(),
+            depends_on_id: depends_on_id.to_string(),
+            edge_type: edge_type.to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn task_store_status_policy_uses_canonical_closed_aliases() {
+        for alias in [
+            "done",
+            "closed",
+            "complete",
+            "completed",
+            "resolved",
+            "merged",
+        ] {
+            assert!(
+                StateStore::task_status_is_closed_like(alias),
+                "{alias} should be closed-like"
+            );
+            assert!(
+                StateStore::task_status_matches_filter(alias, "closed"),
+                "{alias} should match the canonical closed filter"
+            );
+        }
+
+        for alias in ["open", "in_progress", "paused", "blocked", "cancelled"] {
+            assert!(
+                !StateStore::task_status_is_closed_like(alias),
+                "{alias} should not be closed-like"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_tasks_excludes_and_filters_closed_aliases_canonically() {
+        let root = unique_task_store_temp_root("vida-list-closed-aliases");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, status) in [
+            ("open-epic", "open"),
+            ("done-epic", "done"),
+            ("resolved-epic", "resolved"),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title: task_id,
+                    display_id: None,
+                    description: "",
+                    issue_type: "epic",
+                    status,
+                    priority: 1,
+                    parent_id: None,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create task");
+        }
+
+        let visible = store
+            .list_tasks(None, false)
+            .await
+            .expect("list visible tasks")
+            .into_iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>();
+        assert_eq!(visible, vec!["open-epic"]);
+
+        let closed = store
+            .list_tasks(Some("closed"), true)
+            .await
+            .expect("list closed tasks")
+            .into_iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>();
+        assert_eq!(closed, vec!["done-epic", "resolved-epic"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn blocked_tasks_from_rows_treats_closed_alias_blockers_as_resolved() {
+        let mut candidate = test_task_record("candidate", "task", "open");
+        candidate.dependencies.push(test_task_dependency(
+            "candidate",
+            "resolved-blocker",
+            "blocks",
+        ));
+        let resolved_blocker = test_task_record("resolved-blocker", "task", "resolved");
+
+        assert!(
+            StateStore::blocked_tasks_from_rows(&[candidate.clone(), resolved_blocker]).is_empty()
+        );
+
+        candidate.dependencies.clear();
+        candidate.dependencies.push(test_task_dependency(
+            "candidate",
+            "unknown-blocker",
+            "blocks",
+        ));
+        let unknown_blocker = test_task_record("unknown-blocker", "task", "cancelled");
+
+        let blocked = StateStore::blocked_tasks_from_rows(&[candidate, unknown_blocker]);
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].blockers[0].dependency_status, "cancelled");
     }
 
     #[test]
@@ -3649,6 +3820,66 @@ mod tests {
             .expect("unrelated historical orphan should not block close");
 
         assert_eq!(closed.status, "closed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn close_parent_with_open_child_fails_without_mutating_parent() {
+        let root = unique_task_store_temp_root("vida-close-parent-open-child-atomic");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "parent-with-open-child",
+                title: "Parent with open child",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "still-open-child",
+                title: "Still open child",
+                display_id: None,
+                description: "",
+                issue_type: "todo",
+                status: "open",
+                priority: 1,
+                parent_id: Some("parent-with-open-child"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child");
+
+        let error = store
+            .close_task("parent-with-open-child", "done")
+            .await
+            .expect_err("open child must block parent close before persistence");
+
+        assert!(error.to_string().contains(
+            "cannot close task `parent-with-open-child` while non-closed child tasks exist"
+        ));
+        let parent = store
+            .show_task("parent-with-open-child")
+            .await
+            .expect("load parent");
+        assert_eq!(parent.status, "open");
+        assert!(parent.closed_at.is_none());
+        assert!(parent.close_reason.is_none());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4056,6 +4287,81 @@ mod tests {
         assert_eq!(
             parent.close_reason.as_deref(),
             Some("all direct child tasks closed after closing `update-close-child`")
+        );
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate")
+            .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn update_task_status_done_closes_parent_without_active_children() {
+        let root = unique_task_store_temp_root("vida-update-child-done-closes-parent");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, parent_id) in [
+            ("done-close-parent", "Done close parent", "epic", None),
+            (
+                "done-close-child",
+                "Done close child",
+                "task",
+                Some("done-close-parent"),
+            ),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status: "open",
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create task pair");
+        }
+
+        let child = store
+            .update_task(UpdateTaskRequest {
+                task_id: "done-close-child",
+                title: None,
+                status: Some("done"),
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("close child through done alias update");
+
+        assert_eq!(child.status, "done");
+        assert!(child.closed_at.is_some());
+
+        let parent = store
+            .show_task("done-close-parent")
+            .await
+            .expect("load parent");
+        assert_eq!(parent.status, "closed");
+        assert_eq!(
+            parent.close_reason.as_deref(),
+            Some("all direct child tasks closed after closing `done-close-child`")
         );
         assert!(store
             .validate_task_graph()
@@ -4626,8 +4932,9 @@ mod tests {
             .await
             .expect("load refreshed status");
         assert_eq!(refreshed.status, "ready");
-        assert_eq!(refreshed.active_node, "specification");
+        assert_eq!(refreshed.active_node, "work_pool_pack");
         assert_eq!(refreshed.next_node.as_deref(), Some("work_pool_pack"));
+        assert_eq!(refreshed.lifecycle_stage, "work_pool_pack_active");
         assert_eq!(refreshed.handoff_state, "awaiting_work_pool_pack");
         assert_eq!(refreshed.resume_target, "dispatch.work_pool_pack_lane");
         assert!(refreshed.recovery_ready);
@@ -4780,9 +5087,9 @@ mod tests {
             .await
             .expect("load reconciled feature-run status");
         assert_eq!(refreshed.status, "ready");
-        assert_eq!(refreshed.active_node, "specification");
+        assert_eq!(refreshed.active_node, "work_pool_pack");
         assert_eq!(refreshed.next_node.as_deref(), Some("work_pool_pack"));
-        assert_eq!(refreshed.lifecycle_stage, "specification_complete");
+        assert_eq!(refreshed.lifecycle_stage, "work_pool_pack_active");
         assert_eq!(refreshed.handoff_state, "awaiting_work_pool_pack");
         assert_eq!(refreshed.resume_target, "dispatch.work_pool_pack_lane");
         assert!(refreshed.recovery_ready);
@@ -4984,6 +5291,7 @@ mod tests {
             std::process::id(),
             nanos
         ));
+        let _state_override = TestProxyStateDirOverrideGuard::install(root.clone());
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         store
@@ -5115,7 +5423,10 @@ mod tests {
                 exception_path_receipt_id: None,
                 dispatch_kind: "agent_lane".to_string(),
                 dispatch_surface: Some("vida agent-init".to_string()),
-                dispatch_command: Some("vida agent-init --dispatch-packet /tmp/implementer.json --execute-dispatch --json".to_string()),
+                dispatch_command: Some(
+                    "vida agent-init --dispatch-packet /tmp/implementer.json --execute-dispatch"
+                        .to_string(),
+                ),
                 dispatch_packet_path: Some(implementer_packet_path.display().to_string()),
                 dispatch_result_path: Some(implementer_result_path.display().to_string()),
                 blocker_code: None,
@@ -5191,7 +5502,7 @@ mod tests {
             .run_graph_status("run-close-task")
             .await
             .expect("reconciled run status should load");
-        assert_eq!(reconciled_status.checkpoint_kind, "none");
+        assert_eq!(reconciled_status.checkpoint_kind, "terminal_closure");
         let checkpoint_record = store
             .run_graph_projection_checkpoint_record("run-close-task")
             .await

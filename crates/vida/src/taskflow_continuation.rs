@@ -521,7 +521,7 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
                 );
             }
         };
-        if task.status == "closed" {
+        if StateStore::task_status_is_closed_like(&task.status) {
             return emit_continuation_bind_error(
                 as_json,
                 Some(&run_id),

@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::{TaskStatus, parse_task_status, task_status_is_closed_like};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskProgressBasis {
     DescendantsExcludingRoot,
@@ -96,10 +98,10 @@ pub fn task_progress_summary_from_rows(
     let mut epic_count = 0usize;
     for task in rows.iter().filter(|task| scoped_ids.contains(&task.id)) {
         *status_counts.entry(task.status.clone()).or_insert(0) += 1;
-        match task.status.as_str() {
-            "open" => open_count += 1,
-            "in_progress" => in_progress_count += 1,
-            status if task_status_is_closed_like(status) => closed_count += 1,
+        match parse_task_status(&task.status) {
+            Some(TaskStatus::Open) => open_count += 1,
+            Some(TaskStatus::InProgress) => in_progress_count += 1,
+            Some(TaskStatus::Closed) => closed_count += 1,
             _ => {}
         }
         if task_is_program_container(task) {
@@ -292,7 +294,7 @@ fn descendant_progress_summary(
         next_required_command,
     ) = if closure_candidate {
         let close_command = human_command(&format!(
-            "vida task close {} --reason \"all descendants closed\" --json",
+            "vida task close {} --reason \"all descendants closed\"",
             quote_task_id(&root_task.id)
         ));
         (
@@ -396,7 +398,7 @@ fn non_container_progress_state(
         Some("Record or resolve the runtime blocker before closing the leaf task.".to_string())
     } else if leaf_ready_for_close {
         Some(human_command(&format!(
-            "vida task close {} --reason \"verified\" --json",
+            "vida task close {} --reason \"verified\"",
             quote_task_id(&root_task.id)
         )))
     } else {
@@ -429,10 +431,6 @@ fn non_container_progress_state(
         Vec::new(),
         next_required_command,
     )
-}
-
-fn task_status_is_closed_like(status: &str) -> bool {
-    matches!(status.trim(), "closed" | "completed")
 }
 
 fn task_is_program_container(task: &TaskProgressRow) -> bool {
@@ -482,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_child_progress_rejects_done_and_cancelled_as_open_work() {
+    fn direct_child_progress_counts_done_alias_but_rejects_cancelled_as_open_work() {
         let rows = vec![
             row("parent", "open", "task", None),
             row("child-a", "done", "task", Some("parent")),
@@ -501,8 +499,8 @@ mod tests {
         assert!(!summary.closure_candidate);
         assert!(!summary.ready_for_close);
         assert_eq!(summary.closure_candidate_state, "direct_children_remaining");
-        assert_eq!(summary.closed_count, 0);
-        assert_eq!(summary.percent_closed, 0.0);
+        assert_eq!(summary.closed_count, 1);
+        assert_eq!(summary.percent_closed, 50.0);
     }
 
     #[test]

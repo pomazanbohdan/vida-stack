@@ -351,14 +351,19 @@ fn provider_issue_type_map(provider: &str, issue_type: &str) -> Option<&'static 
 }
 
 fn provider_status_map(status: &str) -> Option<&'static str> {
-    match normalize_provider_mapping_value(status).as_str() {
-        "" => None,
-        "open" | "new" | "todo" | "to_do" | "backlog" => Some("open"),
-        "in_progress" | "progress" | "started" | "doing" | "active" => Some("in_progress"),
-        "paused" | "blocked" => Some("paused"),
-        "done" | "closed" | "complete" | "completed" | "resolved" | "merged" => Some("closed"),
-        _ => None,
-    }
+    taskflow_core::canonical_task_status(status)
+}
+
+pub fn canonical_task_status_name(status: &str) -> Option<&'static str> {
+    taskflow_core::canonical_task_status(status)
+}
+
+pub fn task_status_is_closed_like(status: &str) -> bool {
+    taskflow_core::task_status_is_closed_like(status)
+}
+
+pub fn task_status_is_open_like(status: &str) -> bool {
+    taskflow_core::task_status_is_open_like(status)
 }
 
 pub(crate) fn provider_external_key(
@@ -1278,6 +1283,20 @@ mod tests {
         assert_eq!(mapping.external_parent_id.as_deref(), Some("PROJ-1"));
         assert_eq!(mapping.provider_issue_type.as_deref(), Some("story"));
         assert_eq!(mapping.provider_status.as_deref(), Some("resolved"));
+    }
+
+    #[test]
+    fn task_status_helpers_share_provider_alias_policy() {
+        for alias in ["done", "resolved", "merged", "completed", "closed"] {
+            assert_eq!(super::canonical_task_status_name(alias), Some("closed"));
+            assert!(super::task_status_is_closed_like(alias));
+            assert!(!super::task_status_is_open_like(alias));
+        }
+        for alias in ["open", "todo", "in-progress", "active"] {
+            assert!(super::task_status_is_open_like(alias));
+            assert!(!super::task_status_is_closed_like(alias));
+        }
+        assert_eq!(super::canonical_task_status_name("cancelled"), None);
     }
 
     #[test]
