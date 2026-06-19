@@ -3,6 +3,7 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 const BACKLOG_DIRECT_CHILDREN: usize = 120;
+const GRAPH_READ_BUDGET: Duration = Duration::from_secs(20);
 const STATE_LOCK_RETRY_LIMIT: usize = 5;
 
 struct TimedJson {
@@ -51,6 +52,13 @@ fn run_json(args: &[&str], state_dir: &str) -> TimedJson {
     TimedJson { value, duration }
 }
 
+fn assert_graph_read_budget(surface: &str, duration: Duration) {
+    assert!(
+        duration <= GRAPH_READ_BUDGET,
+        "{surface} exceeded large-backlog graph read budget: {duration:?}"
+    );
+}
+
 fn ids_from_array(value: &Value, label: &str) -> Vec<String> {
     value
         .as_array()
@@ -96,6 +104,7 @@ fn large_backlog_graph_progress_and_scheduler_surfaces_stay_deterministic() {
         ],
         &state_dir_string,
     );
+    assert_graph_read_budget("vida task progress", progress.duration);
     assert_eq!(progress.value["status"], "pass");
     assert_eq!(
         progress.value["progress"]["direct_child_count"],
@@ -122,6 +131,7 @@ fn large_backlog_graph_progress_and_scheduler_surfaces_stay_deterministic() {
         &["task", "tree", &fixture.root_id, "--json"],
         &state_dir_string,
     );
+    assert_graph_read_budget("vida task tree", tree.duration);
     assert_eq!(tree.value["status"], "pass");
     assert_eq!(tree.value["root_task_id"], fixture.root_id);
     assert_eq!(tree.value["child_count"], fixture.direct_child_count);
@@ -137,12 +147,14 @@ fn large_backlog_graph_progress_and_scheduler_surfaces_stay_deterministic() {
         &["task", "ready", "--scope", &fixture.root_id, "--json"],
         &state_dir_string,
     );
+    assert_graph_read_budget("vida task ready", ready.duration);
     assert_eq!(ready.value["status"], "pass");
     assert_eq!(ready.value["ready_count"], fixture.open_child_count);
     let ready_ids = ids_from_array(&ready.value["tasks"], "ready tasks");
     assert!(ready_ids.contains(&fixture.primary_ready_id));
 
     let blocked = run_json(&["task", "blocked", "--json"], &state_dir_string);
+    assert_graph_read_budget("vida task blocked", blocked.duration);
     assert_eq!(blocked.value["status"], "pass");
     assert_eq!(
         blocked.value["blocked_count"],
@@ -151,6 +163,7 @@ fn large_backlog_graph_progress_and_scheduler_surfaces_stay_deterministic() {
     assert!(blocked_task_ids(&blocked.value).contains(&fixture.blocked_task_id));
 
     let graph_summary = run_json(&["taskflow", "graph-summary", "--json"], &state_dir_string);
+    assert_graph_read_budget("vida taskflow graph-summary", graph_summary.duration);
     assert_eq!(
         graph_summary.value["surface"],
         "vida taskflow graph-summary"
@@ -176,6 +189,7 @@ fn large_backlog_graph_progress_and_scheduler_surfaces_stay_deterministic() {
         ],
         &state_dir_string,
     );
+    assert_graph_read_budget("vida taskflow scheduler dispatch", scheduler.duration);
     assert_eq!(
         scheduler.value["surface"],
         "vida taskflow scheduler dispatch"
@@ -201,6 +215,7 @@ fn large_backlog_graph_progress_and_scheduler_surfaces_stay_deterministic() {
         &["status", "--fields", "taskflow_counts", "--json"],
         &state_dir_string,
     );
+    assert_graph_read_budget("vida status --fields taskflow_counts", status.duration);
     assert_eq!(
         status.value["taskflow_counts"]["total_count"],
         fixture.total_task_count
@@ -231,4 +246,25 @@ fn large_backlog_graph_progress_and_scheduler_surfaces_stay_deterministic() {
     );
 
     let _ = std::fs::remove_dir_all(state_dir);
+}
+
+#[test]
+fn simulated_lock_pressure_retry_is_deterministic() {
+    let mut attempts = 0usize;
+    let output = vida_test_support::retry_with_backoff(
+        || {
+            attempts += 1;
+            if attempts < 4 {
+                vida_test_support::simulated_state_lock_output()
+            } else {
+                vida_test_support::simulated_success_output("ready\n")
+            }
+        },
+        STATE_LOCK_RETRY_LIMIT,
+        is_state_lock_error,
+    );
+
+    assert!(output.status.success());
+    assert_eq!(attempts, 4);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ready\n");
 }

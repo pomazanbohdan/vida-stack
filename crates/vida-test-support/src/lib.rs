@@ -79,6 +79,14 @@ pub fn simulated_state_lock_output() -> Output {
     }
 }
 
+pub fn simulated_success_output(stdout: impl Into<Vec<u8>>) -> Output {
+    Output {
+        status: successful_exit_status(),
+        stdout: stdout.into(),
+        stderr: Vec::new(),
+    }
+}
+
 #[cfg(unix)]
 fn failing_exit_status() -> ExitStatus {
     use std::os::unix::process::ExitStatusExt;
@@ -91,6 +99,20 @@ fn failing_exit_status() -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
 
     ExitStatus::from_raw(1)
+}
+
+#[cfg(unix)]
+fn successful_exit_status() -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+
+    ExitStatus::from_raw(0)
+}
+
+#[cfg(windows)]
+fn successful_exit_status() -> ExitStatus {
+    use std::os::windows::process::ExitStatusExt;
+
+    ExitStatus::from_raw(0)
 }
 
 pub fn temp_dir(prefix: &str) -> PathBuf {
