@@ -16392,6 +16392,48 @@ mod tests {
     }
 
     #[test]
+    fn task_close_feedback_records_proved_blocked_receipt_rejection_policy() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let project_root = harness.path();
+        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+            .expect("project marker should write");
+        fs::write(project_root.join("AGENTS.md"), "test project\n")
+            .expect("agents marker should write");
+        fs::create_dir_all(project_root.join(".vida/config"))
+            .expect("config marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/db"))
+            .expect("db marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/project"))
+            .expect("project marker directory should initialize");
+        let task_value = serde_json::json!({
+            "id": "task-close-feedback-blocked-receipt-policy",
+            "status": "closed",
+        });
+        let reason = "Rejected materialization-only blocked task-ensure receipts before terminal closure and persisted final-snapshot resume paths. Proof: cargo test -p vida taskflow_consume_continue_rejects_materialization_only_receipt_before_final_snapshot_replay passed.";
+
+        let telemetry = task_close_host_agent_telemetry(
+            &project_root.join(crate::state_store::default_state_dir()),
+            false,
+            Some(project_root),
+            &task_value,
+            reason,
+            "vida task close",
+        );
+
+        assert_eq!(telemetry["status"], "recorded");
+        assert_eq!(telemetry.get("canonical_status"), None);
+        assert!(task_close_feedback_blocker_summary(&telemetry).is_none());
+        assert_eq!(
+            telemetry["feedback_outcome_inference"]["outcome"],
+            "success"
+        );
+        assert_eq!(
+            telemetry["feedback_outcome_inference"]["failure_markers"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
     fn task_close_commit_automation_requires_explicit_owned_files() {
         let receipt = task_close_automation_receipt(
             &crate::TaskCloseArgs {

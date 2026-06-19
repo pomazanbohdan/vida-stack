@@ -454,6 +454,7 @@ fn ignored_canonical_close_historical_context(reason: &str) -> Vec<String> {
 }
 
 fn ignored_historical_failure_state_segments(reason: &str) -> Vec<String> {
+    let full_reason_normalized = reason.to_ascii_lowercase();
     reason
         .split(['.', ';', '\n'])
         .filter_map(|segment| {
@@ -463,7 +464,11 @@ fn ignored_historical_failure_state_segments(reason: &str) -> Vec<String> {
             }
             let normalized = trimmed.to_ascii_lowercase();
             if !has_failure_state_language(&normalized)
-                || !has_historical_or_success_evidence_context(&normalized)
+                || !(has_historical_or_success_evidence_context(&normalized)
+                    || has_resolved_failure_artifact_action_context(
+                        &normalized,
+                        &full_reason_normalized,
+                    ))
                 || has_current_failure_outcome_language(&normalized)
             {
                 return None;
@@ -495,6 +500,89 @@ fn has_failure_state_language(normalized: &str) -> bool {
         "status: blocked",
         "blocker details",
         "blocker code",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+}
+
+fn has_resolved_failure_artifact_action_context(
+    segment_normalized: &str,
+    full_reason_normalized: &str,
+) -> bool {
+    if !has_proof_or_success_context(full_reason_normalized) {
+        return false;
+    }
+
+    let describes_resolution_action = [
+        "rejected ",
+        "rejects ",
+        "rejecting ",
+        "reject ",
+        "guarded ",
+        "guards ",
+        "prevented ",
+        "prevents ",
+        "denied ",
+        "denies ",
+        "disallowed ",
+        "disallows ",
+    ]
+    .iter()
+    .any(|phrase| {
+        segment_normalized.starts_with(phrase) || segment_normalized.contains(&format!(" {phrase}"))
+    });
+    let names_runtime_artifact = [
+        "receipt",
+        "receipts",
+        "task-ensure",
+        "task ensure",
+        "final-snapshot",
+        "final snapshot",
+        "terminal closure",
+        "resume path",
+        "resume paths",
+        "materialization-only",
+        "dispatch packet",
+        "run-graph",
+    ]
+    .iter()
+    .any(|phrase| segment_normalized.contains(phrase));
+    let scopes_completed_policy = [
+        " before ",
+        " after ",
+        " instead of ",
+        " no longer ",
+        " now ",
+        " coverage",
+        " regression",
+        " path",
+        " paths",
+    ]
+    .iter()
+    .any(|phrase| segment_normalized.contains(phrase));
+
+    describes_resolution_action && names_runtime_artifact && scopes_completed_policy
+}
+
+fn has_proof_or_success_context(normalized: &str) -> bool {
+    [
+        "proof:",
+        "proofs:",
+        "proof target",
+        "proof command",
+        "proof commands",
+        "evidence:",
+        "validated",
+        "verified",
+        "tests passed",
+        "test passed",
+        "proof passed",
+        "proofs passed",
+        "passed",
+        "fixed",
+        "closed",
+        "implemented",
+        "succeeded",
     ]
     .iter()
     .any(|phrase| normalized.contains(phrase))
@@ -1578,6 +1666,26 @@ mod tests {
     }
 
     #[test]
+    fn canonical_close_status_ignores_proved_blocked_receipt_rejection_policy() {
+        let reason = "Rejected materialization-only blocked task-ensure receipts before terminal closure and persisted final-snapshot resume paths. Proof: cargo test -p vida taskflow_consume_continue_rejects_materialization_only_receipt_before_final_snapshot_replay passed.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase.as_str().is_some_and(|value| value
+                .contains("rejected materialization-only blocked task-ensure receipts"))));
+    }
+
+    #[test]
     fn canonical_close_status_preserves_concrete_blocked_reasons() {
         let reason = "Task remains blocked pending operator evidence.";
 
@@ -1616,6 +1724,16 @@ mod tests {
                 "concrete blocker field-label reason should remain fail-closed: {reason}"
             );
         }
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_current_blocked_receipt_reason() {
+        let reason = "Rejected receipt because task is blocked by missing execution evidence.";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
     }
 
     #[test]
