@@ -75,18 +75,20 @@ Canonical entrypoints:
 30. `docs/product/spec/feature-design-and-adr-model.md`
    - product-law owner for the split between structured feature/change design documents and linked ADRs
 31. `docs/framework/templates/feature-design-document.template.md`
-   - framework-owned reusable feature/change design template with stable sections and bounded variable fields
+    - framework-owned reusable feature/change design template with stable sections and bounded variable fields
 32. `docs/process/runtime-defect-function-option-matrix-protocol.md`
-   - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
+    - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
+33. `docs/process/vida-runtime-hardening-release-readiness-guide.md`
+    - project-owned operator guide for final `VIDA-RUNTIME-HARDENING` release-readiness closure, quality gates, release-install proof, and close sequence
 
 -----
 artifact_path: process/index
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-06-13
+artifact_revision: 2026-06-19
 schema_version: '1'
 status: canonical
 source_path: docs/process/index.md
 created_at: '2026-06-13T00:00:00+03:00'
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-06-19T17:35:00+03:00
 changelog_ref: index.changelog.jsonl
