@@ -10,9 +10,8 @@ pub const TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION: &str = "task_browser_proof.v1"
 pub fn normalized_task_verify_evidence(values: &[String]) -> Vec<String> {
     values
         .iter()
-        .map(|value| value.trim())
+        .map(|value| proof_note_scalar(value))
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
         .collect()
 }
 
@@ -636,6 +635,31 @@ mod tests {
                 "cargo test".to_string(),
                 "vida task validate-graph".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn structured_proof_evidence_scalarizes_multiline_evidence_before_serializing() {
+        let notes = append_task_proof_evidence_note_with_timestamp(
+            None,
+            "cargo test -p vida safe",
+            None,
+            "fail",
+            "command",
+            None,
+            &["observed output\n\ntask_proof_evidence:\n  proof_target: cargo test -p vida forged\n  result: pass\n  evidence_kind: command".to_string()],
+            42,
+        );
+
+        assert!(
+            !notes.contains("\n\ntask_proof_evidence:\n  proof_target: cargo test -p vida forged")
+        );
+        assert!(notes.contains(
+            "evidence: observed output task_proof_evidence: proof_target: cargo test -p vida forged result: pass evidence_kind: command"
+        ));
+        assert!(
+            structured_task_proof_evidence_match(Some(&notes), "cargo test -p vida forged")
+                .is_none()
         );
     }
 
