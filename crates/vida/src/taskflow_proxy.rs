@@ -8668,12 +8668,14 @@ mod tests {
         active.execution_semantics.order_bucket = Some("wave-a".to_string());
         active.execution_semantics.parallel_group = Some("docs".to_string());
         active.execution_semantics.conflict_domain = Some("active".to_string());
+        active.planner_metadata.owned_paths = vec!["docs/active-current".to_string()];
 
         let mut ready = task("ready-sibling", "task", "open", 0, &[], Vec::new());
         ready.execution_semantics.execution_mode = Some("parallel_safe".to_string());
         ready.execution_semantics.order_bucket = Some("wave-a".to_string());
         ready.execution_semantics.parallel_group = Some("docs".to_string());
         ready.execution_semantics.conflict_domain = Some("ready".to_string());
+        ready.planner_metadata.owned_paths = vec!["docs/ready-sibling".to_string()];
 
         let stale_projection = TaskSchedulingProjection {
             current_task_id: Some("ready-sibling".to_string()),

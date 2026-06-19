@@ -150,6 +150,14 @@ fn task_progress_row_from_record(
     }
 }
 
+fn task_progress_json_command(command: &str) -> String {
+    if command.split_whitespace().any(|token| token == "--json") {
+        command.to_string()
+    } else {
+        format!("{command} --json")
+    }
+}
+
 impl StateStore {
     fn task_is_open_like(task: &TaskRecord) -> bool {
         task_status_is_open_like(&task.status) && !work_item_is_program_container(&task.issue_type)
@@ -473,7 +481,7 @@ impl StateStore {
             task_id,
             taskflow_core::task::progress::TaskProgressBasis::DescendantsExcludingRoot,
             shell_quote,
-            operator_output::command_text::human_command,
+            task_progress_json_command,
         )
         .map_err(|_| StateStoreError::MissingTask {
             task_id: task_id.to_string(),
