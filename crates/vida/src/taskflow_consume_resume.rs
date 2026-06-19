@@ -286,25 +286,129 @@ fn emit_consume_continue_state_access_blocker(
     }
 }
 
+fn emit_consume_continue_state_access_blocker_with_lineage(
+    state_root: &Path,
+    surface_name: &str,
+    operation: &str,
+    error: &str,
+    as_json: bool,
+    source_run_id: Option<&str>,
+    source_dispatch_packet_path: Option<&str>,
+) {
+    let mut payload =
+        consume_continue_state_access_blocker_payload(state_root, surface_name, operation, error);
+    enrich_consume_continue_resume_error_payload(
+        &mut payload,
+        source_run_id,
+        source_dispatch_packet_path,
+    );
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        crate::taskflow_consume_resume_output::print_toon(surface_name, &payload);
+    }
+}
+
 pub(crate) fn emit_consume_continue_resume_error(error: &str, surface_name: &str, as_json: bool) {
     let mut payload =
         crate::taskflow_operator_diagnostics::consume_resume_error_payload(error, surface_name);
-    let source_run_id = payload
-        .get("run_id")
-        .cloned()
+    enrich_consume_continue_resume_error_payload(&mut payload, None, None);
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        crate::taskflow_consume_resume_output::print_toon(surface_name, &payload);
+    }
+}
+
+fn emit_consume_continue_resume_error_with_lineage(
+    error: &str,
+    surface_name: &str,
+    as_json: bool,
+    source_run_id: Option<&str>,
+    source_dispatch_packet_path: Option<&str>,
+) {
+    let mut payload =
+        crate::taskflow_operator_diagnostics::consume_resume_error_payload(error, surface_name);
+    enrich_consume_continue_resume_error_payload(
+        &mut payload,
+        source_run_id,
+        source_dispatch_packet_path,
+    );
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        crate::taskflow_consume_resume_output::print_toon(surface_name, &payload);
+    }
+}
+
+fn enrich_consume_continue_resume_error_payload(
+    payload: &mut serde_json::Value,
+    explicit_source_run_id: Option<&str>,
+    explicit_source_dispatch_packet_path: Option<&str>,
+) {
+    let source_run_id = explicit_source_run_id
+        .map(|value| serde_json::Value::String(value.to_string()))
+        .or_else(|| payload.get("run_id").cloned())
         .or_else(|| payload.pointer("/artifact_refs/run_id").cloned())
         .unwrap_or(serde_json::Value::Null);
-    let source_dispatch_packet_path = payload
-        .pointer("/artifact_refs/dispatch_packet_path")
-        .cloned()
+    let source_dispatch_packet_path = explicit_source_dispatch_packet_path
+        .map(|value| serde_json::Value::String(value.to_string()))
+        .or_else(|| {
+            payload
+                .pointer("/artifact_refs/dispatch_packet_path")
+                .cloned()
+        })
         .unwrap_or(serde_json::Value::Null);
     if let Some(object) = payload.as_object_mut() {
+        if !source_run_id.is_null() && object.get("run_id").is_none_or(serde_json::Value::is_null) {
+            object.insert("run_id".to_string(), source_run_id.clone());
+        }
         object
             .entry("source_run_id")
             .or_insert_with(|| source_run_id.clone());
         object
             .entry("source_dispatch_packet_path")
-            .or_insert(source_dispatch_packet_path);
+            .or_insert(source_dispatch_packet_path.clone());
+        let source_dispatch_packet_path = object
+            .get("source_dispatch_packet_path")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        if !object
+            .get("artifact_refs")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            let artifact_surface = object.get("surface").cloned().unwrap_or_else(|| {
+                serde_json::Value::String("vida taskflow consume continue".to_string())
+            });
+            object.insert(
+                "artifact_refs".to_string(),
+                serde_json::json!({
+                    "surface": artifact_surface,
+                }),
+            );
+        }
+        if let Some(artifact_refs) = object
+            .get_mut("artifact_refs")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            if !source_run_id.is_null()
+                && artifact_refs
+                    .get("run_id")
+                    .is_none_or(serde_json::Value::is_null)
+            {
+                artifact_refs.insert("run_id".to_string(), source_run_id.clone());
+            }
+            if !source_dispatch_packet_path.is_null()
+                && artifact_refs
+                    .get("dispatch_packet_path")
+                    .is_none_or(serde_json::Value::is_null)
+            {
+                artifact_refs.insert(
+                    "dispatch_packet_path".to_string(),
+                    source_dispatch_packet_path,
+                );
+            }
+        }
         if !object.contains_key("dispatch_receipt") {
             if let Some(dispatch_receipt) = diagnostic_dispatch_receipt_from_packet_path(
                 object
@@ -314,11 +418,6 @@ pub(crate) fn emit_consume_continue_resume_error(error: &str, surface_name: &str
                 object.insert("dispatch_receipt".to_string(), dispatch_receipt);
             }
         }
-    }
-    if as_json {
-        crate::print_json_pretty(&payload);
-    } else {
-        crate::taskflow_consume_resume_output::print_toon(surface_name, &payload);
     }
 }
 
@@ -7475,7 +7574,13 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                             }
                         }
                         if emit_output {
-                            emit_consume_continue_resume_error(&error, surface_name, as_json);
+                            emit_consume_continue_resume_error_with_lineage(
+                                &error,
+                                surface_name,
+                                as_json,
+                                Some(dispatch_receipt.run_id.as_str()),
+                                Some(dispatch_packet_path.as_str()),
+                            );
                             eprintln!(
                                 "Failed to execute resumed runtime dispatch handoff: {error}"
                             );
@@ -7491,12 +7596,14 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         Ok(store) => store,
                         Err(error) => {
                             if emit_output {
-                                emit_consume_continue_state_access_blocker(
+                                emit_consume_continue_state_access_blocker_with_lineage(
                                     &state_root,
                                     surface_name,
                                     "reopening authoritative state store after resumed runtime dispatch",
                                     &error,
                                     as_json,
+                                    Some(dispatch_receipt.run_id.as_str()),
+                                    Some(dispatch_packet_path.as_str()),
                                 );
                                 return ExitCode::from(1);
                             }
@@ -7564,6 +7671,29 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 &role_selection,
                 &dispatch_receipt,
             );
+            if dispatch_receipt.dispatch_status == "executed"
+                && !dispatch_receipt.downstream_dispatch_ready
+            {
+                let error = if dispatch_receipt.downstream_dispatch_blockers.is_empty() {
+                    "TaskFlow consume continue blocked: resumed dispatch did not produce a ready downstream dispatch packet.".to_string()
+                } else {
+                    format!(
+                        "TaskFlow consume continue blocked: resumed downstream dispatch is not ready: {}",
+                        dispatch_receipt.downstream_dispatch_blockers.join(", ")
+                    )
+                };
+                if emit_output {
+                    emit_consume_continue_resume_error_with_lineage(
+                        &error,
+                        surface_name,
+                        as_json,
+                        Some(dispatch_receipt.run_id.as_str()),
+                        Some(dispatch_packet_path.as_str()),
+                    );
+                    eprintln!("{error}");
+                }
+                return ExitCode::from(1);
+            }
             if let Err(error) = consume_continue_handoff_with_timeout(
                 "downstream dispatch chain",
                 downstream_dispatch_handoff_timeout,
@@ -7607,7 +7737,13 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     }
                 }
                 if emit_output {
-                    emit_consume_continue_resume_error(&error, surface_name, as_json);
+                    emit_consume_continue_resume_error_with_lineage(
+                        &error,
+                        surface_name,
+                        as_json,
+                        Some(dispatch_receipt.run_id.as_str()),
+                        Some(dispatch_packet_path.as_str()),
+                    );
                     eprintln!("{error}");
                 }
                 return ExitCode::from(1);
@@ -7621,12 +7757,14 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 Ok(store) => store,
                 Err(error) => {
                     if emit_output {
-                        emit_consume_continue_state_access_blocker(
+                        emit_consume_continue_state_access_blocker_with_lineage(
                             &state_root,
                             surface_name,
                             "reopening authoritative state store before resumed receipt persistence",
                             &error,
                             as_json,
+                            Some(dispatch_receipt.run_id.as_str()),
+                            Some(dispatch_packet_path.as_str()),
                         );
                         return ExitCode::from(1);
                     }
