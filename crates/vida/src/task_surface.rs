@@ -22,9 +22,10 @@ use taskflow_core::task::progress::{
 };
 use taskflow_core::task::verify::{
     all_structured_task_proof_targets_satisfied, append_task_browser_proof_note,
-    append_task_proof_evidence_note, append_task_verify_note, normalized_task_verify_evidence,
-    structured_task_proof_evidence_match, task_reports_runtime_proof_blocker, task_verify_labels,
-    TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+    append_task_proof_evidence_note, append_task_verify_note, canonical_task_proof_result,
+    normalized_task_verify_evidence, structured_task_proof_evidence_match,
+    task_browser_proof_target, task_reports_runtime_proof_blocker, task_verify_labels,
+    TaskBrowserProofArtifact,
 };
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -865,6 +866,7 @@ struct TaskProofAttachBrowserReceipt {
     screenshot: Option<String>,
     evidence: Vec<String>,
     proof_target: String,
+    artifact: TaskBrowserProofArtifact,
     notes_appended: bool,
     task: state_store::TaskRecord,
 }
@@ -1063,24 +1065,9 @@ fn proof_target_has_close_reason_evidence(task: &state_store::TaskRecord, target
 }
 
 fn normalize_browser_proof_result(result: &str) -> Result<String, String> {
-    let result = result.trim().to_ascii_lowercase();
-    match result.as_str() {
-        "pass" | "passed" | "success" | "satisfied" => Ok("pass".to_string()),
-        "fail" | "failed" | "failure" => Ok("fail".to_string()),
-        "blocked" | "block" => Ok("blocked".to_string()),
-        _ => Err("--result must be one of: pass, fail, blocked".to_string()),
-    }
-}
-
-fn browser_proof_target(route: &str, expect: Option<&str>) -> String {
-    match expect.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(expect) => format!(
-            "vida proof browser --route {} --expect {}",
-            route.trim(),
-            expect
-        ),
-        None => format!("vida proof browser --route {}", route.trim()),
-    }
+    canonical_task_proof_result(result)
+        .map(str::to_string)
+        .ok_or_else(|| "--result must be one of: pass, fail, blocked".to_string())
 }
 
 fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
@@ -1203,9 +1190,10 @@ fn task_proof_status_payload(
         "next_required_command": next_required_command,
         "evidence_model": {
             "configured_targets_source": "task.planner_metadata.proof_targets",
-            "satisfaction_source": "task_proof_evidence structured registry entries",
+            "satisfaction_source": "task_proof_evidence structured registry entries or schema-backed browser proof artifacts",
             "artifact_registry": "task_notes.task_proof_evidence|task_notes.task_browser_proof",
-            "browser_proof_note_schema": TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+            "browser_proof_artifact_schema": taskflow_core::task::verify::TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION,
+            "browser_proof_note_schema": taskflow_core::task::verify::TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
             "legacy_close_reason_text": "migration_context_not_authority"
         },
         "state_access": task_read_metadata_value(read_metadata),
@@ -9971,16 +9959,24 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
-                        let proof_target = browser_proof_target(route, command.expect.as_deref());
                         let evidence = normalized_task_verify_evidence(&command.evidence);
-                        let browser_notes = append_task_browser_proof_note(
-                            existing.notes.as_deref(),
-                            &proof_target,
+                        let browser_artifact = match TaskBrowserProofArtifact::new(
                             route,
                             &result,
                             command.expect.as_deref(),
                             command.screenshot.as_deref(),
                             &evidence,
+                        ) {
+                            Some(artifact) => artifact,
+                            None => {
+                                eprintln!("Failed to build browser proof artifact");
+                                return ExitCode::from(2);
+                            }
+                        };
+                        let proof_target = browser_artifact.proof_target.clone();
+                        let browser_notes = append_task_browser_proof_note(
+                            existing.notes.as_deref(),
+                            &browser_artifact,
                         );
                         let notes = append_task_proof_evidence_note(
                             Some(&browser_notes),
@@ -10034,6 +10030,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     screenshot: command.screenshot,
                                     evidence,
                                     proof_target,
+                                    artifact: browser_artifact,
                                     notes_appended: true,
                                     task,
                                 };
@@ -11980,7 +11977,8 @@ mod tests {
         task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
         task_ready_authoritative_first, task_takeover_status_receipt,
         task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        TaskCloseAutomationReceipt, TaskContinuationCandidate, ADAPTIVE_REPLAN_FINDING_KINDS,
+        TaskCloseAutomationReceipt, TaskContinuationCandidate, TaskProofAttachBrowserReceipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -11989,6 +11987,10 @@ mod tests {
     use crate::test_cli_support::EnvVarGuard;
     use std::fs;
     use std::process::ExitCode;
+    use taskflow_core::task::verify::{
+        append_task_browser_proof_note, task_browser_proof_target, TaskBrowserProofArtifact,
+        TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION, TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+    };
 
     async fn create_task_for_test(
         store: &crate::StateStore,
@@ -13509,6 +13511,46 @@ mod tests {
     }
 
     #[test]
+    fn task_proof_attach_browser_receipt_serializes_versioned_artifact() {
+        let artifact = TaskBrowserProofArtifact::new(
+            "/odoo",
+            "pass",
+            Some("My Tasks"),
+            Some("artifacts/proof.png"),
+            &["console clean".to_string()],
+        )
+        .expect("browser proof artifact should build");
+        let receipt = TaskProofAttachBrowserReceipt {
+            surface: "vida task proof attach-browser",
+            status: task_json_success_status(),
+            task_id: "proof-task".to_string(),
+            route: "/odoo".to_string(),
+            result: "pass".to_string(),
+            expect: Some("My Tasks".to_string()),
+            screenshot: Some("artifacts/proof.png".to_string()),
+            evidence: artifact.evidence.clone(),
+            proof_target: artifact.proof_target.clone(),
+            artifact,
+            notes_appended: true,
+            task: owned_task_record("proof-task", vec![]),
+        };
+
+        let payload =
+            serde_json::to_value(&receipt).expect("browser proof receipt should serialize");
+
+        assert_eq!(
+            payload["artifact"]["schema_version"],
+            TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            payload["artifact"]["proof_target"],
+            "vida proof browser --route /odoo --expect My Tasks"
+        );
+        assert_eq!(payload["artifact"]["result"], "pass");
+        assert_eq!(payload["proof_target"], payload["artifact"]["proof_target"]);
+    }
+
+    #[test]
     fn task_proof_attach_evidence_cli_accepts_structured_fields() {
         let parsed = cli(&[
             "task",
@@ -13555,17 +13597,17 @@ mod tests {
     #[test]
     fn task_proof_status_payload_accepts_browser_attach_registry_note() {
         let mut task = owned_task_record("proof-task", vec![]);
-        let proof_target = super::browser_proof_target("/odoo", Some("My Tasks"));
-        task.planner_metadata.proof_targets = vec![proof_target.clone()];
-        let browser_notes = super::append_task_browser_proof_note(
-            None,
-            &proof_target,
+        let artifact = TaskBrowserProofArtifact::new(
             "/odoo",
             "pass",
             Some("My Tasks"),
             Some("artifacts/proof.png"),
             &["console clean".to_string()],
-        );
+        )
+        .expect("browser proof artifact should build");
+        let proof_target = artifact.proof_target.clone();
+        task.planner_metadata.proof_targets = vec![proof_target.clone()];
+        let browser_notes = append_task_browser_proof_note(None, &artifact);
         task.notes = Some(super::append_task_proof_evidence_note(
             Some(&browser_notes),
             &proof_target,
@@ -13590,25 +13632,28 @@ mod tests {
             "task_notes.task_proof_evidence|task_notes.task_browser_proof"
         );
         assert_eq!(
+            payload["evidence_model"]["browser_proof_artifact_schema"],
+            TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+        );
+        assert_eq!(
             payload["evidence_model"]["browser_proof_note_schema"],
-            super::TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION
+            TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION
         );
     }
 
     #[test]
     fn task_proof_status_payload_rejects_failed_browser_note_with_pass_text_in_evidence() {
         let mut task = owned_task_record("proof-task", vec![]);
-        let proof_target = super::browser_proof_target("/secure", Some("OK"));
-        task.planner_metadata.proof_targets = vec![proof_target.clone()];
-        task.notes = Some(super::append_task_browser_proof_note(
-            None,
-            &proof_target,
+        let artifact = TaskBrowserProofArtifact::new(
             "/secure",
             "fail",
             Some("OK"),
             Some("artifacts/proof.png"),
             &["console included result: pass text".to_string()],
-        ));
+        )
+        .expect("browser proof artifact should build");
+        task.planner_metadata.proof_targets = vec![artifact.proof_target.clone()];
+        task.notes = Some(append_task_browser_proof_note(None, &artifact));
 
         let payload = super::task_proof_status_payload(&task, None);
 
@@ -13620,26 +13665,17 @@ mod tests {
     #[test]
     fn task_proof_status_payload_scopes_browser_pass_to_matching_target_record() {
         let mut task = owned_task_record("proof-task", vec![]);
-        let other_target = super::browser_proof_target("/other", None);
-        let secure_target = super::browser_proof_target("/secure", None);
+        let other_artifact = TaskBrowserProofArtifact::new("/other", "pass", None, None, &[])
+            .expect("browser proof artifact should build");
+        let secure_artifact = TaskBrowserProofArtifact::new("/secure", "fail", None, None, &[])
+            .expect("browser proof artifact should build");
+        let other_target = task_browser_proof_target("/other", None);
+        let secure_target = task_browser_proof_target("/secure", None);
         task.planner_metadata.proof_targets = vec![other_target.clone(), secure_target.clone()];
-        let notes = super::append_task_browser_proof_note(
-            None,
-            &other_target,
-            "/other",
-            "pass",
-            None,
-            None,
-            &[],
-        );
-        task.notes = Some(super::append_task_browser_proof_note(
+        let notes = append_task_browser_proof_note(None, &other_artifact);
+        task.notes = Some(append_task_browser_proof_note(
             Some(&notes),
-            &secure_target,
-            "/secure",
-            "fail",
-            None,
-            None,
-            &[],
+            &secure_artifact,
         ));
 
         let payload = super::task_proof_status_payload(&task, None);
@@ -13653,20 +13689,38 @@ mod tests {
 
     #[test]
     fn append_task_browser_proof_note_normalizes_newlines_in_untrusted_fields() {
-        let note = super::append_task_browser_proof_note(
-            None,
-            "vida proof browser --route /secure",
+        let artifact = TaskBrowserProofArtifact::new(
             "/secure",
             "fail",
             Some("OK\n  result: pass"),
             Some("artifacts/proof.png\n  result: pass"),
             &["first line\n  result: pass".to_string()],
-        );
+        )
+        .expect("browser proof artifact should build");
+        let note = append_task_browser_proof_note(None, &artifact);
 
         assert!(note.contains("  result: fail\n"));
+        assert!(note.contains("  schema_version: task_browser_proof.v1\n"));
         assert!(!note.contains("\n  expect: OK\n  result: pass"));
         assert!(!note.contains("\n  screenshot: artifacts/proof.png\n  result: pass"));
         assert!(!note.contains("\n  evidence: first line\n  result: pass"));
+    }
+
+    #[test]
+    fn task_proof_status_payload_rejects_unversioned_browser_note() {
+        let mut task = owned_task_record("proof-task", vec![]);
+        let proof_target = task_browser_proof_target("/odoo", Some("My Tasks"));
+        task.planner_metadata.proof_targets = vec![proof_target.clone()];
+        task.notes = Some(
+            "task_browser_proof:\n  proof_target: vida proof browser --route /odoo --expect My Tasks\n  command: vida proof browser --route /odoo --expect My Tasks\n  route: /odoo\n  result: pass\n  screenshot: artifacts/proof.png"
+                .to_string(),
+        );
+
+        let payload = super::task_proof_status_payload(&task, None);
+
+        assert_eq!(payload["satisfied_count"], 0);
+        assert_eq!(payload["missing_count"], 1);
+        assert_eq!(payload["missing_targets"][0], proof_target);
     }
 
     #[test]

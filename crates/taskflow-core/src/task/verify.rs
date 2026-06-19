@@ -26,13 +26,106 @@ pub struct TaskProofEvidenceMatch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TaskProofEvidenceRecord {
     record_kind: String,
-    schema_version: Option<String>,
     proof_target: Option<String>,
     command: Option<String>,
-    route: Option<String>,
     result: Option<String>,
     evidence_kind: Option<String>,
     artifact_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TaskBrowserProofArtifact {
+    pub schema_version: String,
+    pub proof_target: String,
+    pub command: String,
+    pub route: String,
+    pub result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expect: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
+}
+
+impl TaskBrowserProofArtifact {
+    #[must_use]
+    pub fn new(
+        route: &str,
+        result: &str,
+        expect: Option<&str>,
+        screenshot: Option<&str>,
+        evidence: &[String],
+    ) -> Option<Self> {
+        let route = proof_note_scalar(route);
+        if route.is_empty() {
+            return None;
+        }
+        let result = canonical_task_proof_result(result)?.to_string();
+        let expect = expect
+            .map(proof_note_scalar)
+            .filter(|value| !value.is_empty());
+        let screenshot = screenshot
+            .map(proof_note_scalar)
+            .filter(|value| !value.is_empty());
+        let proof_target = task_browser_proof_target(&route, expect.as_deref());
+        let evidence = evidence
+            .iter()
+            .map(|value| proof_note_scalar(value))
+            .filter(|value| !value.is_empty())
+            .collect();
+        Some(Self {
+            schema_version: TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION.to_string(),
+            command: proof_target.clone(),
+            proof_target,
+            route,
+            result,
+            expect,
+            screenshot,
+            evidence,
+        })
+    }
+
+    #[must_use]
+    pub fn satisfies_target(&self, target: &str) -> bool {
+        self.schema_version == TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+            && self.result == "pass"
+            && (self.proof_target == target || self.command == target)
+    }
+
+    #[must_use]
+    pub fn artifact_status(&self) -> &'static str {
+        if self.screenshot.is_some() {
+            "recorded"
+        } else {
+            "recorded_in_task_notes"
+        }
+    }
+}
+
+#[must_use]
+pub fn task_browser_proof_target(route: &str, expect: Option<&str>) -> String {
+    match expect
+        .map(proof_note_scalar)
+        .filter(|value| !value.is_empty())
+    {
+        Some(expect) => format!(
+            "vida proof browser --route {} --expect {}",
+            route.trim(),
+            expect
+        ),
+        None => format!("vida proof browser --route {}", route.trim()),
+    }
+}
+
+#[must_use]
+pub fn canonical_task_proof_result(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "pass" | "passed" | "success" | "satisfied" => Some("pass"),
+        "fail" | "failed" | "failure" => Some("fail"),
+        "blocked" | "block" => Some("blocked"),
+        _ => None,
+    }
 }
 
 #[must_use]
@@ -55,11 +148,7 @@ pub fn append_task_proof_evidence_note_with_timestamp(
     let artifact_ref = artifact_ref
         .map(proof_note_scalar)
         .filter(|value| !value.is_empty());
-    let evidence = evidence
-        .iter()
-        .map(|value| proof_note_scalar(value))
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
+    let evidence = normalized_task_verify_evidence(evidence);
     let mut note = format!(
         "task_proof_evidence:\n  recorded_at_unix_nanos: {recorded_at_unix_nanos}\n  proof_target: {proof_target}\n  result: {result}\n  evidence_kind: {evidence_kind}"
     );
@@ -110,44 +199,28 @@ pub fn append_task_proof_evidence_note(
 #[must_use]
 pub fn append_task_browser_proof_note_with_timestamp(
     existing_notes: Option<&str>,
-    proof_target: &str,
-    route: &str,
-    result: &str,
-    expect: Option<&str>,
-    screenshot: Option<&str>,
-    evidence: &[String],
+    artifact: &TaskBrowserProofArtifact,
     recorded_at_unix_nanos: i128,
 ) -> String {
-    let proof_target = proof_note_scalar(proof_target);
-    let route = proof_note_scalar(route);
-    let result = proof_note_scalar(result).to_ascii_lowercase();
     let mut note = format!(
-        "task_browser_proof:\n  schema_version: {TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION}\n  recorded_at_unix_nanos: {recorded_at_unix_nanos}\n  proof_target: {proof_target}\n  command: {proof_target}\n  route: {route}\n  result: {result}\n  evidence_kind: browser"
+        "task_browser_proof:\n  schema_version: {}\n  recorded_at_unix_nanos: {recorded_at_unix_nanos}\n  proof_target: {}\n  command: {}\n  route: {}\n  result: {}",
+        TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+        proof_note_scalar(&artifact.proof_target),
+        proof_note_scalar(&artifact.command),
+        proof_note_scalar(&artifact.route),
+        proof_note_scalar(&artifact.result),
     );
-    if let Some(expect) = expect
-        .map(proof_note_scalar)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(expect) = artifact.expect.as_deref() {
         note.push_str("\n  expect: ");
-        note.push_str(&expect);
+        note.push_str(&proof_note_scalar(expect));
     }
-    if let Some(screenshot) = screenshot
-        .map(proof_note_scalar)
-        .filter(|value| !value.is_empty())
-    {
-        note.push_str("\n  artifact_ref: ");
-        note.push_str(&screenshot);
+    if let Some(screenshot) = artifact.screenshot.as_deref() {
         note.push_str("\n  screenshot: ");
-        note.push_str(&screenshot);
+        note.push_str(&proof_note_scalar(screenshot));
     }
-    let evidence = evidence
-        .iter()
-        .map(|value| proof_note_scalar(value))
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    if !evidence.is_empty() {
+    if !artifact.evidence.is_empty() {
         note.push_str("\n  evidence: ");
-        note.push_str(&evidence.join(" | "));
+        note.push_str(&normalized_task_verify_evidence(&artifact.evidence).join(" | "));
     }
 
     match existing_notes
@@ -162,21 +235,11 @@ pub fn append_task_browser_proof_note_with_timestamp(
 #[must_use]
 pub fn append_task_browser_proof_note(
     existing_notes: Option<&str>,
-    proof_target: &str,
-    route: &str,
-    result: &str,
-    expect: Option<&str>,
-    screenshot: Option<&str>,
-    evidence: &[String],
+    artifact: &TaskBrowserProofArtifact,
 ) -> String {
     append_task_browser_proof_note_with_timestamp(
         existing_notes,
-        proof_target,
-        route,
-        result,
-        expect,
-        screenshot,
-        evidence,
+        artifact,
         time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
     )
 }
@@ -219,6 +282,19 @@ pub fn structured_task_proof_evidence_match(
                 ),
                 artifact_status: artifact_status.to_string(),
             })
+        })
+        .or_else(|| {
+            task_browser_proof_artifacts(notes)
+                .into_iter()
+                .find(|artifact| artifact.satisfies_target(target))
+                .map(|artifact| TaskProofEvidenceMatch {
+                    evidence_source: "task_browser_proof_artifact".to_string(),
+                    evidence_detail: format!(
+                        "schema {} browser proof reports result pass",
+                        artifact.schema_version
+                    ),
+                    artifact_status: artifact.artifact_status().to_string(),
+                })
         })
 }
 
@@ -377,16 +453,14 @@ fn task_proof_evidence_records(notes: Option<&str>) -> Vec<TaskProofEvidenceReco
     let mut current: Option<TaskProofEvidenceRecord> = None;
     for line in notes.lines() {
         let trimmed = line.trim();
-        if trimmed == "task_proof_evidence:" || trimmed == "task_browser_proof:" {
+        if trimmed == "task_proof_evidence:" {
             if let Some(record) = current.take() {
-                push_task_proof_evidence_record(&mut records, record);
+                records.push(record);
             }
             current = Some(TaskProofEvidenceRecord {
                 record_kind: trimmed.trim_end_matches(':').to_string(),
-                schema_version: None,
                 proof_target: None,
                 command: None,
-                route: None,
                 result: None,
                 evidence_kind: None,
                 artifact_ref: None,
@@ -398,20 +472,15 @@ fn task_proof_evidence_records(notes: Option<&str>) -> Vec<TaskProofEvidenceReco
             continue;
         };
         let field = line.trim_start();
-        if record.schema_version.is_none() {
-            record.schema_version = note_field(field, "schema_version:");
-        }
         if record.proof_target.is_none() {
             record.proof_target = note_field(field, "proof_target:");
         }
         if record.command.is_none() {
             record.command = note_field(field, "command:");
         }
-        if record.route.is_none() {
-            record.route = note_field(field, "route:");
-        }
         if record.result.is_none() {
-            record.result = note_field(field, "result:").map(|value| value.to_ascii_lowercase());
+            record.result = note_field(field, "result:")
+                .and_then(|value| canonical_task_proof_result(&value).map(str::to_string));
         }
         if record.evidence_kind.is_none() {
             record.evidence_kind = note_field(field, "evidence_kind:");
@@ -422,39 +491,108 @@ fn task_proof_evidence_records(notes: Option<&str>) -> Vec<TaskProofEvidenceReco
         }
     }
     if let Some(record) = current {
-        push_task_proof_evidence_record(&mut records, record);
+        records.push(record);
     }
     records
 }
 
-fn push_task_proof_evidence_record(
-    records: &mut Vec<TaskProofEvidenceRecord>,
-    record: TaskProofEvidenceRecord,
-) {
-    if record.record_kind == "task_browser_proof" && !task_browser_proof_record_is_valid(&record) {
-        return;
+fn task_browser_proof_artifacts(notes: Option<&str>) -> Vec<TaskBrowserProofArtifact> {
+    let Some(notes) = notes else {
+        return Vec::new();
+    };
+    let mut artifacts = Vec::new();
+    let mut current: Option<TaskBrowserProofArtifactBuilder> = None;
+    for line in notes.lines() {
+        let trimmed = line.trim();
+        if trimmed == "task_browser_proof:" {
+            if let Some(artifact) = current
+                .take()
+                .and_then(TaskBrowserProofArtifactBuilder::build)
+            {
+                artifacts.push(artifact);
+            }
+            current = Some(TaskBrowserProofArtifactBuilder::default());
+            continue;
+        }
+
+        let Some(record) = current.as_mut() else {
+            continue;
+        };
+        let field = line.trim_start();
+        record.set_field(field);
     }
-    records.push(record);
+    if let Some(artifact) = current.and_then(TaskBrowserProofArtifactBuilder::build) {
+        artifacts.push(artifact);
+    }
+    artifacts
 }
 
-fn task_browser_proof_record_is_valid(record: &TaskProofEvidenceRecord) -> bool {
-    record.schema_version.as_deref() == Some(TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION)
-        && record
-            .proof_target
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && record
-            .command
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && record
-            .route
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && record
-            .result
-            .as_deref()
-            .is_some_and(|value| matches!(value, "pass" | "fail" | "blocked"))
+#[derive(Default)]
+struct TaskBrowserProofArtifactBuilder {
+    schema_version: Option<String>,
+    proof_target: Option<String>,
+    command: Option<String>,
+    route: Option<String>,
+    result: Option<String>,
+    expect: Option<String>,
+    screenshot: Option<String>,
+    evidence: Vec<String>,
+}
+
+impl TaskBrowserProofArtifactBuilder {
+    fn set_field(&mut self, line: &str) {
+        if self.schema_version.is_none() {
+            self.schema_version = note_field(line, "schema_version:");
+        }
+        if self.proof_target.is_none() {
+            self.proof_target = note_field(line, "proof_target:");
+        }
+        if self.command.is_none() {
+            self.command = note_field(line, "command:");
+        }
+        if self.route.is_none() {
+            self.route = note_field(line, "route:");
+        }
+        if self.result.is_none() {
+            self.result = note_field(line, "result:")
+                .and_then(|value| canonical_task_proof_result(&value).map(str::to_string));
+        }
+        if self.expect.is_none() {
+            self.expect = note_field(line, "expect:");
+        }
+        if self.screenshot.is_none() {
+            self.screenshot = note_field(line, "screenshot:");
+        }
+        if let Some(evidence) = note_field(line, "evidence:") {
+            self.evidence.extend(
+                evidence
+                    .split('|')
+                    .map(proof_note_scalar)
+                    .filter(|value| !value.is_empty()),
+            );
+        }
+    }
+
+    fn build(self) -> Option<TaskBrowserProofArtifact> {
+        let schema_version = self.schema_version?;
+        if schema_version != TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION {
+            return None;
+        }
+        let route = self.route?;
+        let result = self.result?;
+        let mut artifact = TaskBrowserProofArtifact::new(
+            &route,
+            &result,
+            self.expect.as_deref(),
+            self.screenshot.as_deref(),
+            &self.evidence,
+        )?;
+        let proof_target = self.proof_target?;
+        let command = self.command.unwrap_or_else(|| proof_target.clone());
+        artifact.proof_target = proof_target;
+        artifact.command = command;
+        Some(artifact)
+    }
 }
 
 fn note_field(line: &str, prefix: &str) -> Option<String> {
@@ -475,12 +613,13 @@ fn proof_note_scalar(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION, append_task_browser_proof_note_with_timestamp,
+        TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION, TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+        TaskBrowserProofArtifact, append_task_browser_proof_note_with_timestamp,
         append_task_proof_evidence_note_with_timestamp, append_task_verify_note_with_timestamp,
         canonical_task_verify_label, normalized_task_verify_evidence,
-        structured_task_proof_evidence_match, task_reports_runtime_proof_blocker,
-        task_verify_label_is_runtime_proof_blocker, task_verify_labels,
-        verify_proof_targets_for_empty_existing,
+        structured_task_proof_evidence_match, task_browser_proof_target,
+        task_reports_runtime_proof_blocker, task_verify_label_is_runtime_proof_blocker,
+        task_verify_labels, verify_proof_targets_for_empty_existing,
     };
 
     #[test]
@@ -604,58 +743,74 @@ task_partial_verification:\n  recorded_at_unix_nanos: 99\n  source_fixed: true\n
     }
 
     #[test]
-    fn browser_proof_note_has_schema_and_satisfies_exact_target() {
-        let notes = append_task_browser_proof_note_with_timestamp(
-            None,
-            "vida proof browser --route /secure --expect OK",
-            "/secure",
-            "pass",
-            Some("OK"),
-            Some("artifacts/secure.png"),
-            &["console clean".to_string()],
-            42,
-        );
+    fn browser_proof_artifact_schema_builds_canonical_target() {
+        let artifact = TaskBrowserProofArtifact::new(
+            "/odoo",
+            "passed",
+            Some("My Tasks"),
+            Some("artifacts/proof.png"),
+            &[" console clean ".to_string()],
+        )
+        .expect("browser proof artifact should build");
 
+        assert_eq!(
+            artifact.schema_version,
+            TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            artifact.proof_target,
+            "vida proof browser --route /odoo --expect My Tasks"
+        );
+        assert_eq!(artifact.command, artifact.proof_target);
+        assert_eq!(artifact.result, "pass");
+        assert_eq!(artifact.evidence, vec!["console clean".to_string()]);
+        assert_eq!(
+            task_browser_proof_target("/odoo", Some("My Tasks")),
+            artifact.proof_target
+        );
+    }
+
+    #[test]
+    fn versioned_browser_proof_note_satisfies_matching_target() {
+        let artifact = TaskBrowserProofArtifact::new(
+            "/odoo",
+            "pass",
+            Some("My Tasks"),
+            Some("artifacts/proof.png"),
+            &["console clean".to_string()],
+        )
+        .expect("browser proof artifact should build");
+        let notes = append_task_browser_proof_note_with_timestamp(None, &artifact, 42);
         assert!(notes.contains(&format!(
             "schema_version: {TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION}"
         )));
-        let proof_match = structured_task_proof_evidence_match(
-            Some(&notes),
-            "vida proof browser --route /secure --expect OK",
-        )
-        .expect("schema-backed browser proof should match");
-        assert_eq!(proof_match.evidence_source, "task_proof_evidence_registry");
+
+        let proof_match =
+            structured_task_proof_evidence_match(Some(&notes), &artifact.proof_target)
+                .expect("versioned browser proof should satisfy target");
+
+        assert_eq!(proof_match.evidence_source, "task_browser_proof_artifact");
         assert_eq!(proof_match.artifact_status, "recorded");
-        assert!(proof_match.evidence_detail.contains("browser"));
     }
 
     #[test]
-    fn malformed_browser_proof_note_fails_closed() {
-        let notes = "task_browser_proof:\n  proof_target: vida proof browser --route /secure\n  command: vida proof browser --route /secure\n  route: /secure\n  result: pass";
+    fn malformed_or_failed_browser_proof_notes_fail_closed() {
+        let target = "vida proof browser --route /odoo --expect My Tasks";
+        let old_unversioned = "\
+task_browser_proof:\n  proof_target: vida proof browser --route /odoo --expect My Tasks\n  command: vida proof browser --route /odoo --expect My Tasks\n  route: /odoo\n  result: pass";
+        assert!(structured_task_proof_evidence_match(Some(old_unversioned), target).is_none());
 
-        assert!(
-            structured_task_proof_evidence_match(Some(notes), "vida proof browser --route /secure")
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn browser_proof_note_normalizes_newlines_in_untrusted_fields() {
-        let note = append_task_browser_proof_note_with_timestamp(
-            None,
-            "vida proof browser --route /secure",
-            "/secure",
+        let artifact = TaskBrowserProofArtifact::new(
+            "/odoo",
             "fail",
-            Some("OK\n  result: pass"),
-            Some("artifacts/proof.png\n  result: pass"),
-            &["first line\n  result: pass".to_string()],
-            42,
-        );
+            Some("My Tasks"),
+            Some("artifacts/proof.png"),
+            &["contains pass text".to_string()],
+        )
+        .expect("browser proof artifact should build");
+        let failed_notes = append_task_browser_proof_note_with_timestamp(None, &artifact, 42);
 
-        assert!(note.contains("  result: fail\n"));
-        assert!(!note.contains("\n  expect: OK\n  result: pass"));
-        assert!(!note.contains("\n  screenshot: artifacts/proof.png\n  result: pass"));
-        assert!(!note.contains("\n  evidence: first line\n  result: pass"));
+        assert!(structured_task_proof_evidence_match(Some(&failed_notes), target).is_none());
     }
 
     #[test]
