@@ -10,6 +10,123 @@ use taskflow_core::task::verify::all_structured_task_proof_targets_satisfied;
 const TASK_TREE_MAX_DEPTH: usize = 64;
 const TASK_TREE_MAX_NODE_VISITS: usize = 10_000;
 
+#[derive(Debug, Clone)]
+pub(crate) struct TaskGraphSnapshot {
+    rows: Vec<TaskRecord>,
+    index: TaskIndex,
+    progress_rows: Vec<taskflow_core::task::progress::TaskProgressRow>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TaskIndex {
+    by_id: BTreeMap<String, usize>,
+    children_by_parent: BTreeMap<String, Vec<String>>,
+    non_parent_dependencies: BTreeMap<String, Vec<(String, String)>>,
+}
+
+impl TaskIndex {
+    fn from_sorted_rows(rows: &[TaskRecord]) -> Self {
+        let mut by_id = BTreeMap::new();
+        for (index, task) in rows.iter().enumerate() {
+            by_id.insert(task.id.clone(), index);
+        }
+
+        let mut children_by_parent = BTreeMap::<String, Vec<String>>::new();
+        let mut non_parent_dependencies = BTreeMap::<String, Vec<(String, String)>>::new();
+        for task in rows {
+            for dependency in &task.dependencies {
+                if dependency.edge_type == "parent-child" {
+                    children_by_parent
+                        .entry(dependency.depends_on_id.clone())
+                        .or_default()
+                        .push(task.id.clone());
+                } else if by_id.contains_key(&dependency.depends_on_id) {
+                    non_parent_dependencies
+                        .entry(task.id.clone())
+                        .or_default()
+                        .push((
+                            dependency.depends_on_id.clone(),
+                            dependency.edge_type.clone(),
+                        ));
+                }
+            }
+        }
+
+        Self {
+            by_id,
+            children_by_parent,
+            non_parent_dependencies,
+        }
+    }
+}
+
+impl TaskGraphSnapshot {
+    pub(crate) fn from_rows(rows: &[TaskRecord]) -> Self {
+        let mut rows = rows.to_vec();
+        rows.sort_by(task_sort_key);
+        let index = TaskIndex::from_sorted_rows(&rows);
+        let progress_rows = rows.iter().map(task_progress_row_from_record).collect();
+
+        Self {
+            rows,
+            index,
+            progress_rows,
+        }
+    }
+
+    fn rows(&self) -> &[TaskRecord] {
+        &self.rows
+    }
+
+    fn task(&self, task_id: &str) -> Option<&TaskRecord> {
+        self.index
+            .by_id
+            .get(task_id)
+            .and_then(|index| self.rows.get(*index))
+    }
+
+    fn contains_task(&self, task_id: &str) -> bool {
+        self.index.by_id.contains_key(task_id)
+    }
+
+    fn children_for(&self, task_id: &str) -> Option<&Vec<String>> {
+        self.index.children_by_parent.get(task_id)
+    }
+
+    fn children_by_parent(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.index.children_by_parent
+    }
+
+    fn non_parent_dependencies(&self) -> &BTreeMap<String, Vec<(String, String)>> {
+        &self.index.non_parent_dependencies
+    }
+
+    fn progress_rows(&self) -> &[taskflow_core::task::progress::TaskProgressRow] {
+        &self.progress_rows
+    }
+
+    fn scope_ids(&self, scope_task_id: &str) -> Result<BTreeSet<String>, StateStoreError> {
+        if !self.contains_task(scope_task_id) {
+            return Err(StateStoreError::MissingTask {
+                task_id: scope_task_id.to_string(),
+            });
+        }
+
+        let mut scope_ids = BTreeSet::new();
+        let mut stack = vec![scope_task_id.to_string()];
+        while let Some(current) = stack.pop() {
+            if !scope_ids.insert(current.clone()) {
+                continue;
+            }
+            if let Some(descendants) = self.children_for(&current) {
+                stack.extend(descendants.iter().cloned());
+            }
+        }
+
+        Ok(scope_ids)
+    }
+}
+
 fn task_progress_row_from_record(
     task: &TaskRecord,
 ) -> taskflow_core::task::progress::TaskProgressRow {
@@ -34,51 +151,37 @@ fn task_progress_row_from_record(
 }
 
 impl StateStore {
-    fn parent_child_reverse_index(rows: &[TaskRecord]) -> BTreeMap<String, Vec<String>> {
-        let mut children = BTreeMap::<String, Vec<String>>::new();
-        for task in rows {
-            for dependency in &task.dependencies {
-                if dependency.edge_type != "parent-child" {
-                    continue;
-                }
-                children
-                    .entry(dependency.depends_on_id.clone())
-                    .or_default()
-                    .push(task.id.clone());
-            }
-        }
-        children
-    }
-
     fn task_is_open_like(task: &TaskRecord) -> bool {
         task_status_is_open_like(&task.status) && !work_item_is_program_container(&task.issue_type)
     }
 
-    fn task_blockers(
+    fn task_blockers_from_snapshot(
         task: &TaskRecord,
-        by_id: &BTreeMap<String, TaskRecord>,
+        snapshot: &TaskGraphSnapshot,
     ) -> Vec<TaskDependencyStatus> {
         let mut blockers = task
             .dependencies
             .iter()
             .filter(|dependency| dependency.edge_type != "parent-child")
-            .filter_map(|dependency| match by_id.get(&dependency.depends_on_id) {
-                Some(blocker_task) if task_status_is_closed_like(&blocker_task.status) => None,
-                Some(blocker_task) => Some(TaskDependencyStatus {
-                    issue_id: dependency.issue_id.clone(),
-                    depends_on_id: dependency.depends_on_id.clone(),
-                    edge_type: dependency.edge_type.clone(),
-                    dependency_status: blocker_task.status.clone(),
-                    dependency_issue_type: Some(blocker_task.issue_type.clone()),
-                }),
-                None => Some(TaskDependencyStatus {
-                    issue_id: dependency.issue_id.clone(),
-                    depends_on_id: dependency.depends_on_id.clone(),
-                    edge_type: dependency.edge_type.clone(),
-                    dependency_status: "missing".to_string(),
-                    dependency_issue_type: Some("missing_dependency_target".to_string()),
-                }),
-            })
+            .filter_map(
+                |dependency| match snapshot.task(&dependency.depends_on_id) {
+                    Some(blocker_task) if task_status_is_closed_like(&blocker_task.status) => None,
+                    Some(blocker_task) => Some(TaskDependencyStatus {
+                        issue_id: dependency.issue_id.clone(),
+                        depends_on_id: dependency.depends_on_id.clone(),
+                        edge_type: dependency.edge_type.clone(),
+                        dependency_status: blocker_task.status.clone(),
+                        dependency_issue_type: Some(blocker_task.issue_type.clone()),
+                    }),
+                    None => Some(TaskDependencyStatus {
+                        issue_id: dependency.issue_id.clone(),
+                        depends_on_id: dependency.depends_on_id.clone(),
+                        edge_type: dependency.edge_type.clone(),
+                        dependency_status: "missing".to_string(),
+                        dependency_issue_type: Some("missing_dependency_target".to_string()),
+                    }),
+                },
+            )
             .collect::<Vec<_>>();
         blockers.sort_by(|left, right| {
             left.edge_type
@@ -121,61 +224,37 @@ impl StateStore {
             || work_item_is_program_container(&task.issue_type)
     }
 
-    fn ready_scope_ids_from_rows(
-        rows: &[TaskRecord],
-        scope_task_id: &str,
-    ) -> Result<BTreeSet<String>, StateStoreError> {
-        if !rows.iter().any(|task| task.id == scope_task_id) {
-            return Err(StateStoreError::MissingTask {
-                task_id: scope_task_id.to_string(),
-            });
-        }
-
-        let children = Self::parent_child_reverse_index(rows);
-
-        let mut scope_ids = BTreeSet::new();
-        let mut stack = vec![scope_task_id.to_string()];
-        while let Some(current) = stack.pop() {
-            if !scope_ids.insert(current.clone()) {
-                continue;
-            }
-            if let Some(descendants) = children.get(&current) {
-                stack.extend(descendants.iter().cloned());
-            }
-        }
-
-        Ok(scope_ids)
-    }
-
     pub(crate) fn ready_tasks_scoped_from_rows(
         rows: &[TaskRecord],
         scope_task_id: Option<&str>,
     ) -> Result<Vec<TaskRecord>, StateStoreError> {
-        let mut rows = rows.to_vec();
-        rows.sort_by(task_sort_key);
+        let snapshot = TaskGraphSnapshot::from_rows(rows);
+        Self::ready_tasks_scoped_from_snapshot(&snapshot, scope_task_id)
+    }
 
-        let by_id = rows
-            .iter()
-            .cloned()
-            .map(|task| (task.id.clone(), task))
-            .collect::<BTreeMap<_, _>>();
+    pub(crate) fn ready_tasks_scoped_from_snapshot(
+        snapshot: &TaskGraphSnapshot,
+        scope_task_id: Option<&str>,
+    ) -> Result<Vec<TaskRecord>, StateStoreError> {
         let scope_ids = if let Some(scope_task_id) = scope_task_id {
-            Some(Self::ready_scope_ids_from_rows(&rows, scope_task_id)?)
+            Some(snapshot.scope_ids(scope_task_id)?)
         } else {
             None
         };
 
-        let mut ready = rows
-            .into_iter()
+        let mut ready = snapshot
+            .rows()
+            .iter()
             .filter(|task| {
                 scope_ids
                     .as_ref()
                     .map(|ids| ids.contains(&task.id))
                     .unwrap_or(true)
             })
-            .filter(Self::task_is_open_like)
+            .filter(|task| Self::task_is_open_like(task))
             .filter(|task| !Self::task_is_container_only(task))
-            .filter(|task| Self::task_blockers(task, &by_id).is_empty())
+            .filter(|task| Self::task_blockers_from_snapshot(task, snapshot).is_empty())
+            .cloned()
             .collect::<Vec<_>>();
 
         ready.sort_by(task_ready_sort_key);
@@ -195,15 +274,15 @@ impl StateStore {
         scope_task_id: Option<&str>,
         current_task_id: Option<&str>,
     ) -> Result<TaskSchedulingProjection, StateStoreError> {
-        let mut rows = self.all_tasks().await?;
-        rows.sort_by(task_sort_key);
+        let rows = self.all_tasks().await?;
+        let snapshot = TaskGraphSnapshot::from_rows(&rows);
         let mut critical_path_ids = BTreeSet::new();
-        if let Ok(path) = Self::critical_path_from_rows(&rows) {
+        if let Ok(path) = Self::critical_path_from_snapshot(&snapshot) {
             critical_path_ids.extend(path.nodes.into_iter().map(|node| node.id));
         }
 
-        Self::scheduling_projection_scoped_from_rows(
-            &rows,
+        Self::scheduling_projection_scoped_from_snapshot(
+            &snapshot,
             scope_task_id,
             current_task_id,
             &critical_path_ids,
@@ -216,29 +295,37 @@ impl StateStore {
         current_task_id: Option<&str>,
         critical_path_ids: &BTreeSet<String>,
     ) -> Result<TaskSchedulingProjection, StateStoreError> {
-        let mut rows = rows.to_vec();
-        rows.sort_by(task_sort_key);
+        let snapshot = TaskGraphSnapshot::from_rows(rows);
+        Self::scheduling_projection_scoped_from_snapshot(
+            &snapshot,
+            scope_task_id,
+            current_task_id,
+            critical_path_ids,
+        )
+    }
 
+    pub(crate) fn scheduling_projection_scoped_from_snapshot(
+        snapshot: &TaskGraphSnapshot,
+        scope_task_id: Option<&str>,
+        current_task_id: Option<&str>,
+        critical_path_ids: &BTreeSet<String>,
+    ) -> Result<TaskSchedulingProjection, StateStoreError> {
         let scope_ids = if let Some(scope_task_id) = scope_task_id {
-            Some(Self::ready_scope_ids_from_rows(&rows, scope_task_id)?)
+            Some(snapshot.scope_ids(scope_task_id)?)
         } else {
             None
         };
 
-        let by_id = rows
+        let scoped_tasks = snapshot
+            .rows()
             .iter()
-            .cloned()
-            .map(|task| (task.id.clone(), task))
-            .collect::<BTreeMap<_, _>>();
-        let scoped_tasks = rows
-            .into_iter()
             .filter(|task| {
                 scope_ids
                     .as_ref()
                     .map(|ids| ids.contains(&task.id))
                     .unwrap_or(true)
             })
-            .filter(Self::task_is_open_like)
+            .filter(|task| Self::task_is_open_like(task))
             .collect::<Vec<_>>();
 
         let chosen_current = current_task_id
@@ -253,19 +340,19 @@ impl StateStore {
                 scoped_tasks
                     .iter()
                     .filter(|task| !Self::task_is_container_only(task))
-                    .find(|task| Self::task_blockers(task, &by_id).is_empty())
+                    .find(|task| Self::task_blockers_from_snapshot(task, snapshot).is_empty())
                     .map(|task| task.id.clone())
             });
         let current_task = chosen_current
             .as_deref()
-            .and_then(|task_id| by_id.get(task_id));
+            .and_then(|task_id| snapshot.task(task_id));
 
         let mut ready = Vec::new();
         let mut blocked = Vec::new();
         for task in scoped_tasks {
             let active_critical_path = critical_path_ids.contains(&task.id);
-            let mut blocked_by = Self::task_blockers(&task, &by_id);
-            if Self::task_is_container_only(&task) && blocked_by.is_empty() {
+            let mut blocked_by = Self::task_blockers_from_snapshot(task, snapshot);
+            if Self::task_is_container_only(task) && blocked_by.is_empty() {
                 blocked_by.push(TaskDependencyStatus {
                     issue_id: task.id.clone(),
                     depends_on_id: task.id.clone(),
@@ -276,12 +363,12 @@ impl StateStore {
             }
             let ready_now = blocked_by.is_empty();
             let parallel_blockers = if ready_now {
-                Self::parallel_blockers_against_current(&task, current_task)
+                Self::parallel_blockers_against_current(task, current_task)
             } else {
                 vec!["graph_blocked".to_string()]
             };
             let candidate = TaskSchedulingCandidate {
-                task,
+                task: task.clone(),
                 ready_now,
                 ready_parallel_safe: ready_now && parallel_blockers.is_empty(),
                 blocked_by,
@@ -373,12 +460,16 @@ impl StateStore {
         rows: &[TaskRecord],
         task_id: &str,
     ) -> Result<TaskProgressSummary, StateStoreError> {
-        let core_rows = rows
-            .iter()
-            .map(task_progress_row_from_record)
-            .collect::<Vec<_>>();
+        let snapshot = TaskGraphSnapshot::from_rows(rows);
+        Self::task_progress_summary_from_snapshot(&snapshot, task_id)
+    }
+
+    pub(crate) fn task_progress_summary_from_snapshot(
+        snapshot: &TaskGraphSnapshot,
+        task_id: &str,
+    ) -> Result<TaskProgressSummary, StateStoreError> {
         let core = taskflow_core::task::progress::task_progress_summary_from_rows(
-            &core_rows,
+            snapshot.progress_rows(),
             task_id,
             taskflow_core::task::progress::TaskProgressBasis::DescendantsExcludingRoot,
             shell_quote,
@@ -387,13 +478,11 @@ impl StateStore {
         .map_err(|_| StateStoreError::MissingTask {
             task_id: task_id.to_string(),
         })?;
-        let root_task = rows
-            .iter()
-            .find(|task| task.id == core.root_task.id)
-            .cloned()
-            .ok_or_else(|| StateStoreError::MissingTask {
+        let root_task = snapshot.task(&core.root_task.id).cloned().ok_or_else(|| {
+            StateStoreError::MissingTask {
                 task_id: core.root_task.id.clone(),
-            })?;
+            }
+        })?;
 
         Ok(TaskProgressSummary {
             root_task,
@@ -431,19 +520,19 @@ impl StateStore {
         tasks: &[TaskRecord],
         task_id: &str,
     ) -> Result<TaskDependencyTreeNode, StateStoreError> {
-        let by_id = tasks
-            .iter()
-            .cloned()
-            .map(|task| (task.id.clone(), task))
-            .collect::<BTreeMap<_, _>>();
-        let tree_rows = by_id.values().cloned().collect::<Vec<_>>();
-        let children_by_parent = Self::parent_child_reverse_index(&tree_rows);
+        let snapshot = TaskGraphSnapshot::from_rows(tasks);
+        Self::task_dependency_tree_from_snapshot(&snapshot, task_id)
+    }
+
+    pub(crate) fn task_dependency_tree_from_snapshot(
+        snapshot: &TaskGraphSnapshot,
+        task_id: &str,
+    ) -> Result<TaskDependencyTreeNode, StateStoreError> {
         let mut active = BTreeSet::new();
         let mut expanded = BTreeSet::new();
         let mut node_visits = 0usize;
         Self::build_task_dependency_tree(
-            &by_id,
-            &children_by_parent,
+            snapshot,
             task_id,
             &mut active,
             &mut expanded,
@@ -453,8 +542,7 @@ impl StateStore {
     }
 
     fn build_task_dependency_tree(
-        by_id: &BTreeMap<String, TaskRecord>,
-        children_by_parent: &BTreeMap<String, Vec<String>>,
+        snapshot: &TaskGraphSnapshot,
         task_id: &str,
         active: &mut BTreeSet<String>,
         expanded: &mut BTreeSet<String>,
@@ -477,8 +565,8 @@ impl StateStore {
         }
         *node_visits += 1;
 
-        let task = by_id
-            .get(task_id)
+        let task = snapshot
+            .task(task_id)
             .cloned()
             .ok_or_else(|| StateStoreError::MissingTask {
                 task_id: task_id.to_string(),
@@ -509,15 +597,14 @@ impl StateStore {
 
             if active.contains(&dependency.depends_on_id) {
                 edge.cycle = true;
-            } else if let Some(dependency_task) = by_id.get(&dependency.depends_on_id) {
+            } else if let Some(dependency_task) = snapshot.task(&dependency.depends_on_id) {
                 edge.dependency_status = dependency_task.status.clone();
                 edge.dependency_issue_type = Some(dependency_task.issue_type.clone());
                 if expanded.contains(&dependency.depends_on_id) {
                     edge.repeated = true;
                 } else {
                     edge.node = Some(Box::new(Self::build_task_dependency_tree(
-                        by_id,
-                        children_by_parent,
+                        snapshot,
                         &dependency.depends_on_id,
                         active,
                         expanded,
@@ -532,7 +619,7 @@ impl StateStore {
             dependencies.push(edge);
         }
         let mut children = Vec::new();
-        if let Some(child_ids) = children_by_parent.get(&task.id) {
+        if let Some(child_ids) = snapshot.children_for(&task.id) {
             for child_id in child_ids {
                 let mut child = TaskDependencyTreeChild {
                     child_id: child_id.clone(),
@@ -549,7 +636,7 @@ impl StateStore {
                 };
                 if active.contains(child_id) {
                     child.cycle = true;
-                } else if let Some(child_task) = by_id.get(child_id) {
+                } else if let Some(child_task) = snapshot.task(child_id) {
                     child.child_display_id = child_task.display_id.clone();
                     child.child_title = Some(child_task.title.clone());
                     child.child_status = child_task.status.clone();
@@ -560,8 +647,7 @@ impl StateStore {
                         child.repeated = true;
                     } else {
                         child.node = Some(Box::new(Self::build_task_dependency_tree(
-                            by_id,
-                            children_by_parent,
+                            snapshot,
                             child_id,
                             active,
                             expanded,
@@ -604,19 +690,22 @@ impl StateStore {
     pub(crate) fn critical_path_from_rows(
         tasks: &[TaskRecord],
     ) -> Result<TaskCriticalPath, StateStoreError> {
-        let issues = Self::validate_task_graph_rows(&tasks);
+        let snapshot = TaskGraphSnapshot::from_rows(tasks);
+        Self::critical_path_from_snapshot(&snapshot)
+    }
+
+    pub(crate) fn critical_path_from_snapshot(
+        snapshot: &TaskGraphSnapshot,
+    ) -> Result<TaskCriticalPath, StateStoreError> {
+        let issues = Self::validate_task_graph_snapshot(snapshot);
         if !issues.is_empty() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: "task graph is invalid; run `vida task validate-graph` first".to_string(),
             });
         }
 
-        let by_id = tasks
-            .iter()
-            .cloned()
-            .map(|task| (task.id.clone(), task))
-            .collect::<BTreeMap<_, _>>();
-        let active_ids = tasks
+        let active_ids = snapshot
+            .rows()
             .iter()
             .filter(|task| {
                 task_status_is_open_like(&task.status)
@@ -629,7 +718,7 @@ impl StateStore {
         let mut active = BTreeSet::new();
         let mut best = Vec::new();
         for task_id in active_ids {
-            let path = Self::critical_path_for_task(&by_id, &task_id, &mut memo, &mut active)?;
+            let path = Self::critical_path_for_task(snapshot, &task_id, &mut memo, &mut active)?;
             if compare_task_paths(&path, &best).is_gt() {
                 best = path;
             }
@@ -637,7 +726,7 @@ impl StateStore {
 
         let nodes = best
             .into_iter()
-            .filter_map(|task_id| by_id.get(&task_id))
+            .filter_map(|task_id| snapshot.task(&task_id))
             .map(|task| TaskCriticalPathNode {
                 id: task.id.clone(),
                 title: task.title.clone(),
@@ -665,13 +754,16 @@ impl StateStore {
     }
 
     pub(crate) fn validate_task_graph_rows(tasks: &[TaskRecord]) -> Vec<TaskGraphIssue> {
-        let by_id = tasks
-            .iter()
-            .map(|task| (task.id.clone(), task))
-            .collect::<BTreeMap<_, _>>();
+        let snapshot = TaskGraphSnapshot::from_rows(tasks);
+        Self::validate_task_graph_snapshot(&snapshot)
+    }
+
+    pub(crate) fn validate_task_graph_snapshot(
+        snapshot: &TaskGraphSnapshot,
+    ) -> Vec<TaskGraphIssue> {
         let mut issues = Vec::new();
 
-        for task in tasks {
+        for task in snapshot.rows() {
             let parent_edges = task
                 .dependencies
                 .iter()
@@ -706,7 +798,7 @@ impl StateStore {
             }
 
             for dependency in &task.dependencies {
-                if !by_id.contains_key(&dependency.depends_on_id) {
+                if !snapshot.contains_task(&dependency.depends_on_id) {
                     issues.push(TaskGraphIssue {
                         issue_type: "missing_dependency_target".to_string(),
                         issue_id: task.id.clone(),
@@ -726,7 +818,7 @@ impl StateStore {
                     });
                 }
                 if dependency.edge_type == "parent-child" {
-                    if let Some(parent) = by_id.get(&dependency.depends_on_id) {
+                    if let Some(parent) = snapshot.task(&dependency.depends_on_id) {
                         let child_kind = canonical_work_item_issue_type(&task.issue_type);
                         let parent_kind = canonical_work_item_issue_type(&parent.issue_type);
                         if child_kind == "epic" && parent_kind != "epic" {
@@ -746,34 +838,13 @@ impl StateStore {
             }
         }
 
-        let mut parent_children = BTreeMap::<String, Vec<String>>::new();
-        let mut non_parent_dependencies = BTreeMap::<String, Vec<(String, String)>>::new();
-        for task in tasks {
-            for dependency in &task.dependencies {
-                if dependency.edge_type == "parent-child" {
-                    parent_children
-                        .entry(dependency.depends_on_id.clone())
-                        .or_default()
-                        .push(task.id.clone());
-                } else if by_id.contains_key(&dependency.depends_on_id) {
-                    non_parent_dependencies
-                        .entry(task.id.clone())
-                        .or_default()
-                        .push((
-                            dependency.depends_on_id.clone(),
-                            dependency.edge_type.clone(),
-                        ));
-                }
-            }
-        }
-
-        for task in tasks {
-            let Some(children) = parent_children.get(&task.id) else {
+        for task in snapshot.rows() {
+            let Some(children) = snapshot.children_for(&task.id) else {
                 continue;
             };
             if task_status_is_closed_like(&task.status) {
                 for child_id in children {
-                    let Some(child) = by_id.get(child_id) else {
+                    let Some(child) = snapshot.task(child_id) else {
                         continue;
                     };
                     if !task_status_is_closed_like(&child.status) {
@@ -793,8 +864,8 @@ impl StateStore {
                 && work_item_is_program_container(&task.issue_type)
             {
                 let has_non_closed_child = children.iter().any(|child_id| {
-                    by_id
-                        .get(child_id)
+                    snapshot
+                        .task(child_id)
                         .map(|child| !task_status_is_closed_like(&child.status))
                         .unwrap_or(false)
                 });
@@ -803,8 +874,8 @@ impl StateStore {
                     .iter()
                     .filter(|dependency| dependency.edge_type != "parent-child")
                     .any(|dependency| {
-                        by_id
-                            .get(&dependency.depends_on_id)
+                        snapshot
+                            .task(&dependency.depends_on_id)
                             .map(|dependency_task| {
                                 !task_status_is_closed_like(&dependency_task.status)
                             })
@@ -813,11 +884,11 @@ impl StateStore {
                 let waiting_for_work_pool_handoff = task_is_spec_first_feature_parent(task)
                     && children
                         .iter()
-                        .filter_map(|child_id| by_id.get(child_id))
+                        .filter_map(|child_id| snapshot.task(child_id))
                         .any(|child| task_is_spec_pack_child(child))
                     && !children
                         .iter()
-                        .filter_map(|child_id| by_id.get(child_id))
+                        .filter_map(|child_id| snapshot.task(child_id))
                         .any(|child| task_is_work_pool_pack_child(child));
                 if !has_non_closed_child
                     && !has_unresolved_non_parent_dependency
@@ -837,10 +908,10 @@ impl StateStore {
 
         let mut visited = BTreeSet::new();
         let mut active = BTreeSet::new();
-        for task in tasks {
+        for task in snapshot.rows() {
             Self::validate_parent_child_cycles(
                 &task.id,
-                &parent_children,
+                snapshot.children_by_parent(),
                 &mut visited,
                 &mut active,
                 &mut issues,
@@ -849,10 +920,10 @@ impl StateStore {
 
         let mut visited = BTreeSet::new();
         let mut active = BTreeSet::new();
-        for task in tasks {
+        for task in snapshot.rows() {
             Self::validate_non_parent_dependency_cycles(
                 &task.id,
-                &non_parent_dependencies,
+                snapshot.non_parent_dependencies(),
                 &mut visited,
                 &mut active,
                 &mut issues,
@@ -904,7 +975,7 @@ impl StateStore {
     }
 
     fn critical_path_for_task(
-        by_id: &BTreeMap<String, TaskRecord>,
+        snapshot: &TaskGraphSnapshot,
         task_id: &str,
         memo: &mut BTreeMap<String, Vec<String>>,
         active: &mut BTreeSet<String>,
@@ -918,8 +989,8 @@ impl StateStore {
             });
         }
 
-        let task = by_id
-            .get(task_id)
+        let task = snapshot
+            .task(task_id)
             .ok_or_else(|| StateStoreError::MissingTask {
                 task_id: task_id.to_string(),
             })?;
@@ -928,7 +999,7 @@ impl StateStore {
             if dependency.edge_type == "parent-child" {
                 continue;
             }
-            let Some(dep_task) = by_id.get(&dependency.depends_on_id) else {
+            let Some(dep_task) = snapshot.task(&dependency.depends_on_id) else {
                 continue;
             };
             if task_status_is_closed_like(&dep_task.status)
@@ -937,7 +1008,7 @@ impl StateStore {
                 continue;
             }
 
-            let candidate = Self::critical_path_for_task(by_id, &dep_task.id, memo, active)?;
+            let candidate = Self::critical_path_for_task(snapshot, &dep_task.id, memo, active)?;
             if compare_task_paths(&candidate, &best_dependency_path).is_gt() {
                 best_dependency_path = candidate;
             }
@@ -1186,6 +1257,183 @@ mod tests {
             metadata: "{}".to_string(),
             thread_id: String::new(),
         }
+    }
+
+    #[test]
+    fn task_graph_snapshot_reuses_parent_child_and_dependency_indexes() {
+        let mut parent = task_record("parent", "open");
+        parent.issue_type = "epic".to_string();
+        let blocker = task_record("blocker", "in_progress");
+        let mut child = task_record("child", "open");
+        child
+            .dependencies
+            .push(parent_child_dependency("child", "parent"));
+        child
+            .dependencies
+            .push(dependency("child", "blocker", "blocks"));
+
+        let snapshot = TaskGraphSnapshot::from_rows(&[child, blocker, parent]);
+
+        assert!(snapshot.contains_task("parent"));
+        assert_eq!(snapshot.task("child").expect("child indexed").id, "child");
+        assert_eq!(
+            snapshot.children_for("parent").expect("parent children"),
+            &vec!["child".to_string()]
+        );
+        assert_eq!(
+            snapshot.scope_ids("parent").expect("scope ids"),
+            BTreeSet::from(["child".to_string(), "parent".to_string()])
+        );
+        assert_eq!(
+            snapshot
+                .non_parent_dependencies()
+                .get("child")
+                .expect("child dependencies"),
+            &vec![("blocker".to_string(), "blocks".to_string())]
+        );
+
+        let blockers = StateStore::task_blockers_from_snapshot(
+            snapshot.task("child").expect("child task"),
+            &snapshot,
+        );
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].depends_on_id, "blocker");
+        assert_eq!(blockers[0].dependency_status, "in_progress");
+    }
+
+    #[test]
+    fn task_graph_snapshot_builds_reusable_task_index() {
+        let mut epic = task_record("epic", "open");
+        epic.issue_type = "epic".to_string();
+        epic.priority = 3;
+
+        let mut blocker = task_record("blocker", "closed");
+        blocker.priority = 1;
+
+        let mut child = task_record("child", "open");
+        child.priority = 2;
+        child
+            .dependencies
+            .push(parent_child_dependency("child", "epic"));
+        child
+            .dependencies
+            .push(dependency("child", "blocker", "blocks"));
+
+        let snapshot = TaskGraphSnapshot::from_rows(&[epic, child, blocker]);
+
+        assert_eq!(
+            snapshot
+                .rows()
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["blocker", "child", "epic"]
+        );
+        assert!(snapshot.contains_task("child"));
+        assert_eq!(
+            snapshot.children_for("epic").cloned().unwrap_or_default(),
+            vec!["child".to_string()]
+        );
+        assert_eq!(
+            snapshot
+                .non_parent_dependencies()
+                .get("child")
+                .cloned()
+                .unwrap_or_default(),
+            vec![("blocker".to_string(), "blocks".to_string())]
+        );
+
+        let scope_ids = snapshot.scope_ids("epic").expect("scope should resolve");
+        assert_eq!(
+            scope_ids.into_iter().collect::<Vec<_>>(),
+            vec!["child".to_string(), "epic".to_string()]
+        );
+        let child_progress = snapshot
+            .progress_rows()
+            .iter()
+            .find(|row| row.id == "child")
+            .expect("child progress row should exist");
+        assert_eq!(child_progress.parent_id.as_deref(), Some("epic"));
+    }
+
+    #[test]
+    fn task_graph_snapshot_drives_key_graph_readers() {
+        let mut epic = task_record("epic", "open");
+        epic.issue_type = "epic".to_string();
+        epic.priority = 0;
+
+        let mut ready = task_record("ready", "open");
+        ready.priority = 1;
+        ready
+            .dependencies
+            .push(parent_child_dependency("ready", "epic"));
+        ready
+            .dependencies
+            .push(dependency("ready", "blocker", "blocks"));
+
+        let mut done = task_record("done", "closed");
+        done.priority = 2;
+        done.dependencies
+            .push(parent_child_dependency("done", "epic"));
+
+        let mut blocker = task_record("blocker", "closed");
+        blocker.priority = 3;
+
+        let snapshot = TaskGraphSnapshot::from_rows(&[epic, ready, done, blocker]);
+
+        let progress = StateStore::task_progress_summary_from_snapshot(&snapshot, "epic")
+            .expect("progress should reuse snapshot rows");
+        assert_eq!(progress.descendant_count, 2);
+        assert_eq!(progress.open_count, 1);
+        assert_eq!(progress.closed_count, 1);
+
+        let ready_tasks = StateStore::ready_tasks_scoped_from_snapshot(&snapshot, Some("epic"))
+            .expect("ready tasks should reuse snapshot index");
+        assert_eq!(
+            ready_tasks
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ready"]
+        );
+
+        let critical_path = StateStore::critical_path_from_snapshot(&snapshot)
+            .expect("critical path should reuse snapshot index");
+        let critical_path_ids = critical_path
+            .nodes
+            .iter()
+            .map(|node| node.id.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            critical_path
+                .nodes
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ready"]
+        );
+
+        let scheduling = StateStore::scheduling_projection_scoped_from_snapshot(
+            &snapshot,
+            Some("epic"),
+            None,
+            &critical_path_ids,
+        )
+        .expect("scheduling should reuse snapshot index");
+        assert_eq!(scheduling.current_task_id.as_deref(), Some("ready"));
+        assert_eq!(scheduling.ready.len(), 1);
+        assert!(scheduling.blocked.is_empty());
+
+        let tree = StateStore::task_dependency_tree_from_snapshot(&snapshot, "epic")
+            .expect("tree should reuse snapshot index");
+        assert_eq!(
+            tree.children
+                .iter()
+                .map(|child| child.child_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["done", "ready"]
+        );
+        assert!(StateStore::validate_task_graph_snapshot(&snapshot).is_empty());
     }
 
     #[test]
