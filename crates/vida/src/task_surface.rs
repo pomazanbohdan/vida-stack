@@ -21,9 +21,10 @@ use taskflow_core::task::progress::{
     TaskProgressSummary as CoreTaskProgressSummary,
 };
 use taskflow_core::task::verify::{
-    all_structured_task_proof_targets_satisfied, append_task_proof_evidence_note,
-    append_task_verify_note, normalized_task_verify_evidence, structured_task_proof_evidence_match,
-    task_reports_runtime_proof_blocker, task_verify_labels,
+    all_structured_task_proof_targets_satisfied, append_task_browser_proof_note,
+    append_task_proof_evidence_note, append_task_verify_note, normalized_task_verify_evidence,
+    structured_task_proof_evidence_match, task_reports_runtime_proof_blocker, task_verify_labels,
+    TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
 };
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -1203,7 +1204,8 @@ fn task_proof_status_payload(
         "evidence_model": {
             "configured_targets_source": "task.planner_metadata.proof_targets",
             "satisfaction_source": "task_proof_evidence structured registry entries",
-            "artifact_registry": "task_notes.task_proof_evidence",
+            "artifact_registry": "task_notes.task_proof_evidence|task_notes.task_browser_proof",
+            "browser_proof_note_schema": TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
             "legacy_close_reason_text": "migration_context_not_authority"
         },
         "state_access": task_read_metadata_value(read_metadata),
@@ -1670,65 +1672,6 @@ fn task_verify_planner_metadata(
         None
     } else {
         Some(metadata)
-    }
-}
-
-fn browser_proof_note_scalar(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string()
-}
-
-fn append_task_browser_proof_note(
-    existing_notes: Option<&str>,
-    proof_target: &str,
-    route: &str,
-    result: &str,
-    expect: Option<&str>,
-    screenshot: Option<&str>,
-    evidence: &[String],
-) -> String {
-    let proof_target = browser_proof_note_scalar(proof_target);
-    let route = browser_proof_note_scalar(route);
-    let result = browser_proof_note_scalar(result);
-    let mut note = format!(
-        "task_browser_proof:\n  recorded_at_unix_nanos: {}\n  proof_target: {}\n  command: {}\n  route: {}\n  result: {}",
-        time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
-        proof_target, proof_target, route, result
-    );
-    if let Some(expect) = expect
-        .map(browser_proof_note_scalar)
-        .filter(|value| !value.is_empty())
-    {
-        note.push_str("\n  expect: ");
-        note.push_str(&expect);
-    }
-    if let Some(screenshot) = screenshot
-        .map(browser_proof_note_scalar)
-        .filter(|value| !value.is_empty())
-    {
-        note.push_str("\n  screenshot: ");
-        note.push_str(&screenshot);
-    }
-    let evidence = evidence
-        .iter()
-        .map(|value| browser_proof_note_scalar(value))
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    if !evidence.is_empty() {
-        note.push_str("\n  evidence: ");
-        note.push_str(&evidence.join(" | "));
-    }
-
-    match existing_notes
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(existing) => format!("{existing}\n\n{note}"),
-        None => note,
     }
 }
 
@@ -13644,7 +13587,11 @@ mod tests {
         );
         assert_eq!(
             payload["evidence_model"]["artifact_registry"],
-            "task_notes.task_proof_evidence"
+            "task_notes.task_proof_evidence|task_notes.task_browser_proof"
+        );
+        assert_eq!(
+            payload["evidence_model"]["browser_proof_note_schema"],
+            super::TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION
         );
     }
 

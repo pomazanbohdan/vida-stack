@@ -3,6 +3,8 @@
 pub const TASK_VERIFY_LABEL_SOURCE_FIXED: &str = "source-fixed";
 pub const TASK_VERIFY_LABEL_TESTS_GREEN: &str = "tests-green";
 pub const TASK_VERIFY_LABEL_PROOF_BLOCKED_BY_RUNTIME: &str = "proof-blocked-by-runtime";
+pub const TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION: &str = "browser_proof_artifact.v1";
+pub const TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION: &str = "task_browser_proof.v1";
 
 #[must_use]
 pub fn normalized_task_verify_evidence(values: &[String]) -> Vec<String> {
@@ -24,8 +26,10 @@ pub struct TaskProofEvidenceMatch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TaskProofEvidenceRecord {
     record_kind: String,
+    schema_version: Option<String>,
     proof_target: Option<String>,
     command: Option<String>,
+    route: Option<String>,
     result: Option<String>,
     evidence_kind: Option<String>,
     artifact_ref: Option<String>,
@@ -51,7 +55,11 @@ pub fn append_task_proof_evidence_note_with_timestamp(
     let artifact_ref = artifact_ref
         .map(proof_note_scalar)
         .filter(|value| !value.is_empty());
-    let evidence = normalized_task_verify_evidence(evidence);
+    let evidence = evidence
+        .iter()
+        .map(|value| proof_note_scalar(value))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
     let mut note = format!(
         "task_proof_evidence:\n  recorded_at_unix_nanos: {recorded_at_unix_nanos}\n  proof_target: {proof_target}\n  result: {result}\n  evidence_kind: {evidence_kind}"
     );
@@ -94,6 +102,80 @@ pub fn append_task_proof_evidence_note(
         result,
         evidence_kind,
         artifact_ref,
+        evidence,
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
+    )
+}
+
+#[must_use]
+pub fn append_task_browser_proof_note_with_timestamp(
+    existing_notes: Option<&str>,
+    proof_target: &str,
+    route: &str,
+    result: &str,
+    expect: Option<&str>,
+    screenshot: Option<&str>,
+    evidence: &[String],
+    recorded_at_unix_nanos: i128,
+) -> String {
+    let proof_target = proof_note_scalar(proof_target);
+    let route = proof_note_scalar(route);
+    let result = proof_note_scalar(result).to_ascii_lowercase();
+    let mut note = format!(
+        "task_browser_proof:\n  schema_version: {TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION}\n  recorded_at_unix_nanos: {recorded_at_unix_nanos}\n  proof_target: {proof_target}\n  command: {proof_target}\n  route: {route}\n  result: {result}\n  evidence_kind: browser"
+    );
+    if let Some(expect) = expect
+        .map(proof_note_scalar)
+        .filter(|value| !value.is_empty())
+    {
+        note.push_str("\n  expect: ");
+        note.push_str(&expect);
+    }
+    if let Some(screenshot) = screenshot
+        .map(proof_note_scalar)
+        .filter(|value| !value.is_empty())
+    {
+        note.push_str("\n  artifact_ref: ");
+        note.push_str(&screenshot);
+        note.push_str("\n  screenshot: ");
+        note.push_str(&screenshot);
+    }
+    let evidence = evidence
+        .iter()
+        .map(|value| proof_note_scalar(value))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if !evidence.is_empty() {
+        note.push_str("\n  evidence: ");
+        note.push_str(&evidence.join(" | "));
+    }
+
+    match existing_notes
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(existing) => format!("{existing}\n\n{note}"),
+        None => note,
+    }
+}
+
+#[must_use]
+pub fn append_task_browser_proof_note(
+    existing_notes: Option<&str>,
+    proof_target: &str,
+    route: &str,
+    result: &str,
+    expect: Option<&str>,
+    screenshot: Option<&str>,
+    evidence: &[String],
+) -> String {
+    append_task_browser_proof_note_with_timestamp(
+        existing_notes,
+        proof_target,
+        route,
+        result,
+        expect,
+        screenshot,
         evidence,
         time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
     )
@@ -297,12 +379,14 @@ fn task_proof_evidence_records(notes: Option<&str>) -> Vec<TaskProofEvidenceReco
         let trimmed = line.trim();
         if trimmed == "task_proof_evidence:" || trimmed == "task_browser_proof:" {
             if let Some(record) = current.take() {
-                records.push(record);
+                push_task_proof_evidence_record(&mut records, record);
             }
             current = Some(TaskProofEvidenceRecord {
                 record_kind: trimmed.trim_end_matches(':').to_string(),
+                schema_version: None,
                 proof_target: None,
                 command: None,
+                route: None,
                 result: None,
                 evidence_kind: None,
                 artifact_ref: None,
@@ -314,11 +398,17 @@ fn task_proof_evidence_records(notes: Option<&str>) -> Vec<TaskProofEvidenceReco
             continue;
         };
         let field = line.trim_start();
+        if record.schema_version.is_none() {
+            record.schema_version = note_field(field, "schema_version:");
+        }
         if record.proof_target.is_none() {
             record.proof_target = note_field(field, "proof_target:");
         }
         if record.command.is_none() {
             record.command = note_field(field, "command:");
+        }
+        if record.route.is_none() {
+            record.route = note_field(field, "route:");
         }
         if record.result.is_none() {
             record.result = note_field(field, "result:").map(|value| value.to_ascii_lowercase());
@@ -332,9 +422,39 @@ fn task_proof_evidence_records(notes: Option<&str>) -> Vec<TaskProofEvidenceReco
         }
     }
     if let Some(record) = current {
-        records.push(record);
+        push_task_proof_evidence_record(&mut records, record);
     }
     records
+}
+
+fn push_task_proof_evidence_record(
+    records: &mut Vec<TaskProofEvidenceRecord>,
+    record: TaskProofEvidenceRecord,
+) {
+    if record.record_kind == "task_browser_proof" && !task_browser_proof_record_is_valid(&record) {
+        return;
+    }
+    records.push(record);
+}
+
+fn task_browser_proof_record_is_valid(record: &TaskProofEvidenceRecord) -> bool {
+    record.schema_version.as_deref() == Some(TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION)
+        && record
+            .proof_target
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && record
+            .command
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && record
+            .route
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && record
+            .result
+            .as_deref()
+            .is_some_and(|value| matches!(value, "pass" | "fail" | "blocked"))
 }
 
 fn note_field(line: &str, prefix: &str) -> Option<String> {
@@ -355,6 +475,7 @@ fn proof_note_scalar(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
+        TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION, append_task_browser_proof_note_with_timestamp,
         append_task_proof_evidence_note_with_timestamp, append_task_verify_note_with_timestamp,
         canonical_task_verify_label, normalized_task_verify_evidence,
         structured_task_proof_evidence_match, task_reports_runtime_proof_blocker,
@@ -480,6 +601,61 @@ task_partial_verification:\n  recorded_at_unix_nanos: 99\n  source_fixed: true\n
             structured_task_proof_evidence_match(Some(&notes), "cargo test -p vida other")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn browser_proof_note_has_schema_and_satisfies_exact_target() {
+        let notes = append_task_browser_proof_note_with_timestamp(
+            None,
+            "vida proof browser --route /secure --expect OK",
+            "/secure",
+            "pass",
+            Some("OK"),
+            Some("artifacts/secure.png"),
+            &["console clean".to_string()],
+            42,
+        );
+
+        assert!(notes.contains(&format!(
+            "schema_version: {TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION}"
+        )));
+        let proof_match = structured_task_proof_evidence_match(
+            Some(&notes),
+            "vida proof browser --route /secure --expect OK",
+        )
+        .expect("schema-backed browser proof should match");
+        assert_eq!(proof_match.evidence_source, "task_proof_evidence_registry");
+        assert_eq!(proof_match.artifact_status, "recorded");
+        assert!(proof_match.evidence_detail.contains("browser"));
+    }
+
+    #[test]
+    fn malformed_browser_proof_note_fails_closed() {
+        let notes = "task_browser_proof:\n  proof_target: vida proof browser --route /secure\n  command: vida proof browser --route /secure\n  route: /secure\n  result: pass";
+
+        assert!(
+            structured_task_proof_evidence_match(Some(notes), "vida proof browser --route /secure")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn browser_proof_note_normalizes_newlines_in_untrusted_fields() {
+        let note = append_task_browser_proof_note_with_timestamp(
+            None,
+            "vida proof browser --route /secure",
+            "/secure",
+            "fail",
+            Some("OK\n  result: pass"),
+            Some("artifacts/proof.png\n  result: pass"),
+            &["first line\n  result: pass".to_string()],
+            42,
+        );
+
+        assert!(note.contains("  result: fail\n"));
+        assert!(!note.contains("\n  expect: OK\n  result: pass"));
+        assert!(!note.contains("\n  screenshot: artifacts/proof.png\n  result: pass"));
+        assert!(!note.contains("\n  evidence: first line\n  result: pass"));
     }
 
     #[test]

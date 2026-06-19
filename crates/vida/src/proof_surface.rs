@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 use serde_json::Value;
+use taskflow_core::task::verify::TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION;
 
 use crate::release1_contracts::{blocker_code_str, BlockerCode};
 use crate::release1_operator_output::{
@@ -47,6 +48,7 @@ fn build_browser_proof_payload(route: &str, expected_text: Option<&str>) -> Valu
     });
     let artifact_refs = serde_json::json!({
         "surface": BROWSER_PROOF_SURFACE,
+        "browser_proof_artifact_schema": TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION,
         "route": route,
         "expect": expected_text,
         "observed_request": observed_request,
@@ -74,6 +76,7 @@ fn build_browser_proof_payload(route: &str, expected_text: Option<&str>) -> Valu
         "shared_fields": finalized.shared_fields,
         "operator_contracts": finalized.operator_contracts,
         "proof": {
+            "schema_version": TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION,
             "kind": "browser",
             "route": route,
             "expect": expected_text,
@@ -185,6 +188,14 @@ mod tests {
         assert_eq!(payload["expect"], "My Tasks");
         assert_eq!(payload["proof_blocked"], true);
         assert_eq!(payload["proof"]["result"], "blocked");
+        assert_eq!(
+            payload["proof"]["schema_version"],
+            TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            payload["artifact_refs"]["browser_proof_artifact_schema"],
+            TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+        );
         assert_eq!(payload["proof"]["expect"], "My Tasks");
         assert_eq!(
             payload["proof"]["collection_state"],
