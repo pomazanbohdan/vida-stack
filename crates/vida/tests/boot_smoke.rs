@@ -1558,6 +1558,104 @@ fn persist_authoritative_downstream_receipt_fixture_with_blockers(
     wait_for_state_unlock(state_dir);
 }
 
+fn persist_materialization_only_blocked_receipt_fixture(
+    state_dir: &str,
+    run_id: &str,
+    dispatch_packet_path: &str,
+    downstream_packet_path: &str,
+    result_path: &str,
+) {
+    wait_for_state_unlock(state_dir);
+    let output = Command::new(std::env::current_exe().expect("current test executable"))
+        .arg("boot_smoke_runtime_consumption_receipt_helper")
+        .arg("--exact")
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_STATE_DIR_ENV,
+            state_dir,
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_RUN_ID_ENV,
+            run_id,
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DISPATCH_TARGET_ENV,
+            "work-pool-pack",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DISPATCH_PACKET_PATH_ENV,
+            dispatch_packet_path,
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DOWNSTREAM_TARGET_ENV,
+            "dev-pack",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DOWNSTREAM_PACKET_PATH_ENV,
+            downstream_packet_path,
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_RESULT_PATH_ENV,
+            result_path,
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DOWNSTREAM_READY_ENV,
+            "false",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DOWNSTREAM_STATUS_ENV,
+            "blocked",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV,
+            "internal_activation_view_only",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DISPATCH_STATUS_ENV,
+            "blocked",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_LANE_STATUS_ENV,
+            "lane_blocked",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_BLOCKER_CODE_ENV,
+            "internal_activation_view_only",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DISPATCH_SURFACE_ENV,
+            "vida task ensure",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_DISPATCH_COMMAND_ENV,
+            "vida task ensure work-pool-pack \"Work-pool pack\" --type task --status open",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_TASK_CLASS_ENV,
+            "implementation",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_LIFECYCLE_STAGE_ENV,
+            "work_pool_pack_blocked",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_HANDOFF_STATE_ENV,
+            "none",
+        )
+        .env(
+            runtime_consumption_support::RECEIPT_HELPER_RESUME_TARGET_ENV,
+            "none",
+        )
+        .output()
+        .expect("materialization-only receipt helper should run");
+    assert!(
+        output.status.success(),
+        "materialization-only receipt helper stdout: {}\nmaterialization-only receipt helper stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    wait_for_state_unlock(state_dir);
+}
+
 fn taskflow_consume_bundle_check_with_timeout(state_dir: &str) -> std::process::Output {
     bounded_vida_output(
         &["-k", "5s", "20s"],
@@ -7405,6 +7503,116 @@ fn taskflow_consume_continue_accepts_receipt_backed_executed_completed_downstrea
         resumed_json["dispatch_receipt"]["lane_status"],
         "lane_completed"
     );
+}
+
+#[test]
+fn taskflow_consume_continue_rejects_materialization_only_receipt_before_final_snapshot_replay() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "continue-materialization-only-receipt",
+        "Continue Materialization Only Receipt",
+    );
+
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "clarify the scope and write the specification before implementation",
+    );
+    assert!(
+        !initial.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+
+    let initial_json: serde_json::Value =
+        serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
+    let source_dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]
+        ["dispatch_packet_path"]
+        .as_str()
+        .expect("source dispatch packet path should be present");
+    let run_id = initial_json["payload"]["dispatch_receipt"]["run_id"]
+        .as_str()
+        .expect("dispatch receipt run id should be present");
+    let create_run_task = project_bound_task_create_with_timeout(
+        &project_root,
+        &state_dir,
+        run_id,
+        "Materialization-only receipt fixture",
+    );
+    assert!(
+        create_run_task.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&create_run_task.stdout),
+        String::from_utf8_lossy(&create_run_task.stderr)
+    );
+    let materialization_result_path = format!("{project_root}/task-materialization-result.json");
+    write_file(
+        &materialization_result_path,
+        &serde_json::json!({
+            "artifact_kind": "task_materialization_result",
+            "status": "blocked",
+            "execution_state": "blocked",
+            "blocker_code": "internal_activation_view_only",
+            "run_id": run_id,
+            "dispatch_target": "work-pool-pack",
+            "execution_evidence": {
+                "receipt_backed": false,
+                "status": "missing"
+            }
+        })
+        .to_string(),
+    );
+    let downstream_dispatch_packet_path = materialize_downstream_dispatch_packet_fixture(
+        &state_dir,
+        source_dispatch_packet_path,
+        run_id,
+        "dev-pack",
+        &materialization_result_path,
+        "materialization-only-blocked",
+    );
+    persist_materialization_only_blocked_receipt_fixture(
+        &state_dir,
+        run_id,
+        source_dispatch_packet_path,
+        &downstream_dispatch_packet_path,
+        &materialization_result_path,
+    );
+    mark_project_run_graph_closure_complete(&project_root, &state_dir, run_id);
+
+    let resumed = project_bound_taskflow_consume_continue_with_timeout(
+        &project_root,
+        &state_dir,
+        &["--run-id", run_id, "--json"],
+    );
+    assert!(
+        !resumed.status.success(),
+        "materialization-only receipt must not authorize final snapshot replay"
+    );
+    let resumed_json: serde_json::Value =
+        serde_json::from_slice(&resumed.stdout).expect("consume continue json should parse");
+    assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
+    assert_eq!(resumed_json["status"], "blocked");
+    assert!(resumed_json["blocker_codes"]
+        .as_array()
+        .is_some_and(|codes| codes
+            .iter()
+            .any(|code| code.as_str() == Some("internal_activation_view_only"))));
+    assert_eq!(
+        resumed_json["diagnostic_kind"],
+        "internal_activation_view_only"
+    );
+    let error = resumed_json["error"]
+        .as_str()
+        .expect("blocked resume should explain the materialization-only evidence gap");
+    assert!(
+        error.contains("materialization-only dispatch receipt"),
+        "{error}"
+    );
+    assert!(
+        error.contains("task-materialization result is not executable continuation evidence"),
+        "{error}"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
 #[test]

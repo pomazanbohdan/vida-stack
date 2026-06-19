@@ -682,6 +682,16 @@ fn materialization_only_blocked_resume_error(
     )
 }
 
+fn materialization_only_blocked_resume_error_for_receipt(
+    receipt: Option<&crate::state_store::RunGraphDispatchReceipt>,
+) -> Option<String> {
+    let receipt = receipt?;
+    crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(
+        receipt,
+    )
+    .then(|| materialization_only_blocked_resume_error(receipt))
+}
+
 async fn latest_stale_run_graph_task_authority_error(
     store: &super::StateStore,
 ) -> Result<Option<String>, String> {
@@ -773,7 +783,31 @@ async fn receipt_backed_terminal_closure_resume(
 ) -> bool {
     status.is_terminal_closure()
         && status.handoff_state == "none"
-        && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
+        && matches!(
+            store.run_graph_dispatch_receipt(run_id).await,
+            Ok(Some(receipt)) if receipt_has_terminal_execution_evidence(&receipt)
+        )
+}
+
+fn receipt_has_terminal_execution_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    if crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
+    {
+        return false;
+    }
+    let receipt_blockers_clear = receipt
+        .blocker_code
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+        && receipt
+            .downstream_dispatch_blockers
+            .iter()
+            .all(|value| value.trim().is_empty());
+    let execution_recorded = receipt.dispatch_status == "executed"
+        || receipt.downstream_dispatch_status.as_deref() == Some("executed")
+        || receipt.lane_status == super::LaneStatus::LaneCompleted.as_str();
+    receipt_blockers_clear && execution_recorded
 }
 
 fn receipt_has_ready_downstream_packet(
@@ -814,6 +848,11 @@ async fn validate_run_graph_resume_state(
                 .ok()
                 .flatten();
             let receipt_exists = receipt.is_some();
+            if let Some(error) =
+                materialization_only_blocked_resume_error_for_receipt(receipt.as_ref())
+            {
+                return Err(error);
+            }
             if receipt
                 .as_ref()
                 .is_some_and(receipt_or_packet_has_ready_downstream_packet)
@@ -839,6 +878,11 @@ async fn validate_run_graph_resume_state(
         .await
         .ok()
         .flatten();
+    if let Some(error) =
+        materialization_only_blocked_resume_error_for_receipt(active_receipt.as_ref())
+    {
+        return Err(error);
+    }
     if receipt_backed_terminal_closure_resume(store, &status, run_id).await {
         return Ok(());
     }
@@ -894,18 +938,6 @@ async fn validate_run_graph_resume_state(
     {
         return Ok(());
     }
-    if active_receipt
-        .as_ref()
-        .is_some_and(|receipt| {
-            crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
-        })
-    {
-        return Err(materialization_only_blocked_resume_error(
-            active_receipt
-                .as_ref()
-                .expect("active receipt checked by materialization-only guard"),
-        ));
-    }
     match validate_run_graph_resume_gate(&status) {
         Ok(()) => Ok(()),
         Err(_error) if resume_from_persisted_final_snapshot(store, run_id)? => Ok(()),
@@ -935,6 +967,11 @@ async fn validate_run_graph_resume_state_strict(
         .await
         .ok()
         .flatten();
+    if let Some(error) =
+        materialization_only_blocked_resume_error_for_receipt(active_receipt.as_ref())
+    {
+        return Err(error);
+    }
     if receipt_backed_terminal_closure_resume(store, &status, run_id).await {
         return Ok(());
     }
@@ -982,18 +1019,6 @@ async fn validate_run_graph_resume_state_strict(
         .is_some_and(|receipt| dispatch_receipt_records_completed_lane(receipt, run_id))
     {
         return Ok(());
-    }
-    if active_receipt
-        .as_ref()
-        .is_some_and(|receipt| {
-            crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
-        })
-    {
-        return Err(materialization_only_blocked_resume_error(
-            active_receipt
-                .as_ref()
-                .expect("active receipt checked by materialization-only guard"),
-        ));
     }
     validate_run_graph_resume_gate(&status).map_err(|error| {
         active_exception_takeover_resume_blocker_error(&status, active_receipt.as_ref())
@@ -8091,6 +8116,28 @@ mod tests {
         assert!(
             strict_error.contains("materialization-only dispatch receipt"),
             "unexpected strict materialization-only gate error: {strict_error}"
+        );
+
+        status.status = "completed".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist terminal closure status");
+        let terminal_error = validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect_err("terminal closure shortcut must still reject materialization-only receipt");
+        assert!(
+            terminal_error.contains("materialization-only dispatch receipt"),
+            "unexpected terminal materialization-only gate error: {terminal_error}"
         );
 
         let result_path = root.join("execution-result.json");
