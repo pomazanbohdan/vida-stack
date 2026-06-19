@@ -1344,20 +1344,22 @@ pub(crate) fn latest_run_graph_dispatch_receipt_summary_is_inconsistent(
 pub(crate) fn latest_run_graph_dispatch_receipt_signal_is_ambiguous(
     receipt: &RunGraphDispatchReceiptSummary,
 ) -> bool {
+    dispatch_receipt_status_has_canonical_lane_signal(&receipt.dispatch_status)
+        && receipt.lane_status.as_str()
+            != normalize_run_graph_lane_status(
+                Some(receipt.lane_status.as_str()),
+                &receipt.dispatch_status,
+                receipt.supersedes_receipt_id.as_deref(),
+                receipt.exception_path_receipt_id.as_deref(),
+            )
+        || !dispatch_receipt_status_has_canonical_lane_signal(&receipt.dispatch_status)
+}
+
+fn dispatch_receipt_status_has_canonical_lane_signal(dispatch_status: &str) -> bool {
     matches!(
-        receipt.dispatch_status.as_str(),
-        "packet_ready" | "routed" | "executing" | "executed" | "blocked"
-    ) && receipt.lane_status.as_str()
-        != normalize_run_graph_lane_status(
-            Some(receipt.lane_status.as_str()),
-            &receipt.dispatch_status,
-            receipt.supersedes_receipt_id.as_deref(),
-            receipt.exception_path_receipt_id.as_deref(),
-        )
-        || !matches!(
-            receipt.dispatch_status.as_str(),
-            "packet_ready" | "routed" | "executing" | "executed" | "blocked"
-        )
+        dispatch_status,
+        "packet_ready" | "routed" | "bridge_request_pending" | "executing" | "executed" | "blocked"
+    )
 }
 
 pub(crate) fn latest_run_graph_evidence_snapshot_is_consistent(
@@ -5309,6 +5311,46 @@ mod tests {
             downstream_dispatch_last_target: Some("analysis".to_string()),
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-15T08:00:00Z".to_string(),
+        });
+
+        assert!(!latest_run_graph_dispatch_receipt_signal_is_ambiguous(
+            &summary
+        ));
+    }
+
+    #[test]
+    fn bridge_request_pending_lane_open_dispatch_receipt_signal_is_not_ambiguous() {
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(RunGraphDispatchReceipt {
+            run_id: "run-bridge-request-pending-signal".to_string(),
+            dispatch_target: "analyst".to_string(),
+            dispatch_status: "bridge_request_pending".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_packet_path: Some("runtime-consumption/dispatch-packets/run.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some(
+                "bridge request is pending host execution evidence".to_string(),
+            ),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analyst".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
             recorded_at: "2026-05-15T08:00:00Z".to_string(),
         });
