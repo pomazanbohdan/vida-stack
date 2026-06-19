@@ -6877,6 +6877,108 @@ fn task_proof_attach_evidence_satisfies_status_and_progress() {
 }
 
 #[test]
+fn task_close_requires_structured_proof_evidence_for_configured_targets() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("close-proof-parent");
+    let task_id = unique_test_id("close-proof-task");
+    let proof_target = "Close/progress proof gate integration tests";
+    create_epic_parent(&state_dir, &parent_id, "Close proof parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Close proof task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--status",
+            "in_progress",
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let (blocked_close, close_succeeded) = run_command_json_allow_failure(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Proof: Close/progress proof gate integration tests passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!close_succeeded);
+    assert_eq!(blocked_close["surface"], "vida task close");
+    assert_eq!(blocked_close["status"], "blocked");
+    assert_eq!(blocked_close["closed"], false);
+    assert_eq!(
+        blocked_close["blocker_codes"],
+        serde_json::json!(["missing_structured_proof_evidence"])
+    );
+    assert_eq!(
+        blocked_close["missing_targets"],
+        serde_json::json!([proof_target])
+    );
+    assert_eq!(
+        blocked_close["proof_status"]["evidence_model"]["legacy_close_reason_text"],
+        "migration_context_not_authority"
+    );
+    let still_open = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    assert_ne!(still_open["task"]["status"], "closed");
+
+    let _ = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/close-proof-gate.json",
+            "--evidence",
+            "close gate integration proof passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let allowed_close = run_command_json(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Structured proof evidence recorded",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(allowed_close["status"], "pass");
+    assert_eq!(allowed_close["closed"], true);
+    assert_eq!(allowed_close["task"]["status"], "closed");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn implementation_attempt_isolation() {
     let (project_root, state_dir) = project_bound_state_dir();
     init_git_repo(&project_root);

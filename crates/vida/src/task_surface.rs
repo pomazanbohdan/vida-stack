@@ -1210,6 +1210,99 @@ fn task_proof_status_payload(
     })
 }
 
+fn task_close_structured_proof_gate_payload(
+    task: &state_store::TaskRecord,
+) -> Option<serde_json::Value> {
+    let proof_status = task_proof_status_payload(task, None);
+    let configured_count = proof_status["configured_proof_target_count"]
+        .as_u64()
+        .unwrap_or(0);
+    let missing_count = proof_status["missing_count"].as_u64().unwrap_or(0);
+    if configured_count == 0 || missing_count == 0 {
+        return None;
+    }
+
+    let proof_blocked_by_runtime = proof_status["proof_blocked_by_runtime"]
+        .as_bool()
+        .unwrap_or(false);
+    let blocker_code = if proof_blocked_by_runtime {
+        "proof_blocked_by_runtime"
+    } else {
+        "missing_structured_proof_evidence"
+    };
+    let quoted_task_id = crate::shell_quote(&task.id);
+    Some(serde_json::json!({
+        "surface": "vida task close",
+        "status": "blocked",
+        "closed": false,
+        "continuation_blocked": true,
+        "automation_blocked": false,
+        "feedback_blocked": false,
+        "blocker_codes": [blocker_code],
+        "next_actions": [
+            format!(
+                "Attach structured proof evidence for missing target(s), then rerun `{}`.",
+                operator_output::command_text::human_command(&format!(
+                    "vida task proof status {} --json",
+                    quoted_task_id
+                ))
+            )
+        ],
+        "task_id": task.id,
+        "reason": "task has configured proof targets without matching structured task_proof_evidence pass receipt",
+        "missing_targets": proof_status["missing_targets"].clone(),
+        "proof_status": proof_status,
+        "task": task,
+    }))
+}
+
+fn print_task_close_structured_proof_gate_block(
+    render: RenderMode,
+    payload: &serde_json::Value,
+    as_json: bool,
+) {
+    if as_json {
+        crate::print_json_pretty(payload);
+        return;
+    }
+    print_surface_header(render, "vida task close");
+    print_surface_line(render, "status", "blocked");
+    print_surface_line(
+        render,
+        "task",
+        payload["task_id"].as_str().unwrap_or("unknown"),
+    );
+    let blockers = payload["blocker_codes"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    print_surface_line(render, "blockers", &blockers);
+    let missing_targets = payload["missing_targets"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .unwrap_or_default();
+    print_surface_line(render, "missing targets", &missing_targets);
+    if let Some(next_action) = payload["next_actions"]
+        .as_array()
+        .and_then(|values| values.first())
+        .and_then(serde_json::Value::as_str)
+    {
+        print_surface_line(render, "next", next_action);
+    }
+}
+
 fn print_task_proof_status(
     render: RenderMode,
     task: &state_store::TaskRecord,
@@ -11033,18 +11126,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             };
             match StateStore::open_existing(state_dir.clone()).await {
                 Ok(store) => {
+                    let preclose_task = match store.show_task(&command.task_id).await {
+                        Ok(task) => task,
+                        Err(error) => {
+                            eprintln!("Failed to close task: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    if let Some(payload) = task_close_structured_proof_gate_payload(&preclose_task)
+                    {
+                        print_task_close_structured_proof_gate_block(
+                            command.render,
+                            &payload,
+                            command.json,
+                        );
+                        return ExitCode::from(1);
+                    }
                     if crate::agent_feedback_surface::canonical_close_status_from_reason(
                         &close_reason,
                     )
                     .is_some()
                     {
-                        let preclose_task = match store.show_task(&command.task_id).await {
-                            Ok(task) => task,
-                            Err(error) => {
-                                eprintln!("Failed to close task: {error}");
-                                return ExitCode::from(1);
-                            }
-                        };
                         let task_value = serde_json::to_value(&preclose_task)
                             .expect("task close payload should serialize");
                         let telemetry = task_close_host_agent_telemetry(
