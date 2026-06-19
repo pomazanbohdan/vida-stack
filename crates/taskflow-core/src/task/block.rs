@@ -1,13 +1,52 @@
 //! Task blocking command helpers.
 
 pub fn normalize_task_block_list(values: &[String]) -> Vec<String> {
-    values
+    let mut normalized = Vec::new();
+    for code in values
         .iter()
         .flat_map(|value| value.split(','))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect()
+        .filter_map(canonical_task_blocker_code)
+    {
+        if !normalized.iter().any(|existing| existing == &code) {
+            normalized.push(code);
+        }
+    }
+    normalized
+}
+
+#[must_use]
+pub fn canonical_task_blocker_code(value: &str) -> Option<String> {
+    let value = value.trim();
+    let (code, suffix) = value
+        .split_once(':')
+        .map_or((value, None), |(code, suffix)| (code, Some(suffix.trim())));
+    let code = canonical_task_blocker_code_segment(code)?;
+    match suffix.filter(|suffix| !suffix.is_empty()) {
+        Some(suffix) => Some(format!("{code}:{suffix}")),
+        None => Some(code),
+    }
+}
+
+fn canonical_task_blocker_code_segment(value: &str) -> Option<String> {
+    let mut normalized = String::new();
+    let mut previous_separator = false;
+    for character in value.trim().chars() {
+        let next = match character {
+            '-' | ' ' | '\t' | '\n' | '\r' => '_',
+            other => other.to_ascii_lowercase(),
+        };
+        if next == '_' {
+            if previous_separator {
+                continue;
+            }
+            previous_separator = true;
+        } else {
+            previous_separator = false;
+        }
+        normalized.push(next);
+    }
+    let normalized = normalized.trim_matches('_').to_string();
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 #[must_use]
@@ -68,22 +107,33 @@ pub fn append_task_block_note(
 
 #[cfg(test)]
 mod tests {
-    use super::{append_task_block_note_with_timestamp, normalize_task_block_list};
+    use super::{
+        append_task_block_note_with_timestamp, canonical_task_blocker_code,
+        normalize_task_block_list,
+    };
 
     #[test]
-    fn block_list_splits_commas_and_omits_empty_entries() {
+    fn block_list_splits_commas_and_canonicalizes_entries() {
         let values = normalize_task_block_list(&[
-            "runtime, bridge_request_pending".to_string(),
-            " , proof ".to_string(),
+            "Runtime Blocked, bridge-request-pending".to_string(),
+            " , proof\tblocked ,runtime_blocked ".to_string(),
         ]);
 
         assert_eq!(
             values,
             vec![
-                "runtime".to_string(),
+                "runtime_blocked".to_string(),
                 "bridge_request_pending".to_string(),
-                "proof".to_string()
+                "proof_blocked".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn parameterized_blocker_code_punctuation_is_preserved() {
+        assert_eq!(
+            canonical_task_blocker_code(" Selected-Lane:task=VH-42 "),
+            Some("selected_lane:task=VH-42".to_string())
         );
     }
 

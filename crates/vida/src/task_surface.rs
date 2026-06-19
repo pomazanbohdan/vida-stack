@@ -12879,6 +12879,7 @@ mod tests {
             assert!(task
                 .labels
                 .contains(&"proof-blocked-by-runtime".to_string()));
+            assert!(!task.labels.contains(&"runtime-proof-blocked".to_string()));
             assert_eq!(
                 task.planner_metadata.proof_targets,
                 vec!["cargo test -p vida task_verify".to_string()]
@@ -13025,7 +13026,9 @@ mod tests {
                     task_id: "blocked-task".to_string(),
                     reason: "runtime bridge unavailable".to_string(),
                     evidence: Some("agent-init returned host_tool_capability_missing".to_string()),
-                    blockers: vec!["host_tool_capability_missing".to_string()],
+                    blockers: vec![
+                        "Host-Tool-Capability-Missing, bridge request pending".to_string()
+                    ],
                     next_actions: vec!["retry after host bridge repair".to_string()],
                     state_dir: Some(harness.path().to_path_buf()),
                     render: crate::RenderMode::Plain,
@@ -13051,6 +13054,9 @@ mod tests {
             assert!(notes.contains("task_block:"));
             assert!(notes.contains("runtime bridge unavailable"));
             assert!(notes.contains("host_tool_capability_missing"));
+            assert!(notes.contains("bridge_request_pending"));
+            assert!(!notes.contains("Host-Tool-Capability-Missing"));
+            assert!(!notes.contains("bridge request pending"));
             assert!(notes.contains("retry after host bridge repair"));
         });
     }

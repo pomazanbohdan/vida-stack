@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::verify::task_verify_label_is_runtime_proof_blocker;
 use crate::{TaskStatus, parse_task_status, task_status_is_closed_like};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,7 +263,7 @@ fn descendant_progress_summary(
         && root_task
             .labels
             .iter()
-            .any(|label| label == "proof-blocked-by-runtime" || label == "runtime-proof-blocked");
+            .any(|label| task_verify_label_is_runtime_proof_blocker(label));
     let blocked_by_runtime = proof_blocked_by_runtime
         || (!root_closed
             && is_non_container_work_item
@@ -603,6 +604,31 @@ mod tests {
         assert!(!summary.ready_for_close);
         assert!(summary.missing_proof);
         assert_eq!(summary.closure_candidate_state, "leaf_missing_proof");
+    }
+
+    #[test]
+    fn descendant_progress_uses_canonical_runtime_proof_blocker_label_helper() {
+        let mut parent = row("leaf", "in_progress", "task", None);
+        parent.proof_targets = vec!["cargo test".to_string()];
+        parent.labels = vec!["runtime-proof-blocked".to_string()];
+
+        let summary = task_progress_summary_from_rows(
+            &[parent],
+            "leaf",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.replace(" --json", ""),
+        )
+        .unwrap();
+
+        assert!(!summary.ready_for_close);
+        assert!(!summary.missing_proof);
+        assert!(summary.proof_blocked_by_runtime);
+        assert!(summary.blocked_by_runtime);
+        assert_eq!(
+            summary.closure_candidate_state,
+            "leaf_proof_blocked_by_runtime"
+        );
     }
 
     #[test]

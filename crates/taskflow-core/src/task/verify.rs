@@ -1,5 +1,9 @@
 //! Task verification command helpers.
 
+pub const TASK_VERIFY_LABEL_SOURCE_FIXED: &str = "source-fixed";
+pub const TASK_VERIFY_LABEL_TESTS_GREEN: &str = "tests-green";
+pub const TASK_VERIFY_LABEL_PROOF_BLOCKED_BY_RUNTIME: &str = "proof-blocked-by-runtime";
+
 #[must_use]
 pub fn normalized_task_verify_evidence(values: &[String]) -> Vec<String> {
     values
@@ -212,15 +216,32 @@ pub fn task_verify_labels(
 ) -> Vec<String> {
     let mut labels = Vec::new();
     if source_fixed {
-        labels.push("source-fixed".to_string());
+        labels.push(TASK_VERIFY_LABEL_SOURCE_FIXED.to_string());
     }
     if tests_green {
-        labels.push("tests-green".to_string());
+        labels.push(TASK_VERIFY_LABEL_TESTS_GREEN.to_string());
     }
     if proof_blocked {
-        labels.push("proof-blocked-by-runtime".to_string());
+        labels.push(TASK_VERIFY_LABEL_PROOF_BLOCKED_BY_RUNTIME.to_string());
     }
     labels
+}
+
+#[must_use]
+pub fn canonical_task_verify_label(value: &str) -> Option<&'static str> {
+    match value.trim() {
+        TASK_VERIFY_LABEL_SOURCE_FIXED => Some(TASK_VERIFY_LABEL_SOURCE_FIXED),
+        TASK_VERIFY_LABEL_TESTS_GREEN => Some(TASK_VERIFY_LABEL_TESTS_GREEN),
+        TASK_VERIFY_LABEL_PROOF_BLOCKED_BY_RUNTIME | "runtime-proof-blocked" => {
+            Some(TASK_VERIFY_LABEL_PROOF_BLOCKED_BY_RUNTIME)
+        }
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn task_verify_label_is_runtime_proof_blocker(value: &str) -> bool {
+    canonical_task_verify_label(value) == Some(TASK_VERIFY_LABEL_PROOF_BLOCKED_BY_RUNTIME)
 }
 
 #[must_use]
@@ -234,7 +255,7 @@ pub fn task_reports_runtime_proof_blocker(labels: &[String], close_reason: Optio
         })
         || labels
             .iter()
-            .any(|label| label == "proof-blocked-by-runtime" || label == "runtime-proof-blocked")
+            .any(|label| task_verify_label_is_runtime_proof_blocker(label))
 }
 
 #[must_use]
@@ -335,8 +356,9 @@ fn proof_note_scalar(value: &str) -> String {
 mod tests {
     use super::{
         append_task_proof_evidence_note_with_timestamp, append_task_verify_note_with_timestamp,
-        normalized_task_verify_evidence, structured_task_proof_evidence_match,
-        task_reports_runtime_proof_blocker, task_verify_labels,
+        canonical_task_verify_label, normalized_task_verify_evidence,
+        structured_task_proof_evidence_match, task_reports_runtime_proof_blocker,
+        task_verify_label_is_runtime_proof_blocker, task_verify_labels,
         verify_proof_targets_for_empty_existing,
     };
 
@@ -394,6 +416,21 @@ task_partial_verification:\n  recorded_at_unix_nanos: 99\n  source_fixed: true\n
             &[],
             Some("Runtime proof blocker: browser unavailable"),
         ));
+    }
+
+    #[test]
+    fn verify_label_canonicalization_accepts_legacy_runtime_blocker_alias() {
+        assert_eq!(
+            canonical_task_verify_label("runtime-proof-blocked"),
+            Some("proof-blocked-by-runtime")
+        );
+        assert!(task_verify_label_is_runtime_proof_blocker(
+            "proof-blocked-by-runtime"
+        ));
+        assert!(task_verify_label_is_runtime_proof_blocker(
+            "runtime-proof-blocked"
+        ));
+        assert_eq!(canonical_task_verify_label("unknown"), None);
     }
 
     #[test]
