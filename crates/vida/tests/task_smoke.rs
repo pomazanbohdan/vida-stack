@@ -465,10 +465,104 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
         "closed",
         Some("prune-closed-subtree-epic"),
     );
+    create_task_fixture_row(
+        &state_dir,
+        "prune-runtime-linked-epic",
+        "Closed runtime-linked epic",
+        "epic",
+        "open",
+        None,
+    );
+    create_task_fixture_row(
+        &state_dir,
+        "prune-runtime-linked-task",
+        "Closed runtime-linked task",
+        "task",
+        "open",
+        Some("prune-runtime-linked-epic"),
+    );
+    let attempt = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            "prune-runtime-linked-task",
+            "--attempt-id",
+            "prune-runtime-linked-attempt",
+            "--stage-id",
+            "implementation",
+            "--backend",
+            "test-backend",
+            "--model-profile",
+            "test-model",
+            "--isolation",
+            "readonly",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            "runtime-receipts/prune-runtime-linked-attempt.json",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(attempt["status"], "pass");
+    let closed_runtime_task = run_command_json(
+        &[
+            "task",
+            "close",
+            "prune-runtime-linked-task",
+            "--reason",
+            "runtime attempt evidence accepted",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_runtime_task["status"], "pass");
+    let closed_runtime_epic = run_command_json(
+        &[
+            "task",
+            "close",
+            "prune-runtime-linked-epic",
+            "--reason",
+            "runtime-linked child task closed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_runtime_epic["status"], "pass");
     let runtime_sentinel = format!("{state_dir}/runtime-receipts/keep.json");
     fs::create_dir_all(format!("{state_dir}/runtime-receipts"))
         .expect("create runtime sentinel dir");
     fs::write(&runtime_sentinel, "{\"keep\":true}\n").expect("write runtime sentinel");
+
+    let dry_run = run_command_json(&["task", "prune-closed-epics", "--json"], &state_dir);
+    assert_eq!(dry_run["surface"], "vida task prune-closed-epics");
+    assert_eq!(dry_run["status"], "pass");
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["candidate_count"], 3);
+    assert_eq!(dry_run["archived_count"], 0);
+    assert_eq!(dry_run["pruned_count"], 0);
+    assert_eq!(dry_run["protected_count"], 3);
+    let dry_run_runtime_protected = dry_run["protected"]
+        .as_array()
+        .expect("dry-run protected rows should be an array")
+        .iter()
+        .find(|task| task["task_id"] == "prune-runtime-linked-epic")
+        .expect("runtime-linked closed epic should be protected");
+    assert_eq!(dry_run_runtime_protected["reason"], "runtime_linked_task");
+    assert_eq!(
+        dry_run_runtime_protected["blocking_task_ids"],
+        serde_json::json!(["prune-runtime-linked-task"])
+    );
+    let dry_run_runtime_refs = dry_run_runtime_protected["runtime_refs"]
+        .as_array()
+        .expect("runtime refs should be an array")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    assert!(dry_run_runtime_refs.iter().any(
+        |value| *value == "prune-runtime-linked-task:task_attempt:prune-runtime-linked-attempt"
+    ));
 
     let payload = run_command_json(
         &["task", "prune-closed-epics", "--apply", "--json"],
@@ -481,7 +575,7 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
     assert_eq!(payload["candidate_count"], 3);
     assert_eq!(payload["archived_count"], 3);
     assert_eq!(payload["pruned_count"], 3);
-    assert_eq!(payload["protected_count"], 2);
+    assert_eq!(payload["protected_count"], 3);
     assert_eq!(payload["blocker_codes"], serde_json::json!([]));
     let protected_ids = payload["protected"]
         .as_array()
@@ -491,6 +585,7 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
         .collect::<Vec<_>>();
     assert!(protected_ids.contains(&"prune-open-live-epic"));
     assert!(protected_ids.contains(&"prune-in-progress-live-epic"));
+    assert!(protected_ids.contains(&"prune-runtime-linked-epic"));
 
     let archive_path = payload["archive_path"]
         .as_str()
@@ -499,6 +594,8 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
     assert!(archive.contains("prune-closed-empty-epic"));
     assert!(archive.contains("prune-closed-subtree-epic"));
     assert!(archive.contains("prune-closed-subtree-task"));
+    assert!(!archive.contains("prune-runtime-linked-epic"));
+    assert!(!archive.contains("prune-runtime-linked-task"));
 
     let list = run_command_json(&["task", "list", "--all", "--json"], &state_dir);
     let task_ids = list["tasks"]
@@ -509,6 +606,8 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
         .collect::<Vec<_>>();
     assert!(task_ids.contains(&"prune-open-live-epic"));
     assert!(task_ids.contains(&"prune-in-progress-live-epic"));
+    assert!(task_ids.contains(&"prune-runtime-linked-epic"));
+    assert!(task_ids.contains(&"prune-runtime-linked-task"));
     assert!(!task_ids.contains(&"prune-closed-empty-epic"));
     assert!(!task_ids.contains(&"prune-closed-subtree-epic"));
     assert!(!task_ids.contains(&"prune-closed-subtree-task"));

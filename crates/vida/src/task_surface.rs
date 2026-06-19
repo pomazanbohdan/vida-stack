@@ -373,6 +373,7 @@ struct TaskPruneProtectedRow {
     issue_type: String,
     reason: String,
     blocking_task_ids: Vec<String>,
+    runtime_refs: Vec<String>,
 }
 
 struct TaskPruneClosedEpicsPlan {
@@ -430,6 +431,29 @@ fn retained_task_refs_to_prune_subtree(
     referrers.into_iter().collect()
 }
 
+fn runtime_refs_to_prune_subtree(
+    runtime_refs_by_task: &BTreeMap<String, Vec<String>>,
+    subtree_ids: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    let mut blocking_task_ids = Vec::new();
+    let mut runtime_refs = Vec::new();
+    for task_id in subtree_ids {
+        let Some(refs) = runtime_refs_by_task.get(task_id) else {
+            continue;
+        };
+        if refs.is_empty() {
+            continue;
+        }
+        blocking_task_ids.push(task_id.clone());
+        for runtime_ref in refs {
+            runtime_refs.push(format!("{task_id}:{runtime_ref}"));
+        }
+    }
+    runtime_refs.sort();
+    runtime_refs.dedup();
+    (blocking_task_ids, runtime_refs)
+}
+
 fn task_prune_row(
     task: &state_store::TaskRecord,
     reason: impl Into<String>,
@@ -447,6 +471,7 @@ fn task_prune_protected_row(
     task: &state_store::TaskRecord,
     reason: impl Into<String>,
     blocking_task_ids: Vec<String>,
+    runtime_refs: Vec<String>,
 ) -> TaskPruneProtectedRow {
     TaskPruneProtectedRow {
         task_id: task.id.clone(),
@@ -455,11 +480,13 @@ fn task_prune_protected_row(
         issue_type: task.issue_type.clone(),
         reason: reason.into(),
         blocking_task_ids,
+        runtime_refs,
     }
 }
 
 fn build_task_prune_closed_epics_plan(
     rows: &[state_store::TaskRecord],
+    runtime_refs_by_task: &BTreeMap<String, Vec<String>>,
     dry_run: bool,
     state_dir: &std::path::Path,
     archive_path: Option<&std::path::Path>,
@@ -481,6 +508,7 @@ fn build_task_prune_closed_epics_plan(
             protected.push(task_prune_protected_row(
                 task,
                 "open_or_in_progress_container",
+                Vec::new(),
                 Vec::new(),
             ));
             continue;
@@ -505,6 +533,7 @@ fn build_task_prune_closed_epics_plan(
                 task,
                 "non_closed_descendant",
                 non_closed_descendants,
+                Vec::new(),
             ));
             continue;
         }
@@ -515,6 +544,19 @@ fn build_task_prune_closed_epics_plan(
                 task,
                 "referenced_by_retained_task",
                 retained_refs,
+                Vec::new(),
+            ));
+            continue;
+        }
+
+        let (runtime_linked_task_ids, runtime_refs) =
+            runtime_refs_to_prune_subtree(runtime_refs_by_task, &subtree_ids);
+        if !runtime_linked_task_ids.is_empty() {
+            protected.push(task_prune_protected_row(
+                task,
+                "runtime_linked_task",
+                runtime_linked_task_ids,
+                runtime_refs,
             ));
             continue;
         }
@@ -705,8 +747,23 @@ async fn run_task_prune_closed_epics(command: TaskPruneClosedEpicsArgs) -> ExitC
             let archive_path = command
                 .apply
                 .then(|| task_prune_archive_path(&state_dir, command.archive_dir.as_deref()));
+            let task_ids = rows
+                .iter()
+                .map(|task| task.id.clone())
+                .collect::<BTreeSet<_>>();
+            let runtime_refs_by_task = match store
+                .task_runtime_reference_labels_for_tasks(&task_ids)
+                .await
+            {
+                Ok(refs) => refs,
+                Err(error) => {
+                    eprintln!("Failed to read task runtime references for prune: {error}");
+                    return ExitCode::from(1);
+                }
+            };
             let mut plan = build_task_prune_closed_epics_plan(
                 &rows,
+                &runtime_refs_by_task,
                 !command.apply,
                 &state_dir,
                 archive_path.as_deref(),
