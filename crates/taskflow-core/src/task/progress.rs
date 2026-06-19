@@ -480,6 +480,46 @@ mod tests {
     }
 
     #[test]
+    fn descendant_progress_blocks_open_grandchild_when_direct_children_are_closed() {
+        let rows = vec![
+            row("parent", "open", "epic", None),
+            row("child", "closed", "task", Some("parent")),
+            row("grandchild", "open", "task", Some("child")),
+        ];
+
+        let direct = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DirectChildren,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+        let descendants = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(direct.progress_basis, "direct_children");
+        assert!(direct.ready_for_close);
+        assert_eq!(direct.direct_child_count, 1);
+        assert_eq!(direct.descendant_count, 1);
+        assert_eq!(descendants.progress_basis, "descendants_excluding_root");
+        assert!(!descendants.ready_for_close);
+        assert_eq!(
+            descendants.closure_candidate_state,
+            "active_descendants_remaining"
+        );
+        assert_eq!(descendants.direct_child_count, 1);
+        assert_eq!(descendants.descendant_count, 2);
+        assert_eq!(descendants.open_count, 1);
+    }
+
+    #[test]
     fn direct_child_progress_counts_done_alias_but_rejects_cancelled_as_open_work() {
         let rows = vec![
             row("parent", "open", "task", None),

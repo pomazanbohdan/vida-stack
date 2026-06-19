@@ -8247,6 +8247,10 @@ fn task_reconcile_epics_close_if_complete_json_and_idempotent() {
         serde_json::from_slice(&reconcile.stdout).expect("reconcile json should parse");
     assert_eq!(reconcile_json["surface"], "vida task reconcile");
     assert_eq!(reconcile_json["status"], "pass");
+    assert_eq!(
+        reconcile_json["progress_basis"],
+        "descendants_excluding_root"
+    );
     assert!(reconcile_json["closed_epics"]
         .as_array()
         .is_some_and(|rows| rows.iter().any(|row| row["epic_id"] == epic_id)));
@@ -8326,7 +8330,7 @@ fn task_reconcile_epics_reports_blocked_open_child_without_closing_parent() {
     assert!(reconcile_json["blocked_epics"]
         .as_array()
         .is_some_and(|rows| rows.iter().any(|row| {
-            row["epic_id"] == epic_id && row["reason"] == "direct_children_not_all_closed"
+            row["epic_id"] == epic_id && row["reason"] == "active_descendants_remaining"
         })));
     assert!(reconcile_json["closed_epics"]
         .as_array()
@@ -8366,6 +8370,8 @@ fn task_reconcile_epics_default_output_is_compact_toon_and_help_lists_modes() {
             "help should document {expected}: {help_text}"
         );
     }
+    assert!(help_text.contains("descendants"));
+    assert!(!help_text.contains("direct children"));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }

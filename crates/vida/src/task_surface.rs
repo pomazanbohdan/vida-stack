@@ -114,6 +114,7 @@ struct TaskEpicReconcileReceipt {
     surface: &'static str,
     status: String,
     scope: String,
+    progress_basis: String,
     dry_run: bool,
     close_if_complete: bool,
     inspected_epic_count: usize,
@@ -128,6 +129,8 @@ struct TaskEpicReconcileReceipt {
 struct TaskEpicReconcileClosedRow {
     epic_id: String,
     child_count: usize,
+    descendant_count: usize,
+    progress_basis: String,
     reason: String,
 }
 
@@ -135,8 +138,12 @@ struct TaskEpicReconcileClosedRow {
 struct TaskEpicReconcileBlockedRow {
     epic_id: String,
     child_count: usize,
+    descendant_count: usize,
     open_child_count: usize,
     in_progress_child_count: usize,
+    open_descendant_count: usize,
+    in_progress_descendant_count: usize,
+    progress_basis: String,
     reason: String,
 }
 
@@ -176,7 +183,9 @@ struct TaskEpicProgressRow {
     recommended_next_action: String,
 }
 
-async fn reconcile_epics_from_direct_children(
+const EPIC_RECONCILE_PROGRESS_BASIS: &str = "descendants_excluding_root";
+
+async fn reconcile_epics_from_descendant_progress(
     store: &StateStore,
     close_if_complete: bool,
     dry_run: bool,
@@ -204,6 +213,9 @@ async fn reconcile_epics_from_direct_children(
             continue;
         }
 
+        let progress =
+            task_progress_summary_for_basis(&tasks, &epic.id, EPIC_RECONCILE_PROGRESS_BASIS)?;
+
         let children = tasks
             .iter()
             .filter(|task| {
@@ -215,8 +227,12 @@ async fn reconcile_epics_from_direct_children(
             blocked_epics.push(TaskEpicReconcileBlockedRow {
                 epic_id: epic.id,
                 child_count,
+                descendant_count: progress.descendant_count,
                 open_child_count: 0,
                 in_progress_child_count: 0,
+                open_descendant_count: progress.open_count,
+                in_progress_descendant_count: progress.in_progress_count,
+                progress_basis: progress.progress_basis,
                 reason: "no_direct_children".to_string(),
             });
             continue;
@@ -233,13 +249,22 @@ async fn reconcile_epics_from_direct_children(
         let all_children_closed = children
             .iter()
             .all(|child| StateStore::task_status_is_closed_like(&child.status));
-        if !all_children_closed {
+        if !progress.closure_candidate {
+            let reason = if !all_children_closed {
+                "active_descendants_remaining".to_string()
+            } else {
+                progress.closure_candidate_state.clone()
+            };
             blocked_epics.push(TaskEpicReconcileBlockedRow {
                 epic_id: epic.id,
                 child_count,
+                descendant_count: progress.descendant_count,
                 open_child_count,
                 in_progress_child_count,
-                reason: "direct_children_not_all_closed".to_string(),
+                open_descendant_count: progress.open_count,
+                in_progress_descendant_count: progress.in_progress_count,
+                progress_basis: progress.progress_basis,
+                reason,
             });
             continue;
         }
@@ -248,7 +273,7 @@ async fn reconcile_epics_from_direct_children(
             match store
                 .close_task(
                     &epic.id,
-                    "all direct child tasks closed by epic auto-reconcile",
+                    "all descendant tasks closed by epic auto-reconcile",
                 )
                 .await
             {
@@ -257,14 +282,20 @@ async fn reconcile_epics_from_direct_children(
                     closed_epics.push(TaskEpicReconcileClosedRow {
                         epic_id: closed.id,
                         child_count,
-                        reason: "all_direct_children_closed".to_string(),
+                        descendant_count: progress.descendant_count,
+                        progress_basis: progress.progress_basis,
+                        reason: "all_descendants_closed".to_string(),
                     });
                 }
                 Err(error) => blocked_epics.push(TaskEpicReconcileBlockedRow {
                     epic_id: epic.id,
                     child_count,
+                    descendant_count: progress.descendant_count,
                     open_child_count,
                     in_progress_child_count,
+                    open_descendant_count: progress.open_count,
+                    in_progress_descendant_count: progress.in_progress_count,
+                    progress_basis: progress.progress_basis,
                     reason: format!("close_failed:{error}"),
                 }),
             }
@@ -272,7 +303,9 @@ async fn reconcile_epics_from_direct_children(
             closed_epics.push(TaskEpicReconcileClosedRow {
                 epic_id: epic.id,
                 child_count,
-                reason: "eligible_all_direct_children_closed".to_string(),
+                descendant_count: progress.descendant_count,
+                progress_basis: progress.progress_basis,
+                reason: "eligible_all_descendants_closed".to_string(),
             });
         }
     }
@@ -290,6 +323,7 @@ async fn reconcile_epics_from_direct_children(
         surface: "vida task reconcile",
         status: "pass".to_string(),
         scope: "epics".to_string(),
+        progress_basis: EPIC_RECONCILE_PROGRESS_BASIS.to_string(),
         dry_run,
         close_if_complete,
         inspected_epic_count,
@@ -11072,7 +11106,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
             match StateStore::open_existing(state_dir).await {
-                Ok(store) => match reconcile_epics_from_direct_children(
+                Ok(store) => match reconcile_epics_from_descendant_progress(
                     &store,
                     command.close_if_complete,
                     command.dry_run,
@@ -11722,7 +11756,8 @@ mod tests {
         parse_proof_target_values, pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
-        persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
+        persist_task_handoff_accept_receipt, reconcile_epics_from_descendant_progress,
+        runtime_binding_has_active_exception_takeover,
         runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
         select_task_next_lawful_binding, task_close_automation_is_blocked,
         task_close_automation_receipt, task_close_commit_allowlist_next_actions,
@@ -12129,6 +12164,106 @@ mod tests {
         });
 
         runtime.shutdown_timeout(std::time::Duration::from_millis(250));
+    }
+
+    #[test]
+    fn reconcile_epics_blocks_legacy_closed_direct_child_with_open_grandchild() {
+        run_on_runtime_stack_for_test(|| {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+            runtime.block_on(async {
+                let harness =
+                    TempStateHarness::new().expect("temp state harness should initialize");
+                let store = crate::StateStore::open(harness.path().to_path_buf())
+                    .await
+                    .expect("state store should open");
+
+                create_task_for_test(
+                    &store,
+                    "legacy-epic",
+                    "Legacy Epic",
+                    "epic",
+                    "open",
+                    1,
+                    None,
+                )
+                .await;
+                create_task_for_test(
+                    &store,
+                    "legacy-child",
+                    "Legacy Child",
+                    "task",
+                    "open",
+                    2,
+                    Some("legacy-epic"),
+                )
+                .await;
+                create_task_for_test(
+                    &store,
+                    "legacy-grandchild",
+                    "Legacy Grandchild",
+                    "task",
+                    "open",
+                    3,
+                    Some("legacy-child"),
+                )
+                .await;
+
+                let mut child = store
+                    .show_task("legacy-child")
+                    .await
+                    .expect("legacy child should exist");
+                child.status = "closed".to_string();
+                child.closed_at = Some("2026-03-08T00:10:00Z".to_string());
+                child.close_reason =
+                    Some("legacy fixture closed before graph validation".to_string());
+                store
+                    .persist_task_record(child)
+                    .await
+                    .expect("legacy fixture should persist directly");
+
+                let rows = store.all_tasks().await.expect("tasks should read");
+                let direct_summary =
+                    task_progress_summary_for_basis(&rows, "legacy-epic", "direct_children")
+                        .expect("direct child progress should compute");
+                assert!(direct_summary.ready_for_close);
+
+                let dry_run = reconcile_epics_from_descendant_progress(&store, false, true)
+                    .await
+                    .expect("reconcile should inspect legacy state");
+                assert_eq!(dry_run.progress_basis, "descendants_excluding_root");
+                assert!(dry_run
+                    .closed_epics
+                    .iter()
+                    .all(|row| row.epic_id != "legacy-epic"));
+                let blocked = dry_run
+                    .blocked_epics
+                    .iter()
+                    .find(|row| row.epic_id == "legacy-epic")
+                    .expect("legacy epic should be blocked by open grandchild");
+                assert_eq!(blocked.reason, "active_descendants_remaining");
+                assert_eq!(blocked.progress_basis, "descendants_excluding_root");
+                assert_eq!(blocked.child_count, 1);
+                assert_eq!(blocked.open_child_count, 0);
+                assert_eq!(blocked.descendant_count, 2);
+                assert_eq!(blocked.open_descendant_count, 1);
+
+                let close_if_complete =
+                    reconcile_epics_from_descendant_progress(&store, true, false)
+                        .await
+                        .expect("close-if-complete should still block legacy state");
+                assert!(close_if_complete
+                    .closed_epics
+                    .iter()
+                    .all(|row| row.epic_id != "legacy-epic"));
+                let epic = store
+                    .show_task("legacy-epic")
+                    .await
+                    .expect("legacy epic should remain readable");
+                assert_eq!(epic.status, "open");
+            });
+
+            runtime.shutdown_timeout(std::time::Duration::from_millis(250));
+        });
     }
 
     #[test]

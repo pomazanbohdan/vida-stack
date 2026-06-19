@@ -978,7 +978,7 @@ pub(crate) enum TaskCommand {
     Takeover(TaskTakeoverArgs),
     #[command(about = "close one tracked task with evidence and optional release automation")]
     Close(TaskCloseArgs),
-    #[command(about = "reconcile open epics whose direct children are complete")]
+    #[command(about = "reconcile open epics whose descendants are complete")]
     Reconcile(TaskReconcileArgs),
     #[command(about = "retire historical run-graph rows for already-closed tasks")]
     ReconcileClosedRuns(TaskReconcileClosedRunsArgs),
@@ -2688,7 +2688,7 @@ pub(crate) struct TaskReconcileArgs {
 
     #[arg(
         long = "close-if-complete",
-        help = "Close eligible epics whose direct children are all closed-like"
+        help = "Close eligible epics whose descendants are all closed-like"
     )]
     pub(crate) close_if_complete: bool,
 
