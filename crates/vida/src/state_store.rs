@@ -6720,6 +6720,7 @@ hierarchy: framework,contracts
         fs::write(
             &source,
             concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":0,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
                 "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-stale\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
                 "{\"id\":\"vida-keep\",\"title\":\"Keep old\",\"description\":\"keep\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
             ),
@@ -6731,17 +6732,33 @@ hierarchy: framework,contracts
             .expect("initial import should succeed");
 
         let snapshot = TaskSnapshot {
-            tasks: vec![CanonicalTaskRecord {
-                id: CanonicalTaskId::new("vida-keep"),
-                title: "Keep new".to_string(),
-                status: CanonicalTaskStatus::Closed,
-                issue_type: CanonicalIssueType::Task,
-                updated_at: CanonicalTimestamp(
-                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
-                        .expect("parse timestamp"),
-                ),
+            tasks: vec![
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-root"),
+                    title: "Root".to_string(),
+                    status: CanonicalTaskStatus::Closed,
+                    issue_type: CanonicalIssueType::Epic,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                            .expect("parse root timestamp"),
+                    ),
+                },
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-keep"),
+                    title: "Keep new".to_string(),
+                    status: CanonicalTaskStatus::Closed,
+                    issue_type: CanonicalIssueType::Task,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                            .expect("parse timestamp"),
+                    ),
+                },
+            ],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-keep"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
             }],
-            dependencies: Vec::new(),
         };
 
         store
@@ -6771,7 +6788,8 @@ hierarchy: framework,contracts
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].operation, "replace_snapshot");
         assert_eq!(receipts[0].source_kind, "canonical_snapshot_memory");
-        assert_eq!(receipts[0].task_count, 1);
+        assert_eq!(receipts[0].task_count, 2);
+        assert_eq!(receipts[0].dependency_count, 1);
         assert_eq!(receipts[0].stale_removed_count, 1);
 
         let latest = store
@@ -6781,7 +6799,8 @@ hierarchy: framework,contracts
             .expect("latest reconciliation receipt should exist");
         assert_eq!(latest.operation, "replace_snapshot");
         assert_eq!(latest.source_kind, "canonical_snapshot_memory");
-        assert_eq!(latest.task_count, 1);
+        assert_eq!(latest.task_count, 2);
+        assert_eq!(latest.dependency_count, 1);
         assert_eq!(latest.stale_removed_count, 1);
         assert!(latest
             .as_display()
@@ -6801,7 +6820,7 @@ hierarchy: framework,contracts
         assert!(
             rollup
                 .as_display()
-                .contains("1 receipts (tasks=1, dependencies=0, stale_removed=1, operations: replace_snapshot=1; source_kinds: canonical_snapshot_memory=1;")
+                .contains("1 receipts (tasks=2, dependencies=1, stale_removed=1, operations: replace_snapshot=1; source_kinds: canonical_snapshot_memory=1;")
         );
 
         let _ = fs::remove_dir_all(&root);
@@ -7373,6 +7392,7 @@ hierarchy: framework,contracts
         fs::write(
             &source,
             concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":0,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
                 "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-stale\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
                 "{\"id\":\"vida-keep\",\"title\":\"Keep old\",\"description\":\"keep\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
             ),
@@ -7384,17 +7404,33 @@ hierarchy: framework,contracts
             .expect("initial import should succeed");
 
         let snapshot = TaskSnapshot {
-            tasks: vec![CanonicalTaskRecord {
-                id: CanonicalTaskId::new("vida-keep"),
-                title: "Keep replacement".to_string(),
-                status: CanonicalTaskStatus::Closed,
-                issue_type: CanonicalIssueType::Task,
-                updated_at: CanonicalTimestamp(
-                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
-                        .expect("parse timestamp"),
-                ),
+            tasks: vec![
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-root"),
+                    title: "Root".to_string(),
+                    status: CanonicalTaskStatus::Closed,
+                    issue_type: CanonicalIssueType::Epic,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                            .expect("parse root timestamp"),
+                    ),
+                },
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-keep"),
+                    title: "Keep replacement".to_string(),
+                    status: CanonicalTaskStatus::Closed,
+                    issue_type: CanonicalIssueType::Task,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                            .expect("parse timestamp"),
+                    ),
+                },
+            ],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-keep"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
             }],
-            dependencies: Vec::new(),
         };
         taskflow_state_fs::write_snapshot(&snapshot_path, &snapshot)
             .expect("snapshot should write");
@@ -7426,8 +7462,8 @@ hierarchy: framework,contracts
             latest.source_path.as_deref(),
             Some(snapshot_path.to_string_lossy().as_ref())
         );
-        assert_eq!(latest.task_count, 1);
-        assert_eq!(latest.dependency_count, 0);
+        assert_eq!(latest.task_count, 2);
+        assert_eq!(latest.dependency_count, 1);
         assert_eq!(latest.stale_removed_count, 1);
 
         let rollup = store
@@ -7435,8 +7471,8 @@ hierarchy: framework,contracts
             .await
             .expect("reconciliation rollup should load");
         assert_eq!(rollup.total_receipts, 1);
-        assert_eq!(rollup.total_task_rows, 1);
-        assert_eq!(rollup.total_dependency_rows, 0);
+        assert_eq!(rollup.total_task_rows, 2);
+        assert_eq!(rollup.total_dependency_rows, 1);
         assert_eq!(rollup.total_stale_removed, 1);
         assert_eq!(rollup.by_operation.get("replace_snapshot"), Some(&1));
         assert_eq!(
@@ -7463,8 +7499,8 @@ hierarchy: framework,contracts
         assert_eq!(bridge.file_export_receipts, 0);
         assert_eq!(bridge.file_import_receipts, 0);
         assert_eq!(bridge.file_replace_receipts, 1);
-        assert_eq!(bridge.total_task_rows, 1);
-        assert_eq!(bridge.total_dependency_rows, 0);
+        assert_eq!(bridge.total_task_rows, 2);
+        assert_eq!(bridge.total_dependency_rows, 1);
         assert_eq!(bridge.total_stale_removed, 1);
         assert_eq!(bridge.latest_operation.as_deref(), Some("replace_snapshot"));
         assert_eq!(
@@ -7478,7 +7514,7 @@ hierarchy: framework,contracts
         assert!(
             bridge
                 .as_display()
-                .contains("receipts=1 export=0 import=0 replace=1 object=0 memory=0 file=1 tasks=1 dependencies=0 stale_removed=1 latest=replace_snapshot via canonical_snapshot_file")
+                .contains("receipts=1 export=0 import=0 replace=1 object=0 memory=0 file=1 tasks=2 dependencies=1 stale_removed=1 latest=replace_snapshot via canonical_snapshot_file")
         );
 
         let _ = fs::remove_dir_all(&root);
