@@ -3,9 +3,9 @@ use crate::semantic_routing_features::{
     SemanticScoreInputs,
 };
 use crate::{
-    carrier_runtime_section, infer_execution_runtime_role, infer_runtime_task_class, json_lookup,
-    json_u64, role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
-    RuntimeConsumptionLaneSelection,
+    carrier_runtime_section, declared_task_class_supports_requested, infer_execution_runtime_role,
+    infer_runtime_task_class, json_lookup, json_u64, role_supports_task_class,
+    runtime_role_for_task_class, task_complexity_multiplier, RuntimeConsumptionLaneSelection,
 };
 
 fn selection_strategy(carrier_runtime: &serde_json::Value) -> String {
@@ -723,7 +723,10 @@ fn profile_supports_task_class(
     task_class: &str,
 ) -> bool {
     let task_classes = profile_task_classes(role, profile);
-    task_classes.is_empty() || task_classes.iter().any(|value| value == task_class)
+    task_classes.is_empty()
+        || task_classes
+            .iter()
+            .any(|declared| declared_task_class_supports_requested(declared, task_class))
 }
 
 fn profile_readiness_status(profile: &serde_json::Value) -> String {
@@ -4916,6 +4919,48 @@ mod tests {
             assignment["selected_external_backend_readiness"]["status"],
             "carrier_ready_with_override"
         );
+    }
+
+    #[test]
+    fn canonical_task_class_declaration_satisfies_alias_assignment_request() {
+        let compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "middle",
+            "tier": "middle",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "coach",
+            "runtime_roles": ["coach"],
+            "task_classes": ["coach"],
+            "reasoning_band": "medium",
+            "default_model_profile": "coach_validation",
+            "model_profiles": {
+                "coach_validation": {
+                    "profile_id": "coach_validation",
+                    "model_ref": "gpt-5.5",
+                    "provider": "openai",
+                    "reasoning_effort": "medium",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "read_or_review",
+                    "runtime_roles": ["coach"],
+                    "task_classes": ["coach"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+
+        let assignment = build_runtime_assignment_preview_from_resolved_constraints(
+            &compiled_bundle,
+            "coach",
+            "validation",
+            "coach",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "middle");
+        assert_eq!(assignment["task_class"], "validation");
+        assert_eq!(assignment["runtime_role"], "coach");
     }
 
     #[test]

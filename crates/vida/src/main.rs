@@ -283,8 +283,8 @@ use runtime_assignment_builder::{
     build_runtime_assignment_preview_from_resolved_constraints, resolve_dispatch_alias_id,
 };
 use runtime_assignment_policy::{
-    infer_execution_runtime_role, infer_runtime_task_class, role_supports_task_class,
-    runtime_role_for_task_class, task_complexity_multiplier,
+    declared_task_class_supports_requested, infer_execution_runtime_role, infer_runtime_task_class,
+    role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
 };
 pub(crate) use runtime_assignment_projection_utils::{
     carrier_runtime_section, infer_task_class_from_task_payload, json_u64,

@@ -8206,6 +8206,61 @@ mod tests {
     }
 
     #[test]
+    fn dev_team_validation_step_uses_coach_assignment_alias_truth() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "runtime_defect_remediation",
+            "work_item_flow_bindings": {
+                "runtime_defect": "runtime_defect_remediation"
+            },
+            "roles": [
+                {"role_id": "coach_validator", "runtime_role": "coach", "task_classes": ["validation"]}
+            ],
+            "flows": [
+                {
+                    "flow_id": "runtime_defect_remediation",
+                    "enabled": true,
+                    "default": true,
+                    "work_item_bindings": ["runtime_defect"],
+                    "ordered_steps": [
+                        {"role_id": "coach_validator", "runtime_role": "coach", "task_class": "validation"}
+                    ]
+                }
+            ]
+        });
+
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: Some("runtime-defect-a".to_string()),
+                ready: vec![candidate_with_type(
+                    "runtime-defect-a",
+                    "Runtime defect A",
+                    true,
+                    false,
+                    "runtime_defect",
+                )],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            1,
+            1,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 1);
+        assert_eq!(preview.selected_lanes[0].runtime_role, "coach");
+        assert_eq!(preview.selected_lanes[0].task_class, "validation");
+        assert_eq!(
+            preview.selected_lanes[0].selection_truth.selected_carrier,
+            "coach-seat"
+        );
+        assert!(preview.blocker_codes.is_empty());
+    }
+
+    #[test]
     fn development_flow_binding_scopes_all_ordered_steps_to_current_task() {
         let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
         activation_bundle["dev_team_readiness"] = serde_json::json!({
