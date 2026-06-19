@@ -1144,12 +1144,25 @@ impl StateStore {
         }
     }
 
+    fn normalize_task_record_defaults(
+        task_id: &str,
+        execution_semantics: TaskExecutionSemantics,
+        planner_metadata: TaskPlannerMetadata,
+    ) -> Result<(TaskExecutionSemantics, TaskPlannerMetadata), StateStoreError> {
+        Ok((
+            Self::validate_execution_semantics(task_id, execution_semantics)?,
+            Self::normalize_planner_metadata(planner_metadata),
+        ))
+    }
+
     fn normalize_stored_task_row(row: TaskStorageRowStored) -> TaskStorageRow {
         let mut normalized = TaskStorageRow::from(row);
+        let execution_semantics = std::mem::take(&mut normalized.execution_semantics);
+        let planner_metadata = std::mem::take(&mut normalized.planner_metadata);
         normalized.execution_semantics =
-            Self::validate_execution_semantics(&normalized.task_id, normalized.execution_semantics)
+            Self::validate_execution_semantics(&normalized.task_id, execution_semantics)
                 .unwrap_or_default();
-        normalized.planner_metadata = Self::normalize_planner_metadata(normalized.planner_metadata);
+        normalized.planner_metadata = Self::normalize_planner_metadata(planner_metadata);
         normalized
     }
 
@@ -1661,6 +1674,13 @@ impl StateStore {
                 .await?;
             let mut content = TaskContent::from(record);
             content.display_id = normalized_display_id;
+            let (execution_semantics, planner_metadata) = Self::normalize_task_record_defaults(
+                &task_id,
+                std::mem::take(&mut content.execution_semantics),
+                std::mem::take(&mut content.planner_metadata),
+            )?;
+            content.execution_semantics = execution_semantics;
+            content.planner_metadata = planner_metadata;
 
             touched_task_ids.insert(task_id.clone());
             for dependency in &content.dependencies {
@@ -2469,8 +2489,8 @@ impl StateStore {
                 });
             }
         }
-        let execution_semantics = Self::validate_execution_semantics(task_id, execution_semantics)?;
-        let planner_metadata = Self::normalize_planner_metadata(planner_metadata);
+        let (execution_semantics, planner_metadata) =
+            Self::normalize_task_record_defaults(task_id, execution_semantics, planner_metadata)?;
 
         let now = unix_timestamp_nanos().to_string();
         let mut normalized_labels = labels
@@ -2771,11 +2791,16 @@ impl StateStore {
             task.execution_semantics.conflict_domain =
                 Self::normalize_execution_semantics_value(conflict_domain);
         }
-        task.execution_semantics =
-            Self::validate_execution_semantics(task_id, task.execution_semantics.clone())?;
         if let Some(planner_metadata) = planner_metadata {
-            task.planner_metadata = Self::normalize_planner_metadata(planner_metadata);
+            task.planner_metadata = planner_metadata;
         }
+        let (execution_semantics, planner_metadata) = Self::normalize_task_record_defaults(
+            task_id,
+            std::mem::take(&mut task.execution_semantics),
+            std::mem::take(&mut task.planner_metadata),
+        )?;
+        task.execution_semantics = execution_semantics;
+        task.planner_metadata = planner_metadata;
         task.labels.sort();
         task.labels.dedup();
         task.updated_at = unix_timestamp_nanos().to_string();
@@ -5889,6 +5914,159 @@ mod tests {
             .await
             .expect("planner metadata task should load");
         assert_eq!(loaded.planner_metadata, expected_planner_metadata);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn create_import_and_update_share_task_record_default_policy() {
+        let root = unique_task_store_temp_root("vida-task-record-default-policy");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let messy_metadata = TaskPlannerMetadata {
+            owned_paths: vec![
+                " crates/vida/src/task_surface.rs ".to_string(),
+                "crates/vida/src/state_store_task_store.rs".to_string(),
+                "crates/vida/src/task_surface.rs".to_string(),
+                " ".to_string(),
+            ],
+            acceptance_targets: vec![
+                " lifecycle defaults converge ".to_string(),
+                "lifecycle defaults converge".to_string(),
+            ],
+            proof_targets: vec![
+                " cargo test -p vida task_record_default_policy ".to_string(),
+                "cargo test -p vida task_record_default_policy".to_string(),
+            ],
+            risk: Some(" high ".to_string()),
+            estimate: Some(" medium ".to_string()),
+            lane_hint: Some(" core-boundary ".to_string()),
+        };
+        let expected_metadata = TaskPlannerMetadata {
+            owned_paths: vec![
+                "crates/vida/src/state_store_task_store.rs".to_string(),
+                "crates/vida/src/task_surface.rs".to_string(),
+            ],
+            acceptance_targets: vec!["lifecycle defaults converge".to_string()],
+            proof_targets: vec!["cargo test -p vida task_record_default_policy".to_string()],
+            risk: Some("high".to_string()),
+            estimate: Some("medium".to_string()),
+            lane_hint: Some("core-boundary".to_string()),
+        };
+        let messy_semantics = TaskExecutionSemantics {
+            execution_mode: Some(" parallel_safe ".to_string()),
+            order_bucket: Some(" workflow ".to_string()),
+            parallel_group: Some(" lifecycle ".to_string()),
+            conflict_domain: Some(" defaults ".to_string()),
+        };
+        let expected_semantics = TaskExecutionSemantics {
+            execution_mode: Some("parallel_safe".to_string()),
+            order_bucket: Some("workflow".to_string()),
+            parallel_group: Some("lifecycle".to_string()),
+            conflict_domain: Some("defaults".to_string()),
+        };
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "created-defaults",
+                title: "Created defaults",
+                display_id: None,
+                description: "created path",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: messy_semantics.clone(),
+                planner_metadata: messy_metadata.clone(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create task should normalize defaults");
+        let created = store
+            .show_task("created-defaults")
+            .await
+            .expect("created task should load");
+        assert_eq!(created.execution_semantics, expected_semantics);
+        assert_eq!(created.planner_metadata, expected_metadata);
+
+        store
+            .update_task(UpdateTaskRequest {
+                task_id: "created-defaults",
+                title: None,
+                status: None,
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: Some(Some(" exclusive ")),
+                order_bucket: Some(Some(" workflow-updated ")),
+                parallel_group: Some(Some(" lifecycle-updated ")),
+                conflict_domain: Some(Some(" defaults-updated ")),
+                planner_metadata: Some(messy_metadata.clone()),
+            })
+            .await
+            .expect("update task should normalize defaults");
+        let updated = store
+            .show_task("created-defaults")
+            .await
+            .expect("updated task should load");
+        assert_eq!(
+            updated.execution_semantics,
+            TaskExecutionSemantics {
+                execution_mode: Some("exclusive".to_string()),
+                order_bucket: Some("workflow-updated".to_string()),
+                parallel_group: Some("lifecycle-updated".to_string()),
+                conflict_domain: Some("defaults-updated".to_string()),
+            }
+        );
+        assert_eq!(updated.planner_metadata, expected_metadata);
+
+        let jsonl_path = root.join("import-defaults.jsonl");
+        fs::write(
+            &jsonl_path,
+            r#"{"id":"imported-defaults","title":"Imported defaults","description":"import path","status":"open","priority":1,"issue_type":"epic","created_at":"2026-06-19T00:00:00Z","created_by":"tester","updated_at":"2026-06-19T00:00:00Z","source_repo":".","labels":[],"execution_semantics":{"execution_mode":" parallel_safe ","order_bucket":" workflow ","parallel_group":" lifecycle ","conflict_domain":" defaults "},"planner_metadata":{"owned_paths":[" crates/vida/src/task_surface.rs ","crates/vida/src/state_store_task_store.rs","crates/vida/src/task_surface.rs"," "],"acceptance_targets":[" lifecycle defaults converge ","lifecycle defaults converge"],"proof_targets":[" cargo test -p vida task_record_default_policy ","cargo test -p vida task_record_default_policy"],"risk":" high ","estimate":" medium ","lane_hint":" core-boundary "},"dependencies":[]}"#,
+        )
+        .expect("import jsonl should write");
+        store
+            .import_tasks_from_jsonl(&jsonl_path)
+            .await
+            .expect("import should normalize defaults");
+        let imported = store
+            .show_task("imported-defaults")
+            .await
+            .expect("imported task should load");
+        assert_eq!(imported.execution_semantics, expected_semantics);
+        assert_eq!(imported.planner_metadata, expected_metadata);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_tasks_rejects_invalid_execution_mode_without_persisting() {
+        let root = unique_task_store_temp_root("vida-task-import-invalid-execution-mode");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let jsonl_path = root.join("invalid-execution-mode.jsonl");
+        fs::write(
+            &jsonl_path,
+            r#"{"id":"invalid-execution-mode","title":"Invalid execution mode","description":"import path","status":"open","priority":1,"issue_type":"epic","created_at":"2026-06-19T00:00:00Z","created_by":"tester","updated_at":"2026-06-19T00:00:00Z","source_repo":".","labels":[],"execution_semantics":{"execution_mode":"unsafe_parallel"},"dependencies":[]}"#,
+        )
+        .expect("invalid import jsonl should write");
+
+        let error = store
+            .import_tasks_from_jsonl(&jsonl_path)
+            .await
+            .expect_err("invalid execution mode should block import");
+        assert!(
+            error
+                .to_string()
+                .contains("execution_mode must be one of sequential"),
+            "{error}"
+        );
+        assert!(store.show_task("invalid-execution-mode").await.is_err());
 
         let _ = fs::remove_dir_all(&root);
     }
