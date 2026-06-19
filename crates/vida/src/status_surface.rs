@@ -864,10 +864,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                         _ => false,
                     };
-                let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
-                    || global_closed_run_is_current
-                    || terminal_closed_run_is_current
-                    || latest_run_graph_terminal_closure_without_truth;
+                let latest_recovery_is_terminal_retired_runtime_run =
+                    crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
+                        latest_run_graph_recovery.as_ref(),
+                    );
+                let closed_task_active_run_projection_mismatch =
+                    !latest_recovery_is_terminal_retired_runtime_run
+                        && (latest_run_graph_task_closed
+                            || global_closed_run_is_current
+                            || terminal_closed_run_is_current
+                            || latest_run_graph_terminal_closure_without_truth);
                 let in_progress_tasks = all_tasks
                     .iter()
                     .filter(|task| task.status == "in_progress")
@@ -2102,10 +2108,16 @@ async fn refresh_cached_status_projection_runtime_fields(
             }
             _ => false,
         };
-    let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
-        || global_closed_run_is_current
-        || terminal_closed_run_is_current
-        || latest_run_graph_terminal_closure_without_truth;
+    let latest_recovery_is_terminal_retired_runtime_run =
+        crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
+            latest_run_graph_recovery.as_ref(),
+        );
+    let closed_task_active_run_projection_mismatch =
+        !latest_recovery_is_terminal_retired_runtime_run
+            && (latest_run_graph_task_closed
+                || global_closed_run_is_current
+                || terminal_closed_run_is_current
+                || latest_run_graph_terminal_closure_without_truth);
     let continuation_binding = if terminal_task_active_run_graph_task_missing {
         match latest_terminal_task_active_run_graph_status.as_ref() {
             Some(status) => {
