@@ -39,6 +39,23 @@ For every runtime development session:
 5. create a DB-backed `todo` before any write-producing mutation,
 6. validate TaskFlow graph after mutations.
 
+## Current Installed Runtime Environment
+
+The current Windows operator environment uses the canonical release-install gate:
+
+```powershell
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-install -Json
+```
+
+That gate must:
+
+1. build the current revision's release runtime binary at the effective Cargo target path, normally `.vida\cargo-target\release\vida.exe`,
+2. run `vida release install --skip-build --source-binary <release vida.exe> --json` from that release binary,
+3. install that exact binary into the system VIDA install root `current\bin`,
+4. run installed-runtime proof through `current\bin\vida.exe status --json`.
+
+On Windows, the gate owns the session environment required for this proof. It restores the standard Windows variables needed by Cargo/MSVC and operator commands, imports the Visual Studio Build Tools environment when available, and ensures `%LOCALAPPDATA%\vida-stack\current\bin` is available before installed-runtime status proof. Manual `target\release\vida.exe` copies or ad hoc PATH edits are fallback diagnostics only, not the current canonical install path.
+
 ## GitHub Issues Workflow
 
 GitHub issue work must follow this authority split:
@@ -92,10 +109,10 @@ Before reporting a runtime environment/docs/skill update as complete:
 artifact_path: process/vida-runtime-development-environment
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-04'
+artifact_revision: '2026-06-19'
 schema_version: '1'
 status: canonical
 source_path: docs/process/vida-runtime-development-environment.md
 created_at: 2026-06-04T00:00:00+03:00
-updated_at: 2026-06-04T05:00:00Z
+updated_at: 2026-06-19T14:15:00+03:00
 changelog_ref: vida-runtime-development-environment.changelog.jsonl

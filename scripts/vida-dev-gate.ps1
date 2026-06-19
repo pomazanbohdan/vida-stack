@@ -18,6 +18,159 @@ $RootDir = Split-Path -Parent $PSScriptRoot
 $Records = New-Object System.Collections.Generic.List[object]
 $OriginalCargoTargetDir = $env:CARGO_TARGET_DIR
 
+function Test-IsWindowsHost {
+    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+}
+
+function Set-EnvIfMissing {
+    param(
+        [string]$Name,
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace((Get-Item -Path "Env:$Name" -ErrorAction SilentlyContinue).Value) -and
+        -not [string]::IsNullOrWhiteSpace($Value)) {
+        Set-Item -Path "Env:$Name" -Value $Value
+    }
+}
+
+function Add-PathEntries {
+    param([string[]]$Entries)
+
+    $separator = [System.IO.Path]::PathSeparator
+    $existing = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in (($env:Path -split [regex]::Escape([string]$separator)) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        [void]$existing.Add(([System.IO.Path]::GetFullPath($entry.Trim())))
+    }
+
+    $toPrepend = New-Object System.Collections.Generic.List[string]
+    foreach ($entry in $Entries) {
+        if ([string]::IsNullOrWhiteSpace($entry) -or -not (Test-Path -LiteralPath $entry)) {
+            continue
+        }
+        $fullPath = [System.IO.Path]::GetFullPath($entry)
+        if ($existing.Add($fullPath)) {
+            $toPrepend.Add($fullPath)
+        }
+    }
+
+    if ($toPrepend.Count -gt 0) {
+        $env:Path = (($toPrepend.ToArray() + @($env:Path)) -join [string]$separator)
+    }
+}
+
+function Initialize-WindowsHostEnvironment {
+    if (-not (Test-IsWindowsHost)) {
+        return
+    }
+
+    $windowsRoot = $env:SystemRoot
+    if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
+        $windowsRoot = $env:windir
+    }
+    if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
+        $windowsRoot = "C:\Windows"
+    }
+    Set-EnvIfMissing "SystemRoot" $windowsRoot
+    Set-EnvIfMissing "windir" $windowsRoot
+    Set-EnvIfMissing "ComSpec" (Join-Path $windowsRoot "System32\cmd.exe")
+    Set-EnvIfMissing "ProgramData" "C:\ProgramData"
+    Set-EnvIfMissing "ProgramFiles" "C:\Program Files"
+    Set-EnvIfMissing "ProgramFiles(x86)" "C:\Program Files (x86)"
+
+    $userName = $env:USERNAME
+    if ([string]::IsNullOrWhiteSpace($userName)) {
+        $userName = [System.Environment]::UserName
+    }
+    $userProfile = $env:USERPROFILE
+    if ([string]::IsNullOrWhiteSpace($userProfile) -and
+        -not [string]::IsNullOrWhiteSpace($env:HOMEDRIVE) -and
+        -not [string]::IsNullOrWhiteSpace($env:HOMEPATH)) {
+        $userProfile = Join-Path $env:HOMEDRIVE $env:HOMEPATH
+    }
+    if ([string]::IsNullOrWhiteSpace($userProfile) -and -not [string]::IsNullOrWhiteSpace($userName)) {
+        $userProfile = Join-Path "C:\Users" $userName
+    }
+    Set-EnvIfMissing "USERPROFILE" $userProfile
+    if (-not [string]::IsNullOrWhiteSpace($userProfile)) {
+        Set-EnvIfMissing "HOMEDRIVE" ([System.IO.Path]::GetPathRoot($userProfile).TrimEnd('\'))
+        Set-EnvIfMissing "HOMEPATH" $userProfile.Substring(([System.IO.Path]::GetPathRoot($userProfile)).Length - 1)
+        Set-EnvIfMissing "LOCALAPPDATA" (Join-Path $userProfile "AppData\Local")
+        Set-EnvIfMissing "APPDATA" (Join-Path $userProfile "AppData\Roaming")
+        Set-EnvIfMissing "TEMP" (Join-Path $userProfile "AppData\Local\Temp")
+        Set-EnvIfMissing "TMP" $env:TEMP
+        if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) {
+            New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+        }
+    }
+
+    $pathEntries = @(
+        (Join-Path $windowsRoot "System32"),
+        $windowsRoot,
+        (Join-Path $windowsRoot "System32\Wbem"),
+        (Join-Path $windowsRoot "System32\WindowsPowerShell\v1.0"),
+        (Join-Path $env:ProgramFiles "PowerShell\7"),
+        "C:\Program Files\Git\cmd",
+        "C:\Program Files\Git\bin",
+        (Join-Path $userProfile ".cargo\bin"),
+        (Join-Path $env:LOCALAPPDATA "vida-stack\current\bin")
+    )
+    Add-PathEntries $pathEntries
+}
+
+function Import-VisualStudioBuildEnvironment {
+    if (-not (Test-IsWindowsHost)) {
+        return
+    }
+    if ((Get-Command "cl.exe" -ErrorAction SilentlyContinue) -and -not [string]::IsNullOrWhiteSpace($env:VCINSTALLDIR)) {
+        return
+    }
+
+    $vcvarsCandidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"),
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"),
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"),
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat")
+    )
+    $vcvarsPath = $vcvarsCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+    if (-not $vcvarsPath) {
+        return
+    }
+
+    $cmdPath = if ([string]::IsNullOrWhiteSpace($env:ComSpec)) { "C:\Windows\System32\cmd.exe" } else { $env:ComSpec }
+    & $cmdPath /d /s /c "`"$vcvarsPath`" >nul && set" | ForEach-Object {
+        if ($_ -match '^(.*?)=(.*)$') {
+            Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+        }
+    }
+    Initialize-WindowsHostEnvironment
+}
+
+function Test-ModeNeedsWindowsBuildEnvironment {
+    param([string]$ModeName)
+
+    return $ModeName -in @(
+        "quick",
+        "focused-nextest",
+        "package-nextest",
+        "workspace-nextest",
+        "doc-test",
+        "build-debug",
+        "runtime-smoke",
+        "release-install"
+    )
+}
+
+function Resolve-InstalledVidaPath {
+    $installedVidaPath = Join-Path $env:LOCALAPPDATA "vida-stack\current\bin\vida.exe"
+    if (Test-Path -LiteralPath $installedVidaPath) {
+        return $installedVidaPath
+    }
+    return Resolve-CommandPath "vida"
+}
+
+Initialize-WindowsHostEnvironment
+
 function Show-Help {
     @"
 Usage:
@@ -338,6 +491,10 @@ if ($Help) {
 
 Push-Location $RootDir
 try {
+    if (Test-ModeNeedsWindowsBuildEnvironment $Mode) {
+        Import-VisualStudioBuildEnvironment
+    }
+
     if ($Mode -eq "target-dir-policy") {
         $Records.Add([pscustomobject]@{
             operation_id = "target-dir-policy"
@@ -472,8 +629,8 @@ try {
     } elseif ($Mode -eq "release-install") {
         Invoke-Timed "cargo-build-release-vida" @("cargo", "build", "--locked", "-p", "vida", "--release")
         Invoke-Timed "vida-release-install" @($ReleaseVidaPath, "release", "install", "--skip-build", "--source-binary", $ReleaseVidaPath, "--json")
-        Invoke-Timed "installed-vida-status" @("vida", "status", "--json")
-    }
+        Invoke-Timed "installed-vida-status" @((Resolve-InstalledVidaPath), "status", "--json")
+}
 } finally {
     Pop-Location
     if ($Json) {
