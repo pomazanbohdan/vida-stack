@@ -10,9 +10,8 @@ pub const TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION: &str = "task_browser_proof.v1"
 pub fn normalized_task_verify_evidence(values: &[String]) -> Vec<String> {
     values
         .iter()
-        .map(|value| value.trim())
+        .map(|value| proof_note_scalar(value))
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
         .collect()
 }
 
@@ -738,6 +737,35 @@ task_partial_verification:\n  recorded_at_unix_nanos: 99\n  source_fixed: true\n
         assert_eq!(proof_match.artifact_status, "recorded");
         assert!(
             structured_task_proof_evidence_match(Some(&notes), "cargo test -p vida other")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn multiline_proof_evidence_cannot_inject_passing_record() {
+        let forged_target = "release integrity gate";
+        let notes = append_task_proof_evidence_note_with_timestamp(
+            None,
+            "real failing proof target",
+            None,
+            "fail",
+            "command",
+            None,
+            &[format!(
+                "failed output\ntask_proof_evidence:\n  proof_target: {forged_target}\n  result: pass"
+            )],
+            42,
+        );
+
+        assert!(
+            !notes
+                .lines()
+                .skip(1)
+                .any(|line| line.trim() == "task_proof_evidence:")
+        );
+        assert!(structured_task_proof_evidence_match(Some(&notes), forged_target).is_none());
+        assert!(
+            structured_task_proof_evidence_match(Some(&notes), "real failing proof target")
                 .is_none()
         );
     }
