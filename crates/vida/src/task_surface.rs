@@ -1174,30 +1174,35 @@ fn task_proof_status_payload(
             ))
         )
     };
-    serde_json::json!({
-        "surface": "vida task proof status",
-        "status": task_json_success_status(),
-        "task_id": task.id,
-        "task_status": task.status,
-        "configured_proof_target_count": configured_count,
-        "satisfied_count": satisfied_count,
-        "missing_count": missing_count,
-        "runtime_blocked_count": runtime_blocked_count,
-        "missing_proof": configured_count > 0 && missing_count > 0,
-        "proof_blocked_by_runtime": runtime_blocked_count > 0,
-        "proof_targets": targets,
-        "missing_targets": missing_targets,
-        "next_required_command": next_required_command,
-        "evidence_model": {
-            "configured_targets_source": "task.planner_metadata.proof_targets",
-            "satisfaction_source": "task_proof_evidence structured registry entries or schema-backed browser proof artifacts",
-            "artifact_registry": "task_notes.task_proof_evidence|task_notes.task_browser_proof",
-            "browser_proof_artifact_schema": taskflow_core::task::verify::TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION,
-            "browser_proof_note_schema": taskflow_core::task::verify::TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
-            "legacy_close_reason_text": "migration_context_not_authority"
-        },
-        "state_access": task_read_metadata_value(read_metadata),
-    })
+    crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task proof status")
+        .artifact_refs(serde_json::json!({
+            "surface": "vida task proof status",
+            "task_id": task.id,
+        }))
+        .extra_fields(serde_json::json!({
+            "task_id": task.id,
+            "task_status": task.status,
+            "configured_proof_target_count": configured_count,
+            "satisfied_count": satisfied_count,
+            "missing_count": missing_count,
+            "runtime_blocked_count": runtime_blocked_count,
+            "missing_proof": configured_count > 0 && missing_count > 0,
+            "proof_blocked_by_runtime": runtime_blocked_count > 0,
+            "proof_targets": targets,
+            "missing_targets": missing_targets,
+            "next_required_command": next_required_command,
+            "evidence_model": {
+                "configured_targets_source": "task.planner_metadata.proof_targets",
+                "satisfaction_source": "task_proof_evidence structured registry entries or schema-backed browser proof artifacts",
+                "artifact_registry": "task_notes.task_proof_evidence|task_notes.task_browser_proof",
+                "browser_proof_artifact_schema": taskflow_core::task::verify::TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION,
+                "browser_proof_note_schema": taskflow_core::task::verify::TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+                "legacy_close_reason_text": "migration_context_not_authority"
+            },
+            "state_access": task_read_metadata_value(read_metadata),
+        }))
+        .build()
+        .expect("task proof status payload should satisfy release-1 operator contract")
 }
 
 fn task_close_structured_proof_gate_payload(
@@ -1221,29 +1226,36 @@ fn task_close_structured_proof_gate_payload(
         "missing_structured_proof_evidence"
     };
     let quoted_task_id = crate::shell_quote(&task.id);
-    Some(serde_json::json!({
-        "surface": "vida task close",
-        "status": "blocked",
-        "closed": false,
-        "continuation_blocked": true,
-        "automation_blocked": false,
-        "feedback_blocked": false,
-        "blocker_codes": [blocker_code],
-        "next_actions": [
-            format!(
-                "Attach structured proof evidence for missing target(s), then rerun `{}`.",
-                operator_output::command_text::human_command(&format!(
-                    "vida task proof status {} --json",
-                    quoted_task_id
-                ))
-            )
-        ],
-        "task_id": task.id,
-        "reason": "task has configured proof targets without matching structured task_proof_evidence pass receipt",
-        "missing_targets": proof_status["missing_targets"].clone(),
-        "proof_status": proof_status,
-        "task": task,
-    }))
+    let next_actions = vec![format!(
+        "Attach structured proof evidence for missing target(s), then rerun `{}`.",
+        operator_output::command_text::human_command(&format!(
+            "vida task proof status {} --json",
+            quoted_task_id
+        ))
+    )];
+    Some(
+        crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task close")
+            .blocker_codes(vec![blocker_code.to_string()])
+            .next_actions(next_actions)
+            .artifact_refs(serde_json::json!({
+                "surface": "vida task close",
+                "task_id": task.id,
+                "proof_status_surface": "vida task proof status",
+            }))
+            .extra_fields(serde_json::json!({
+                "closed": false,
+                "continuation_blocked": true,
+                "automation_blocked": false,
+                "feedback_blocked": false,
+                "task_id": task.id,
+                "reason": "task has configured proof targets without matching structured task_proof_evidence pass receipt",
+                "missing_targets": proof_status["missing_targets"].clone(),
+                "proof_status": proof_status,
+                "task": task,
+            }))
+            .build()
+            .expect("task close structured proof gate should satisfy release-1 operator contract"),
+    )
 }
 
 fn print_task_close_structured_proof_gate_block(
@@ -5640,18 +5652,35 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
     let title = match task_create_title(&command) {
         Ok(title) => title,
         Err(error) => {
+            let surface = if ensure_existing {
+                "vida task ensure"
+            } else {
+                "vida task create"
+            };
+            let usage =
+                "vida task create <task-id> <title> OR vida task create <task-id> --title <title>";
+            let next_action = format!("Provide a non-empty title with `{usage}`.");
             if command.json {
-                crate::print_json_pretty(&serde_json::json!({
-                    "status": "blocked",
-                    "blocker_codes": ["invalid_task_title_input"],
-                    "reason": error,
-                    "usage": "vida task create <task-id> <title> OR vida task create <task-id> --title <title>",
-                }));
+                let payload =
+                    crate::release1_operator_output::Release1OperatorOutputBuilder::new(surface)
+                        .blocker_codes(vec!["invalid_task_title_input".to_string()])
+                        .next_actions(vec![next_action])
+                        .artifact_refs(serde_json::json!({
+                            "surface": surface,
+                            "task_id": command.task_id.clone(),
+                        }))
+                        .extra_fields(serde_json::json!({
+                            "reason": error,
+                            "usage": usage,
+                        }))
+                        .build()
+                        .expect(
+                            "task create title error should satisfy release-1 operator contract",
+                        );
+                crate::print_json_pretty(&payload);
             } else {
                 eprintln!("{error}");
-                eprintln!(
-                    "Usage: vida task create <task-id> <title> OR vida task create <task-id> --title <title>"
-                );
+                eprintln!("Usage: {usage}");
             }
             return ExitCode::from(2);
         }
@@ -5669,15 +5698,29 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
             )),
         );
         if command.json {
-            crate::print_json_pretty(&serde_json::json!({
-                "status": "blocked",
-                "blocker_codes": ["untrusted_create_notes_file"],
-                "surface": if ensure_existing { "vida task ensure" } else { "vida task create" },
+            let surface = if ensure_existing {
+                "vida task ensure"
+            } else {
+                "vida task create"
+            };
+            let payload = crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                surface,
+            )
+            .blocker_codes(vec!["untrusted_create_notes_file".to_string()])
+            .next_actions(vec![action.clone()])
+            .artifact_refs(serde_json::json!({
+                "surface": surface,
+                "task_id": command.task_id.clone(),
+                "rejected_option": "--notes-file",
+            }))
+            .extra_fields(serde_json::json!({
                 "rejected_option": "--notes-file",
                 "rejected_path": path,
                 "next_action": action,
-                "next_actions": [action],
-            }));
+            }))
+            .build()
+            .expect("task create notes-file rejection should satisfy release-1 operator contract");
+            crate::print_json_pretty(&payload);
         } else {
             eprintln!(
                 "Refusing --notes-file for `vida task {}`: path `{}` is outside the trusted inline intake boundary.",
@@ -5888,14 +5931,34 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
 
                 if has_conflict {
                     if command.json {
-                        crate::print_json_pretty(&serde_json::json!({
-                            "status": "blocked",
-                            "blocker_codes": ["foreign_claim_conflict_blocked"],
-                            "reason": "Another orchestrator session holds an active exclusive claim on the same task, run, conflict domain, or intersecting paths. Wait for that session to complete or explicitly reclaim/supersede the claim before continuing.",
-                            "next_action": operator_output::command_text::human_command("vida orchestrator-session show --json"),
-                            "blocking_surface": "vida orchestrator-session show",
-                            "current_session_id": current_session_id,
-                        }));
+                        let surface = if ensure_existing {
+                            "vida task ensure"
+                        } else {
+                            "vida task create"
+                        };
+                        let next_action = operator_output::command_text::human_command(
+                            "vida orchestrator-session show --json",
+                        );
+                        let payload =
+                            crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                surface,
+                            )
+                            .blocker_codes(vec!["foreign_claim_conflict_blocked".to_string()])
+                            .next_actions(vec![next_action.clone()])
+                            .artifact_refs(serde_json::json!({
+                                "surface": surface,
+                                "current_session_id": current_session_id,
+                                "blocking_surface": "vida orchestrator-session show",
+                            }))
+                            .extra_fields(serde_json::json!({
+                                "reason": "Another orchestrator session holds an active exclusive claim on the same task, run, conflict domain, or intersecting paths. Wait for that session to complete or explicitly reclaim/supersede the claim before continuing.",
+                                "next_action": next_action,
+                                "blocking_surface": "vida orchestrator-session show",
+                                "current_session_id": current_session_id,
+                            }))
+                            .build()
+                            .expect("foreign claim conflict payload should satisfy release-1 operator contract");
+                        crate::print_json_pretty(&payload);
                     } else {
                         eprintln!(
                             "Another orchestrator session holds an active exclusive claim on this work scope."
@@ -11101,14 +11164,25 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             task_close_feedback_blocker_summary(&telemetry)
                         {
                             if command.json {
-                                crate::print_json_pretty(&serde_json::json!({
-                                    "status": "blocked",
-                                    "blocker_codes": blocker_codes,
-                                    "next_actions": next_actions,
-                                    "task": preclose_task,
-                                    "host_agent_telemetry": telemetry,
-                                    "automation": null,
-                                }));
+                                let payload =
+                                    crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                        "vida task close",
+                                    )
+                                    .blocker_codes(blocker_codes)
+                                    .next_actions(next_actions)
+                                    .artifact_refs(serde_json::json!({
+                                        "surface": "vida task close",
+                                        "task_id": preclose_task.id.clone(),
+                                        "feedback_source": feedback_source,
+                                    }))
+                                    .extra_fields(serde_json::json!({
+                                        "task": preclose_task,
+                                        "host_agent_telemetry": telemetry,
+                                        "automation": null,
+                                    }))
+                                    .build()
+                                    .expect("task close feedback blocker should satisfy release-1 operator contract");
+                                crate::print_json_pretty(&payload);
                             } else {
                                 print_task_mutation(
                                     command.render,
@@ -11381,13 +11455,20 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             })
                             .unwrap_or_default();
                         if command.json {
-                            crate::print_json_pretty(&serde_json::json!({
-                                "status": "pass",
-                                "surface": "vida task reconcile-closed-runs",
-                                "summary": summary,
-                                "blocker_codes": [],
-                                "next_actions": next_actions,
-                            }));
+                            let payload =
+                                crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                    "vida task reconcile-closed-runs",
+                                )
+                                .artifact_refs(serde_json::json!({
+                                    "surface": "vida task reconcile-closed-runs",
+                                }))
+                                .extra_fields(serde_json::json!({
+                                    "summary": summary,
+                                    "recommended_next_actions": next_actions,
+                                }))
+                                .build()
+                                .expect("task reconcile closed runs payload should satisfy release-1 operator contract");
+                            crate::print_json_pretty(&payload);
                         } else {
                             print_surface_line(
                                 command.render,
@@ -11575,15 +11656,24 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 "vida task children <task-id> --json"
                             )
                         );
-                        crate::print_json_pretty(&serde_json::json!({
-                            "status": "blocked",
-                            "surface": "vida task children",
-                            "blocker_codes": ["task_tree_traversal_failed"],
-                            "task_id": command.task_id,
-                            "reason": error.to_string(),
-                            "next_action": next_action.clone(),
-                            "next_actions": [next_action],
-                        }));
+                        let payload =
+                            crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                "vida task children",
+                            )
+                            .blocker_codes(vec!["task_tree_traversal_failed".to_string()])
+                            .next_actions(vec![next_action.clone()])
+                            .artifact_refs(serde_json::json!({
+                                "surface": "vida task children",
+                                "task_id": command.task_id.clone(),
+                            }))
+                            .extra_fields(serde_json::json!({
+                                "task_id": command.task_id.clone(),
+                                "reason": error.to_string(),
+                                "next_action": next_action,
+                            }))
+                            .build()
+                            .expect("task children traversal error should satisfy release-1 operator contract");
+                        crate::print_json_pretty(&payload);
                     } else {
                         eprintln!("Failed to read task direct children: {error}");
                     }
@@ -11611,15 +11701,24 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 "vida task children <task-id> --json"
                             )
                         );
-                        crate::print_json_pretty(&serde_json::json!({
-                            "status": "blocked",
-                            "surface": "vida task tree",
-                            "blocker_codes": ["task_tree_traversal_failed"],
-                            "task_id": command.task_id,
-                            "reason": error.to_string(),
-                            "next_action": next_action.clone(),
-                            "next_actions": [next_action],
-                        }));
+                        let payload =
+                            crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                "vida task tree",
+                            )
+                            .blocker_codes(vec!["task_tree_traversal_failed".to_string()])
+                            .next_actions(vec![next_action.clone()])
+                            .artifact_refs(serde_json::json!({
+                                "surface": "vida task tree",
+                                "task_id": command.task_id.clone(),
+                            }))
+                            .extra_fields(serde_json::json!({
+                                "task_id": command.task_id.clone(),
+                                "reason": error.to_string(),
+                                "next_action": next_action,
+                            }))
+                            .build()
+                            .expect("task tree traversal error should satisfy release-1 operator contract");
+                        crate::print_json_pretty(&payload);
                     } else {
                         eprintln!("Failed to read task dependency tree: {error}");
                     }

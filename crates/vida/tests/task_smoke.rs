@@ -6959,6 +6959,8 @@ fn task_browser_proof_progress_close_golden_workflow_satisfies_schema() {
         blocked_close.0["blocker_codes"],
         serde_json::json!(["missing_structured_proof_evidence"])
     );
+    assert_shared_fields_consistency(&blocked_close.0, "browser proof close blocker");
+    assert_operator_contracts_consistency(&blocked_close.0, "browser proof close blocker");
     assert_eq!(
         blocked_close.0["proof_status"]["evidence_model"]["artifact_registry"],
         "task_notes.task_proof_evidence|task_notes.task_browser_proof"
@@ -7151,6 +7153,8 @@ fn task_close_requires_structured_proof_evidence_for_configured_targets() {
         blocked_close["blocker_codes"],
         serde_json::json!(["missing_structured_proof_evidence"])
     );
+    assert_shared_fields_consistency(&blocked_close, "structured proof close blocker");
+    assert_operator_contracts_consistency(&blocked_close, "structured proof close blocker");
     assert_eq!(
         blocked_close["missing_targets"],
         serde_json::json!([proof_target])
@@ -7298,6 +7302,8 @@ fn task_verify_runtime_proof_blocker_is_golden_close_blocker_workflow() {
         blocked_close["blocker_codes"],
         serde_json::json!(["proof_blocked_by_runtime"])
     );
+    assert_shared_fields_consistency(&blocked_close, "runtime proof close blocker");
+    assert_operator_contracts_consistency(&blocked_close, "runtime proof close blocker");
     assert_eq!(
         blocked_close["proof_status"]["proof_targets"][0]["status"],
         "blocked_by_runtime"
@@ -15172,6 +15178,15 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
         &state_dir,
     );
     assert_eq!(reconcile["status"], "pass");
+    assert_shared_fields_consistency(&reconcile, "reconcile closed runs");
+    assert_operator_contracts_consistency(&reconcile, "reconcile closed runs");
+    assert_eq!(reconcile["next_actions"], serde_json::json!([]));
+    assert!(
+        reconcile["recommended_next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()),
+        "reconcile advisory next actions should remain available outside the release-1 pass contract: {reconcile}"
+    );
     assert_eq!(
         reconcile["summary"]["reconciled_count"], 0,
         "historical reconciliation must not retire closed-task active runs without receipt-backed execution evidence: {reconcile}"
@@ -15615,7 +15630,7 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
         .expect("inspect command should render")
         .contains("vida taskflow run-graph status task-reconcile-unproven-active --json"));
     assert!(
-        reconcile["next_actions"][0]
+        reconcile["recommended_next_actions"][0]
             .as_str()
             .expect("next action should render")
             .contains("vida taskflow run-graph status task-reconcile-unproven-active --json"),
@@ -16199,7 +16214,7 @@ fn task_reconcile_closed_runs_skips_stale_route_and_non_closure_receipt_evidence
         2
     );
     assert!(
-        reconcile["next_actions"][0]
+        reconcile["recommended_next_actions"][0]
             .as_str()
             .expect("next action should render")
             .contains("vida taskflow run-graph status"),
@@ -17482,14 +17497,16 @@ fn task_close_json_surfaces_canonical_feedback_blockers_without_masking_successf
     assert_eq!(
         blocked_json["blocker_codes"],
         serde_json::json!([
-            "close_feedback_canonical_status_blocked",
-            "canonical_gate_blocked"
+            "canonical_gate_blocked",
+            "close_feedback_canonical_status_blocked"
         ])
     );
+    assert_shared_fields_consistency(&blocked_json, "canonical feedback close blocker");
+    assert_operator_contracts_consistency(&blocked_json, "canonical feedback close blocker");
     assert!(blocked_json["next_actions"][0]
         .as_str()
         .expect("next action should render")
-        .contains("Resolve the blocked condition"));
+        .contains("resolve the blocked condition"));
 
     let _ = fs::remove_dir_all(project_root);
 }
@@ -18745,6 +18762,8 @@ fn task_create_rejects_notes_file_for_local_disclosure_boundary() {
         parsed["blocker_codes"],
         serde_json::json!(["untrusted_create_notes_file"])
     );
+    assert_shared_fields_consistency(&parsed, "task create notes-file blocker");
+    assert_operator_contracts_consistency(&parsed, "task create notes-file blocker");
     assert_eq!(parsed["rejected_option"], "--notes-file");
     assert!(
         parsed["next_action"]
