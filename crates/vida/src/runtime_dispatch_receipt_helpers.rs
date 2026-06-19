@@ -461,6 +461,67 @@ mod tests {
         }
     }
 
+    #[test]
+    fn materialization_only_task_ensure_classifier_rejects_preview_as_execution() {
+        for target in ["work-pool-pack", "dev-pack"] {
+            assert!(
+                dispatch_fields_are_materialization_only_blocked_task_ensure(
+                    "blocked",
+                    Some("vida task ensure"),
+                    target,
+                    Some("internal_activation_view_only"),
+                ),
+                "blocked task ensure materialization must be classified for {target}"
+            );
+            assert!(
+                dispatch_fields_are_materialization_only_blocked_task_ensure(
+                    "blocked",
+                    Some("vida task ensure"),
+                    target,
+                    None,
+                ),
+                "legacy materialization receipts without blocker_code still remain materialization-only for {target}"
+            );
+            assert!(
+                !dispatch_fields_are_materialization_only_blocked_task_ensure(
+                    "executed",
+                    Some("vida task ensure"),
+                    target,
+                    None,
+                ),
+                "executed task ensure receipt is no longer preview/materialization-only for {target}"
+            );
+        }
+
+        assert!(
+            !dispatch_fields_are_materialization_only_blocked_task_ensure(
+                "blocked",
+                Some("vida agent-init"),
+                "dev-pack",
+                Some("internal_activation_view_only"),
+            ),
+            "agent-lane activation blockers are handled by the retry/exception gates, not the materialization-only classifier"
+        );
+        assert!(
+            !dispatch_fields_are_materialization_only_blocked_task_ensure(
+                "blocked",
+                Some("vida task ensure"),
+                "closure",
+                Some("internal_activation_view_only"),
+            ),
+            "closure receipts must not be folded into tracked-flow materialization"
+        );
+        assert!(
+            !dispatch_fields_are_materialization_only_blocked_task_ensure(
+                "blocked",
+                Some("vida task ensure"),
+                "dev-pack",
+                Some("tool_execution_failed"),
+            ),
+            "real task ensure failures are not safe to classify as materialization-only"
+        );
+    }
+
     fn ready_status_for(run_id: &str) -> crate::state_store::RunGraphStatus {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             run_id,

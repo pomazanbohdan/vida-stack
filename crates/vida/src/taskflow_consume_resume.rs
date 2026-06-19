@@ -8027,6 +8027,104 @@ mod tests {
             .expect("create TaskFlow authority");
     }
 
+    #[tokio::test]
+    async fn materialization_only_receipt_gate_rejects_preview_and_accepts_execution_evidence() {
+        let root = unique_consume_packet_test_root("vida-materialization-receipt-gate");
+        fs::create_dir_all(&root).expect("create materialization receipt gate state root");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-materialization-gate";
+        taskflow_consume_resume_test_create_authority_task(
+            &store,
+            run_id,
+            "Materialization gate task",
+            "TaskFlow authority for materialization receipt gate",
+        )
+        .await;
+
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "dev-pack", "delivery");
+        status.task_id = run_id.to_string();
+        status.active_node = "dev-pack".to_string();
+        status.next_node = Some("closure".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "dev_pack_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_closure".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "conversation_cursor".to_string();
+        status.resume_target = "dispatch.closure_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt =
+            taskflow_consume_resume_test_receipt("tracked_flow_materialization", "blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "dev-pack".to_string();
+        receipt.dispatch_surface = Some("vida task ensure".to_string());
+        receipt.dispatch_command = Some("vida task ensure dev".to_string());
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("internal_activation_view_only".to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_blockers = vec!["internal_activation_view_only".to_string()];
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist materialization-only receipt");
+
+        let error = validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect_err("materialization-only task ensure receipt must not authorize resume");
+        assert!(
+            error.contains("materialization-only dispatch receipt"),
+            "unexpected materialization-only gate error: {error}"
+        );
+        assert!(
+            error.contains("not executable continuation evidence"),
+            "operator error must distinguish preview/materialization from execution evidence: {error}"
+        );
+        let strict_error = validate_run_graph_resume_state_strict(&store, run_id)
+            .await
+            .expect_err("strict validation must share the materialization-only gate");
+        assert!(
+            strict_error.contains("materialization-only dispatch receipt"),
+            "unexpected strict materialization-only gate error: {strict_error}"
+        );
+
+        let result_path = root.join("execution-result.json");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_lane_completion_result",
+                "completed_target": "dev-pack",
+                "execution_evidence": { "status": "recorded" }
+            })
+            .to_string(),
+        )
+        .expect("write execution evidence result");
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = "lane_completed".to_string();
+        receipt.blocker_code = None;
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_blockers.clear();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist executed receipt");
+
+        validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect("receipt-backed execution evidence should authorize resume");
+        validate_run_graph_resume_state_strict(&store, run_id)
+            .await
+            .expect("strict validation should accept receipt-backed execution evidence");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn taskflow_consume_resume_receipt() {
         let mut receipt = taskflow_consume_resume_test_receipt("agent_lane", "routed");
