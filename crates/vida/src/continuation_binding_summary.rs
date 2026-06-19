@@ -471,7 +471,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
         })
         .unwrap_or_default();
     if let Some(status) = latest_run_graph_status {
-        if latest_run_graph_task_missing && terminal_retired_runtime_run {
+        if terminal_retired_runtime_run {
             return serde_json::json!({
                 "status": "idle",
                 "continuation_allowed": false,
@@ -479,21 +479,6 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                 "active_bounded_unit": serde_json::Value::Null,
                 "binding_source": serde_json::Value::Null,
                 "why_this_unit": "Latest runtime run is terminally retired and no longer binds active TaskFlow work.",
-                "primary_path": "idle_project_ready",
-                "sequential_vs_parallel_posture": "not_applicable_no_active_work",
-                "pause_boundary_gate": "allowed_no_active_work",
-                "ambiguity_reason": serde_json::Value::Null,
-                "next_actions": []
-            });
-        }
-        if latest_run_graph_task_closed && terminal_retired_runtime_run {
-            return serde_json::json!({
-                "status": "idle",
-                "continuation_allowed": false,
-                "continuation_required_now": false,
-                "active_bounded_unit": serde_json::Value::Null,
-                "binding_source": serde_json::Value::Null,
-                "why_this_unit": "Latest runtime run is terminally retired and its TaskFlow task is already closed.",
                 "primary_path": "idle_project_ready",
                 "sequential_vs_parallel_posture": "not_applicable_no_active_work",
                 "pause_boundary_gate": "allowed_no_active_work",
