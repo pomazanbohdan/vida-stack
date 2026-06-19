@@ -236,23 +236,16 @@ impl StateStore {
             .iter()
             .map(|task| task.id.clone())
             .collect::<BTreeSet<_>>();
+        let stale_task_ids = self.snapshot_replace_stale_task_ids(&keep_ids).await?;
+        self.reject_runtime_linked_snapshot_replace_stale_tasks(&stale_task_ids)
+            .await?;
 
         for task in task_records {
             self.persist_task_record(task).await?;
         }
 
-        let mut stale_removed_count = 0usize;
-        for task_id in self
-            .all_tasks()
-            .await?
-            .into_iter()
-            .map(|task| task.id)
-            .collect::<Vec<_>>()
-        {
-            if !keep_ids.contains(&task_id) {
-                self.delete_task_record(&task_id).await?;
-                stale_removed_count += 1;
-            }
+        for task_id in &stale_task_ids {
+            self.delete_task_record(task_id).await?;
         }
 
         self.record_snapshot_bridge_reconciliation_summary(
@@ -261,7 +254,7 @@ impl StateStore {
             None,
             snapshot.tasks.len(),
             snapshot.dependencies.len(),
-            stale_removed_count,
+            stale_task_ids.len(),
         )
         .await?;
         Ok(())
@@ -279,21 +272,14 @@ impl StateStore {
             .iter()
             .map(|task| task.id.clone())
             .collect::<BTreeSet<_>>();
+        let stale_task_ids = self.snapshot_replace_stale_task_ids(&keep_ids).await?;
+        self.reject_runtime_linked_snapshot_replace_stale_tasks(&stale_task_ids)
+            .await?;
         for task in task_records {
             self.persist_task_record(task).await?;
         }
-        let mut stale_removed_count = 0usize;
-        for task_id in self
-            .all_tasks()
-            .await?
-            .into_iter()
-            .map(|task| task.id)
-            .collect::<Vec<_>>()
-        {
-            if !keep_ids.contains(&task_id) {
-                self.delete_task_record(&task_id).await?;
-                stale_removed_count += 1;
-            }
+        for task_id in &stale_task_ids {
+            self.delete_task_record(task_id).await?;
         }
         self.record_snapshot_bridge_reconciliation_summary(
             "replace_snapshot",
@@ -301,10 +287,42 @@ impl StateStore {
             Some(source_path),
             snapshot.tasks.len(),
             snapshot.dependencies.len(),
-            stale_removed_count,
+            stale_task_ids.len(),
         )
         .await?;
         Ok(())
+    }
+
+    async fn snapshot_replace_stale_task_ids(
+        &self,
+        keep_ids: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>, StateStoreError> {
+        Ok(self
+            .all_tasks()
+            .await?
+            .into_iter()
+            .map(|task| task.id)
+            .filter(|task_id| !keep_ids.contains(task_id))
+            .collect())
+    }
+
+    async fn reject_runtime_linked_snapshot_replace_stale_tasks(
+        &self,
+        stale_task_ids: &BTreeSet<String>,
+    ) -> Result<(), StateStoreError> {
+        let runtime_references = self
+            .task_runtime_reference_labels_for_tasks(stale_task_ids)
+            .await?;
+        if runtime_references.is_empty() {
+            return Ok(());
+        }
+
+        Err(StateStoreError::InvalidCanonicalTaskflowExport {
+            reason: format!(
+                "snapshot replace would delete runtime-linked stale task rows; reconcile runtime references before replacing snapshot: {}",
+                format_runtime_linked_stale_task_rows(&runtime_references)
+            ),
+        })
     }
 
     pub async fn latest_task_reconciliation_summary(
@@ -436,6 +454,16 @@ impl StateStore {
             latest_recorded_at: rollup.latest_recorded_at,
         })
     }
+}
+
+fn format_runtime_linked_stale_task_rows(
+    runtime_references: &BTreeMap<String, Vec<String>>,
+) -> String {
+    runtime_references
+        .iter()
+        .map(|(task_id, references)| format!("{task_id} [{}]", references.join(", ")))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[cfg(test)]
@@ -686,6 +714,218 @@ mod tests {
             .await
             .expect("graph validation should succeed");
         assert!(graph_issues.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn replace_with_taskflow_snapshot_rejects_runtime_linked_stale_task_deletion_before_mutation(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-replace-runtime-ref-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root old\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-stale\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+        store
+            .record_task_attempt(RecordTaskAttemptRequest {
+                attempt_id: Some("attempt-stale".to_string()),
+                task_id: "vida-stale".to_string(),
+                stage_id: "stage-a".to_string(),
+                backend: "codex".to_string(),
+                model_profile: "middle".to_string(),
+                isolation: "local".to_string(),
+                freshness: None,
+                status: "running".to_string(),
+                artifact_refs: vec!["artifact://stale".to_string()],
+                consolidation_receipt_id: None,
+                selected_model_profile_readiness_status: None,
+                budget_posture: None,
+                cap_posture: None,
+                write_scope_classification: None,
+            })
+            .await
+            .expect("runtime attempt should be recorded");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-root"),
+                title: "Root new".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Epic,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse root timestamp"),
+                ),
+            }],
+            dependencies: vec![],
+        };
+
+        let error = store
+            .replace_with_taskflow_snapshot(&snapshot)
+            .await
+            .expect_err("runtime-linked stale task deletion should fail closed");
+        match error {
+            StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
+                assert!(reason.contains("runtime-linked stale task rows"));
+                assert!(reason.contains("vida-stale"));
+                assert!(reason.contains("task_attempt:attempt-stale"));
+                assert!(reason.contains("task_stage:stage-a"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let root_task = store
+            .show_task("vida-root")
+            .await
+            .expect("root should still exist after rejected replace");
+        assert_eq!(root_task.title, "Root old");
+        let stale_task = store
+            .show_task("vida-stale")
+            .await
+            .expect("runtime-linked stale task should be retained");
+        assert_eq!(stale_task.title, "Stale");
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load");
+        assert!(
+            latest.is_none(),
+            "rejected replace must not emit reconciliation receipt"
+        );
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 0);
+        assert_eq!(bridge.replace_receipts, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn replace_with_taskflow_snapshot_file_rejects_runtime_linked_stale_task_deletion_before_mutation(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-file-replace-runtime-ref-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        let snapshot_path = root.join("snapshot.json");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root old\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-stale\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+        store
+            .record_task_attempt(RecordTaskAttemptRequest {
+                attempt_id: Some("attempt-stale".to_string()),
+                task_id: "vida-stale".to_string(),
+                stage_id: "stage-a".to_string(),
+                backend: "codex".to_string(),
+                model_profile: "middle".to_string(),
+                isolation: "local".to_string(),
+                freshness: None,
+                status: "running".to_string(),
+                artifact_refs: vec!["artifact://stale".to_string()],
+                consolidation_receipt_id: None,
+                selected_model_profile_readiness_status: None,
+                budget_posture: None,
+                cap_posture: None,
+                write_scope_classification: None,
+            })
+            .await
+            .expect("runtime attempt should be recorded");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-root"),
+                title: "Root new".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Epic,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse root timestamp"),
+                ),
+            }],
+            dependencies: vec![],
+        };
+        taskflow_state_fs::write_snapshot(&snapshot_path, &snapshot).expect("write snapshot");
+
+        let error = store
+            .replace_with_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect_err("runtime-linked stale task deletion should fail closed");
+        match error {
+            StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
+                assert!(reason.contains("runtime-linked stale task rows"));
+                assert!(reason.contains("vida-stale"));
+                assert!(reason.contains("task_attempt:attempt-stale"));
+                assert!(reason.contains("task_stage:stage-a"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let root_task = store
+            .show_task("vida-root")
+            .await
+            .expect("root should still exist after rejected replace");
+        assert_eq!(root_task.title, "Root old");
+        let stale_task = store
+            .show_task("vida-stale")
+            .await
+            .expect("runtime-linked stale task should be retained");
+        assert_eq!(stale_task.title, "Stale");
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load");
+        assert!(
+            latest.is_none(),
+            "rejected replace must not emit reconciliation receipt"
+        );
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 0);
+        assert_eq!(bridge.replace_receipts, 0);
 
         let _ = fs::remove_dir_all(&root);
     }
