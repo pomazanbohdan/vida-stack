@@ -6877,6 +6877,226 @@ fn task_proof_attach_evidence_satisfies_status_and_progress() {
 }
 
 #[test]
+fn task_browser_proof_progress_close_golden_workflow_satisfies_schema() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("browser-proof-parent");
+    let task_id = unique_test_id("browser-proof-task");
+    let route = "/secure/settings";
+    let expect = "Settings Ready";
+    let proof_target = format!("vida proof browser --route {route} --expect {expect}");
+    create_epic_parent(&state_dir, &parent_id, "Browser proof parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Browser proof task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--status",
+            "in_progress",
+            "--proof-target",
+            &proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let malformed_browser_note = format!(
+        "task_browser_proof:\n  proof_target: {proof_target}\n  command: {proof_target}\n  route: {route}\n  result: pass"
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--notes",
+            &malformed_browser_note,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let malformed_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(malformed_status["missing_count"], 1);
+    assert_eq!(malformed_status["satisfied_count"], 0);
+    assert_eq!(
+        malformed_status["proof_targets"][0]["evidence_detail"],
+        "no matching structured proof evidence found"
+    );
+    assert_eq!(
+        malformed_status["evidence_model"]["browser_proof_note_schema"],
+        "task_browser_proof.v1"
+    );
+
+    let blocked_close = run_command_json_allow_failure(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Browser proof target passed in plain text only",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!blocked_close.1);
+    assert_eq!(blocked_close.0["surface"], "vida task close");
+    assert_eq!(blocked_close.0["status"], "blocked");
+    assert_eq!(
+        blocked_close.0["blocker_codes"],
+        serde_json::json!(["missing_structured_proof_evidence"])
+    );
+    assert_eq!(
+        blocked_close.0["proof_status"]["evidence_model"]["artifact_registry"],
+        "task_notes.task_proof_evidence|task_notes.task_browser_proof"
+    );
+
+    let failed_browser = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-browser",
+            &task_id,
+            "--route",
+            route,
+            "--expect",
+            expect,
+            "--result",
+            "fail",
+            "--screenshot",
+            "artifacts/browser-fail.png",
+            "--evidence",
+            "page text mentioned pass but assertion failed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(failed_browser["status"], "pass");
+    assert_eq!(
+        failed_browser["artifact"]["schema_version"],
+        "browser_proof_artifact.v1"
+    );
+    assert_eq!(failed_browser["proof_target"], proof_target);
+    let failed_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(failed_status["missing_count"], 1);
+    assert_eq!(failed_status["satisfied_count"], 0);
+
+    let passed_browser = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-browser",
+            &task_id,
+            "--route",
+            route,
+            "--expect",
+            expect,
+            "--result",
+            "pass",
+            "--screenshot",
+            "artifacts/browser-pass.png",
+            "--evidence",
+            "visible heading matched expected text",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(passed_browser["surface"], "vida task proof attach-browser");
+    assert_eq!(passed_browser["status"], "pass");
+    assert_eq!(passed_browser["proof_target"], proof_target);
+    assert_eq!(
+        passed_browser["artifact"]["schema_version"],
+        "browser_proof_artifact.v1"
+    );
+    assert_eq!(passed_browser["artifact"]["proof_target"], proof_target);
+    assert_eq!(passed_browser["artifact"]["result"], "pass");
+    assert_eq!(
+        passed_browser["artifact"]["screenshot"],
+        "artifacts/browser-pass.png"
+    );
+    let task_after_browser = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    assert_eq!(
+        task_after_browser["task"]["planner_metadata"]["proof_targets"],
+        serde_json::json!([proof_target])
+    );
+    assert!(task_after_browser["task"]["notes"]
+        .as_str()
+        .expect("task notes should be present")
+        .contains("schema_version: task_browser_proof.v1"));
+
+    let satisfied_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(satisfied_status["satisfied_count"], 1);
+    assert_eq!(satisfied_status["missing_count"], 0);
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["evidence_source"],
+        "task_proof_evidence_registry"
+    );
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["evidence_detail"],
+        "structured browser proof evidence reports result pass"
+    );
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["artifact_status"],
+        "recorded"
+    );
+    assert_eq!(
+        satisfied_status["evidence_model"]["browser_proof_artifact_schema"],
+        "browser_proof_artifact.v1"
+    );
+    assert_eq!(
+        satisfied_status["evidence_model"]["browser_proof_note_schema"],
+        "task_browser_proof.v1"
+    );
+
+    let default_status = run_and_assert_success(&["task", "proof", "status", &task_id], &state_dir);
+    assert!(default_status.starts_with("vida task proof status\n"));
+    assert!(default_status.contains("satisfied: 1"));
+    assert!(default_status.contains("missing: 0"));
+    assert!(!default_status.trim_start().starts_with('{'));
+
+    let satisfied_progress =
+        run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(satisfied_progress["progress"]["missing_proof"], false);
+    assert_eq!(satisfied_progress["progress"]["ready_for_close"], true);
+    assert_eq!(
+        satisfied_progress["progress"]["closure_candidate_state"],
+        "leaf_ready_for_close"
+    );
+
+    let allowed_close = run_command_json(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Schema-backed browser proof evidence recorded",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(allowed_close["status"], "pass");
+    assert_eq!(allowed_close["closed"], true);
+    assert_eq!(allowed_close["task"]["status"], "closed");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_close_requires_structured_proof_evidence_for_configured_targets() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -6974,6 +7194,114 @@ fn task_close_requires_structured_proof_evidence_for_configured_targets() {
     assert_eq!(allowed_close["status"], "pass");
     assert_eq!(allowed_close["closed"], true);
     assert_eq!(allowed_close["task"]["status"], "closed");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_verify_runtime_proof_blocker_is_golden_close_blocker_workflow() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("runtime-proof-parent");
+    let task_id = unique_test_id("runtime-proof-task");
+    let proof_target = "browser proof unavailable";
+    create_epic_parent(&state_dir, &parent_id, "Runtime proof parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Runtime proof task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            &parent_id,
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let receipt = run_command_json(
+        &[
+            "task",
+            "verify",
+            &task_id,
+            "--source-fixed",
+            "--tests-green",
+            "--proof-blocked",
+            "--proof-blocker",
+            proof_target,
+            "--evidence",
+            "vida proof browser returned browser_automation_unavailable",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(receipt["surface"], "vida task verify");
+    assert_eq!(receipt["status"], "pass");
+    assert_eq!(receipt["proof_blocked"], true);
+    assert_eq!(receipt["proof_blocked_by_runtime"], true);
+    assert_eq!(receipt["proof_blocker"], proof_target);
+    let labels = require_json_string_array(&receipt["task"]["labels"], "verify labels");
+    for label in ["source-fixed", "tests-green", "proof-blocked-by-runtime"] {
+        assert!(
+            labels.contains(&label.to_string()),
+            "verify receipt should include canonical label `{label}`: {labels:?}"
+        );
+    }
+
+    let proof_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(proof_status["satisfied_count"], 0);
+    assert_eq!(proof_status["missing_count"], 1);
+    assert_eq!(proof_status["runtime_blocked_count"], 1);
+    assert_eq!(proof_status["proof_blocked_by_runtime"], true);
+    assert_eq!(
+        proof_status["proof_targets"][0]["status"],
+        "blocked_by_runtime"
+    );
+    assert_eq!(
+        proof_status["proof_targets"][0]["artifact_status"],
+        "not_recorded"
+    );
+
+    let progress = run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(progress["progress"]["missing_proof"], false);
+    assert_eq!(progress["progress"]["proof_blocked_by_runtime"], true);
+    assert_eq!(progress["progress"]["blocked_by_runtime"], true);
+    assert_eq!(progress["progress"]["ready_for_close"], false);
+    assert_eq!(
+        progress["progress"]["closure_candidate_state"],
+        "leaf_proof_blocked_by_runtime"
+    );
+
+    let (blocked_close, close_succeeded) = run_command_json_allow_failure(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "runtime proof blocker still active",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!close_succeeded);
+    assert_eq!(blocked_close["surface"], "vida task close");
+    assert_eq!(blocked_close["status"], "blocked");
+    assert_eq!(blocked_close["closed"], false);
+    assert_eq!(
+        blocked_close["blocker_codes"],
+        serde_json::json!(["proof_blocked_by_runtime"])
+    );
+    assert_eq!(
+        blocked_close["proof_status"]["proof_targets"][0]["status"],
+        "blocked_by_runtime"
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }
