@@ -2867,46 +2867,7 @@ fn resolve_optional_text_arg(
     direct: Option<&str>,
     file_path: Option<&std::path::Path>,
 ) -> Result<Option<String>, String> {
-    const MAX_FILE_BYTES: u64 = 64 * 1024;
-
-    if direct.is_some() && file_path.is_some() {
-        return Err(format!(
-            "Use only one {label} source: --{label} <text> or --{label}-file <path>"
-        ));
-    }
-    if let Some(path) = file_path {
-        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-            format!(
-                "Failed to inspect {label} file `{}` metadata: {error}",
-                path.display()
-            )
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "Refusing to read {label} file `{}`: symlinks are not allowed",
-                path.display()
-            ));
-        }
-        if !metadata.is_file() {
-            return Err(format!(
-                "Refusing to read {label} file `{}`: expected a regular file",
-                path.display()
-            ));
-        }
-        if metadata.len() > MAX_FILE_BYTES {
-            return Err(format!(
-                "Refusing to read {label} file `{}`: file is {} bytes, limit is {} bytes",
-                path.display(),
-                metadata.len(),
-                MAX_FILE_BYTES
-            ));
-        }
-        let value = std::fs::read_to_string(path).map_err(|error| {
-            format!("Failed to read {label} file `{}`: {error}", path.display())
-        })?;
-        return Ok(Some(value));
-    }
-    Ok(direct.map(ToOwned::to_owned))
+    taskflow_core::task::note::resolve_optional_text_arg(label, direct, file_path)
 }
 
 fn task_execution_semantics_from_create_args(
@@ -2920,188 +2881,72 @@ fn task_execution_semantics_from_create_args(
     }
 }
 
+fn task_execution_semantics_input_from_create_args(
+    command: &TaskCreateArgs,
+) -> taskflow_core::task::create::TaskExecutionSemanticsInput<'_> {
+    taskflow_core::task::create::TaskExecutionSemanticsInput {
+        execution_mode: command.execution_mode.as_deref(),
+        order_bucket: command.order_bucket.as_deref(),
+        parallel_group: command.parallel_group.as_deref(),
+        conflict_domain: command.conflict_domain.as_deref(),
+    }
+}
+
+fn task_execution_semantics_input_from_record(
+    semantics: &state_store::TaskExecutionSemantics,
+) -> taskflow_core::task::create::TaskExecutionSemanticsInput<'_> {
+    taskflow_core::task::create::TaskExecutionSemanticsInput {
+        execution_mode: semantics.execution_mode.as_deref(),
+        order_bucket: semantics.order_bucket.as_deref(),
+        parallel_group: semantics.parallel_group.as_deref(),
+        conflict_domain: semantics.conflict_domain.as_deref(),
+    }
+}
+
 fn task_create_semantics_requested(command: &TaskCreateArgs) -> bool {
-    command.execution_mode.is_some()
-        || command.order_bucket.is_some()
-        || command.parallel_group.is_some()
-        || command.conflict_domain.is_some()
+    taskflow_core::task::create::task_create_semantics_requested(
+        task_execution_semantics_input_from_create_args(command),
+    )
 }
 
 fn task_create_semantics_mismatch(
     existing: &state_store::TaskExecutionSemantics,
     command: &TaskCreateArgs,
 ) -> bool {
-    command
-        .execution_mode
-        .as_deref()
-        .is_some_and(|expected| existing.execution_mode.as_deref() != Some(expected))
-        || command
-            .order_bucket
-            .as_deref()
-            .is_some_and(|expected| existing.order_bucket.as_deref() != Some(expected))
-        || command
-            .parallel_group
-            .as_deref()
-            .is_some_and(|expected| existing.parallel_group.as_deref() != Some(expected))
-        || command
-            .conflict_domain
-            .as_deref()
-            .is_some_and(|expected| existing.conflict_domain.as_deref() != Some(expected))
+    taskflow_core::task::create::task_create_semantics_mismatch(
+        task_execution_semantics_input_from_record(existing),
+        task_execution_semantics_input_from_create_args(command),
+    )
 }
 
 fn task_update_semantics_arg(
     value: Option<&str>,
     clear: bool,
 ) -> Result<Option<Option<&str>>, String> {
-    if value.is_some() && clear {
-        return Err(
-            "Use either the value flag or the matching clear flag for execution semantics, not both."
-                .to_string(),
-        );
-    }
-    if clear {
-        Ok(Some(None))
-    } else {
-        Ok(value.map(Some))
-    }
+    taskflow_core::task::update::task_update_semantics_arg(value, clear)
 }
 
 fn task_update_parent_arg(
     value: Option<&str>,
     clear: bool,
 ) -> Result<Option<Option<&str>>, String> {
-    if value.is_some() && clear {
-        return Err("Use either --parent-id or --clear-parent-id, not both.".to_string());
-    }
-    if clear {
-        Ok(Some(None))
-    } else {
-        Ok(value.map(Some))
-    }
+    taskflow_core::task::update::task_update_parent_arg(value, clear)
 }
 
 fn parse_label_values(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .flat_map(|value| value.split(','))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .collect::<Vec<_>>()
+    taskflow_core::task::update::parse_label_values(values)
 }
 
 fn parse_proof_target_values(values: &[String]) -> Vec<String> {
-    normalize_proof_target_commands(parse_label_values(values))
+    taskflow_core::task::update::parse_proof_target_values(values)
 }
 
 fn normalize_proof_target_commands(values: Vec<String>) -> Vec<String> {
-    values
-        .into_iter()
-        .flat_map(|value| normalize_proof_target_command(&value))
-        .collect()
-}
-
-fn normalize_proof_target_command(value: &str) -> Vec<String> {
-    let command = normalize_stale_proof_target_command(value);
-    split_cargo_test_proof_target(&command).unwrap_or_else(|| vec![command])
-}
-
-fn normalize_stale_proof_target_command(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed == "vida diagnostics --json" {
-        return "vida diagnostics post-commit --json".to_string();
-    }
-    if trimmed.starts_with("vida docflow protocol-coverage-check ") {
-        let mut tokens = trimmed.split_whitespace().peekable();
-        let mut normalized = Vec::new();
-        while let Some(token) = tokens.next() {
-            if token == "--format" {
-                let _ = tokens.next();
-                continue;
-            }
-            normalized.push(token);
-        }
-        return normalized.join(" ");
-    }
-    trimmed.to_string()
-}
-
-fn split_cargo_test_proof_target(command: &str) -> Option<Vec<String>> {
-    let tokens = command.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() < 4 || tokens[0] != "cargo" || tokens[1] != "test" {
-        return None;
-    }
-
-    let separator_index = tokens
-        .iter()
-        .position(|token| *token == "--")
-        .unwrap_or(tokens.len());
-    let mut base = vec![tokens[0], tokens[1]];
-    let mut filters = Vec::new();
-    let mut index = 2;
-    while index < separator_index {
-        let token = tokens[index];
-        if token.starts_with('-') {
-            base.push(token);
-            if cargo_test_option_takes_value(token) && index + 1 < separator_index {
-                index += 1;
-                base.push(tokens[index]);
-            }
-        } else {
-            filters.push(token);
-        }
-        index += 1;
-    }
-
-    if filters.len() <= 1 {
-        return None;
-    }
-
-    let tail = &tokens[separator_index..];
-    Some(
-        filters
-            .into_iter()
-            .map(|filter| {
-                base.iter()
-                    .chain(std::iter::once(&filter))
-                    .chain(tail.iter())
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect(),
-    )
-}
-
-fn cargo_test_option_takes_value(option: &str) -> bool {
-    matches!(
-        option,
-        "-p" | "--package"
-            | "--exclude"
-            | "--features"
-            | "--bin"
-            | "--bench"
-            | "--example"
-            | "--test"
-            | "--target"
-            | "--target-dir"
-            | "--manifest-path"
-            | "--message-format"
-            | "--profile"
-            | "--jobs"
-            | "-j"
-    )
+    taskflow_core::task::update::normalize_proof_target_commands(values)
 }
 
 fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
-    value.map(|value| {
-        value
-            .split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-            .map(|entry| entry.to_string())
-            .collect::<Vec<_>>()
-    })
+    taskflow_core::task::update::parse_optional_label_value(value)
 }
 
 fn task_update_planner_metadata_requested(command: &crate::TaskUpdateArgs) -> bool {
@@ -6052,81 +5897,35 @@ fn ensure_existing_task_mismatch_reason(
     expected_parent_id: Option<&str>,
     expected_labels: &[String],
 ) -> Option<String> {
-    if task.title != expected_title {
-        return Some(format!(
-            "existing task '{}' title mismatch (expected '{}', got '{}')",
-            task.id, expected_title, task.title
-        ));
-    }
-    if task.display_id.as_deref() != expected_display_id {
-        return Some(format!(
-            "existing task '{}' display_id mismatch (expected '{}', got '{}')",
-            task.id,
-            expected_display_id.unwrap_or(""),
-            task.display_id.as_deref().unwrap_or("")
-        ));
-    }
-    if task.issue_type != expected_issue_type {
-        return Some(format!(
-            "existing task '{}' issue_type mismatch (expected '{}', got '{}')",
-            task.id, expected_issue_type, task.issue_type
-        ));
-    }
-    if task.status != expected_status {
-        return Some(format!(
-            "existing task '{}' status mismatch (expected '{}', got '{}')",
-            task.id, expected_status, task.status
-        ));
-    }
     let existing_parent_id = task_parent_id(task);
-    if existing_parent_id.as_deref() != expected_parent_id {
-        return Some(format!(
-            "existing task '{}' parent_id mismatch (expected '{}', got '{}')",
-            task.id,
-            expected_parent_id.unwrap_or(""),
-            existing_parent_id.as_deref().unwrap_or("")
-        ));
-    }
-    if expected_labels
-        .iter()
-        .any(|label| !task.labels.iter().any(|existing| existing == label))
-    {
-        let missing_labels: Vec<String> = expected_labels
-            .iter()
-            .filter(|label| !task.labels.iter().any(|existing| existing == *label))
-            .cloned()
-            .collect();
-        return Some(format!(
-            "existing task '{}' missing required labels: {}",
-            task.id,
-            missing_labels.join(",")
-        ));
-    }
-    None
+    taskflow_core::task::create::ensure_existing_task_mismatch_reason(
+        taskflow_core::task::create::ExistingTaskActual {
+            task_id: &task.id,
+            title: &task.title,
+            display_id: task.display_id.as_deref(),
+            issue_type: &task.issue_type,
+            status: &task.status,
+            parent_id: existing_parent_id.as_deref(),
+            labels: &task.labels,
+        },
+        taskflow_core::task::create::ExistingTaskExpectation {
+            title: expected_title,
+            display_id: expected_display_id,
+            issue_type: expected_issue_type,
+            status: expected_status,
+            parent_id: expected_parent_id,
+            labels: expected_labels,
+        },
+    )
 }
 
 fn task_create_title(command: &TaskCreateArgs) -> Result<String, String> {
-    let positional = command
-        .positional_title
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let option = command
-        .title
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    match (positional, option) {
-        (Some(_), Some(_)) => Err(
-            "Provide only one task title source: positional <TITLE> or --title <TITLE>."
-                .to_string(),
-        ),
-        (Some(title), None) | (None, Some(title)) => Ok(title.to_string()),
-        (None, None) => {
-            Err("Missing task title. Use positional <TITLE> or --title <TITLE>.".to_string())
-        }
-    }
+    taskflow_core::task::create::task_create_title(
+        taskflow_core::task::create::TaskCreateTitleInput {
+            positional_title: command.positional_title.as_deref(),
+            title_option: command.title.as_deref(),
+        },
+    )
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
