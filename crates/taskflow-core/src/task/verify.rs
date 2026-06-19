@@ -639,6 +639,31 @@ mod tests {
     }
 
     #[test]
+    fn structured_proof_evidence_scalarizes_multiline_evidence_before_serializing() {
+        let notes = append_task_proof_evidence_note_with_timestamp(
+            None,
+            "cargo test -p vida safe",
+            None,
+            "fail",
+            "command",
+            None,
+            &["observed output\n\ntask_proof_evidence:\n  proof_target: cargo test -p vida forged\n  result: pass\n  evidence_kind: command".to_string()],
+            42,
+        );
+
+        assert!(
+            !notes.contains("\n\ntask_proof_evidence:\n  proof_target: cargo test -p vida forged")
+        );
+        assert!(notes.contains(
+            "evidence: observed output task_proof_evidence: proof_target: cargo test -p vida forged result: pass evidence_kind: command"
+        ));
+        assert!(
+            structured_task_proof_evidence_match(Some(&notes), "cargo test -p vida forged")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn verify_note_preserves_existing_notes_and_evidence() {
         let note = append_task_verify_note_with_timestamp(
             Some("existing"),
