@@ -82,6 +82,9 @@ async fn fail_fast_state_store_open(
     state_root: std::path::PathBuf,
     label: &str,
 ) -> Result<super::StateStore, String> {
+    if authoritative_datastore_lock_is_held(&state_root)? {
+        return Err(state_store_locked_error(label));
+    }
     match tokio::time::timeout(
         CONSUME_RESUME_LOCK_TIMEOUT,
         super::StateStore::open_existing(state_root),
@@ -117,9 +120,7 @@ async fn fail_fast_state_store_open_read_only_with_timeout(
     if timeout <= CONSUME_RESUME_SHORT_LOCK_PROBE_TIMEOUT
         && authoritative_datastore_lock_is_held(&state_root)?
     {
-        return Err(format!(
-            "consume continue failed fast: {label}: Database at LOCK is already locked by another process"
-        ));
+        return Err(state_store_locked_error(label));
     }
     match tokio::time::timeout(
         timeout,
@@ -134,6 +135,12 @@ async fn fail_fast_state_store_open_read_only_with_timeout(
             "consume continue failed fast: {label} timed out while waiting for authoritative datastore lock"
         )),
     }
+}
+
+fn state_store_locked_error(label: &str) -> String {
+    format!(
+        "consume continue failed fast: {label}: Database at LOCK is already locked by another process"
+    )
 }
 
 fn authoritative_datastore_lock_is_held(state_root: &Path) -> Result<bool, String> {

@@ -6874,6 +6874,79 @@ fn taskflow_consume_continue_default_output_is_compact_toon() {
 }
 
 #[test]
+fn taskflow_consume_continue_json_fails_closed_under_state_lock_without_snapshot_fallback_mutation()
+{
+    let (project_root, state_dir) =
+        bootstrap_project_runtime("continue-lock-fallback", "Continue Lock Fallback");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe consume continue lock fallback",
+    );
+    assert!(
+        !initial.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+
+    let initial_json: serde_json::Value =
+        serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
+    let snapshot_path = initial_json["snapshot_path"]
+        .as_str()
+        .expect("snapshot path should be present");
+    let snapshot_before = fs::read_to_string(snapshot_path).expect("snapshot should read");
+    let held_state_lock = StateStoreLockGuard::acquire(&state_dir);
+
+    let resumed = project_bound_taskflow_consume_continue_once_with_timeout(
+        &project_root,
+        &state_dir,
+        &["--json"],
+    );
+
+    drop(held_state_lock);
+
+    assert!(
+        !resumed.status.success(),
+        "consume continue must fail closed while authoritative state is locked"
+    );
+    assert_ne!(
+        resumed.status.code(),
+        Some(124),
+        "consume continue timed out instead of returning state-access blocker json: stdout={} stderr={}",
+        String::from_utf8_lossy(&resumed.stdout),
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let resumed_json: serde_json::Value =
+        serde_json::from_slice(&resumed.stdout).expect("consume continue json should parse");
+    assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
+    assert_eq!(resumed_json["status"], "blocked");
+    let blocker_codes = resumed_json["blocker_codes"]
+        .as_array()
+        .expect("blocker_codes should render");
+    assert!(
+        blocker_codes
+            .iter()
+            .any(|code| code == "authoritative_state_store_locked"),
+        "{resumed_json}"
+    );
+    assert_eq!(
+        resumed_json["state_access"]["snapshot_fallback"]["status"],
+        "not_attempted"
+    );
+    assert_eq!(
+        resumed_json["state_access"]["snapshot_fallback"]["reason"],
+        "authoritative_resume_requires_state_store_open"
+    );
+    assert_eq!(
+        fs::read_to_string(snapshot_path).expect("snapshot should still read"),
+        snapshot_before,
+        "consume continue must not mutate or trust snapshot fallback while state access is blocked"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
 fn agent_init_fails_closed_for_dispatch_packet_missing_template_required_fields() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("dispatch-packet-validation", "Dispatch Packet Validation");
