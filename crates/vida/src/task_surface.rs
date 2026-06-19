@@ -21,8 +21,9 @@ use taskflow_core::task::progress::{
     TaskProgressSummary as CoreTaskProgressSummary,
 };
 use taskflow_core::task::verify::{
-    append_task_verify_note, normalized_task_verify_evidence, task_reports_runtime_proof_blocker,
-    task_verify_labels,
+    all_structured_task_proof_targets_satisfied, append_task_proof_evidence_note,
+    append_task_verify_note, normalized_task_verify_evidence, structured_task_proof_evidence_match,
+    task_reports_runtime_proof_blocker, task_verify_labels,
 };
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -848,6 +849,7 @@ struct TaskProofTargetStatus {
     evidence_source: String,
     evidence_detail: String,
     artifact_status: String,
+    legacy_close_reason_match: bool,
     next_action: String,
 }
 
@@ -862,6 +864,20 @@ struct TaskProofAttachBrowserReceipt {
     screenshot: Option<String>,
     evidence: Vec<String>,
     proof_target: String,
+    notes_appended: bool,
+    task: state_store::TaskRecord,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskProofAttachEvidenceReceipt {
+    surface: &'static str,
+    status: &'static str,
+    task_id: String,
+    proof_target: String,
+    command: String,
+    result: String,
+    artifact_ref: Option<String>,
+    evidence: Vec<String>,
     notes_appended: bool,
     task: state_store::TaskRecord,
 }
@@ -1066,82 +1082,20 @@ fn browser_proof_target(route: &str, expect: Option<&str>) -> String {
     }
 }
 
-fn task_notes_have_browser_proof_evidence(task: &state_store::TaskRecord, target: &str) -> bool {
-    let Some(notes) = task.notes.as_deref() else {
-        return false;
-    };
-    let target = target.trim();
-    if target.is_empty() {
-        return false;
-    }
-
-    let mut in_browser_proof_record = false;
-    let mut proof_target: Option<&str> = None;
-    let mut command: Option<&str> = None;
-    let mut result: Option<&str> = None;
-
-    for line in notes.lines() {
-        let trimmed = line.trim();
-        if trimmed == "task_browser_proof:" {
-            if browser_proof_record_satisfies_target(proof_target, command, result, target) {
-                return true;
-            }
-            in_browser_proof_record = true;
-            proof_target = None;
-            command = None;
-            result = None;
-            continue;
-        }
-
-        if !in_browser_proof_record {
-            continue;
-        }
-
-        let field = line.trim_start();
-        if proof_target.is_none() {
-            proof_target = field.strip_prefix("proof_target:").map(str::trim);
-        }
-        if command.is_none() {
-            command = field.strip_prefix("command:").map(str::trim);
-        }
-        if result.is_none() {
-            result = field.strip_prefix("result:").map(str::trim);
-        }
-    }
-
-    browser_proof_record_satisfies_target(proof_target, command, result, target)
-}
-
-fn browser_proof_record_satisfies_target(
-    proof_target: Option<&str>,
-    command: Option<&str>,
-    result: Option<&str>,
-    target: &str,
-) -> bool {
-    result == Some("pass") && (proof_target == Some(target) || command == Some(target))
-}
-
 fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
     let target = target.trim().to_string();
     let runtime_blocked =
         task_reports_runtime_proof_blocker(&task.labels, task.close_reason.as_deref());
-    if proof_target_has_close_reason_evidence(task, &target) {
+    let legacy_close_reason_match = proof_target_has_close_reason_evidence(task, &target);
+    if let Some(proof_match) = structured_task_proof_evidence_match(task.notes.as_deref(), &target)
+    {
         return TaskProofTargetStatus {
             target,
             status: "satisfied".to_string(),
-            evidence_source: "close_reason".to_string(),
-            evidence_detail: "target text is present in task close_reason".to_string(),
-            artifact_status: "not_recorded".to_string(),
-            next_action: "No action for this proof target.".to_string(),
-        };
-    }
-    if task_notes_have_browser_proof_evidence(task, &target) {
-        return TaskProofTargetStatus {
-            target,
-            status: "satisfied".to_string(),
-            evidence_source: "task_browser_proof_note".to_string(),
-            evidence_detail: "attached browser proof note reports result pass".to_string(),
-            artifact_status: "recorded_in_task_notes".to_string(),
+            evidence_source: proof_match.evidence_source,
+            evidence_detail: proof_match.evidence_detail,
+            artifact_status: proof_match.artifact_status,
+            legacy_close_reason_match,
             next_action: "No action for this proof target.".to_string(),
         };
     }
@@ -1152,6 +1106,7 @@ fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> Tas
             evidence_source: "close_reason".to_string(),
             evidence_detail: "task close_reason reports runtime proof blocker context".to_string(),
             artifact_status: "not_recorded".to_string(),
+            legacy_close_reason_match,
             next_action: format!(
                 "Resolve runtime proof blocker, then record evidence for proof target `{}`.",
                 target
@@ -1167,8 +1122,14 @@ fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> Tas
         target: target.clone(),
         status: status.to_string(),
         evidence_source: "planner_metadata.proof_targets".to_string(),
-        evidence_detail: "no matching close_reason or structured proof artifact found".to_string(),
+        evidence_detail: if legacy_close_reason_match {
+            "legacy close_reason text matches target, but structured proof evidence is required"
+                .to_string()
+        } else {
+            "no matching structured proof evidence found".to_string()
+        },
         artifact_status: "not_recorded".to_string(),
+        legacy_close_reason_match,
         next_action: format!(
             "Run or attach evidence for proof target `{}`, then close or update `{}`.",
             target, task.id
@@ -1214,7 +1175,8 @@ fn task_proof_status_payload(
             ))
         )
     } else if missing_count == 0 {
-        "No proof action required; all configured proof targets have close evidence.".to_string()
+        "No proof action required; all configured proof targets have structured proof evidence."
+            .to_string()
     } else {
         format!(
             "Run or attach missing proof evidence, then inspect again with `{}`.",
@@ -1238,11 +1200,12 @@ fn task_proof_status_payload(
         "proof_targets": targets,
         "missing_targets": missing_targets,
         "next_required_command": next_required_command,
-            "evidence_model": {
-                "configured_targets_source": "task.planner_metadata.proof_targets",
-                "satisfaction_source": "task.close_reason substring match or task_browser_proof note",
-                "artifact_registry": "task_notes.task_browser_proof"
-            },
+        "evidence_model": {
+            "configured_targets_source": "task.planner_metadata.proof_targets",
+            "satisfaction_source": "task_proof_evidence structured registry entries",
+            "artifact_registry": "task_notes.task_proof_evidence",
+            "legacy_close_reason_text": "migration_context_not_authority"
+        },
         "state_access": task_read_metadata_value(read_metadata),
     })
 }
@@ -1722,6 +1685,26 @@ fn print_task_browser_proof_receipt(
     print_surface_line(render, "proof target", &receipt.proof_target);
     if let Some(screenshot) = receipt.screenshot.as_deref() {
         print_surface_line(render, "screenshot", screenshot);
+    }
+}
+
+fn print_task_evidence_proof_receipt(
+    render: RenderMode,
+    receipt: &TaskProofAttachEvidenceReceipt,
+    as_json: bool,
+) {
+    if as_json {
+        let payload = serde_json::to_value(receipt)
+            .expect("task proof evidence receipt should serialize to JSON");
+        crate::print_json_pretty(&payload);
+        return;
+    }
+    print_task_mutation(render, receipt.surface, &receipt.task, false);
+    print_surface_line(render, "result", &receipt.result);
+    print_surface_line(render, "proof target", &receipt.proof_target);
+    print_surface_line(render, "command", &receipt.command);
+    if let Some(artifact_ref) = receipt.artifact_ref.as_deref() {
+        print_surface_line(render, "artifact", artifact_ref);
     }
 }
 
@@ -2526,6 +2509,10 @@ fn task_progress_row_from_record(task: &state_store::TaskRecord) -> TaskProgress
         priority: task.priority,
         labels: task.labels.clone(),
         proof_targets: task.planner_metadata.proof_targets.clone(),
+        proof_satisfied: all_structured_task_proof_targets_satisfied(
+            task.notes.as_deref(),
+            &task.planner_metadata.proof_targets,
+        ),
         parent_id: task_parent_id(task),
     }
 }
@@ -9950,12 +9937,21 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         };
                         let proof_target = browser_proof_target(route, command.expect.as_deref());
                         let evidence = normalized_task_verify_evidence(&command.evidence);
-                        let notes = append_task_browser_proof_note(
+                        let browser_notes = append_task_browser_proof_note(
                             existing.notes.as_deref(),
                             &proof_target,
                             route,
                             &result,
                             command.expect.as_deref(),
+                            command.screenshot.as_deref(),
+                            &evidence,
+                        );
+                        let notes = append_task_proof_evidence_note(
+                            Some(&browser_notes),
+                            &proof_target,
+                            Some(&proof_target),
+                            &result,
+                            "browser",
                             command.screenshot.as_deref(),
                             &evidence,
                         );
@@ -10014,6 +10010,115 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             }
                             Err(error) => {
                                 eprintln!("Failed to attach browser proof to task: {error}");
+                                ExitCode::from(1)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to open authoritative state store: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
+            TaskProofCommand::AttachEvidence(command) => {
+                let proof_target = command.proof_target.trim();
+                if proof_target.is_empty() {
+                    eprintln!("--proof-target cannot be empty");
+                    return ExitCode::from(2);
+                }
+                let result = match normalize_browser_proof_result(&command.result) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
+                };
+                let evidence = normalized_task_verify_evidence(&command.evidence);
+                let command_text = command
+                    .command
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(proof_target)
+                    .to_string();
+                let state_dir = command
+                    .state_dir
+                    .clone()
+                    .unwrap_or_else(state_store::default_state_dir);
+                match StateStore::open_existing(state_dir).await {
+                    Ok(store) => {
+                        let existing = match store.show_task(&command.task_id).await {
+                            Ok(task) => task,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read task before proof evidence attachment: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        let notes = append_task_proof_evidence_note(
+                            existing.notes.as_deref(),
+                            proof_target,
+                            Some(&command_text),
+                            &result,
+                            "command",
+                            command.artifact_ref.as_deref(),
+                            &evidence,
+                        );
+                        let planner_metadata = task_browser_proof_planner_metadata(
+                            &existing.planner_metadata,
+                            proof_target,
+                        );
+                        match store
+                            .update_task(state_store::UpdateTaskRequest {
+                                task_id: &command.task_id,
+                                title: None,
+                                status: None,
+                                priority: None,
+                                notes: Some(&notes),
+                                description: None,
+                                parent_id: None,
+                                add_labels: &[],
+                                remove_labels: &[],
+                                set_labels: None,
+                                execution_mode: None,
+                                order_bucket: None,
+                                parallel_group: None,
+                                conflict_domain: None,
+                                planner_metadata: Some(planner_metadata),
+                            })
+                            .await
+                        {
+                            Ok(task) => {
+                                if let Err(code) = refresh_task_snapshot_after_mutation(
+                                    &store,
+                                    "vida task proof attach-evidence",
+                                )
+                                .await
+                                {
+                                    return code;
+                                }
+                                let receipt = TaskProofAttachEvidenceReceipt {
+                                    surface: "vida task proof attach-evidence",
+                                    status: task_json_success_status(),
+                                    task_id: task.id.clone(),
+                                    proof_target: proof_target.to_string(),
+                                    command: command_text,
+                                    result,
+                                    artifact_ref: command.artifact_ref,
+                                    evidence,
+                                    notes_appended: true,
+                                    task,
+                                };
+                                print_task_evidence_proof_receipt(
+                                    command.render,
+                                    &receipt,
+                                    command.json,
+                                );
+                                ExitCode::SUCCESS
+                            }
+                            Err(error) => {
+                                eprintln!("Failed to attach proof evidence to task: {error}");
                                 ExitCode::from(1)
                             }
                         }
@@ -13268,15 +13373,49 @@ mod tests {
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["task_id"], "proof-task");
         assert_eq!(payload["configured_proof_target_count"], 2);
+        assert_eq!(payload["satisfied_count"], 0);
+        assert_eq!(payload["missing_count"], 2);
+        assert_eq!(payload["missing_proof"], true);
+        assert_eq!(payload["proof_targets"][0]["status"], "missing_evidence");
+        assert_eq!(
+            payload["proof_targets"][0]["legacy_close_reason_match"],
+            true
+        );
+        assert!(payload["proof_targets"][0]["evidence_detail"]
+            .as_str()
+            .expect("evidence detail should render")
+            .contains("structured proof evidence is required"));
+        assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
+        assert_eq!(
+            payload["missing_targets"],
+            serde_json::json!([
+                "cargo test -p vida proof_status_payload",
+                "cargo build -p vida"
+            ])
+        );
+
+        task.notes = Some(super::append_task_proof_evidence_note(
+            None,
+            "cargo test -p vida proof_status_payload",
+            Some("cargo test -p vida proof_status_payload"),
+            "pass",
+            "command",
+            Some("artifacts/proof-status-payload.json"),
+            &["test passed".to_string()],
+        ));
+        let payload = super::task_proof_status_payload(&task, None);
+
         assert_eq!(payload["satisfied_count"], 1);
         assert_eq!(payload["missing_count"], 1);
-        assert_eq!(payload["missing_proof"], true);
         assert_eq!(payload["proof_targets"][0]["status"], "satisfied");
         assert_eq!(
-            payload["proof_targets"][0]["evidence_source"],
-            "close_reason"
+            payload["proof_targets"][0]["legacy_close_reason_match"],
+            true
         );
-        assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
+        assert_eq!(
+            payload["proof_targets"][0]["evidence_source"],
+            "task_proof_evidence_registry"
+        );
         assert_eq!(payload["missing_targets"][0], "cargo build -p vida");
     }
 
@@ -13319,16 +13458,69 @@ mod tests {
     }
 
     #[test]
-    fn task_proof_status_payload_accepts_browser_attach_note() {
+    fn task_proof_attach_evidence_cli_accepts_structured_fields() {
+        let parsed = cli(&[
+            "task",
+            "proof",
+            "attach-evidence",
+            "proof-task",
+            "--proof-target",
+            "cargo test -p vida proof_registry",
+            "--result",
+            "pass",
+            "--command",
+            "cargo test -p vida proof_registry",
+            "--artifact-ref",
+            "artifacts/proof.json",
+            "--evidence",
+            "tests green",
+            "--json",
+        ]);
+        let Some(crate::Command::Task(args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let crate::TaskCommand::Proof(proof) = args.command else {
+            panic!("task proof command should parse");
+        };
+        let crate::TaskProofCommand::AttachEvidence(command) = proof.command else {
+            panic!("attach-evidence command should parse");
+        };
+
+        assert_eq!(command.task_id, "proof-task");
+        assert_eq!(command.proof_target, "cargo test -p vida proof_registry");
+        assert_eq!(command.result, "pass");
+        assert_eq!(
+            command.command.as_deref(),
+            Some("cargo test -p vida proof_registry")
+        );
+        assert_eq!(
+            command.artifact_ref.as_deref(),
+            Some("artifacts/proof.json")
+        );
+        assert_eq!(command.evidence, vec!["tests green".to_string()]);
+        assert!(command.json);
+    }
+
+    #[test]
+    fn task_proof_status_payload_accepts_browser_attach_registry_note() {
         let mut task = owned_task_record("proof-task", vec![]);
         let proof_target = super::browser_proof_target("/odoo", Some("My Tasks"));
         task.planner_metadata.proof_targets = vec![proof_target.clone()];
-        task.notes = Some(super::append_task_browser_proof_note(
+        let browser_notes = super::append_task_browser_proof_note(
             None,
             &proof_target,
             "/odoo",
             "pass",
             Some("My Tasks"),
+            Some("artifacts/proof.png"),
+            &["console clean".to_string()],
+        );
+        task.notes = Some(super::append_task_proof_evidence_note(
+            Some(&browser_notes),
+            &proof_target,
+            Some(&proof_target),
+            "pass",
+            "browser",
             Some("artifacts/proof.png"),
             &["console clean".to_string()],
         ));
@@ -13340,11 +13532,11 @@ mod tests {
         assert_eq!(payload["proof_targets"][0]["status"], "satisfied");
         assert_eq!(
             payload["proof_targets"][0]["evidence_source"],
-            "task_browser_proof_note"
+            "task_proof_evidence_registry"
         );
         assert_eq!(
             payload["evidence_model"]["artifact_registry"],
-            "task_notes.task_browser_proof"
+            "task_notes.task_proof_evidence"
         );
     }
 
@@ -13463,7 +13655,7 @@ mod tests {
             .expect("next command should render");
 
         assert!(next_required_command
-            .contains("vida task proof status 'safe; touch /tmp/vida_pwned #' --json"));
+            .contains("vida task proof status 'safe; touch /tmp/vida_pwned #'"));
         assert!(!next_required_command.contains("vida task proof status safe; touch"));
     }
 

@@ -6775,6 +6775,108 @@ fn task_proof_status_uses_default_human_commands_without_json_bias() {
 }
 
 #[test]
+fn task_proof_attach_evidence_satisfies_status_and_progress() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("proof-registry-parent");
+    let task_id = unique_test_id("proof-registry-task");
+    let proof_target = "cargo test -p vida --test task_smoke proof_registry";
+    create_epic_parent(&state_dir, &parent_id, "Proof registry parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Proof registry task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--status",
+            "in_progress",
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let missing_progress = run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(missing_progress["progress"]["missing_proof"], true);
+    assert_eq!(missing_progress["progress"]["ready_for_close"], false);
+    assert_eq!(
+        missing_progress["progress"]["closure_candidate_state"],
+        "leaf_missing_proof"
+    );
+    let missing_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(missing_status["satisfied_count"], 0);
+    assert_eq!(missing_status["missing_count"], 1);
+
+    let receipt = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--command",
+            proof_target,
+            "--artifact-ref",
+            "artifacts/proof-registry.json",
+            "--evidence",
+            "focused proof registry smoke passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(receipt["surface"], "vida task proof attach-evidence");
+    assert_eq!(receipt["status"], "pass");
+    assert_eq!(receipt["proof_target"], proof_target);
+    assert_eq!(receipt["result"], "pass");
+
+    let satisfied_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(satisfied_status["satisfied_count"], 1);
+    assert_eq!(satisfied_status["missing_count"], 0);
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["evidence_source"],
+        "task_proof_evidence_registry"
+    );
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["artifact_status"],
+        "recorded"
+    );
+    assert_eq!(
+        satisfied_status["evidence_model"]["legacy_close_reason_text"],
+        "migration_context_not_authority"
+    );
+
+    let satisfied_progress =
+        run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(satisfied_progress["progress"]["missing_proof"], false);
+    assert_eq!(satisfied_progress["progress"]["ready_for_close"], true);
+    assert_eq!(
+        satisfied_progress["progress"]["closure_candidate_state"],
+        "leaf_ready_for_close"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn implementation_attempt_isolation() {
     let (project_root, state_dir) = project_bound_state_dir();
     init_git_repo(&project_root);

@@ -42,6 +42,7 @@ mod tests {
                 priority: 2,
                 labels: Vec::new(),
                 proof_targets: Vec::new(),
+                proof_satisfied: false,
                 parent_id: None,
             },
             progress_basis: "descendants_excluding_root".to_string(),

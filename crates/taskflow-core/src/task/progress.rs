@@ -40,6 +40,7 @@ pub struct TaskProgressRow {
     pub priority: u32,
     pub labels: Vec<String>,
     pub proof_targets: Vec<String>,
+    pub proof_satisfied: bool,
     pub parent_id: Option<String>,
 }
 
@@ -257,6 +258,7 @@ fn descendant_progress_summary(
         && is_non_container_work_item
         && non_container_descendants_clear
         && !root_task.proof_targets.is_empty()
+        && !root_task.proof_satisfied
         && root_task
             .labels
             .iter()
@@ -273,6 +275,7 @@ fn descendant_progress_summary(
         && is_non_container_work_item
         && non_container_descendants_clear
         && !root_task.proof_targets.is_empty()
+        && !root_task.proof_satisfied
         && !proof_blocked_by_runtime;
     let leaf_ready_for_close = !root_closed
         && is_non_container_work_item
@@ -450,6 +453,7 @@ mod tests {
             priority: 1,
             labels: Vec::new(),
             proof_targets: Vec::new(),
+            proof_satisfied: false,
             parent_id: parent_id.map(str::to_string),
         }
     }
@@ -599,5 +603,24 @@ mod tests {
         assert!(!summary.ready_for_close);
         assert!(summary.missing_proof);
         assert_eq!(summary.closure_candidate_state, "leaf_missing_proof");
+    }
+
+    #[test]
+    fn descendant_progress_allows_leaf_when_proof_is_satisfied() {
+        let mut parent = row("leaf", "in_progress", "task", None);
+        parent.proof_targets = vec!["cargo test".to_string()];
+        parent.proof_satisfied = true;
+        let summary = task_progress_summary_from_rows(
+            &[parent],
+            "leaf",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.replace(" --json", ""),
+        )
+        .unwrap();
+
+        assert!(summary.ready_for_close);
+        assert!(!summary.missing_proof);
+        assert_eq!(summary.closure_candidate_state, "leaf_ready_for_close");
     }
 }

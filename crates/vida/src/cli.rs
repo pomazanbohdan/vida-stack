@@ -1598,6 +1598,12 @@ pub(crate) enum TaskProofCommand {
         after_help = "Examples:\n  vida task proof attach-browser task-1 --route /odoo --result pass --screenshot artifacts/task-1.png --json\n\nOptions:\n  --route <route>       Browser route or URL that was checked\n  --result <result>     Proof result: pass, fail, or blocked\n  --screenshot <path>   Screenshot artifact path; optional but recommended\n  --expect <text>       Expected text or route marker\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
     )]
     AttachBrowser(TaskProofAttachBrowserArgs),
+    #[command(
+        name = "attach-evidence",
+        about = "attach structured proof evidence to one task",
+        after_help = "Examples:\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --evidence \"test log\" --json\n\nOptions:\n  --proof-target <text> Proof target this evidence satisfies\n  --result <result>     Proof result: pass, fail, or blocked\n  --command <command>   Command or artifact command equivalent; defaults to --proof-target\n  --artifact-ref <path> Receipt, log, screenshot, or artifact path\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
+    )]
+    AttachEvidence(TaskProofAttachEvidenceArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1641,6 +1647,58 @@ pub(crate) struct TaskProofAttachBrowserArgs {
 
     #[arg(long = "expect", help = "Expected text or route marker")]
     pub(crate) expect: Option<String>,
+
+    #[arg(
+        long = "evidence",
+        help = "Additional evidence detail; accepts repeated flags"
+    )]
+    pub(crate) evidence: Vec<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskProofAttachEvidenceArgs {
+    #[arg(help = "Task id whose structured proof evidence should be updated")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "proof-target",
+        help = "Configured proof target this evidence satisfies"
+    )]
+    pub(crate) proof_target: String,
+
+    #[arg(long = "result", help = "Proof result: pass, fail, or blocked")]
+    pub(crate) result: String,
+
+    #[arg(
+        long = "command",
+        help = "Command or artifact command equivalent; defaults to --proof-target"
+    )]
+    pub(crate) command: Option<String>,
+
+    #[arg(
+        long = "artifact-ref",
+        help = "Receipt, log, screenshot, or artifact path"
+    )]
+    pub(crate) artifact_ref: Option<String>,
 
     #[arg(
         long = "evidence",

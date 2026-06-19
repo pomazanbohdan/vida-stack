@@ -5,6 +5,7 @@ use crate::state_store::state_store_task_models::{
     task_status_is_closed_like, task_status_is_open_like,
 };
 use taskflow_core::scheduling::scheduler_dispatch::{self, ParallelSafetyInput};
+use taskflow_core::task::verify::all_structured_task_proof_targets_satisfied;
 
 const TASK_TREE_MAX_DEPTH: usize = 64;
 const TASK_TREE_MAX_NODE_VISITS: usize = 10_000;
@@ -20,6 +21,10 @@ fn task_progress_row_from_record(
         priority: task.priority,
         labels: task.labels.clone(),
         proof_targets: task.planner_metadata.proof_targets.clone(),
+        proof_satisfied: all_structured_task_proof_targets_satisfied(
+            task.notes.as_deref(),
+            &task.planner_metadata.proof_targets,
+        ),
         parent_id: task
             .dependencies
             .iter()
