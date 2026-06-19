@@ -4619,14 +4619,33 @@ mod tests {
         status.task_id = "closed-runtime-task".to_string();
         status.status = "completed".to_string();
         status.lifecycle_stage = "closure_complete".to_string();
+        status.active_node = "closure".to_string();
         status.next_node = None;
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
         status.resume_target = "none".to_string();
+        status.recovery_ready = false;
         status.policy_gate = "historical_closed_task_stale_run_retired".to_string();
 
         assert!(store
             .run_graph_status_is_stale_for_task_continuation_binding(&status)
             .await
             .expect("terminal closure classifier should succeed"));
+
+        let mut malicious_status = status.clone();
+        malicious_status.run_id = "malicious-retired-run".to_string();
+        malicious_status.task_id = "still-active-runtime-task".to_string();
+        malicious_status.active_node = "implementation".to_string();
+        malicious_status.handoff_state = "awaiting_review".to_string();
+        malicious_status.context_state = "open".to_string();
+        malicious_status.checkpoint_kind = "execution_cursor".to_string();
+        malicious_status.recovery_ready = true;
+
+        assert!(!store
+            .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
+            .await
+            .expect("contradictory retired closure classifier should fail closed"));
 
         let mut open_status = sample_run_graph_status();
         open_status.run_id = "active-run".to_string();
