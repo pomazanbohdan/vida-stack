@@ -3407,7 +3407,7 @@ fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
         return None;
     }
     let candidate = std::path::Path::new(path);
-    if !candidate.is_absolute()
+    if !runtime_dispatch_packet_candidate_has_root(candidate)
         || candidate.components().any(|component| {
             matches!(
                 component,
@@ -3464,6 +3464,10 @@ fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
     serde_json::from_str(&raw)
         .ok()
         .map(|packet| (packet, candidate))
+}
+
+fn runtime_dispatch_packet_candidate_has_root(path: &std::path::Path) -> bool {
+    path.is_absolute() || (cfg!(windows) && path.has_root())
 }
 
 fn is_runtime_consumption_dispatch_packet_path(path: &std::path::Path) -> bool {
@@ -6756,6 +6760,23 @@ fn consume_continue_should_defer_agent_handoff(
     })
 }
 
+fn consume_continue_accepts_resolved_materialization_completion(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    receipt.dispatch_kind == "tracked_flow_materialization"
+        && receipt.dispatch_status == "executed"
+        && receipt.downstream_dispatch_ready
+        && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready")
+        && receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .is_some_and(|target| !target.trim().is_empty())
+        && receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .map_or(true, |path| path.trim().is_empty())
+}
+
 async fn persist_and_emit_deferred_agent_handoff(
     store: &super::StateStore,
     surface_name: &str,
@@ -7650,6 +7671,26 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     eprintln!("{error}");
                     return ExitCode::from(1);
                 }
+                if consume_continue_accepts_resolved_materialization_completion(&dispatch_receipt) {
+                    return match emit_runtime_consumption_resume_json(
+                        &store,
+                        surface_name,
+                        &dispatch_packet_path,
+                        &dispatch_receipt,
+                        &role_selection,
+                        requested_run_id.as_deref(),
+                        emit_output,
+                        as_json,
+                    )
+                    .await
+                    {
+                        Ok(()) => ExitCode::SUCCESS,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            ExitCode::from(1)
+                        }
+                    };
+                }
                 if consume_continue_should_defer_agent_handoff(surface_name, &dispatch_receipt) {
                     return persist_and_emit_deferred_agent_handoff(
                         &store,
@@ -8064,6 +8105,29 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct TestEnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl TestEnvVarGuard {
+        fn set_path(key: &'static str, value: &std::path::Path) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for TestEnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.previous {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 
     fn unique_consume_packet_test_root(name: &str) -> std::path::PathBuf {
@@ -20893,6 +20957,47 @@ agent_system:
             let _ = fs::remove_dir_all(root);
         }
         let _ = fs::remove_dir_all(packet_root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn state_dir_absolute_packet_reader_accepts_windows_rooted_runtime_packet_path() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let state_root = std::path::PathBuf::from("/tmp").join(format!(
+            "vida-rooted-state-dispatch-packet-{}-{nanos}",
+            std::process::id()
+        ));
+        let _env_guard = TestEnvVarGuard::set_path("VIDA_STATE_DIR", &state_root);
+        let packet_path = state_root
+            .join("runtime-consumption")
+            .join("dispatch-packets")
+            .join("packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create rooted dispatch packet dir");
+        fs::write(&packet_path, r#"{"status":"pass"}"#).expect("write rooted packet");
+
+        assert!(
+            packet_path.has_root(),
+            "test must exercise Windows rooted path syntax"
+        );
+        assert!(
+            !packet_path.is_absolute(),
+            "test must cover prefixless rooted paths such as /tmp"
+        );
+
+        let (packet, resolved_path) = dispatch_packet_json_and_path_from_state_dir_absolute_path(
+            packet_path.to_str().expect("packet path should be utf-8"),
+        )
+        .expect("rooted state-dir dispatch packet should be trusted after canonicalization");
+
+        assert_eq!(packet["status"], "pass");
+        assert!(resolved_path.is_absolute());
+
+        let _ = fs::remove_dir_all(state_root);
     }
 
     #[test]
