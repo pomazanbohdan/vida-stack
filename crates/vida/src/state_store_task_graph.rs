@@ -742,6 +742,7 @@ impl StateStore {
         }
 
         let mut parent_children = BTreeMap::<String, Vec<String>>::new();
+        let mut non_parent_dependencies = BTreeMap::<String, Vec<(String, String)>>::new();
         for task in tasks {
             for dependency in &task.dependencies {
                 if dependency.edge_type == "parent-child" {
@@ -749,6 +750,14 @@ impl StateStore {
                         .entry(dependency.depends_on_id.clone())
                         .or_default()
                         .push(task.id.clone());
+                } else if by_id.contains_key(&dependency.depends_on_id) {
+                    non_parent_dependencies
+                        .entry(task.id.clone())
+                        .or_default()
+                        .push((
+                            dependency.depends_on_id.clone(),
+                            dependency.edge_type.clone(),
+                        ));
                 }
             }
         }
@@ -827,6 +836,18 @@ impl StateStore {
             Self::validate_parent_child_cycles(
                 &task.id,
                 &parent_children,
+                &mut visited,
+                &mut active,
+                &mut issues,
+            );
+        }
+
+        let mut visited = BTreeSet::new();
+        let mut active = BTreeSet::new();
+        for task in tasks {
+            Self::validate_non_parent_dependency_cycles(
+                &task.id,
+                &non_parent_dependencies,
                 &mut visited,
                 &mut active,
                 &mut issues,
@@ -949,6 +970,42 @@ impl StateStore {
         if let Some(children) = parent_children.get(task_id) {
             for child in children {
                 Self::validate_parent_child_cycles(child, parent_children, visited, active, issues);
+            }
+        }
+        active.remove(task_id);
+    }
+
+    fn validate_non_parent_dependency_cycles(
+        task_id: &str,
+        non_parent_dependencies: &BTreeMap<String, Vec<(String, String)>>,
+        visited: &mut BTreeSet<String>,
+        active: &mut BTreeSet<String>,
+        issues: &mut Vec<TaskGraphIssue>,
+    ) {
+        if !visited.insert(task_id.to_string()) {
+            return;
+        }
+
+        active.insert(task_id.to_string());
+        if let Some(dependencies) = non_parent_dependencies.get(task_id) {
+            for (depends_on_id, edge_type) in dependencies {
+                if active.contains(depends_on_id) {
+                    issues.push(TaskGraphIssue {
+                        issue_type: "dependency_cycle".to_string(),
+                        issue_id: task_id.to_string(),
+                        depends_on_id: Some(depends_on_id.clone()),
+                        edge_type: Some(edge_type.clone()),
+                        detail: "non-parent dependency graph contains a cycle".to_string(),
+                    });
+                    continue;
+                }
+                Self::validate_non_parent_dependency_cycles(
+                    depends_on_id,
+                    non_parent_dependencies,
+                    visited,
+                    active,
+                    issues,
+                );
             }
         }
         active.remove(task_id);
@@ -1114,6 +1171,18 @@ mod tests {
         }
     }
 
+    fn dependency(issue_id: &str, depends_on_id: &str, edge_type: &str) -> TaskDependencyRecord {
+        TaskDependencyRecord {
+            issue_id: issue_id.to_string(),
+            depends_on_id: depends_on_id.to_string(),
+            edge_type: edge_type.to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }
+    }
+
     #[test]
     fn normalized_program_container_is_not_dispatchable_work() {
         let mut epic = task_record("mixed-case-epic", "open");
@@ -1268,6 +1337,73 @@ mod tests {
             issue.issue_type == "invalid_parent_child_kind"
                 && issue.issue_id == "child-epic"
                 && issue.depends_on_id.as_deref() == Some("parent")
+        }));
+    }
+
+    #[test]
+    fn validate_task_graph_flags_non_parent_dependency_cycle_with_stable_code() {
+        let mut first = task_record("first", "open");
+        first.issue_type = "epic".to_string();
+        first
+            .dependencies
+            .push(dependency("first", "second", "blocks"));
+        let mut second = task_record("second", "open");
+        second.issue_type = "epic".to_string();
+        second
+            .dependencies
+            .push(dependency("second", "first", "blocks"));
+
+        let issues = StateStore::validate_task_graph_rows(&[first, second]);
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "dependency_cycle"
+                && issue.edge_type.as_deref() == Some("blocks")
+                && issue.detail == "non-parent dependency graph contains a cycle"
+        }));
+    }
+
+    #[test]
+    fn validate_task_graph_keeps_parent_child_and_blocks_edges_distinct() {
+        let mut parent = task_record("parent", "open");
+        parent.issue_type = "epic".to_string();
+        parent
+            .dependencies
+            .push(dependency("parent", "child", "blocks"));
+        let mut child = task_record("child", "open");
+        child
+            .dependencies
+            .push(parent_child_dependency("child", "parent"));
+
+        let issues = StateStore::validate_task_graph_rows(&[parent, child]);
+
+        assert!(issues.iter().all(|issue| {
+            issue.issue_type != "dependency_cycle" && issue.issue_type != "parent_child_cycle"
+        }));
+    }
+
+    #[test]
+    fn validate_task_graph_mutation_reports_new_dependency_cycle() {
+        let mut first = task_record("first", "open");
+        first.issue_type = "epic".to_string();
+        let mut second = task_record("second", "open");
+        second.issue_type = "epic".to_string();
+        let before = vec![first.clone(), second.clone()];
+        first
+            .dependencies
+            .push(dependency("first", "second", "blocks"));
+        second
+            .dependencies
+            .push(dependency("second", "first", "blocks"));
+        let touched_task_ids = BTreeSet::from(["first".to_string(), "second".to_string()]);
+
+        let issues = StateStore::validate_task_graph_rows_for_mutation(
+            &before,
+            &[first, second],
+            &touched_task_ids,
+        );
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "dependency_cycle" && issue.edge_type.as_deref() == Some("blocks")
         }));
     }
 
