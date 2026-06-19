@@ -1,3 +1,5 @@
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::state_store;
@@ -12,10 +14,45 @@ pub(crate) fn copy_tree_replace(source_root: &Path, target_root: &Path) -> Resul
         ));
     }
     if target_root.exists() {
-        std::fs::remove_dir_all(target_root)
+        remove_tree_for_replacement(target_root)
             .map_err(|error| format!("Failed to replace {}: {error}", target_root.display()))?;
     }
     copy_tree_recursive(source_root, target_root)
+}
+
+fn remove_tree_for_replacement(target_root: &Path) -> Result<(), String> {
+    match fs::remove_dir_all(target_root) {
+        Ok(()) => Ok(()),
+        Err(first_error) if !target_root.exists() => {
+            let _ = first_error;
+            Ok(())
+        }
+        Err(first_error) => remove_path_for_replacement(target_root).map_err(|retry_error| {
+            format!("{first_error}; retry after clearing replacement target failed: {retry_error}")
+        }),
+    }
+}
+
+fn remove_path_for_replacement(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    make_writable_for_replacement(path, &metadata)?;
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)? {
+            remove_path_for_replacement(&entry?.path())?;
+        }
+        fs::remove_dir(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+fn make_writable_for_replacement(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    let mut permissions = metadata.permissions();
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn copy_tree_recursive(source_root: &Path, target_root: &Path) -> Result<(), String> {
@@ -70,4 +107,64 @@ pub(crate) fn materialize_framework_instruction_bundles(
         &project_root.join(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_root(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "vida-materialization-{name}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn copy_tree_replace_removes_stale_nested_target_contents() {
+        let root = unique_temp_root("stale-target");
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(source.join("config")).expect("source config");
+        fs::write(source.join("config").join("fresh.yaml"), "fresh").expect("fresh source");
+        fs::create_dir_all(target.join("stale")).expect("stale target");
+        fs::write(target.join("stale").join("old.yaml"), "old").expect("stale file");
+
+        copy_tree_replace(&source, &target).expect("replace tree");
+
+        assert!(target.join("config").join("fresh.yaml").is_file());
+        assert!(!target.join("stale").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn copy_tree_replace_clears_readonly_target_files_before_retry_copy() {
+        let root = unique_temp_root("readonly-target");
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("fresh.yaml"), "fresh").expect("fresh source");
+        fs::create_dir_all(&target).expect("target");
+        let stale_file = target.join("old.yaml");
+        fs::write(&stale_file, "old").expect("stale file");
+        let mut permissions = fs::metadata(&stale_file)
+            .expect("stale metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&stale_file, permissions).expect("readonly stale file");
+
+        copy_tree_replace(&source, &target).expect("replace tree with readonly target");
+
+        assert_eq!(
+            fs::read_to_string(target.join("fresh.yaml")).expect("fresh target"),
+            "fresh"
+        );
+        assert!(!target.join("old.yaml").exists());
+        let _ = fs::remove_dir_all(root);
+    }
 }
