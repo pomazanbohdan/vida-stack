@@ -620,6 +620,25 @@ impl RunGraphMemoryGovernanceProjection {
 }
 
 impl RunGraphStatus {
+    pub(crate) fn is_terminal_closure(&self) -> bool {
+        self.status == "completed"
+            && self.lifecycle_stage == "closure_complete"
+            && self
+                .next_node
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+    }
+
+    pub(crate) fn is_reconciled_terminal_closure(&self) -> bool {
+        self.is_terminal_closure()
+            && matches!(
+                self.policy_gate.as_str(),
+                "historical_closed_task_stale_run_retired" | "closed_task_stale_run_retired"
+            )
+    }
+
     pub(crate) fn validate_memory_governance(&self) -> Result<(), StateStoreError> {
         if !requires_memory_governance_enforcement(&self.policy_gate) {
             return Ok(());
@@ -893,6 +912,40 @@ mod tests {
             resume_target: "dispatch.approval".to_string(),
             recovery_ready: true,
         }
+    }
+
+    #[test]
+    fn terminal_closure_truth_is_canonical_across_surfaces() {
+        let mut status = status_with_memory_gate();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.next_node = None;
+        status.resume_target = "none".to_string();
+        status.policy_gate = "not_required".to_string();
+
+        assert!(status.is_terminal_closure());
+        assert!(crate::state_store::StateStore::run_graph_status_is_terminal_closure(&status));
+        assert!(
+            crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(&status)
+        );
+
+        status.resume_target = "dispatch.implementation".to_string();
+
+        assert!(status.is_terminal_closure());
+        assert!(crate::state_store::StateStore::run_graph_status_is_terminal_closure(&status));
+        assert!(
+            crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(&status)
+        );
+
+        status.next_node = Some("verification".to_string());
+
+        assert!(!status.is_terminal_closure());
+        assert!(!crate::state_store::StateStore::run_graph_status_is_terminal_closure(&status));
+        assert!(
+            !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                &status
+            )
+        );
     }
 
     fn approval_receipt(

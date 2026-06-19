@@ -584,14 +584,7 @@ fn has_receipt_evidence_id(value: Option<&str>) -> bool {
 }
 
 fn terminal_closure_status(status: &RunGraphStatus) -> bool {
-    status.status == "completed"
-        && status.lifecycle_stage == "closure_complete"
-        && status
-            .next_node
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
+    status.is_terminal_closure()
 }
 
 fn terminal_closure_supersedes_stale_handoff_receipt(
@@ -4476,6 +4469,29 @@ mod tests {
                 "{non_terminal} should not be terminal for run-graph continuation"
             );
         }
+    }
+
+    #[test]
+    fn terminal_closure_status_ignores_stale_resume_target_but_requires_no_next_node() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal",
+            "implementation",
+            "implementation",
+        );
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.next_node = None;
+        status.resume_target = "none".to_string();
+
+        assert!(terminal_closure_status(&status));
+
+        status.resume_target = "dispatch.verification".to_string();
+
+        assert!(terminal_closure_status(&status));
+
+        status.next_node = Some("verification".to_string());
+
+        assert!(!terminal_closure_status(&status));
     }
 
     fn write_release_admission_snapshot(state_root: &std::path::Path, run_id: &str) {

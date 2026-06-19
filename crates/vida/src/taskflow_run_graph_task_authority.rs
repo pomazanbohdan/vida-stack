@@ -46,15 +46,7 @@ impl RunGraphTaskAuthorityVerdict {
 }
 
 pub(crate) fn run_graph_status_is_terminal_closure(status: &RunGraphStatus) -> bool {
-    status.status == "completed"
-        && status.lifecycle_stage == "closure_complete"
-        && status
-            .next_node
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        && status.resume_target == "none"
+    status.is_terminal_closure()
 }
 
 fn identity_authority_candidate_ids(

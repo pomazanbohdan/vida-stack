@@ -74,23 +74,11 @@ impl StateStore {
     }
 
     pub(crate) fn run_graph_status_is_terminal_closure(status: &RunGraphStatus) -> bool {
-        status.status == "completed"
-            && status.lifecycle_stage == "closure_complete"
-            && status
-                .next_node
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .is_none()
-            && status.resume_target == "none"
+        status.is_terminal_closure()
     }
 
     pub(crate) fn run_graph_status_is_reconciled_terminal_closure(status: &RunGraphStatus) -> bool {
-        Self::run_graph_status_is_terminal_closure(status)
-            && matches!(
-                status.policy_gate.as_str(),
-                "historical_closed_task_stale_run_retired" | "closed_task_stale_run_retired"
-            )
+        status.is_reconciled_terminal_closure()
     }
 
     pub(crate) async fn run_graph_terminal_closure_has_task_close_truth(

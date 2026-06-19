@@ -771,10 +771,7 @@ async fn receipt_backed_terminal_closure_resume(
     status: &crate::state_store::RunGraphStatus,
     run_id: &str,
 ) -> bool {
-    status.lifecycle_stage == "closure_complete"
-        && status.status == "completed"
-        && status.resume_target == "none"
-        && status.next_node.is_none()
+    status.is_terminal_closure()
         && status.handoff_state == "none"
         && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
 }
@@ -1373,11 +1370,7 @@ async fn terminal_closure_complete_resume_candidate(
     let status = store.run_graph_status(run_id).await.map_err(|error| {
         format!("Failed to read terminal run-graph status for `{run_id}`: {error}")
     })?;
-    if status.status != "completed"
-        || status.lifecycle_stage != "closure_complete"
-        || status.resume_target != "none"
-        || status.active_node != "closure"
-    {
+    if !status.is_terminal_closure() || status.active_node != "closure" {
         return Ok(None);
     }
     let receipt_points_to_closure = receipt.dispatch_target == "closure"
@@ -1389,6 +1382,11 @@ async fn terminal_closure_complete_resume_candidate(
         || receipt.lane_status == super::LaneStatus::LaneCompleted.as_str();
     if !receipt_points_to_closure || !closure_execution_recorded {
         return Ok(None);
+    }
+    if status.handoff_state == "none" && status.context_state == "sealed" {
+        return Ok(Some(
+            terminal_closure_complete_resume_from_authoritative_status(receipt, &status),
+        ));
     }
     let packet_path = receipt
         .dispatch_packet_path
@@ -1402,6 +1400,97 @@ async fn terminal_closure_complete_resume_candidate(
         packet,
         role_selection,
     )))
+}
+
+fn terminal_closure_authoritative_role_selection(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    status: &crate::state_store::RunGraphStatus,
+) -> super::RuntimeConsumptionLaneSelection {
+    let selected_role = receipt
+        .activation_agent_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("prover")
+        .to_string();
+    super::RuntimeConsumptionLaneSelection {
+        ok: true,
+        activation_source: "run_graph_terminal_closure".to_string(),
+        selection_mode: "authoritative_terminal_closure".to_string(),
+        fallback_role: "orchestrator".to_string(),
+        request: format!("resume terminal closure for run `{}`", status.run_id),
+        selected_role,
+        conversational_mode: Some("development".to_string()),
+        single_task_only: true,
+        tracked_flow_entry: Some("closure".to_string()),
+        allow_freeform_chat: false,
+        confidence: "high".to_string(),
+        matched_terms: vec!["terminal_closure".to_string()],
+        compiled_bundle: serde_json::Value::Null,
+        execution_plan: serde_json::json!({
+            "runtime_assignment": {
+                "selected_backend": receipt.selected_backend.clone(),
+                "runtime_role": receipt.activation_runtime_role.clone(),
+                "task_class": status.route_task_class.clone(),
+            }
+        }),
+        reason: "terminal closure_complete run-graph state is authoritative".to_string(),
+    }
+}
+
+fn terminal_closure_complete_resume_from_authoritative_status(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    status: &crate::state_store::RunGraphStatus,
+) -> ResumeInputs {
+    let dispatch_packet_path = receipt
+        .dispatch_packet_path
+        .clone()
+        .unwrap_or_else(|| format!("run_graph:{}:terminal_closure", status.run_id));
+    let closure_receipt = crate::state_store::RunGraphDispatchReceipt {
+        run_id: status.run_id.clone(),
+        dispatch_target: "closure".to_string(),
+        dispatch_status: "executed".to_string(),
+        lane_status: super::LaneStatus::LaneCompleted.as_str().to_string(),
+        supersedes_receipt_id: receipt.supersedes_receipt_id.clone(),
+        exception_path_receipt_id: receipt.exception_path_receipt_id.clone(),
+        dispatch_kind: receipt.dispatch_kind.clone(),
+        dispatch_surface: receipt.dispatch_surface.clone(),
+        dispatch_command: receipt.dispatch_command.clone(),
+        dispatch_packet_path: Some(dispatch_packet_path.clone()),
+        dispatch_result_path: receipt.dispatch_result_path.clone(),
+        blocker_code: None,
+        downstream_dispatch_target: None,
+        downstream_dispatch_command: None,
+        downstream_dispatch_note: Some(
+            "terminal closure_complete run-graph state is the authoritative final resume lineage"
+                .to_string(),
+        ),
+        downstream_dispatch_ready: false,
+        downstream_dispatch_blockers: Vec::new(),
+        downstream_dispatch_packet_path: None,
+        downstream_dispatch_status: None,
+        downstream_dispatch_result_path: None,
+        downstream_dispatch_trace_path: None,
+        downstream_dispatch_executed_count: receipt.downstream_dispatch_executed_count,
+        downstream_dispatch_active_target: None,
+        downstream_dispatch_last_target: Some("closure".to_string()),
+        activation_agent_type: receipt.activation_agent_type.clone(),
+        activation_runtime_role: receipt.activation_runtime_role.clone(),
+        selected_backend: receipt.selected_backend.clone(),
+        recorded_at: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339 timestamp should render"),
+    };
+    ResumeInputs {
+        dispatch_receipt: closure_receipt,
+        dispatch_packet_path,
+        role_selection: terminal_closure_authoritative_role_selection(receipt, status),
+        run_graph_bootstrap: serde_json::json!({
+            "run_id": status.run_id.clone(),
+            "task_id": status.task_id.clone(),
+            "source": "run_graph_terminal_closure",
+        }),
+    }
 }
 
 async fn completed_task_close_reconcile_resume_target(
