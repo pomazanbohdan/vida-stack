@@ -1617,6 +1617,21 @@ fn terminal_closure_complete_resume_from_authoritative_status(
     }
 }
 
+fn is_terminal_closure_complete_resume_receipt(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    receipt.dispatch_target == "closure"
+        && receipt.dispatch_status == "executed"
+        && receipt.lane_status == super::LaneStatus::LaneCompleted.as_str()
+        && !receipt.downstream_dispatch_ready
+        && receipt.downstream_dispatch_packet_path.is_none()
+        && receipt.downstream_dispatch_blockers.is_empty()
+        && receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .is_none_or(|target| target == "closure")
+}
+
 async fn completed_task_close_reconcile_resume_target(
     store: &super::StateStore,
     run_id: &str,
@@ -7714,6 +7729,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             );
             if dispatch_receipt.dispatch_status == "executed"
                 && !dispatch_receipt.downstream_dispatch_ready
+                && !is_terminal_closure_complete_resume_receipt(&dispatch_receipt)
             {
                 let error = if dispatch_receipt.downstream_dispatch_blockers.is_empty() {
                     "TaskFlow consume continue blocked: resumed dispatch did not produce a ready downstream dispatch packet.".to_string()
@@ -22379,6 +22395,10 @@ agent_system:
         assert_eq!(
             resolved.dispatch_receipt.downstream_dispatch_note.as_deref(),
             Some("terminal closure_complete run-graph state is the authoritative final resume lineage")
+        );
+        assert!(
+            super::is_terminal_closure_complete_resume_receipt(&resolved.dispatch_receipt),
+            "terminal closure_complete receipts must be exempt from downstream readiness"
         );
 
         let _ = fs::remove_dir_all(&root);
