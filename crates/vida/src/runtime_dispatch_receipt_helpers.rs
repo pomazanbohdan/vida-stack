@@ -218,6 +218,14 @@ pub(crate) fn recovery_summary_is_terminal_retired_runtime_run(
     })
 }
 
+pub(crate) fn recovery_summary_is_reconciled_terminal_retired_runtime_run(
+    status: Option<&crate::state_store::RunGraphStatus>,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> bool {
+    status.is_some_and(crate::state_store::RunGraphStatus::is_reconciled_terminal_closure)
+        && recovery_summary_is_terminal_retired_runtime_run(recovery)
+}
+
 pub(crate) fn dispatch_receipt_downstream_blockers_superseded_by_ready_handoff(
     status: Option<&crate::state_store::RunGraphStatus>,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -740,6 +748,27 @@ mod tests {
         }
     }
 
+    fn terminal_status_for(run_id: &str) -> crate::state_store::RunGraphStatus {
+        crate::state_store::RunGraphStatus {
+            run_id: run_id.to_string(),
+            task_id: run_id.to_string(),
+            task_class: "runtime_diagnostic".to_string(),
+            active_node: "closure".to_string(),
+            next_node: None,
+            status: "completed".to_string(),
+            route_task_class: "runtime_diagnostic".to_string(),
+            selected_backend: "local".to_string(),
+            lane_id: "root".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            policy_gate: "closed_task_stale_run_retired".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        }
+    }
+
     #[test]
     fn terminal_retired_runtime_run_requires_closed_clear_self_task_recovery() {
         let terminal = recovery_summary_for("vida-scope");
@@ -758,5 +787,28 @@ mod tests {
         assert!(!recovery_summary_is_terminal_retired_runtime_run(Some(
             &task_backed
         )));
+    }
+
+    #[test]
+    fn reconciled_terminal_retired_runtime_run_requires_retired_policy_gate() {
+        let recovery = recovery_summary_for("vida-scope");
+        let reconciled_status = terminal_status_for("vida-scope");
+        assert!(recovery_summary_is_reconciled_terminal_retired_runtime_run(
+            Some(&reconciled_status),
+            Some(&recovery)
+        ));
+
+        let mut unreconciled_status = reconciled_status;
+        unreconciled_status.policy_gate = "not_required".to_string();
+        assert!(
+            !recovery_summary_is_reconciled_terminal_retired_runtime_run(
+                Some(&unreconciled_status),
+                Some(&recovery)
+            )
+        );
+
+        assert!(
+            !recovery_summary_is_reconciled_terminal_retired_runtime_run(None, Some(&recovery))
+        );
     }
 }

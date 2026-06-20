@@ -440,8 +440,9 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
     let active_run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
     let delegated_cycle_open = latest_run_graph_recovery
         .is_some_and(|recovery| recovery.delegation_gate.delegated_cycle_open);
-    let terminal_retired_runtime_run =
-        crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
+    let terminal_retired_runtime_run = crate::runtime_dispatch_receipt_helpers::
+        recovery_summary_is_reconciled_terminal_retired_runtime_run(
+            latest_run_graph_status,
             latest_run_graph_recovery,
         );
     let exception_takeover_is_resumable =
