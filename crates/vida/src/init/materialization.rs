@@ -27,26 +27,26 @@ fn remove_tree_for_replacement(target_root: &Path) -> Result<(), String> {
             let _ = first_error;
             Ok(())
         }
-        Err(first_error) => remove_path_for_replacement(target_root).map_err(|retry_error| {
-            format!("{first_error}; retry after clearing replacement target failed: {retry_error}")
-        }),
-    }
-}
-
-fn remove_path_for_replacement(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    make_writable_for_replacement(path, &metadata)?;
-    if metadata.is_dir() {
-        for entry in fs::read_dir(path)? {
-            remove_path_for_replacement(&entry?.path())?;
+        Err(first_error) => {
+            make_writable_for_replacement_root(target_root).map_err(|retry_error| {
+                format!(
+                    "{first_error}; retry after clearing replacement target failed: {retry_error}"
+                )
+            })?;
+            fs::remove_dir_all(target_root).map_err(|retry_error| {
+                format!(
+                    "{first_error}; retry after clearing replacement target failed: {retry_error}"
+                )
+            })
         }
-        fs::remove_dir(path)
-    } else {
-        fs::remove_file(path)
     }
 }
 
-fn make_writable_for_replacement(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+fn make_writable_for_replacement_root(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
     let mut permissions = metadata.permissions();
     if permissions.readonly() {
         permissions.set_readonly(false);
