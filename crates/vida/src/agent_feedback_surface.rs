@@ -509,7 +509,9 @@ fn has_resolved_failure_artifact_action_context(
     segment_normalized: &str,
     full_reason_normalized: &str,
 ) -> bool {
-    if !has_proof_or_success_context(full_reason_normalized) {
+    if !has_proof_or_success_context(full_reason_normalized)
+        || has_unresolved_failure_artifact_context(segment_normalized)
+    {
         return false;
     }
 
@@ -564,7 +566,31 @@ fn has_resolved_failure_artifact_action_context(
     describes_resolution_action && names_runtime_artifact && scopes_completed_policy
 }
 
+fn has_unresolved_failure_artifact_context(normalized: &str) -> bool {
+    [
+        "lack", "lacked", "lacking", "missing", "without", "not ", "cannot", "can't", "pending",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+}
+
 fn has_proof_or_success_context(normalized: &str) -> bool {
+    if [
+        "not passed",
+        "not fixed",
+        "not closed",
+        "not implemented",
+        "not succeeded",
+        "without proof",
+        "no proof",
+        "lacked proof",
+        "lacking proof",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+    {
+        return false;
+    }
     [
         "proof:",
         "proofs:",
@@ -1733,6 +1759,23 @@ mod tests {
         assert_eq!(
             super::canonical_close_status_from_reason(reason),
             Some(("blocked", "blocked"))
+        );
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_negated_success_blocked_receipt_reason() {
+        let reason =
+            "Rejected receipt after blocked task lacked execution evidence; tests not passed.";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+        assert!(
+            !super::ignored_canonical_close_historical_context(reason)
+                .iter()
+                .any(|segment| segment.contains("rejected receipt after blocked task")),
+            "current blocked receipt wording must not be stripped by unrelated negated success text"
         );
     }
 
