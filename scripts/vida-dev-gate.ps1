@@ -162,10 +162,26 @@ function Test-ModeNeedsWindowsBuildEnvironment {
 }
 
 function Resolve-InstalledVidaPath {
-    $installedVidaPath = Join-Path $env:LOCALAPPDATA "vida-stack\current\bin\vida.exe"
-    if (Test-Path -LiteralPath $installedVidaPath) {
-        return $installedVidaPath
+    if (Test-IsWindowsHost) {
+        if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+            $installedVidaPath = Join-Path $env:LOCALAPPDATA "vida-stack\current\bin\vida.exe"
+            if (Test-Path -LiteralPath $installedVidaPath) {
+                return $installedVidaPath
+            }
+        }
+    } else {
+        $homePath = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+        if ([string]::IsNullOrWhiteSpace($homePath)) {
+            $homePath = $env:HOME
+        }
+        if (-not [string]::IsNullOrWhiteSpace($homePath)) {
+            $installedVidaPath = Join-Path $homePath ".local/share/vida-stack/current/bin/vida"
+            if (Test-Path -LiteralPath $installedVidaPath) {
+                return $installedVidaPath
+            }
+        }
     }
+
     return Resolve-CommandPath "vida"
 }
 
