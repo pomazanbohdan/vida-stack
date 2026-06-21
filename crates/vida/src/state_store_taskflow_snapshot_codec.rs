@@ -5,6 +5,9 @@ use super::{
     CanonicalTaskStatus, CanonicalTimestamp, OffsetDateTime, Rfc3339, StateStore, StateStoreError,
     TaskDependencyRecord, TaskPlannerMetadata, TaskRecord, TaskSnapshot,
 };
+use taskflow_core::task::import_export::{
+    snapshot_graph_validation_error, SnapshotGraphValidationContext, TaskSnapshotGraphIssue,
+};
 
 #[allow(dead_code)]
 pub(super) fn parse_canonical_timestamp(
@@ -185,13 +188,17 @@ pub(super) fn task_records_from_canonical_snapshot(
 ) -> Result<Vec<TaskRecord>, StateStoreError> {
     let task_records = task_records_from_canonical_snapshot_rows(snapshot)?;
     let issues = StateStore::validate_task_graph_rows(&task_records);
-    if let Some(first) = issues.first() {
-        return Err(StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: format!(
-                "snapshot graph is invalid: {} on {}",
-                first.issue_type, first.issue_id
-            ),
-        });
+    if let Some(reason) = snapshot_graph_validation_error(
+        SnapshotGraphValidationContext::DirectSnapshot,
+        &issues
+            .iter()
+            .map(|issue| TaskSnapshotGraphIssue {
+                issue_type: issue.issue_type.clone(),
+                issue_id: issue.issue_id.clone(),
+            })
+            .collect::<Vec<_>>(),
+    ) {
+        return Err(StateStoreError::InvalidCanonicalTaskflowExport { reason });
     }
 
     Ok(task_records)
@@ -213,13 +220,17 @@ pub(super) fn task_records_from_canonical_snapshot_for_additive_import(
 
     let merged_rows = merged_tasks.into_values().collect::<Vec<_>>();
     let issues = StateStore::validate_task_graph_rows(&merged_rows);
-    if let Some(first) = issues.first() {
-        return Err(StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: format!(
-                "snapshot graph is invalid after additive merge: {} on {}",
-                first.issue_type, first.issue_id
-            ),
-        });
+    if let Some(reason) = snapshot_graph_validation_error(
+        SnapshotGraphValidationContext::AdditiveMerge,
+        &issues
+            .iter()
+            .map(|issue| TaskSnapshotGraphIssue {
+                issue_type: issue.issue_type.clone(),
+                issue_id: issue.issue_id.clone(),
+            })
+            .collect::<Vec<_>>(),
+    ) {
+        return Err(StateStoreError::InvalidCanonicalTaskflowExport { reason });
     }
 
     Ok(imported_tasks)

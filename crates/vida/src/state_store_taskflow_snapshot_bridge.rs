@@ -1,4 +1,8 @@
 use super::*;
+use taskflow_core::task::import_export::{
+    task_reconciliation_rollup as decide_task_reconciliation_rollup,
+    TaskReconciliationRollupRowInput,
+};
 
 impl StateStore {
     async fn write_task_reconciliation_summary(
@@ -372,31 +376,30 @@ impl StateStore {
             )
             .await?;
         let rows: Vec<TaskReconciliationRollupRow> = query.take(0)?;
-        let mut by_operation = BTreeMap::<String, usize>::new();
-        let mut by_source_kind = BTreeMap::<String, usize>::new();
-        let latest_recorded_at = rows.first().map(|row| row.recorded_at.clone());
-        let latest_source_path = rows.first().and_then(|row| row.source_path.clone());
-        let mut total_task_rows = 0usize;
-        let mut total_dependency_rows = 0usize;
-        let mut total_stale_removed = 0usize;
-
-        for row in &rows {
-            *by_operation.entry(row.operation.clone()).or_insert(0) += 1;
-            *by_source_kind.entry(row.source_kind.clone()).or_insert(0) += 1;
-            total_task_rows += row.task_count;
-            total_dependency_rows += row.dependency_count;
-            total_stale_removed += row.stale_removed_count;
-        }
+        let rollup = decide_task_reconciliation_rollup(
+            &rows
+                .iter()
+                .map(|row| TaskReconciliationRollupRowInput {
+                    operation: row.operation.clone(),
+                    source_kind: row.source_kind.clone(),
+                    source_path: row.source_path.clone(),
+                    task_count: row.task_count,
+                    dependency_count: row.dependency_count,
+                    stale_removed_count: row.stale_removed_count,
+                    recorded_at: row.recorded_at.clone(),
+                })
+                .collect::<Vec<_>>(),
+        );
 
         Ok(TaskReconciliationRollup {
-            total_receipts: by_operation.values().sum(),
-            latest_recorded_at,
-            latest_source_path,
-            total_task_rows,
-            total_dependency_rows,
-            total_stale_removed,
-            by_operation,
-            by_source_kind,
+            total_receipts: rollup.total_receipts,
+            latest_recorded_at: rollup.latest_recorded_at,
+            latest_source_path: rollup.latest_source_path,
+            total_task_rows: rollup.total_task_rows,
+            total_dependency_rows: rollup.total_dependency_rows,
+            total_stale_removed: rollup.total_stale_removed,
+            by_operation: rollup.by_operation,
+            by_source_kind: rollup.by_source_kind,
             rows,
         })
     }
