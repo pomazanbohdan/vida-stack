@@ -9264,6 +9264,27 @@ host_environment:
         fs::write(config_path, updated).expect("config should update");
     }
 
+    fn point_qwen_template_at_existing_codex_source(root_path: &Path) {
+        let config_path = root_path.join("vida.config.yaml");
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let mut document: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let qwen_system = document
+            .get_mut("host_environment")
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|host_environment| host_environment.get_mut("systems"))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|systems| systems.get_mut("qwen"))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("qwen host system should exist in test config");
+        qwen_system.insert(
+            serde_yaml::Value::String("template_root".to_string()),
+            serde_yaml::Value::String(".codex".to_string()),
+        );
+        let updated = serde_yaml::to_string(&document).expect("config should serialize as yaml");
+        fs::write(config_path, updated).expect("config should update qwen template root");
+    }
+
     fn install_external_cli_test_model_profiles(config_path: &Path) {
         let config = fs::read_to_string(config_path).expect("config should exist");
         let mut document: serde_yaml::Value =
@@ -11321,6 +11342,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -11691,6 +11713,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -11835,6 +11858,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -11987,6 +12011,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -12124,6 +12149,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -12301,6 +12327,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -12743,6 +12770,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -13729,6 +13757,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -13778,6 +13807,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -13998,6 +14028,7 @@ host_environment:
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+        point_qwen_template_at_existing_codex_source(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
