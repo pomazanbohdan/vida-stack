@@ -414,86 +414,23 @@ pub(crate) fn build_agent_extension_registry_projection(
     config: &serde_yaml::Value,
     root: &Path,
 ) -> AgentExtensionRegistryProjection {
-    let configured_enabled_project_roles = crate::yaml_string_list(crate::yaml_lookup(
-        config,
-        &["agent_extensions", "enabled_project_roles"],
-    ));
-    let configured_enabled_project_profiles = crate::yaml_string_list(crate::yaml_lookup(
-        config,
-        &["agent_extensions", "enabled_project_profiles"],
-    ));
-    let configured_enabled_project_flows = crate::yaml_string_list(crate::yaml_lookup(
-        config,
-        &["agent_extensions", "enabled_project_flows"],
-    ));
-    let roles_path = crate::yaml_string(crate::yaml_lookup(
-        config,
-        &["agent_extensions", "registries", "roles"],
-    ));
-    let skills_path = crate::yaml_string(crate::yaml_lookup(
-        config,
-        &["agent_extensions", "registries", "skills"],
-    ));
-    let profiles_path = crate::yaml_string(crate::yaml_lookup(
-        config,
-        &["agent_extensions", "registries", "profiles"],
-    ));
-    let flows_path = crate::yaml_string(crate::yaml_lookup(
-        config,
-        &["agent_extensions", "registries", "flows"],
-    ));
-    let dispatch_aliases_path = crate::yaml_string(crate::yaml_lookup(
-        config,
-        &["agent_extensions", "registries", "dispatch_aliases"],
-    ));
+    let overlay = crate::project_overlay_config(config).agent_extensions;
+    let configured_enabled_project_roles = overlay.enabled_project_roles;
+    let configured_enabled_project_profiles = overlay.enabled_project_profiles;
+    let configured_enabled_project_flows = overlay.enabled_project_flows;
+    let registry_paths = overlay.registries;
+    let roles_path = registry_paths.roles;
+    let skills_path = registry_paths.skills;
+    let profiles_path = registry_paths.profiles;
+    let flows_path = registry_paths.flows;
+    let dispatch_aliases_path = registry_paths.dispatch_aliases;
+    let validation_flags = overlay.validation;
     let validation = AgentExtensionValidationConfig {
-        require_registry_files: crate::yaml_bool(
-            crate::yaml_lookup(
-                config,
-                &["agent_extensions", "validation", "require_registry_files"],
-            ),
-            false,
-        ),
-        require_profile_resolution: crate::yaml_bool(
-            crate::yaml_lookup(
-                config,
-                &[
-                    "agent_extensions",
-                    "validation",
-                    "require_profile_resolution",
-                ],
-            ),
-            false,
-        ),
-        require_flow_resolution: crate::yaml_bool(
-            crate::yaml_lookup(
-                config,
-                &["agent_extensions", "validation", "require_flow_resolution"],
-            ),
-            false,
-        ),
-        require_framework_role_compatibility: crate::yaml_bool(
-            crate::yaml_lookup(
-                config,
-                &[
-                    "agent_extensions",
-                    "validation",
-                    "require_framework_role_compatibility",
-                ],
-            ),
-            false,
-        ),
-        require_skill_role_compatibility: crate::yaml_bool(
-            crate::yaml_lookup(
-                config,
-                &[
-                    "agent_extensions",
-                    "validation",
-                    "require_skill_role_compatibility",
-                ],
-            ),
-            false,
-        ),
+        require_registry_files: validation_flags.require_registry_files,
+        require_profile_resolution: validation_flags.require_profile_resolution,
+        require_flow_resolution: validation_flags.require_flow_resolution,
+        require_framework_role_compatibility: validation_flags.require_framework_role_compatibility,
+        require_skill_role_compatibility: validation_flags.require_skill_role_compatibility,
     };
     let mut validation_errors = Vec::new();
     let roles_registry = load_optional_registry_projection(

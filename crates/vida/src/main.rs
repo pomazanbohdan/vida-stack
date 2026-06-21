@@ -224,8 +224,8 @@ pub(crate) use cli::*;
 pub(crate) use compiled_agent_extension_bundle::build_compiled_agent_extension_bundle_for_root;
 pub(crate) use config_value_utils::{
     csv_json_string_list, json_bool, json_lookup, json_string, json_string_list,
-    load_project_overlay_yaml, split_csv_like, yaml_bool, yaml_lookup, yaml_string,
-    yaml_string_list,
+    load_project_overlay_yaml, project_overlay_config, split_csv_like, yaml_bool, yaml_lookup,
+    yaml_string, yaml_string_list,
 };
 #[allow(unused_imports)]
 pub(crate) use consume_final_operator_surface::{
