@@ -1318,7 +1318,7 @@ impl StateStore {
         for run_id in affected_run_ids {
             self.refresh_spec_post_design_handoff_after_task_close(&run_id, task_id)
                 .await?;
-            let status = self.run_graph_status(&run_id).await?;
+            let mut status = self.run_graph_status(&run_id).await?;
             let Some(binding) = self
                 .build_task_close_reconciled_binding(&status, task_id)
                 .await?
@@ -1328,12 +1328,17 @@ impl StateStore {
             };
             let closure_bound = binding.active_bounded_unit["kind"] == "downstream_dispatch_target"
                 && binding.active_bounded_unit["dispatch_target"] == "closure";
-            if closure_bound
-                && !self
+            if closure_bound {
+                if !self
                     .materialize_task_close_closure_artifacts(&status)
                     .await?
-            {
-                continue;
+                {
+                    continue;
+                }
+                status = Self::task_close_retired_run_graph_status(
+                    status,
+                    "closed_task_stale_run_retired",
+                );
             }
             if status.task_id == task_id {
                 self.record_run_graph_status(&status).await?;
@@ -4945,9 +4950,9 @@ mod tests {
             .await
             .expect("load refreshed status");
         assert_eq!(refreshed.status, "ready");
-        assert_eq!(refreshed.active_node, "work_pool_pack");
+        assert_eq!(refreshed.active_node, "specification");
         assert_eq!(refreshed.next_node.as_deref(), Some("work_pool_pack"));
-        assert_eq!(refreshed.lifecycle_stage, "work_pool_pack_active");
+        assert_eq!(refreshed.lifecycle_stage, "specification_complete");
         assert_eq!(refreshed.handoff_state, "awaiting_work_pool_pack");
         assert_eq!(refreshed.resume_target, "dispatch.work_pool_pack_lane");
         assert!(refreshed.recovery_ready);
@@ -5100,9 +5105,9 @@ mod tests {
             .await
             .expect("load reconciled feature-run status");
         assert_eq!(refreshed.status, "ready");
-        assert_eq!(refreshed.active_node, "work_pool_pack");
+        assert_eq!(refreshed.active_node, "specification");
         assert_eq!(refreshed.next_node.as_deref(), Some("work_pool_pack"));
-        assert_eq!(refreshed.lifecycle_stage, "work_pool_pack_active");
+        assert_eq!(refreshed.lifecycle_stage, "specification_complete");
         assert_eq!(refreshed.handoff_state, "awaiting_work_pool_pack");
         assert_eq!(refreshed.resume_target, "dispatch.work_pool_pack_lane");
         assert!(refreshed.recovery_ready);
@@ -5515,7 +5520,15 @@ mod tests {
             .run_graph_status("run-close-task")
             .await
             .expect("reconciled run status should load");
-        assert_eq!(reconciled_status.checkpoint_kind, "terminal_closure");
+        assert_eq!(reconciled_status.status, "completed");
+        assert_eq!(reconciled_status.active_node, "closure");
+        assert_eq!(reconciled_status.lifecycle_stage, "closure_complete");
+        assert_eq!(
+            reconciled_status.policy_gate,
+            "closed_task_stale_run_retired"
+        );
+        assert_eq!(reconciled_status.checkpoint_kind, "none");
+        assert!(reconciled_status.is_terminal_closure());
         let checkpoint_record = store
             .run_graph_projection_checkpoint_record("run-close-task")
             .await
@@ -6029,6 +6042,97 @@ mod tests {
             .expect("imported task should load");
         assert_eq!(imported.execution_semantics, expected_semantics);
         assert_eq!(imported.planner_metadata, expected_metadata);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_tasks_replaces_parent_edges_with_single_root_rollup() {
+        let root = unique_task_store_temp_root("vida-task-import-replace-parent-edge");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "old-parent",
+                title: "Old parent",
+                display_id: None,
+                description: "existing parent before import",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create old parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "imported-child",
+                title: "Imported child",
+                display_id: None,
+                description: "existing child before import",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("old-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create child under old parent");
+
+        let before = store
+            .show_task("imported-child")
+            .await
+            .expect("existing child should load");
+        assert_eq!(
+            StateStore::parent_id_for_task(&before).as_deref(),
+            Some("old-parent")
+        );
+
+        let jsonl_path = root.join("replace-parent-edge.jsonl");
+        fs::write(
+            &jsonl_path,
+            concat!(
+                r#"{"id":"new-parent","title":"New parent","description":"single import root","status":"open","priority":1,"issue_type":"epic","created_at":"2026-06-21T00:00:00Z","created_by":"tester","updated_at":"2026-06-21T00:00:00Z","source_repo":".","labels":[],"dependencies":[]}"#,
+                "\n",
+                r#"{"id":"imported-child","title":"Imported child","description":"replaced by import","status":"open","priority":1,"issue_type":"task","created_at":"2026-06-21T00:00:00Z","created_by":"tester","updated_at":"2026-06-21T00:00:00Z","source_repo":".","labels":[],"dependencies":[]}"#,
+                "\n"
+            ),
+        )
+        .expect("import jsonl should write");
+
+        let summary = store
+            .import_tasks_from_jsonl(&jsonl_path)
+            .await
+            .expect("single-root import should roll child under new parent");
+        assert_eq!(summary.imported_count, 1);
+        assert_eq!(summary.updated_count, 1);
+        assert_eq!(summary.unchanged_count, 0);
+
+        let imported = store
+            .show_task("imported-child")
+            .await
+            .expect("imported child should load");
+        assert_eq!(
+            StateStore::parent_id_for_task(&imported).as_deref(),
+            Some("new-parent")
+        );
+        assert!(
+            imported
+                .dependencies
+                .iter()
+                .all(|dependency| dependency.depends_on_id != "old-parent"),
+            "{:?}",
+            imported.dependencies
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
