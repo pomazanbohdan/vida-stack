@@ -1,10 +1,16 @@
 use super::*;
 use crate::launcher_task_commands::shell_quote;
 use crate::state_store::state_store_task_models::{
-    task_is_spec_first_feature_parent, task_is_spec_pack_child, task_is_work_pool_pack_child,
-    task_status_is_closed_like, task_status_is_open_like,
+    canonical_work_item_issue_type, task_is_spec_first_feature_parent, task_is_spec_pack_child,
+    task_is_work_pool_pack_child, task_status_is_closed_like, task_status_is_open_like,
+    work_item_requires_parent,
 };
 use taskflow_core::scheduling::scheduler_dispatch::{self, ParallelSafetyInput};
+use taskflow_core::task::graph::{
+    TaskGraphDependencyRow as CoreTaskGraphDependencyRow, TaskGraphIssue as CoreTaskGraphIssue,
+    TaskGraphRow as CoreTaskGraphRow, TaskGraphView as CoreTaskGraphView,
+    validate_task_graph_rows_for_mutation as validate_core_task_graph_rows_for_mutation,
+};
 use taskflow_core::task::verify::all_structured_task_proof_targets_satisfied;
 
 const TASK_TREE_MAX_DEPTH: usize = 64;
@@ -147,6 +153,39 @@ fn task_progress_row_from_record(
             .iter()
             .find(|dependency| dependency.edge_type == "parent-child")
             .map(|dependency| dependency.depends_on_id.clone()),
+    }
+}
+
+fn task_graph_row_from_record(task: &TaskRecord) -> CoreTaskGraphRow {
+    CoreTaskGraphRow {
+        id: task.id.clone(),
+        status: task.status.clone(),
+        issue_type: task.issue_type.clone(),
+        canonical_issue_type: canonical_work_item_issue_type(&task.issue_type),
+        parent_required: work_item_requires_parent(&task.issue_type),
+        program_container: work_item_is_program_container(&task.issue_type),
+        spec_first_feature_parent: task_is_spec_first_feature_parent(task),
+        spec_pack_child: task_is_spec_pack_child(task),
+        work_pool_pack_child: task_is_work_pool_pack_child(task),
+        dependencies: task
+            .dependencies
+            .iter()
+            .map(|dependency| CoreTaskGraphDependencyRow {
+                issue_id: dependency.issue_id.clone(),
+                depends_on_id: dependency.depends_on_id.clone(),
+                edge_type: dependency.edge_type.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn task_graph_issue_from_core(issue: CoreTaskGraphIssue) -> TaskGraphIssue {
+    TaskGraphIssue {
+        issue_type: issue.issue_type,
+        issue_id: issue.issue_id,
+        depends_on_id: issue.depends_on_id,
+        edge_type: issue.edge_type,
+        detail: issue.detail,
     }
 }
 
@@ -767,194 +806,11 @@ impl StateStore {
     pub(crate) fn validate_task_graph_snapshot(
         snapshot: &TaskGraphSnapshot,
     ) -> Vec<TaskGraphIssue> {
-        let mut issues = Vec::new();
-
-        for task in snapshot.rows() {
-            let parent_edges = task
-                .dependencies
-                .iter()
-                .filter(|dependency| dependency.edge_type == "parent-child")
-                .collect::<Vec<_>>();
-            if parent_edges.len() > 1 {
-                issues.push(TaskGraphIssue {
-                    issue_type: "multiple_parent_edges".to_string(),
-                    issue_id: task.id.clone(),
-                    depends_on_id: None,
-                    edge_type: Some("parent-child".to_string()),
-                    detail: format!(
-                        "task has {} parent-child edges; only one parent is allowed",
-                        parent_edges.len()
-                    ),
-                });
-            }
-            if work_item_requires_parent(&task.issue_type)
-                && !task_status_is_closed_like(&task.status)
-                && parent_edges.is_empty()
-            {
-                issues.push(TaskGraphIssue {
-                    issue_type: "missing_required_parent_edge".to_string(),
-                    issue_id: task.id.clone(),
-                    depends_on_id: None,
-                    edge_type: Some("parent-child".to_string()),
-                    detail: format!(
-                        "non-closed work item kind `{}` requires one parent-child edge",
-                        canonical_work_item_issue_type(&task.issue_type)
-                    ),
-                });
-            }
-
-            for dependency in &task.dependencies {
-                if !snapshot.contains_task(&dependency.depends_on_id) {
-                    issues.push(TaskGraphIssue {
-                        issue_type: "missing_dependency_target".to_string(),
-                        issue_id: task.id.clone(),
-                        depends_on_id: Some(dependency.depends_on_id.clone()),
-                        edge_type: Some(dependency.edge_type.clone()),
-                        detail: "dependency target is missing from the authoritative runtime store"
-                            .to_string(),
-                    });
-                }
-                if dependency.depends_on_id == task.id {
-                    issues.push(TaskGraphIssue {
-                        issue_type: "self_dependency".to_string(),
-                        issue_id: task.id.clone(),
-                        depends_on_id: Some(dependency.depends_on_id.clone()),
-                        edge_type: Some(dependency.edge_type.clone()),
-                        detail: "task must not depend on itself".to_string(),
-                    });
-                }
-                if dependency.edge_type == "parent-child" {
-                    if let Some(parent) = snapshot.task(&dependency.depends_on_id) {
-                        let child_kind = canonical_work_item_issue_type(&task.issue_type);
-                        let parent_kind = canonical_work_item_issue_type(&parent.issue_type);
-                        if child_kind == "epic" && parent_kind != "epic" {
-                            issues.push(TaskGraphIssue {
-                                issue_type: "invalid_parent_child_kind".to_string(),
-                                issue_id: task.id.clone(),
-                                depends_on_id: Some(parent.id.clone()),
-                                edge_type: Some("parent-child".to_string()),
-                                detail: format!(
-                                    "epic work item `{}` can only be parented by another epic, got `{}`",
-                                    task.id, parent.issue_type
-                                ),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        for task in snapshot.rows() {
-            let Some(children) = snapshot.children_for(&task.id) else {
-                continue;
-            };
-            if task_status_is_closed_like(&task.status) {
-                for child_id in children {
-                    let Some(child) = snapshot.task(child_id) else {
-                        continue;
-                    };
-                    if !task_status_is_closed_like(&child.status) {
-                        issues.push(TaskGraphIssue {
-                            issue_type: "closed_parent_has_non_closed_child".to_string(),
-                            issue_id: task.id.clone(),
-                            depends_on_id: Some(child.id.clone()),
-                            edge_type: Some("parent-child".to_string()),
-                            detail: format!(
-                                "closed parent has direct child {} with status {}",
-                                child.id, child.status
-                            ),
-                        });
-                    }
-                }
-            } else if task_status_is_open_like(&task.status)
-                && work_item_is_program_container(&task.issue_type)
-            {
-                let has_non_closed_child = children.iter().any(|child_id| {
-                    snapshot
-                        .task(child_id)
-                        .map(|child| !task_status_is_closed_like(&child.status))
-                        .unwrap_or(false)
-                });
-                let has_unresolved_non_parent_dependency = task
-                    .dependencies
-                    .iter()
-                    .filter(|dependency| dependency.edge_type != "parent-child")
-                    .any(|dependency| {
-                        snapshot
-                            .task(&dependency.depends_on_id)
-                            .map(|dependency_task| {
-                                !task_status_is_closed_like(&dependency_task.status)
-                            })
-                            .unwrap_or(true)
-                    });
-                let waiting_for_work_pool_handoff = task_is_spec_first_feature_parent(task)
-                    && children
-                        .iter()
-                        .filter_map(|child_id| snapshot.task(child_id))
-                        .any(|child| task_is_spec_pack_child(child))
-                    && !children
-                        .iter()
-                        .filter_map(|child_id| snapshot.task(child_id))
-                        .any(|child| task_is_work_pool_pack_child(child));
-                if !has_non_closed_child
-                    && !has_unresolved_non_parent_dependency
-                    && !waiting_for_work_pool_handoff
-                {
-                    issues.push(TaskGraphIssue {
-                        issue_type: "open_parent_has_no_open_child".to_string(),
-                        issue_id: task.id.clone(),
-                        depends_on_id: None,
-                        edge_type: Some("parent-child".to_string()),
-                        detail: "open or in-progress parent has no direct non-closed child"
-                            .to_string(),
-                    });
-                }
-            }
-        }
-
-        let mut visited = BTreeSet::new();
-        let mut active = BTreeSet::new();
-        for task in snapshot.rows() {
-            Self::validate_parent_child_cycles(
-                &task.id,
-                snapshot.children_by_parent(),
-                &mut visited,
-                &mut active,
-                &mut issues,
-            );
-        }
-
-        let mut visited = BTreeSet::new();
-        let mut active = BTreeSet::new();
-        for task in snapshot.rows() {
-            Self::validate_non_parent_dependency_cycles(
-                &task.id,
-                snapshot.non_parent_dependencies(),
-                &mut visited,
-                &mut active,
-                &mut issues,
-            );
-        }
-
-        issues.sort_by(|left, right| {
-            left.issue_type
-                .cmp(&right.issue_type)
-                .then_with(|| left.issue_id.cmp(&right.issue_id))
-                .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
-        });
-        issues.dedup();
-        issues
-    }
-
-    fn task_graph_issue_key(
-        issue: &TaskGraphIssue,
-    ) -> (String, String, Option<String>, Option<String>) {
-        (
-            issue.issue_type.clone(),
-            issue.issue_id.clone(),
-            issue.depends_on_id.clone(),
-            issue.edge_type.clone(),
-        )
+        CoreTaskGraphView::from_rows(snapshot.rows().iter().map(task_graph_row_from_record))
+            .validate()
+            .into_iter()
+            .map(task_graph_issue_from_core)
+            .collect()
     }
 
     pub(crate) fn validate_task_graph_rows_for_mutation(
@@ -962,21 +818,11 @@ impl StateStore {
         after: &[TaskRecord],
         touched_task_ids: &BTreeSet<String>,
     ) -> Vec<TaskGraphIssue> {
-        let existing_issues = Self::validate_task_graph_rows(before)
+        let before = before.iter().map(task_graph_row_from_record);
+        let after = after.iter().map(task_graph_row_from_record);
+        validate_core_task_graph_rows_for_mutation(before, after, touched_task_ids)
             .into_iter()
-            .map(|issue| Self::task_graph_issue_key(&issue))
-            .collect::<BTreeSet<_>>();
-
-        Self::validate_task_graph_rows(after)
-            .into_iter()
-            .filter(|issue| {
-                touched_task_ids.contains(&issue.issue_id)
-                    || issue
-                        .depends_on_id
-                        .as_ref()
-                        .is_some_and(|id| touched_task_ids.contains(id))
-                    || !existing_issues.contains(&Self::task_graph_issue_key(issue))
-            })
+            .map(task_graph_issue_from_core)
             .collect()
     }
 
@@ -1024,73 +870,6 @@ impl StateStore {
         best_dependency_path.push(task_id.to_string());
         memo.insert(task_id.to_string(), best_dependency_path.clone());
         Ok(best_dependency_path)
-    }
-
-    fn validate_parent_child_cycles(
-        task_id: &str,
-        parent_children: &BTreeMap<String, Vec<String>>,
-        visited: &mut BTreeSet<String>,
-        active: &mut BTreeSet<String>,
-        issues: &mut Vec<TaskGraphIssue>,
-    ) {
-        if active.contains(task_id) {
-            issues.push(TaskGraphIssue {
-                issue_type: "parent_child_cycle".to_string(),
-                issue_id: task_id.to_string(),
-                depends_on_id: Some(task_id.to_string()),
-                edge_type: Some("parent-child".to_string()),
-                detail: "parent-child ancestry contains a cycle".to_string(),
-            });
-            return;
-        }
-        if visited.contains(task_id) {
-            return;
-        }
-
-        visited.insert(task_id.to_string());
-        active.insert(task_id.to_string());
-        if let Some(children) = parent_children.get(task_id) {
-            for child in children {
-                Self::validate_parent_child_cycles(child, parent_children, visited, active, issues);
-            }
-        }
-        active.remove(task_id);
-    }
-
-    fn validate_non_parent_dependency_cycles(
-        task_id: &str,
-        non_parent_dependencies: &BTreeMap<String, Vec<(String, String)>>,
-        visited: &mut BTreeSet<String>,
-        active: &mut BTreeSet<String>,
-        issues: &mut Vec<TaskGraphIssue>,
-    ) {
-        if !visited.insert(task_id.to_string()) {
-            return;
-        }
-
-        active.insert(task_id.to_string());
-        if let Some(dependencies) = non_parent_dependencies.get(task_id) {
-            for (depends_on_id, edge_type) in dependencies {
-                if active.contains(depends_on_id) {
-                    issues.push(TaskGraphIssue {
-                        issue_type: "dependency_cycle".to_string(),
-                        issue_id: task_id.to_string(),
-                        depends_on_id: Some(depends_on_id.clone()),
-                        edge_type: Some(edge_type.clone()),
-                        detail: "non-parent dependency graph contains a cycle".to_string(),
-                    });
-                    continue;
-                }
-                Self::validate_non_parent_dependency_cycles(
-                    depends_on_id,
-                    non_parent_dependencies,
-                    visited,
-                    active,
-                    issues,
-                );
-            }
-        }
-        active.remove(task_id);
     }
 }
 
