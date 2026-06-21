@@ -1,5 +1,7 @@
 //! Run-graph model defaults for TaskFlow runtime decomposition.
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefaultRunGraphStatusFields {
     pub run_id: String,
@@ -48,9 +50,177 @@ pub fn default_run_graph_status_fields(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunGraphStatusSnapshot {
+    pub run_id: String,
+    pub task_id: String,
+    pub active_node: String,
+    pub next_node: Option<String>,
+    pub status: String,
+    pub lifecycle_stage: String,
+    pub handoff_state: String,
+    pub resume_target: String,
+    pub recovery_ready: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispatchReceiptSnapshot {
+    pub dispatch_target: String,
+    pub dispatch_status: String,
+    pub lane_status: Option<String>,
+    pub supersedes_receipt_id: Option<String>,
+    pub exception_path_receipt_id: Option<String>,
+    pub downstream_dispatch_ready: bool,
+    pub downstream_dispatch_target: Option<String>,
+    pub downstream_dispatch_blockers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskClosureSnapshot {
+    pub task_id: String,
+    pub status: String,
+    pub terminally_closed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunGraphTransitionKind {
+    TerminalClosure,
+    ExceptionTakeover,
+    CompletedLane,
+    BlockedLane,
+    DownstreamReadyHandoff,
+    NoTransition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunGraphTransitionDecision {
+    pub kind: RunGraphTransitionKind,
+    pub admitted: bool,
+    pub active_node: String,
+    pub next_node: Option<String>,
+    pub resume_target: String,
+    pub blocker_codes: Vec<String>,
+    pub next_actions: Vec<String>,
+}
+
+#[must_use]
+pub fn decide_run_graph_transition(
+    status: &RunGraphStatusSnapshot,
+    receipt: Option<&DispatchReceiptSnapshot>,
+    closure: Option<&TaskClosureSnapshot>,
+) -> RunGraphTransitionDecision {
+    if closure
+        .filter(|closure| closure.terminally_closed && closure.task_id == status.task_id)
+        .is_some()
+    {
+        return RunGraphTransitionDecision {
+            kind: RunGraphTransitionKind::TerminalClosure,
+            admitted: true,
+            active_node: status.active_node.clone(),
+            next_node: None,
+            resume_target: "none".to_string(),
+            blocker_codes: Vec::new(),
+            next_actions: Vec::new(),
+        };
+    }
+
+    if let Some(receipt) = receipt {
+        if receipt_has_active_exception_takeover(receipt) {
+            return RunGraphTransitionDecision {
+                kind: RunGraphTransitionKind::ExceptionTakeover,
+                admitted: true,
+                active_node: receipt.dispatch_target.clone(),
+                next_node: Some(receipt.dispatch_target.clone()),
+                resume_target: format!("dispatch.{}", receipt.dispatch_target),
+                blocker_codes: Vec::new(),
+                next_actions: Vec::new(),
+            };
+        }
+
+        if receipt.lane_status.as_deref() == Some("lane_completed") {
+            return RunGraphTransitionDecision {
+                kind: RunGraphTransitionKind::CompletedLane,
+                admitted: true,
+                active_node: receipt.dispatch_target.clone(),
+                next_node: status.next_node.clone(),
+                resume_target: status.resume_target.clone(),
+                blocker_codes: Vec::new(),
+                next_actions: Vec::new(),
+            };
+        }
+
+        if is_blocked_lane(receipt.lane_status.as_deref()) {
+            return RunGraphTransitionDecision {
+                kind: RunGraphTransitionKind::BlockedLane,
+                admitted: false,
+                active_node: status.active_node.clone(),
+                next_node: status.next_node.clone(),
+                resume_target: status.resume_target.clone(),
+                blocker_codes: vec!["lane_blocked".to_string()],
+                next_actions: vec!["inspect lane recovery evidence".to_string()],
+            };
+        }
+
+        if receipt.downstream_dispatch_ready
+            && receipt
+                .downstream_dispatch_target
+                .as_deref()
+                .is_some_and(|target| !target.trim().is_empty())
+            && receipt.downstream_dispatch_blockers.is_empty()
+        {
+            let target = receipt.downstream_dispatch_target.clone();
+            return RunGraphTransitionDecision {
+                kind: RunGraphTransitionKind::DownstreamReadyHandoff,
+                admitted: true,
+                active_node: status.active_node.clone(),
+                next_node: target.clone(),
+                resume_target: target
+                    .as_deref()
+                    .map(|target| format!("dispatch.{target}"))
+                    .unwrap_or_else(|| status.resume_target.clone()),
+                blocker_codes: Vec::new(),
+                next_actions: Vec::new(),
+            };
+        }
+    }
+
+    RunGraphTransitionDecision {
+        kind: RunGraphTransitionKind::NoTransition,
+        admitted: true,
+        active_node: status.active_node.clone(),
+        next_node: status.next_node.clone(),
+        resume_target: status.resume_target.clone(),
+        blocker_codes: Vec::new(),
+        next_actions: Vec::new(),
+    }
+}
+
+fn receipt_has_active_exception_takeover(receipt: &DispatchReceiptSnapshot) -> bool {
+    receipt.lane_status.as_deref() == Some("lane_exception_takeover")
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+}
+
+fn is_blocked_lane(lane_status: Option<&str>) -> bool {
+    matches!(
+        lane_status,
+        Some("lane_blocked" | "lane_failed" | "lane_exception_recorded")
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::default_run_graph_status_fields;
+    use super::{
+        DispatchReceiptSnapshot, RunGraphStatusSnapshot, RunGraphTransitionKind,
+        TaskClosureSnapshot, decide_run_graph_transition, default_run_graph_status_fields,
+    };
 
     #[test]
     fn default_run_graph_status_fields_keep_legacy_defaults() {
@@ -72,5 +242,124 @@ mod tests {
         assert_eq!(fields.resume_target, "none");
         assert!(!fields.recovery_ready);
         assert!(fields.next_node.is_none());
+    }
+
+    #[test]
+    fn run_graph_transition_prefers_terminal_task_closure() {
+        let decision = decide_run_graph_transition(
+            &status_snapshot(),
+            None,
+            Some(&TaskClosureSnapshot {
+                task_id: "task-1".to_string(),
+                status: "closed".to_string(),
+                terminally_closed: true,
+            }),
+        );
+
+        assert_eq!(decision.kind, RunGraphTransitionKind::TerminalClosure);
+        assert!(decision.admitted);
+        assert_eq!(decision.resume_target, "none");
+        assert!(decision.next_node.is_none());
+    }
+
+    #[test]
+    fn run_graph_transition_activates_exception_takeover_receipt() {
+        let decision = decide_run_graph_transition(
+            &status_snapshot(),
+            Some(&DispatchReceiptSnapshot {
+                dispatch_target: "developer".to_string(),
+                dispatch_status: "routed".to_string(),
+                lane_status: Some("lane_exception_takeover".to_string()),
+                supersedes_receipt_id: Some("receipt-1".to_string()),
+                exception_path_receipt_id: Some("receipt-1".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_target: None,
+                downstream_dispatch_blockers: Vec::new(),
+            }),
+            None,
+        );
+
+        assert_eq!(decision.kind, RunGraphTransitionKind::ExceptionTakeover);
+        assert!(decision.admitted);
+        assert_eq!(decision.active_node, "developer");
+        assert_eq!(decision.resume_target, "dispatch.developer");
+    }
+
+    #[test]
+    fn run_graph_transition_classifies_completed_and_blocked_lanes() {
+        let completed = decide_run_graph_transition(
+            &status_snapshot(),
+            Some(&DispatchReceiptSnapshot {
+                dispatch_target: "tester".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_completed".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_target: None,
+                downstream_dispatch_blockers: Vec::new(),
+            }),
+            None,
+        );
+        assert_eq!(completed.kind, RunGraphTransitionKind::CompletedLane);
+        assert!(completed.admitted);
+
+        let blocked = decide_run_graph_transition(
+            &status_snapshot(),
+            Some(&DispatchReceiptSnapshot {
+                dispatch_target: "developer".to_string(),
+                dispatch_status: "routed".to_string(),
+                lane_status: Some("lane_blocked".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_target: None,
+                downstream_dispatch_blockers: Vec::new(),
+            }),
+            None,
+        );
+        assert_eq!(blocked.kind, RunGraphTransitionKind::BlockedLane);
+        assert!(!blocked.admitted);
+        assert_eq!(blocked.blocker_codes, vec!["lane_blocked"]);
+    }
+
+    #[test]
+    fn run_graph_transition_admits_downstream_ready_handoff() {
+        let decision = decide_run_graph_transition(
+            &status_snapshot(),
+            Some(&DispatchReceiptSnapshot {
+                dispatch_target: "developer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_open".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_target: Some("tester".to_string()),
+                downstream_dispatch_blockers: Vec::new(),
+            }),
+            None,
+        );
+
+        assert_eq!(
+            decision.kind,
+            RunGraphTransitionKind::DownstreamReadyHandoff
+        );
+        assert!(decision.admitted);
+        assert_eq!(decision.next_node, Some("tester".to_string()));
+        assert_eq!(decision.resume_target, "dispatch.tester");
+    }
+
+    fn status_snapshot() -> RunGraphStatusSnapshot {
+        RunGraphStatusSnapshot {
+            run_id: "run-1".to_string(),
+            task_id: "task-1".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("developer".to_string()),
+            status: "ready".to_string(),
+            lifecycle_stage: "developer_dispatch_ready".to_string(),
+            handoff_state: "awaiting_developer".to_string(),
+            resume_target: "dispatch.developer".to_string(),
+            recovery_ready: true,
+        }
     }
 }
