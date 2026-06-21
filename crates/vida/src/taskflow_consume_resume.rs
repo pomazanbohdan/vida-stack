@@ -13998,9 +13998,9 @@ agent_system:
         status.policy_gate = "validation_report_required".to_string();
         status.handoff_state = "none".to_string();
         status.context_state = "sealed".to_string();
-        status.checkpoint_kind = "execution_cursor".to_string();
+        status.checkpoint_kind = "none".to_string();
         status.resume_target = "none".to_string();
-        status.recovery_ready = true;
+        status.recovery_ready = false;
 
         store
             .record_run_graph_status(&status)
