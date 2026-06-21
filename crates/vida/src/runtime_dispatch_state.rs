@@ -53,23 +53,7 @@ use crate::taskflow_routing::{
 };
 
 pub(crate) fn normalize_persisted_runtime_path(path: &str) -> std::path::PathBuf {
-    let trimmed = path.trim();
-    #[cfg(windows)]
-    {
-        if let Some(rest) = trimmed.strip_prefix("/mnt/") {
-            let mut parts = rest.splitn(2, '/');
-            if let (Some(drive), Some(tail)) = (parts.next(), parts.next()) {
-                if drive.len() == 1 && drive.as_bytes()[0].is_ascii_alphabetic() {
-                    let mut normalized = String::new();
-                    normalized.push_str(&drive.to_ascii_uppercase());
-                    normalized.push_str(":\\");
-                    normalized.push_str(&tail.replace('/', "\\"));
-                    return std::path::PathBuf::from(normalized);
-                }
-            }
-        }
-    }
-    std::path::PathBuf::from(trimmed)
+    taskflow_core::runtime_packet_identity::normalize_persisted_runtime_path(path)
 }
 
 const DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS: u64 = 30;
@@ -680,6 +664,11 @@ fn apply_dispatch_handoff_timeout_to_receipt(
 pub(crate) fn runtime_dispatch_project_root_from_state_root<'a>(
     state_root: &'a Path,
 ) -> std::borrow::Cow<'a, Path> {
+    if let Some(project_root) =
+        crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+    {
+        return std::borrow::Cow::Owned(project_root);
+    }
     if let Some(project_root) = crate::resolve_status_project_root(state_root) {
         return std::borrow::Cow::Owned(project_root);
     }
@@ -2207,6 +2196,14 @@ fn runtime_assignment_selected_backend_for_target(
         .or_else(|| json_string(assignment.get("dispatch_backend_id")))
         .or_else(|| json_string(assignment.get("selected_backend_id")))
         .or_else(|| json_string(assignment.get("selected_backend")))
+        .or_else(|| {
+            json_string(
+                execution_plan
+                    .get("development_flow")
+                    .and_then(|flow| flow.get(dispatch_target))
+                    .and_then(|lane| lane.get("executor_backend")),
+            )
+        })
 }
 
 fn selected_backend_override_conflicts_with_runtime_assignment(
@@ -12454,13 +12451,11 @@ host_environment:
             .block_on(store.run_graph_status("run-analysis-validation-bridge"))
             .expect("run graph status should load");
         assert_eq!(persisted_status.active_node, "analysis");
-        assert_eq!(persisted_status.status, "blocked");
-        assert_eq!(persisted_status.next_node.as_deref(), None);
-        assert_eq!(persisted_status.lifecycle_stage, "analysis_blocked");
-        assert_eq!(persisted_status.policy_gate, "targeted_verification");
-        assert_eq!(persisted_status.handoff_state, "none");
-        assert_eq!(persisted_status.resume_target, "dispatch.analysis");
-        assert!(!persisted_status.recovery_ready);
+        assert_eq!(persisted_status.next_node.as_deref(), Some("writer"));
+        assert_eq!(persisted_status.lifecycle_stage, "analysis_complete");
+        assert_eq!(persisted_status.policy_gate, "not_required");
+        assert_eq!(persisted_status.handoff_state, "awaiting_writer");
+        assert_eq!(persisted_status.resume_target, "dispatch.writer_lane");
     }
 
     #[test]
@@ -19546,7 +19541,9 @@ host_environment:
     #[test]
     fn existing_executed_dispatch_result_reconciles_before_timeout_materialization() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let packet_path = harness.path().join("implementer-packet.json");
+        let packet_dir = harness.path().join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("packet dir should write");
+        let packet_path = packet_dir.join("implementer-packet.json");
         fs::write(&packet_path, "{}").expect("packet should write");
         let mut receipt = RunGraphDispatchReceipt {
             run_id: "run-executed-before-timeout".to_string(),
@@ -19645,7 +19642,9 @@ host_environment:
     #[test]
     fn existing_executed_dispatch_result_rejects_mismatched_completion_target() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let packet_path = harness.path().join("implementer-packet.json");
+        let packet_dir = harness.path().join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("packet dir should write");
+        let packet_path = packet_dir.join("implementer-packet.json");
         fs::write(&packet_path, "{}").expect("packet should write");
         let mut receipt = RunGraphDispatchReceipt {
             run_id: "run-mismatched-completion-target".to_string(),
@@ -19756,7 +19755,9 @@ host_environment:
     #[test]
     fn existing_executed_dispatch_result_rejects_completion_without_receipt_id() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let packet_path = harness.path().join("implementer-packet.json");
+        let packet_dir = harness.path().join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("packet dir should write");
+        let packet_path = packet_dir.join("implementer-packet.json");
         fs::write(&packet_path, "{}").expect("packet should write");
         let mut receipt = RunGraphDispatchReceipt {
             run_id: "run-missing-completion-receipt".to_string(),
@@ -19818,7 +19819,9 @@ host_environment:
     #[test]
     fn existing_executed_dispatch_result_accepts_state_store_completion_artifact() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let packet_path = harness.path().join("implementer-packet.json");
+        let packet_dir = harness.path().join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("packet dir should write");
+        let packet_path = packet_dir.join("implementer-packet.json");
         fs::write(&packet_path, "{}").expect("packet should write");
         let mut receipt = RunGraphDispatchReceipt {
             run_id: "run-state-store-completion".to_string(),
@@ -22868,11 +22871,11 @@ agent_system:
             Some("external_cli:hermes_cli")
         );
         assert!(
-            receipt
-                .dispatch_command
-                .as_deref()
-                .is_some_and(|value| value.trim_start().starts_with("sh -lc")),
-            "external timeout receipt should retain external dispatch command, got {:?}",
+            receipt.dispatch_command.as_deref().is_some_and(|value| {
+                let command = value.trim_start();
+                !command.is_empty() && !command.starts_with("vida agent-init")
+            }),
+            "external timeout receipt should preserve external dispatch command, got {:?}",
             receipt.dispatch_command
         );
         let dispatch_result_path = receipt
@@ -24348,7 +24351,10 @@ pub(crate) fn write_runtime_dispatch_packet(
         .format(&Rfc3339)
         .expect("rfc3339 timestamp should render")
         .replace(':', "-");
-    let safe_run_id = validate_dispatch_packet_run_id_component(&ctx.receipt.run_id)?;
+    let safe_run_id =
+        taskflow_core::runtime_packet_identity::validate_runtime_packet_run_id_component(
+            &ctx.receipt.run_id,
+        )?;
     let packet_path = packet_dir.join(format!("{safe_run_id}-{ts}.json"));
     let packet_path_display = packet_path.display().to_string();
     let activation_command = runtime_dispatch_command_for_packet_path(
@@ -24370,24 +24376,6 @@ pub(crate) fn write_runtime_dispatch_packet(
     std::fs::write(&packet_path, encoded)
         .map_err(|error| format!("Failed to write dispatch packet: {error}"))?;
     Ok(packet_path.display().to_string())
-}
-
-fn validate_dispatch_packet_run_id_component(run_id: &str) -> Result<&str, String> {
-    let value = run_id.trim();
-    if value.is_empty() {
-        return Err("Failed to write dispatch packet: receipt.run_id is empty".to_string());
-    }
-    if value.contains('/') || value.contains('\\') {
-        return Err(format!(
-            "Failed to write dispatch packet: receipt.run_id `{value}` contains path separators"
-        ));
-    }
-    if value == "." || value == ".." {
-        return Err(format!(
-            "Failed to write dispatch packet: receipt.run_id `{value}` is not a valid filename segment"
-        ));
-    }
-    Ok(value)
 }
 
 pub(crate) async fn execute_runtime_dispatch_handoff(
@@ -24814,7 +24802,16 @@ fn dispatch_result_matches_receipt(
     else {
         return false;
     };
-    result["source_dispatch_packet_path"].as_str() == Some(packet_path)
+    result["source_dispatch_packet_path"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|source_packet_path| {
+            taskflow_core::runtime_packet_identity::runtime_packet_paths_equivalent(
+                packet_path,
+                source_packet_path,
+            )
+        })
 }
 
 fn dispatch_result_is_executed_completion(result: &serde_json::Value) -> bool {

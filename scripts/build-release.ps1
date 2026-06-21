@@ -40,6 +40,39 @@ function Fail {
     throw "[release-package] ERROR: $Message"
 }
 
+function Assert-SafeArtifactName {
+    param(
+        [string]$Value,
+        [string]$Label
+    )
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        Fail "$Label must not be empty."
+    }
+    if ([System.IO.Path]::IsPathRooted($Value)) {
+        Fail "$Label must be an artifact name, not a rooted path: $Value"
+    }
+    if ($Value.Contains("/") -or $Value.Contains("\")) {
+        Fail "$Label must not contain path separators: $Value"
+    }
+    if ($Value.Contains("..")) {
+        Fail "$Label must not contain '..': $Value"
+    }
+    if ($Value -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+        Fail "$Label may contain only ASCII letters, digits, '.', '_', and '-': $Value"
+    }
+}
+
+function Test-PathWithinRoot {
+    param(
+        [string]$Root,
+        [string]$Path
+    )
+    $resolvedRoot = [System.IO.Path]::GetFullPath($Root)
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    $rootWithSeparator = $resolvedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    return $resolvedPath.StartsWith($rootWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Test-Truthy {
     param([string]$Value)
     return $Value -match '^(1|true|TRUE|yes|YES)$'
@@ -249,6 +282,9 @@ function New-ZipFromPackageRoot {
         $files = Get-ChildItem -LiteralPath $SourceDir -Recurse -File | Sort-Object FullName
         foreach ($file in $files) {
             $relative = [System.IO.Path]::GetRelativePath($PackageRoot, $file.FullName).Replace("\", "/")
+            if ($relative -eq ".." -or $relative.StartsWith("../") -or [System.IO.Path]::IsPathRooted($relative)) {
+                Fail "Refusing to create zip entry outside package root: $relative"
+            }
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, $relative) | Out-Null
         }
     } finally {
@@ -361,17 +397,25 @@ try {
     $script:WindowsRelease = [bool]$Windows
     $script:ResolvedReleaseSuffix = $ReleaseSuffix
     $resolvedVersion = Get-ReleaseVersion
+    Assert-SafeArtifactName -Value $resolvedVersion -Label "Release version"
+    if (-not [string]::IsNullOrWhiteSpace($script:ResolvedReleaseSuffix)) {
+        Assert-SafeArtifactName -Value $script:ResolvedReleaseSuffix -Label "Release suffix"
+    }
     $expectedVersion = $resolvedVersion.TrimStart("v")
     $archiveBase = "vida-stack-$resolvedVersion"
     if (-not [string]::IsNullOrWhiteSpace($script:ResolvedReleaseSuffix)) {
         $archiveBase = "$archiveBase-$script:ResolvedReleaseSuffix"
     }
+    Assert-SafeArtifactName -Value $archiveBase -Label "Archive base"
     if ([string]::IsNullOrWhiteSpace($DistDir)) {
         $DistDir = Join-Path $RootDir "dist"
     }
     $DistDir = [System.IO.Path]::GetFullPath($DistDir)
-    $packageRoot = Join-Path $DistDir "package"
-    $stageDir = Join-Path $packageRoot $archiveBase
+    $packageRoot = [System.IO.Path]::GetFullPath((Join-Path $DistDir "package"))
+    $stageDir = [System.IO.Path]::GetFullPath((Join-Path $packageRoot $archiveBase))
+    if (-not (Test-PathWithinRoot -Root $packageRoot -Path $stageDir)) {
+        Fail "Resolved staging directory escapes package root: $stageDir"
+    }
     $cargoTargetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
         Join-Path $RootDir ".vida\cargo-target"
     } else {

@@ -380,10 +380,11 @@ struct BlockedSourceLane {
 fn downstream_rework_route_from_completion_result(
     receipt: &RunGraphDispatchReceiptStored,
 ) -> Option<crate::runtime_dispatch_result_evidence::DispatchReworkRoute> {
-    crate::runtime_dispatch_result_evidence::dispatch_rework_route_from_receipt_fields(
+    crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
         receipt.downstream_dispatch_result_path.as_deref(),
         receipt.dispatch_result_path.as_deref(),
         receipt.dispatch_packet_path.as_deref(),
+        &receipt.dispatch_target,
     )
 }
 
@@ -662,14 +663,7 @@ fn has_receipt_evidence_id(value: Option<&str>) -> bool {
 }
 
 fn terminal_closure_status(status: &RunGraphStatus) -> bool {
-    status.status == "completed"
-        && status.lifecycle_stage == "closure_complete"
-        && status
-            .next_node
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
+    status.is_terminal_closure()
 }
 
 fn terminal_closure_supersedes_stale_handoff_receipt(
@@ -1464,25 +1458,22 @@ pub(crate) fn latest_run_graph_dispatch_receipt_summary_is_inconsistent(
 pub(crate) fn latest_run_graph_dispatch_receipt_signal_is_ambiguous(
     receipt: &RunGraphDispatchReceiptSummary,
 ) -> bool {
+    dispatch_receipt_status_has_canonical_lane_signal(&receipt.dispatch_status)
+        && receipt.lane_status.as_str()
+            != normalize_run_graph_lane_status(
+                Some(receipt.lane_status.as_str()),
+                &receipt.dispatch_status,
+                receipt.supersedes_receipt_id.as_deref(),
+                receipt.exception_path_receipt_id.as_deref(),
+            )
+        || !dispatch_receipt_status_has_canonical_lane_signal(&receipt.dispatch_status)
+}
+
+fn dispatch_receipt_status_has_canonical_lane_signal(dispatch_status: &str) -> bool {
     matches!(
-        receipt.dispatch_status.as_str(),
-        "packet_ready" | "routed" | "executing" | "executed" | "blocked" | "bridge_request_pending"
-    ) && receipt.lane_status.as_str()
-        != normalize_run_graph_lane_status(
-            Some(receipt.lane_status.as_str()),
-            &receipt.dispatch_status,
-            receipt.supersedes_receipt_id.as_deref(),
-            receipt.exception_path_receipt_id.as_deref(),
-        )
-        || !matches!(
-            receipt.dispatch_status.as_str(),
-            "packet_ready"
-                | "routed"
-                | "executing"
-                | "executed"
-                | "blocked"
-                | "bridge_request_pending"
-        )
+        dispatch_status,
+        "packet_ready" | "routed" | "bridge_request_pending" | "executing" | "executed" | "blocked"
+    )
 }
 
 pub(crate) fn latest_run_graph_evidence_snapshot_is_consistent(
@@ -4376,6 +4367,28 @@ impl StateStore {
             .await
     }
 
+    pub(crate) async fn run_graph_status_is_stale_for_task_continuation_binding(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<bool, StateStoreError> {
+        self.run_graph_status_is_stale_for_task_continuation_binding_from_task_rows(status, &[])
+            .await
+    }
+
+    pub(crate) async fn run_graph_status_is_stale_for_task_continuation_binding_from_task_rows(
+        &self,
+        status: &RunGraphStatus,
+        task_rows: &[TaskRecord],
+    ) -> Result<bool, StateStoreError> {
+        if Self::run_graph_status_is_reconciled_terminal_closure(status) {
+            return Ok(true);
+        }
+        self.run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+            status, task_rows,
+        )
+        .await
+    }
+
     pub(crate) async fn run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
         &self,
         status: &RunGraphStatus,
@@ -4799,6 +4812,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn terminal_closure_status_ignores_stale_resume_target_but_requires_no_next_node() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal",
+            "implementation",
+            "implementation",
+        );
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.next_node = None;
+        status.resume_target = "none".to_string();
+
+        assert!(terminal_closure_status(&status));
+
+        status.resume_target = "dispatch.verification".to_string();
+
+        assert!(terminal_closure_status(&status));
+
+        status.next_node = Some("verification".to_string());
+
+        assert!(!terminal_closure_status(&status));
+    }
+
     fn write_release_admission_snapshot(state_root: &std::path::Path, run_id: &str) {
         let runtime_dir = state_root.join("runtime-consumption");
         fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
@@ -4911,6 +4947,54 @@ mod tests {
             )
             .await
             .expect("task row lookup should succeed"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn task_continuation_binding_stale_classifier_retires_reconciled_terminal_closure() {
+        let root = temp_run_graph_root("vida-terminal-closure-stale-binding");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let mut status = sample_run_graph_status();
+        status.run_id = "terminal-closure-run".to_string();
+        status.task_id = "closed-runtime-task".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        status.policy_gate = "historical_closed_task_stale_run_retired".to_string();
+
+        assert!(store
+            .run_graph_status_is_stale_for_task_continuation_binding(&status)
+            .await
+            .expect("terminal closure classifier should succeed"));
+
+        let mut malicious_status = status.clone();
+        malicious_status.run_id = "malicious-retired-run".to_string();
+        malicious_status.task_id = "still-active-runtime-task".to_string();
+        malicious_status.active_node = "implementation".to_string();
+        malicious_status.handoff_state = "awaiting_review".to_string();
+        malicious_status.context_state = "open".to_string();
+        malicious_status.checkpoint_kind = "execution_cursor".to_string();
+        malicious_status.recovery_ready = true;
+
+        assert!(!store
+            .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
+            .await
+            .expect("contradictory retired closure classifier should fail closed"));
+
+        let mut open_status = sample_run_graph_status();
+        open_status.run_id = "active-run".to_string();
+        open_status.task_id = "active-runtime-task".to_string();
+        assert!(!store
+            .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
+            .await
+            .expect("active status classifier should succeed"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -5119,8 +5203,27 @@ mod tests {
                 "source_blocker_code": "coach_rework_required",
                 "downstream_dispatch_ready": false,
                 "downstream_dispatch_blockers": ["coach_rework_required"],
-                "downstream_dispatch_target": "verification",
-                "downstream_dispatch_result_path": result_path.display().to_string()
+                "downstream_dispatch_target": "tester",
+                "downstream_dispatch_result_path": result_path.display().to_string(),
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "lane_catalog": {
+                                    "developer": {
+                                        "dispatch_target": "developer",
+                                        "task_class": "implementation"
+                                    },
+                                    "tester": {
+                                        "dispatch_target": "tester",
+                                        "task_class": "verification"
+                                    }
+                                },
+                                "execution_lane_sequence": ["developer", "tester"]
+                            }
+                        }
+                    }
+                }
             }))
             .expect("serialize packet"),
         )
@@ -5612,15 +5715,39 @@ mod tests {
     }
 
     #[test]
-    fn bridge_request_pending_exception_takeover_receipt_signal_is_not_ambiguous() {
-        let mut receipt = sample_dispatch_receipt("run-bridge-request-pending-exception");
-        receipt.dispatch_target = "specifier".to_string();
-        receipt.dispatch_status = "bridge_request_pending".to_string();
-        receipt.lane_status = "lane_exception_takeover".to_string();
-        receipt.exception_path_receipt_id = Some("exception-receipt".to_string());
-        receipt.supersedes_receipt_id = Some("exception-receipt".to_string());
-
-        let summary = RunGraphDispatchReceiptSummary::from_receipt(receipt);
+    fn bridge_request_pending_lane_open_dispatch_receipt_signal_is_not_ambiguous() {
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(RunGraphDispatchReceipt {
+            run_id: "run-bridge-request-pending-signal".to_string(),
+            dispatch_target: "analyst".to_string(),
+            dispatch_status: "bridge_request_pending".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_packet_path: Some("runtime-consumption/dispatch-packets/run.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some(
+                "bridge request is pending host execution evidence".to_string(),
+            ),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analyst".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-15T08:00:00Z".to_string(),
+        });
 
         assert!(!latest_run_graph_dispatch_receipt_signal_is_ambiguous(
             &summary
@@ -10026,6 +10153,10 @@ mod tests {
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("task-replay-lineage", "open"))
+            .await
+            .expect("seed replay lineage task");
 
         let mut status = sample_run_graph_status();
         status.run_id = "run-replay-lineage".to_string();

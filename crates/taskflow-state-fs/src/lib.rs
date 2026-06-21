@@ -14,7 +14,7 @@ pub struct TaskSnapshot {
 #[must_use]
 pub fn snapshot_from_store(store: &impl TaskStore) -> TaskSnapshot {
     let mut tasks: Vec<TaskRecord> = store.list_tasks().into_iter().cloned().collect();
-    tasks.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+    tasks.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
 
     let mut dependencies: Vec<DependencyEdge> = tasks
         .iter()
@@ -22,9 +22,13 @@ pub fn snapshot_from_store(store: &impl TaskStore) -> TaskSnapshot {
         .collect();
     dependencies.sort_by(|left, right| {
         left.issue_id
-            .0
-            .cmp(&right.issue_id.0)
-            .then_with(|| left.depends_on_id.0.cmp(&right.depends_on_id.0))
+            .as_str()
+            .cmp(right.issue_id.as_str())
+            .then_with(|| {
+                left.depends_on_id
+                    .as_str()
+                    .cmp(right.depends_on_id.as_str())
+            })
             .then_with(|| left.dependency_type.cmp(&right.dependency_type))
     });
 
@@ -117,7 +121,7 @@ mod tests {
         assert_eq!(loaded.tasks.len(), 1);
         assert_eq!(loaded.dependencies.len(), 1);
         assert_eq!(
-            loaded.dependencies[0].depends_on_id.0,
+            loaded.dependencies[0].depends_on_id.as_str(),
             "vida-rf1-taskflow-core"
         );
     }
@@ -149,15 +153,15 @@ mod tests {
         let snapshot = snapshot_from_store(&store);
 
         assert_eq!(snapshot.tasks.len(), 2);
-        assert_eq!(snapshot.tasks[0].id.0, "vida-rf1-taskflow-core");
-        assert_eq!(snapshot.tasks[1].id.0, "vida-rf1-taskflow-runtime");
+        assert_eq!(snapshot.tasks[0].id.as_str(), "vida-rf1-taskflow-core");
+        assert_eq!(snapshot.tasks[1].id.as_str(), "vida-rf1-taskflow-runtime");
         assert_eq!(snapshot.dependencies.len(), 2);
         assert_eq!(
-            snapshot.dependencies[0].depends_on_id.0,
+            snapshot.dependencies[0].depends_on_id.as_str(),
             "vida-rf1-taskflow-core"
         );
         assert_eq!(
-            snapshot.dependencies[1].depends_on_id.0,
+            snapshot.dependencies[1].depends_on_id.as_str(),
             "vida-rf1-taskflow-state"
         );
     }
@@ -192,7 +196,10 @@ mod tests {
 
         let dependencies = store.list_dependencies(&TaskId::new("vida-rf1-taskflow-runtime"));
         assert_eq!(dependencies.len(), 1);
-        assert_eq!(dependencies[0].depends_on_id.0, "vida-rf1-taskflow-state");
+        assert_eq!(
+            dependencies[0].depends_on_id.as_str(),
+            "vida-rf1-taskflow-state"
+        );
     }
 
     #[test]
@@ -221,11 +228,14 @@ mod tests {
 
         let tasks = restored.list_tasks();
         assert_eq!(tasks.len(), 2);
-        assert_eq!(tasks[0].id.0, "vida-rf1-taskflow-runtime");
-        assert_eq!(tasks[1].id.0, "vida-rf1-taskflow-state");
+        assert_eq!(tasks[0].id.as_str(), "vida-rf1-taskflow-runtime");
+        assert_eq!(tasks[1].id.as_str(), "vida-rf1-taskflow-state");
 
         let dependencies = restored.list_dependencies(&TaskId::new("vida-rf1-taskflow-runtime"));
         assert_eq!(dependencies.len(), 1);
-        assert_eq!(dependencies[0].depends_on_id.0, "vida-rf1-taskflow-state");
+        assert_eq!(
+            dependencies[0].depends_on_id.as_str(),
+            "vida-rf1-taskflow-state"
+        );
     }
 }

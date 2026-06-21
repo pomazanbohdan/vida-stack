@@ -3,7 +3,7 @@ use std::process::Command;
 use serde_json::Value;
 
 fn vida() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_vida"))
+    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
 }
 
 fn vida_timing_from_stderr(stderr: &[u8]) -> Value {

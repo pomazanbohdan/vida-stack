@@ -228,11 +228,11 @@ Minimum successful result:
   "carrier_id": "junior",
   "status": "pass",
   "execution_state": "executed",
-  "decision": "pass",
-  "verdict": "implemented",
+  "decision": "approve",
+  "verdict": "pass",
   "blocker_codes": [],
   "rework_target": null,
-  "allowed_next_node": "coach",
+  "allowed_next_node": "next",
   "host_agent_id": "...",
   "summary": "..."
 }

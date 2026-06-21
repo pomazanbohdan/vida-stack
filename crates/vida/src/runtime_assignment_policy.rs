@@ -167,6 +167,29 @@ pub(crate) fn backend_admissibility_key_for_task_class(
     }
 }
 
+pub(crate) fn declared_task_class_supports_requested(
+    declared_task_class: &str,
+    requested_task_class: &str,
+) -> bool {
+    let declared_task_class = declared_task_class.trim();
+    let requested_task_class = requested_task_class.trim();
+    if declared_task_class.is_empty() || requested_task_class.is_empty() {
+        return false;
+    }
+    if declared_task_class == requested_task_class {
+        return true;
+    }
+
+    let Some(declared_key) = backend_admissibility_key_for_task_class(declared_task_class) else {
+        return false;
+    };
+    let Some(requested_key) = backend_admissibility_key_for_task_class(requested_task_class) else {
+        return false;
+    };
+
+    declared_task_class == declared_key.as_str() && declared_key == requested_key
+}
+
 pub(crate) fn backend_admissibility_key_for_dispatch_target(
     dispatch_target: &str,
     dispatch_contract_lane: Option<&DispatchContractLane<'_>>,
@@ -561,7 +584,7 @@ pub(crate) fn role_supports_task_class(role: &serde_json::Value, task_class: &st
     task_classes.is_empty()
         || task_classes
             .iter()
-            .any(|configured| configured_task_class_supports_requested(configured, task_class))
+            .any(|declared| declared_task_class_supports_requested(declared, task_class))
 }
 
 #[cfg(test)]
@@ -713,5 +736,26 @@ mod tests {
         );
         assert_eq!(canonical_dispatch_target_name("release/closure"), "closure");
         assert_eq!(canonical_dispatch_target_name("custom-lane"), "custom-lane");
+    }
+
+    #[test]
+    fn generic_task_class_declaration_supports_canonical_alias_request() {
+        assert!(declared_task_class_supports_requested(
+            "coach",
+            "validation"
+        ));
+        assert!(declared_task_class_supports_requested(
+            "verification",
+            "release_readiness"
+        ));
+    }
+
+    #[test]
+    fn specific_task_class_alias_does_not_claim_generic_request() {
+        assert!(!declared_task_class_supports_requested(
+            "validation",
+            "coach"
+        ));
+        assert!(!declared_task_class_supports_requested("custom", "coach"));
     }
 }

@@ -160,6 +160,29 @@ pub(crate) fn dispatch_rework_route_from_receipt_fields(
     None
 }
 
+pub(crate) fn authorized_dispatch_rework_route_from_receipt_fields(
+    downstream_dispatch_result_path: Option<&str>,
+    dispatch_result_path: Option<&str>,
+    dispatch_packet_path: Option<&str>,
+    completed_dispatch_target: &str,
+) -> Option<DispatchReworkRoute> {
+    let packet = dispatch_packet_path.and_then(read_dispatch_packet_json)?;
+    let execution_plan = packet_role_selection_execution_plan(&packet)?;
+    let completed_target = completed_result_target(&packet, completed_dispatch_target);
+    for result_path in dispatch_result_path_candidates_from_receipt_fields(
+        downstream_dispatch_result_path,
+        dispatch_result_path,
+        dispatch_packet_path,
+    ) {
+        if let Some(route) = dispatch_rework_route_from_result_path(&result_path) {
+            if rework_route_is_authorized(&execution_plan, &completed_target, &route) {
+                return Some(route);
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn dispatch_result_path_candidates_from_receipt_fields(
     downstream_dispatch_result_path: Option<&str>,
     dispatch_result_path: Option<&str>,
@@ -200,41 +223,73 @@ pub(crate) fn dispatch_result_path_candidates_from_receipt_fields(
     paths
 }
 
-fn dispatch_result_path_candidates_from_receipt_fields_and_state_root(
-    state_root: Option<&Path>,
-    run_id: &str,
-    downstream_dispatch_result_path: Option<&str>,
-    dispatch_result_path: Option<&str>,
-    dispatch_packet_path: Option<&str>,
-) -> Vec<String> {
-    let mut paths = dispatch_result_path_candidates_from_receipt_fields(
-        downstream_dispatch_result_path,
-        dispatch_result_path,
-        dispatch_packet_path,
-    );
-    if let Some(state_root) = state_root {
-        let result_dir = state_root
-            .join("runtime-consumption")
-            .join("dispatch-results");
-        if let Ok(entries) = std::fs::read_dir(result_dir) {
-            let mut result_paths = entries
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(std::ffi::OsStr::to_str)
-                        .is_some_and(|name| {
-                            name.starts_with(&format!("{run_id}-")) && name.ends_with(".json")
-                        })
-                })
-                .collect::<Vec<_>>();
-            result_paths.sort();
-            for result_path in result_paths.into_iter().rev() {
-                push_non_empty_path(&mut paths, result_path.to_str());
-            }
-        }
+fn read_dispatch_packet_json(path: &str) -> Option<serde_json::Value> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
     }
-    paths
+    let path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn packet_role_selection_execution_plan(packet: &serde_json::Value) -> Option<serde_json::Value> {
+    packet
+        .get("role_selection_full")
+        .or_else(|| packet.get("role_selection"))
+        .and_then(|role_selection| role_selection.get("execution_plan"))
+        .cloned()
+}
+
+fn completed_result_target(packet: &serde_json::Value, fallback: &str) -> String {
+    [
+        packet.get("downstream_dispatch_target"),
+        packet.get("dispatch_target"),
+        packet.get("source_dispatch_target"),
+    ]
+    .into_iter()
+    .find_map(|value| {
+        value
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.replace('-', "_"))
+    })
+    .unwrap_or_else(|| fallback.trim().replace('-', "_"))
+}
+
+pub(crate) fn rework_route_is_authorized(
+    execution_plan: &serde_json::Value,
+    completed_dispatch_target: &str,
+    route: &DispatchReworkRoute,
+) -> bool {
+    let Some(rework_resolution) = crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
+        execution_plan,
+        &route.rework_target,
+    ) else {
+        return false;
+    };
+    let Some(completed_resolution) = crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
+        execution_plan,
+        completed_dispatch_target,
+    ) else {
+        return false;
+    };
+    let allowed = route.allowed_next_node.trim();
+    if allowed != rework_resolution.dispatch_target
+        && allowed != format!("{}_rework", rework_resolution.dispatch_target)
+    {
+        return false;
+    }
+    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
+    let sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+    let rework_index = sequence
+        .iter()
+        .position(|target| target == &rework_resolution.dispatch_target);
+    let completed_index = sequence
+        .iter()
+        .position(|target| target == &completed_resolution.dispatch_target);
+    matches!((rework_index, completed_index), (Some(rework_index), Some(completed_index)) if rework_index < completed_index)
 }
 
 fn push_json_string_path(paths: &mut Vec<String>, value: &serde_json::Value, field_names: &[&str]) {
@@ -542,7 +597,7 @@ pub(crate) fn canonical_lane_execution_receipt_artifact_json(
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_rework_route_from_result, dispatch_success_route_from_result};
+    use super::*;
 
     #[test]
     fn dispatch_rework_route_accepts_legacy_top_level_completion_verdict() {
@@ -599,92 +654,58 @@ mod tests {
         assert!(dispatch_rework_route_from_result(&result).is_none());
     }
 
-    #[test]
-    fn dispatch_success_route_accepts_typed_pass_verdict() {
-        let result = serde_json::json!({
-            "status": "pass",
-            "execution_state": "executed",
-            "decision": "pass",
-            "verdict": "implemented",
-            "blocker_codes": [],
-            "allowed_next_node": "designer"
-        });
-
-        let route = dispatch_success_route_from_result(&result)
-            .expect("typed pass should expose downstream success route");
-        assert_eq!(route, "designer");
+    fn execution_plan() -> serde_json::Value {
+        serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "developer": {"dispatch_target": "developer", "task_class": "implementation"},
+                        "tester": {"dispatch_target": "tester", "task_class": "verification"},
+                        "release_admin": {"dispatch_target": "release_admin", "task_class": "release"}
+                    },
+                    "execution_lane_sequence": ["developer", "tester"]
+                }
+            }
+        })
     }
 
     #[test]
-    fn dispatch_success_route_defaults_legacy_lane_completion_pass_to_next() {
-        let result = serde_json::json!({
-            "artifact_kind": "runtime_lane_completion_result",
-            "status": "pass",
-            "execution_state": "executed",
-            "receipt_status": "pass",
-            "completed_target": "coach_implementation_gate"
-        });
+    fn rework_route_authorization_accepts_configured_backward_rework_edge() {
+        let route = DispatchReworkRoute {
+            rework_target: "developer".to_string(),
+            allowed_next_node: "developer_rework".to_string(),
+            blocker_code: Some("verification_rework_required".to_string()),
+        };
 
-        let route = dispatch_success_route_from_result(&result)
-            .expect("legacy pass result should replay through configured next lane");
-        assert_eq!(route, "next");
+        assert!(rework_route_is_authorized(
+            &execution_plan(),
+            "tester",
+            &route
+        ));
     }
 
     #[test]
-    fn dispatch_success_route_defaults_legacy_closure_pass_to_terminal_closure() {
-        let result = serde_json::json!({
-            "artifact_kind": "runtime_lane_completion_result",
-            "status": "pass",
-            "execution_state": "executed",
-            "receipt_status": "pass",
-            "dispatch_target": "closure"
-        });
+    fn rework_route_authorization_rejects_artifact_controlled_unknown_or_unsequenced_lane() {
+        let unknown = DispatchReworkRoute {
+            rework_target: "developer".to_string(),
+            allowed_next_node: "release_admin".to_string(),
+            blocker_code: Some("verification_rework_required".to_string()),
+        };
+        let unsequenced_target = DispatchReworkRoute {
+            rework_target: "release_admin".to_string(),
+            allowed_next_node: "release_admin".to_string(),
+            blocker_code: Some("verification_rework_required".to_string()),
+        };
 
-        let route = dispatch_success_route_from_result(&result)
-            .expect("legacy closure pass should expose terminal closure");
-        assert_eq!(route, "terminal_closure");
-    }
-
-    #[test]
-    fn dispatch_success_route_normalizes_abstract_next_for_closure_completion() {
-        let result = serde_json::json!({
-            "artifact_kind": "runtime_lane_completion_result",
-            "status": "pass",
-            "execution_state": "executed",
-            "decision": "approve",
-            "verdict": "pass",
-            "blocker_codes": [],
-            "allowed_next_node": "next",
-            "completed_target": "closure",
-            "closure_ready": true
-        });
-
-        let route = dispatch_success_route_from_result(&result)
-            .expect("persisted closure pass should normalize abstract next");
-        assert_eq!(route, "terminal_closure");
-    }
-
-    #[test]
-    fn dispatch_success_route_rejects_incomplete_pass_without_completed_target() {
-        let result = serde_json::json!({
-            "artifact_kind": "runtime_lane_completion_result",
-            "status": "pass",
-            "execution_state": "executed"
-        });
-
-        assert!(dispatch_success_route_from_result(&result).is_none());
-    }
-
-    #[test]
-    fn dispatch_success_route_rejects_blocked_verdict() {
-        let result = serde_json::json!({
-            "status": "blocked",
-            "decision": "rework_required",
-            "verdict": "rework_required",
-            "blocker_codes": ["missing_scope"],
-            "allowed_next_node": "developer_rework"
-        });
-
-        assert!(dispatch_success_route_from_result(&result).is_none());
+        assert!(!rework_route_is_authorized(
+            &execution_plan(),
+            "tester",
+            &unknown
+        ));
+        assert!(!rework_route_is_authorized(
+            &execution_plan(),
+            "tester",
+            &unsequenced_target
+        ));
     }
 }

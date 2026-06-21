@@ -34,6 +34,10 @@ fn terminal_completed_without_next_unit(status: &RunGraphStatus) -> bool {
             .is_none()
 }
 
+fn explicit_task_bind_allowed_for_status(status: &RunGraphStatus, task_id: &str) -> bool {
+    terminal_completed_without_next_unit(status) || status.task_id.trim() == task_id.trim()
+}
+
 fn args_request_json(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--json")
 }
@@ -496,13 +500,13 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
         }
     };
     let binding = if let Some(task_id) = task_id.as_deref() {
-        if !terminal_completed_without_next_unit(&status) {
+        if !explicit_task_bind_allowed_for_status(&status, task_id) {
             return emit_continuation_bind_error(
                 as_json,
                 Some(&run_id),
                 Some(task_id),
                 format!(
-                    "Explicit --task-id continuation binding is only allowed after run `{run_id}` reaches closure_complete with no downstream target."
+                    "Explicit --task-id continuation binding is only allowed for the active run task before closure_complete, or after run `{run_id}` reaches closure_complete with no downstream target."
                 ),
                 "continuation_binding_lifecycle_not_closed",
                 1,
@@ -611,9 +615,9 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_run_graph_continuation_binding, build_task_graph_continuation_binding,
-        continuation_bind_blocked_payload, continuation_bind_success_payload, parse_bind_args,
-        run_taskflow_continuation, sync_run_graph_continuation_binding,
-        terminal_completed_without_next_unit,
+        continuation_bind_blocked_payload, continuation_bind_success_payload,
+        explicit_task_bind_allowed_for_status, parse_bind_args, run_taskflow_continuation,
+        sync_run_graph_continuation_binding, terminal_completed_without_next_unit,
     };
     use std::{
         fs,
@@ -792,6 +796,22 @@ mod tests {
         assert_eq!(binding.active_bounded_unit["kind"], "task_graph_task");
         assert_eq!(binding.active_bounded_unit["task_status"], "in_progress");
         assert_eq!(binding.request_text.as_deref(), Some("Bounded task"));
+    }
+
+    #[test]
+    fn explicit_task_bind_allowed_for_active_same_run_task_before_terminal_closure() {
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status("run-1", "planning", "task-42");
+        status.task_id = "task-42".to_string();
+        status.active_node = "planning".to_string();
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "analyst_dispatch_ready".to_string();
+
+        assert!(explicit_task_bind_allowed_for_status(&status, "task-42"));
+        assert!(!explicit_task_bind_allowed_for_status(
+            &status,
+            "other-task"
+        ));
     }
 
     #[test]

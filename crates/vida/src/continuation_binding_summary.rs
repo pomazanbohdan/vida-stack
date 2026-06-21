@@ -440,8 +440,9 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
     let active_run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
     let delegated_cycle_open = latest_run_graph_recovery
         .is_some_and(|recovery| recovery.delegation_gate.delegated_cycle_open);
-    let terminal_retired_runtime_run =
-        crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
+    let terminal_retired_runtime_run = crate::runtime_dispatch_receipt_helpers::
+        recovery_summary_is_reconciled_terminal_retired_runtime_run(
+            latest_run_graph_status,
             latest_run_graph_recovery,
         );
     let exception_takeover_is_resumable =
@@ -471,7 +472,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
         })
         .unwrap_or_default();
     if let Some(status) = latest_run_graph_status {
-        if latest_run_graph_task_missing && terminal_retired_runtime_run {
+        if terminal_retired_runtime_run {
             return serde_json::json!({
                 "status": "idle",
                 "continuation_allowed": false,
@@ -1263,7 +1264,7 @@ pub(crate) fn add_taskflow_active_work_truth_with_session_claims(
 ) -> serde_json::Value {
     let summary_active_unit_missing = summary
         .get("active_bounded_unit")
-        .is_none_or(serde_json::Value::is_null);
+        .map_or(true, serde_json::Value::is_null);
     if summary_active_unit_missing && taskflow_active_candidates.len() > 1 {
         if let Some(candidate) = current_session_taskflow_candidate(
             &taskflow_active_candidates,
@@ -1385,7 +1386,9 @@ fn current_session_taskflow_candidate<'a>(
     }
 
     for candidate in candidates {
-        let task_id = candidate_task_id(candidate)?;
+        let Some(task_id) = candidate_task_id(candidate) else {
+            return None;
+        };
         if task_id == selected_task_id {
             continue;
         }
@@ -1528,6 +1531,7 @@ mod tests {
     use super::{
         add_taskflow_active_work_truth, add_taskflow_active_work_truth_with_session_claims,
         build_continuation_binding_summary, build_continuation_binding_summary_with_idle_policy,
+        build_continuation_binding_summary_with_task_authority,
         taskflow_active_candidates_from_tasks, taskflow_active_work_binding_is_authoritative,
     };
 
@@ -1870,6 +1874,53 @@ mod tests {
             "not_applicable_no_active_work"
         );
         assert_eq!(summary["stale_run_graph_status"]["task_id"], task_id);
+    }
+
+    #[test]
+    fn closed_task_terminal_retired_runtime_run_is_idle_even_with_legacy_downstream_blocker() {
+        let task_id = "closed-retired-terminal-task";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(task_id, "closure", "closure");
+        status.run_id = task_id.to_string();
+        status.task_id = task_id.to_string();
+        status.active_node = "closure".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.next_node = None;
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        status.policy_gate = "historical_closed_task_stale_run_retired".to_string();
+
+        let recovery = crate::state_store::RunGraphRecoverySummary::from_status(status.clone());
+        let mut receipt = exception_takeover_dispatch(task_id);
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = "lane_completed".to_string();
+        receipt.blocker_code = None;
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_blockers =
+            vec!["missing_configured_downstream_dispatch_target".to_string()];
+
+        let summary = build_continuation_binding_summary_with_task_authority(
+            None,
+            Some(&status),
+            Some(&recovery),
+            Some(&receipt),
+            None,
+            false,
+            false,
+            true,
+            false,
+        );
+
+        assert_eq!(summary["status"], "idle");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+        assert_eq!(summary["primary_path"], "idle_project_ready");
+        assert_eq!(summary["pause_boundary_gate"], "allowed_no_active_work");
+        assert_eq!(summary["next_actions"], serde_json::json!([]));
     }
 
     #[test]

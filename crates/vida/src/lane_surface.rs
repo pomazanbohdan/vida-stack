@@ -9,18 +9,11 @@ use runtime_path_policy::{
 };
 use serde::Serialize;
 use taskflow_host_bridge::{
-    host_bridge_allowed_next_node_is_abstract_next,
     host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completion_authorized_request_artifacts, host_bridge_completion_retryable_blocker,
     host_bridge_completion_verdict, host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_requires_implementation_artifacts,
-    host_bridge_request_status_after_completion,
-    host_bridge_result_contract_decision_for_target_with_authorized_next,
-    host_bridge_result_decision_is_blocked, host_bridge_result_decision_is_pass,
-    host_bridge_result_verdict_contract_blockers_for_target_with_authorized_next,
-    host_bridge_result_verdict_fields_for_gate,
-    host_bridge_result_verdict_fields_from_typed_result, host_bridge_result_verdict_is_blocked,
-    host_bridge_result_verdict_is_pass,
+    host_bridge_request_status_after_completion, host_bridge_result_verdict_fields_for_gate,
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
@@ -138,11 +131,16 @@ enum LaneCommand<'a> {
     Complete {
         run_id: &'a str,
         receipt_id: &'a str,
-        idempotency_key: Option<&'a str>,
         host_bridge_request: Option<&'a str>,
         host_agent_id: Option<&'a str>,
         host_bridge_summary: Option<&'a str>,
-        host_bridge_result: HostBridgeCompletionResultArgs,
+        host_bridge_result_file: Option<&'a str>,
+        decision: Option<&'a str>,
+        verdict: Option<&'a str>,
+        allowed_next_node: Option<&'a str>,
+        blocker_codes: Option<&'a str>,
+        blocker_code: Vec<&'a str>,
+        rework_target: Option<&'a str>,
         state_dir: Option<&'a str>,
         as_json: bool,
     },
@@ -343,7 +341,7 @@ impl ExceptionTakeoverMetadata {
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--idempotency-key <key>] [--host-bridge-request <path>] [--host-agent-id <id>] [--decision <pass|blocked|rework_required>] [--verdict <implemented|pass|blocked|rework_required>] [--allowed-next-node <node>] [--blocker-codes <json-or-list>] [--blocker-code <code> ...] [--rework-target <target>] [--host-bridge-result-file <path>] [--host-bridge-summary <text>] [--state-dir <path>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]\n\nOptions:\n  --receipt-id <id>              Receipt id that proves the lane mutation source\n  --idempotency-key <key>        Stable key for retrying the same lane completion without applying a second transition\n  --reason <text>                Human-readable retire reason\n  --host-bridge-request <path>   Host bridge request artifact to complete\n  --host-agent-id <id>           Parent host agent id that executed the bridge request\n  --decision <value>             Typed host bridge decision such as pass, blocked, or rework_required\n  --verdict <value>              Typed host bridge verdict such as implemented, pass, blocked, or rework_required\n  --allowed-next-node <node>     Typed next state-machine node authorized by the host bridge result\n  --blocker-codes <json-or-list> Typed blocker code array for blocked/rework host bridge results; use [] for pass\n  --blocker-code <code>          One typed blocker code; may be repeated\n  --rework-target <target>       Rework target required for blocked/rework host bridge results\n  --host-bridge-result-file <path> Typed host bridge result JSON file under the VIDA state root\n  --host-bridge-summary <text>   Human-readable completion summary; display-only when typed result fields are present\n  --state-dir <path>             Override the TaskFlow state directory for this lane mutation\n  --reason-class <class>         Exception takeover reason class\n  --active-bounded-unit <unit>   Bounded unit authorized by the exception path\n  --owned-write-scope <path>     Receipt-bound write scope; may be repeated\n  --verification-step <text>     Verification step for exception takeover; may be repeated\n  --activate                     Activate the exception takeover immediately\n  --completed                    Reclaim completed lanes\n  --host-agents                  Include host-agent lane handles during reclaim\n  --json                         Emit machine-readable JSON output\n  -h, --help                     Print help"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--host-bridge-result-file <path>] [--decision <decision>] [--verdict <verdict>] [--allowed-next-node <node>] [--blocker-codes <json-or-list>] [--blocker-code <code> ...] [--rework-target <target>] [--state-dir <path>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]\n\nOptions:\n  --receipt-id <id>              Receipt id that proves the lane mutation source\n  --reason <text>                Human-readable retire reason\n  --host-bridge-request <path>   Host bridge request artifact to complete\n  --host-agent-id <id>           Parent host agent id that executed the bridge request\n  --host-bridge-summary <text>   Completion summary from the parent host adapter\n  --host-bridge-result-file <path> Completion result file from the parent host adapter\n  --decision <decision>          Host bridge completion decision\n  --verdict <verdict>            Host bridge completion verdict\n  --allowed-next-node <node>     Next workflow node allowed by completion\n  --blocker-codes <json-or-list> Completion blocker codes\n  --blocker-code <code>          Completion blocker code; may be repeated\n  --rework-target <target>       Workflow target for rework when completion is blocked\n  --state-dir <path>             Override the TaskFlow state directory for this lane mutation\n  --reason-class <class>         Exception takeover reason class\n  --active-bounded-unit <unit>   Bounded unit authorized by the exception path\n  --owned-write-scope <path>     Receipt-bound write scope; may be repeated\n  --verification-step <text>     Verification step for exception takeover; may be repeated\n  --activate                     Activate the exception takeover immediately\n  --completed                    Reclaim completed lanes\n  --host-agents                  Include host-agent lane handles during reclaim\n  --json                         Emit machine-readable JSON output\n  -h, --help                     Print help"
 }
 
 fn lane_retire_help() -> &'static str {
@@ -412,12 +410,17 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
         [head, run_id, rest @ ..] if head == "complete" => {
             let mut as_json = false;
             let mut receipt_id = None;
-            let mut idempotency_key = None;
             let mut host_bridge_request = None;
             let mut host_agent_id = None;
             let mut host_bridge_summary = None;
-            let mut host_bridge_result = HostBridgeCompletionResultArgs::default();
             let mut state_dir = None;
+            let mut host_bridge_result_file = None;
+            let mut decision = None;
+            let mut verdict = None;
+            let mut allowed_next_node = None;
+            let mut blocker_codes = None;
+            let mut blocker_code = Vec::new();
+            let mut rework_target = None;
             let mut index = 0;
             while index < rest.len() {
                 match rest[index].as_str() {
@@ -430,13 +433,6 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                             return Err(lane_usage().to_string());
                         };
                         receipt_id = Some(value.as_str());
-                        index += 2;
-                    }
-                    "--idempotency-key" => {
-                        let Some(value) = rest.get(index + 1) else {
-                            return Err(lane_usage().to_string());
-                        };
-                        idempotency_key = Some(value.as_str());
                         index += 2;
                     }
                     "--host-bridge-request" => {
@@ -460,60 +456,60 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                         host_bridge_summary = Some(value.as_str());
                         index += 2;
                     }
-                    "--host-bridge-result-file" | "--result-file" => {
+                    "--state-dir" => {
                         let Some(value) = rest.get(index + 1) else {
                             return Err(lane_usage().to_string());
                         };
-                        host_bridge_result.result_file = Some(value.to_string());
+                        state_dir = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--host-bridge-result-file" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        host_bridge_result_file = Some(value.as_str());
                         index += 2;
                     }
                     "--decision" => {
                         let Some(value) = rest.get(index + 1) else {
                             return Err(lane_usage().to_string());
                         };
-                        host_bridge_result.decision = Some(value.to_string());
+                        decision = Some(value.as_str());
                         index += 2;
                     }
                     "--verdict" => {
                         let Some(value) = rest.get(index + 1) else {
                             return Err(lane_usage().to_string());
                         };
-                        host_bridge_result.verdict = Some(value.to_string());
+                        verdict = Some(value.as_str());
                         index += 2;
                     }
                     "--allowed-next-node" => {
                         let Some(value) = rest.get(index + 1) else {
                             return Err(lane_usage().to_string());
                         };
-                        host_bridge_result.allowed_next_node = Some(value.to_string());
+                        allowed_next_node = Some(value.as_str());
                         index += 2;
                     }
                     "--blocker-codes" => {
                         let Some(value) = rest.get(index + 1) else {
                             return Err(lane_usage().to_string());
                         };
-                        host_bridge_result.blocker_codes_json = Some(value.to_string());
+                        blocker_codes = Some(value.as_str());
                         index += 2;
                     }
                     "--blocker-code" => {
                         let Some(value) = rest.get(index + 1) else {
                             return Err(lane_usage().to_string());
                         };
-                        host_bridge_result.blocker_codes.push(value.to_string());
+                        blocker_code.push(value.as_str());
                         index += 2;
                     }
                     "--rework-target" => {
                         let Some(value) = rest.get(index + 1) else {
                             return Err(lane_usage().to_string());
                         };
-                        host_bridge_result.rework_target = Some(value.to_string());
-                        index += 2;
-                    }
-                    "--state-dir" => {
-                        let Some(value) = rest.get(index + 1) else {
-                            return Err(lane_usage().to_string());
-                        };
-                        state_dir = Some(value.as_str());
+                        rework_target = Some(value.as_str());
                         index += 2;
                     }
                     _ => return Err(lane_usage().to_string()),
@@ -525,11 +521,16 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
             Ok(LaneCommand::Complete {
                 run_id,
                 receipt_id,
-                idempotency_key,
                 host_bridge_request,
                 host_agent_id,
                 host_bridge_summary,
-                host_bridge_result,
+                host_bridge_result_file,
+                decision,
+                verdict,
+                allowed_next_node,
+                blocker_codes,
+                blocker_code,
+                rework_target,
                 state_dir,
                 as_json,
             })
@@ -1029,31 +1030,8 @@ fn lane_ready_downstream_next_action(
     if blocked || !lane_summary_has_ready_downstream_handoff(summary) {
         return None;
     }
-    let existing_command = summary
-        .downstream_dispatch_command
-        .as_deref()
-        .map(str::trim)
-        .filter(|command| !command.is_empty());
-    if existing_command.is_some_and(|command| !command.starts_with("vida agent-init")) {
-        return None;
-    }
-    let command = if let Some(command) = existing_command {
-        let mut command = command.to_string();
-        if !command.contains("--execute-dispatch") {
-            if let Some(json_index) = command.find(" --json") {
-                command.insert_str(json_index, " --execute-dispatch");
-            } else {
-                command.push_str(" --execute-dispatch");
-            }
-        }
-        if !command.contains("--json") {
-            command.push_str(" --json");
-        }
-        command
-    } else {
-        let packet_path = summary.downstream_dispatch_packet_path.as_deref()?;
-        crate::runtime_dispatch_state::agent_init_execute_command_for_packet_path(packet_path)
-    };
+    let command =
+        crate::continuation_binding_summary::downstream_dispatch_command_for_summary(summary)?;
     Some(LaneNextAction {
         command: command.clone(),
         surface: lane_recommended_surface_for_command(&command),
@@ -1148,7 +1126,7 @@ fn lane_blocked_next_action(
         .map(|value| format!("--owned-write-scope {}", crate::shell_quote(value)))
         .collect::<Vec<_>>();
     if owned_write_scope_args.is_empty() {
-        let command = format!("vida task show {} --json", crate::shell_quote(task_id));
+        let command = format!("vida task show {}", crate::shell_quote(task_id));
         return Some(LaneNextAction {
             surface: "vida task show".to_string(),
             command,
@@ -1551,20 +1529,6 @@ fn lane_summary_is_terminal_completed(
             .all(|value| value.trim().is_empty())
 }
 
-fn recovery_summary_is_terminal_closure(
-    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
-) -> bool {
-    recovery.is_some_and(|recovery| {
-        recovery.resume_status == "completed"
-            && recovery.active_node == "closure"
-            && recovery.lifecycle_stage == "closure_complete"
-            && recovery.resume_node.is_none()
-            && recovery.resume_target == "none"
-            && recovery.policy_gate == "not_required"
-            && !recovery.delegation_gate.delegated_cycle_open
-    })
-}
-
 fn lane_summary_raw_blocker_codes(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
     include_downstream: bool,
@@ -1680,15 +1644,6 @@ fn derive_lane_show_truth(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
 ) -> LaneShowTruth {
-    if lane_summary_is_terminal_completed(summary) || recovery_summary_is_terminal_closure(recovery)
-    {
-        return LaneShowTruth {
-            blocked: false,
-            blocker_codes: Vec::new(),
-            next_actions: Vec::new(),
-        };
-    }
-
     let takeover_state = crate::release1_contracts::exception_takeover_state(
         summary.exception_path_receipt_id.as_deref(),
         summary.supersedes_receipt_id.as_deref(),
@@ -1802,8 +1757,7 @@ fn derive_lane_show_truth_with_exception_metadata(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     exception_path_metadata: Option<&ExceptionTakeoverMetadata>,
 ) -> LaneShowTruth {
-    if lane_summary_is_terminal_completed(summary) || recovery_summary_is_terminal_closure(recovery)
-    {
+    if lane_summary_is_terminal_completed(summary) {
         return LaneShowTruth {
             blocked: false,
             blocker_codes: Vec::new(),
@@ -2289,105 +2243,9 @@ fn exception_takeover_metadata_filename(run_id: &str) -> Result<String, String> 
         .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
     {
         return Err(format!(
-            "Run id `{run_id}` contains unsupported characters for exception takeover metadata filename."
-        ));
-    }
-    Ok(format!("{run_id}.json"))
-}
-
-fn exception_takeover_metadata_path(state_root: &Path, run_id: &str) -> Result<PathBuf, String> {
-    let file_name = exception_takeover_metadata_filename(run_id)?;
-    Ok(exception_takeover_metadata_dir(state_root).join(file_name))
-}
-
-fn read_exception_takeover_metadata(
-    state_root: &Path,
-    run_id: &str,
-) -> Result<Option<ExceptionTakeoverMetadata>, String> {
-    let path = exception_takeover_metadata_path(state_root, run_id)?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "Failed to read persisted exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    let metadata: ExceptionTakeoverMetadata = serde_json::from_str(&raw).map_err(|error| {
-        format!(
-            "Failed to decode persisted exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    metadata.validate()?;
-    Ok(Some(metadata))
-}
-
-fn write_exception_takeover_metadata(
-    state_root: &Path,
-    run_id: &str,
-    metadata: &ExceptionTakeoverMetadata,
-) -> Result<String, String> {
-    metadata.validate()?;
-    let dir = exception_takeover_metadata_dir(state_root);
-    std::fs::create_dir_all(&dir).map_err(|error| {
-        format!(
-            "Failed to create exception takeover metadata directory `{}`: {error}",
-            dir.display()
-        )
-    })?;
-    let path = exception_takeover_metadata_path(state_root, run_id)?;
-    let encoded = serde_json::to_string_pretty(metadata).map_err(|error| {
-        format!(
-            "Failed to encode exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    std::fs::write(&path, encoded).map_err(|error| {
-        format!(
-            "Failed to persist exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    Ok(path.display().to_string())
-}
-
-fn lane_mutation_status_guard(
-    run_id: &str,
-    status: Option<&crate::state_store::RunGraphStatus>,
-    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
-    receipt: &crate::state_store::RunGraphDispatchReceipt,
-) -> Result<(), String> {
-    let Some(status) = status else {
-        return Err(format!(
-            "Lane `{run_id}` has no authoritative run-graph status, so the lane surface cannot prove this run is still active for mutation."
-        ));
-    };
-    if receipt.lane_status == crate::LaneStatus::LaneSuperseded.as_str() {
-        return Err(format!(
-            "Lane `{run_id}` is already superseded; record a new active lane instead of mutating superseded evidence."
-        ));
-    }
-    let terminal_completed_without_next_unit = status.lifecycle_stage == "closure_complete"
-        && status
-            .next_node
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none();
-    let recovery_terminal = recovery.is_some_and(|recovery| {
-        recovery.resume_status == "completed" && recovery.lifecycle_stage == "closure_complete"
-    });
-    if status.status == "completed" || terminal_completed_without_next_unit || recovery_terminal {
-        let next_action =
-            crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(
-                Some(run_id),
-            );
-        return Err(format!(
-            "Lane `{run_id}` is no longer active for mutation because run-graph status is terminal (`{}` / `{}`). Inspect `{}` for the persisted lane envelope and continuation evidence. {next_action}",
-            status.status, status.lifecycle_stage,
-            operator_output::command_text::human_command(&format!("vida lane show {run_id} --json")),
+            "lane_completion_revision_conflict: lane `{run_id}` changed while completion was being prepared; status_changed={}; receipt_changed={}; retry with a fresh lane receipt",
+            current.status_fingerprint != expected.status_fingerprint,
+            true,
         ));
     }
     Ok(())
@@ -2598,12 +2456,13 @@ fn validate_lane_packet_path(
     {
         return Ok(canonical_packet_path);
     }
-    if takeover_active
-        && under_state_root
-        && grandparent_name == "runtime-consumption"
-        && parent_name == "dispatch-packets"
-    {
-        return Ok(canonical_packet_path);
+    if takeover_active {
+        if under_state_root
+            && grandparent_name == "runtime-consumption"
+            && parent_name == "dispatch-packets"
+        {
+            return Ok(canonical_packet_path);
+        }
     }
     Err(format!(
         "Lane `{run_id}` packet path `{}` is outside VIDA runtime packet directories.",
@@ -2637,169 +2496,6 @@ struct HostBridgeCompletionEvidence {
     execution_state: String,
     blocker_code: Option<String>,
     blocker_codes: Vec<String>,
-    result_verdict: taskflow_host_bridge::HostBridgeResultVerdictFields,
-}
-
-#[derive(Clone, Debug, Default, Serialize)]
-struct HostBridgeCompletionResultArgs {
-    result_file: Option<String>,
-    decision: Option<String>,
-    verdict: Option<String>,
-    blocker_codes: Vec<String>,
-    blocker_codes_json: Option<String>,
-    rework_target: Option<String>,
-    allowed_next_node: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct LaneCompletionMutationSnapshot {
-    status_fingerprint: String,
-    receipt_fingerprint: String,
-}
-
-fn lane_completion_now() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("rfc3339 timestamp should render")
-}
-
-fn lane_completion_stable_hash_bytes(bytes: &[u8]) -> String {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("fnv1a64:{hash:016x}")
-}
-
-fn lane_completion_json_hash(value: &serde_json::Value) -> String {
-    let encoded = serde_json::to_vec(value).unwrap_or_else(|_| b"null".to_vec());
-    lane_completion_stable_hash_bytes(&encoded)
-}
-
-fn lane_completion_status_fingerprint(
-    status: Option<&crate::state_store::RunGraphStatus>,
-) -> String {
-    let value = match status {
-        Some(status) => serde_json::json!({
-            "present": true,
-            "run_id": status.run_id.as_str(),
-            "task_id": status.task_id.as_str(),
-            "task_class": status.task_class.as_str(),
-            "active_node": status.active_node.as_str(),
-            "next_node": status.next_node.as_deref(),
-            "status": status.status.as_str(),
-            "route_task_class": status.route_task_class.as_str(),
-            "selected_backend": status.selected_backend.as_str(),
-            "lane_id": status.lane_id.as_str(),
-            "lifecycle_stage": status.lifecycle_stage.as_str(),
-            "policy_gate": status.policy_gate.as_str(),
-            "handoff_state": status.handoff_state.as_str(),
-            "context_state": status.context_state.as_str(),
-            "checkpoint_kind": status.checkpoint_kind.as_str(),
-            "resume_target": status.resume_target.as_str(),
-            "recovery_ready": status.recovery_ready,
-        }),
-        None => serde_json::json!({ "present": false }),
-    };
-    lane_completion_json_hash(&value)
-}
-
-fn lane_completion_receipt_fingerprint(
-    receipt: &crate::state_store::RunGraphDispatchReceipt,
-) -> String {
-    lane_completion_json_hash(
-        &serde_json::to_value(receipt).unwrap_or_else(|_| serde_json::json!({})),
-    )
-}
-
-fn lane_completion_snapshot(
-    status: Option<&crate::state_store::RunGraphStatus>,
-    receipt: &crate::state_store::RunGraphDispatchReceipt,
-) -> LaneCompletionMutationSnapshot {
-    LaneCompletionMutationSnapshot {
-        status_fingerprint: lane_completion_status_fingerprint(status),
-        receipt_fingerprint: lane_completion_receipt_fingerprint(receipt),
-    }
-}
-
-async fn capture_lane_completion_snapshot(
-    store: &StateStore,
-    run_id: &str,
-) -> Result<LaneCompletionMutationSnapshot, String> {
-    let status = store
-        .run_graph_status(run_id)
-        .await
-        .map_err(|error| format!("Failed to read run-graph status `{run_id}`: {error}"))?;
-    let Some(receipt) = store
-        .run_graph_dispatch_receipt(run_id)
-        .await
-        .map_err(|error| format!("Failed to read lane receipt `{run_id}`: {error}"))?
-    else {
-        return Err(format!("Missing lane receipt for `{run_id}`."));
-    };
-    Ok(lane_completion_snapshot(Some(&status), &receipt))
-}
-
-async fn ensure_lane_completion_revision_unchanged(
-    store: &StateStore,
-    run_id: &str,
-    expected: &LaneCompletionMutationSnapshot,
-) -> Result<(), String> {
-    let current = capture_lane_completion_snapshot(store, run_id).await?;
-    if current.receipt_fingerprint != expected.receipt_fingerprint {
-        return Err(format!(
-            "lane_completion_revision_conflict: lane `{run_id}` changed while completion was being prepared; status_changed={}; receipt_changed={}; retry with a fresh lane receipt",
-            current.status_fingerprint != expected.status_fingerprint,
-            true,
-        ));
-    }
-    Ok(())
-}
-
-fn lane_completion_effective_idempotency_key(
-    receipt_id: &str,
-    idempotency_key: Option<&str>,
-) -> String {
-    idempotency_key
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| format!("explicit:{value}"))
-        .unwrap_or_else(|| format!("receipt:{receipt_id}"))
-}
-
-fn lane_completion_commit_record_id(run_id: &str, idempotency_key: &str) -> String {
-    let hash = lane_completion_json_hash(&serde_json::json!({
-        "run_id": run_id,
-        "idempotency_key": idempotency_key,
-    }))
-    .replace(':', "-");
-    format!("lane-completion-{hash}")
-}
-
-fn lane_completion_source_result_hash(
-    run_id: &str,
-    receipt_id: &str,
-    dispatch_target: &str,
-    completed_target: &str,
-    validated_packet_path: &str,
-    host_bridge_request: Option<&str>,
-    host_agent_id: Option<&str>,
-    host_bridge_summary: Option<&str>,
-    host_bridge_result: &HostBridgeCompletionResultArgs,
-) -> String {
-    lane_completion_json_hash(&serde_json::json!({
-        "schema_version": "lane-completion-source-v1",
-        "run_id": run_id,
-        "receipt_id": receipt_id,
-        "dispatch_target": dispatch_target,
-        "completed_target": completed_target,
-        "validated_packet_path": validated_packet_path,
-        "host_bridge_request": host_bridge_request,
-        "host_agent_id": host_agent_id,
-        "host_bridge_summary": host_bridge_summary,
-        "host_bridge_result": host_bridge_result,
-    }))
 }
 
 struct HostBridgeImplementationArtifacts {
@@ -2822,6 +2518,153 @@ struct HostBridgeTaskflowImplementationEvidence {
     blocker_codes: Vec<String>,
 }
 
+#[derive(Default)]
+struct HostBridgeCompletionResultArgs<'a> {
+    result_file: Option<&'a str>,
+    decision: Option<&'a str>,
+    verdict: Option<&'a str>,
+    allowed_next_node: Option<&'a str>,
+    blocker_codes: Option<&'a str>,
+    blocker_code: Vec<&'a str>,
+    rework_target: Option<&'a str>,
+}
+
+impl HostBridgeCompletionResultArgs<'_> {
+    fn explicit_blocker_codes(&self) -> Vec<String> {
+        let mut codes = Vec::new();
+        if let Some(blocker_codes) = self.blocker_codes {
+            codes.extend(parse_host_bridge_completion_blocker_codes(blocker_codes));
+        }
+        codes.extend(
+            self.blocker_code
+                .iter()
+                .flat_map(|code| parse_host_bridge_completion_blocker_codes(code)),
+        );
+        canonicalize_supplied_host_bridge_blocker_codes(codes)
+    }
+
+    fn indicates_blocked(&self) -> bool {
+        [self.decision, self.verdict]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .any(host_bridge_completion_result_value_is_blocked)
+            || self
+                .rework_target
+                .is_some_and(|value| !value.trim().is_empty())
+            || !self.explicit_blocker_codes().is_empty()
+    }
+}
+
+fn parse_host_bridge_completion_blocker_codes(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if let Ok(values) = serde_json::from_str::<Vec<String>>(trimmed) {
+        return values;
+    }
+    trimmed
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn canonicalize_supplied_host_bridge_blocker_codes<I>(codes: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut codes = codes
+        .into_iter()
+        .map(|code| code.trim().to_string())
+        .filter(|code| !code.is_empty())
+        .collect::<Vec<_>>();
+    codes.sort();
+    codes.dedup();
+    codes
+}
+
+fn host_bridge_completion_result_value_is_blocked(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "blocked"
+            | "failed"
+            | "failure"
+            | "error"
+            | "rework"
+            | "rework_required"
+            | "retry"
+            | "retry_required"
+    )
+}
+
+fn read_supplied_host_bridge_completion_result(
+    state_root: &Path,
+    result_file: Option<&str>,
+) -> Result<Option<serde_json::Value>, String> {
+    let Some(result_file) = result_file.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let normalized_path =
+        crate::runtime_dispatch_state::normalize_persisted_runtime_path(result_file);
+    let canonical_path = canonicalize_existing_state_path(
+        state_root,
+        Path::new(&normalized_path),
+        "host bridge result",
+    )?;
+    read_host_bridge_json_artifact_at_path(&canonical_path).map(Some)
+}
+
+fn supplied_host_bridge_completion_result_blocker_codes(
+    args: &HostBridgeCompletionResultArgs<'_>,
+    result: Option<&serde_json::Value>,
+) -> Vec<String> {
+    let mut codes = args.explicit_blocker_codes();
+    if let Some(result) = result {
+        if let Some(code) = result
+            .get("blocker_code")
+            .and_then(serde_json::Value::as_str)
+        {
+            codes.extend(parse_host_bridge_completion_blocker_codes(code));
+        }
+        if let Some(values) = result
+            .get("blocker_codes")
+            .and_then(serde_json::Value::as_array)
+        {
+            codes.extend(
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string),
+            );
+        }
+    }
+    canonicalize_supplied_host_bridge_blocker_codes(codes)
+}
+
+fn supplied_host_bridge_completion_result_is_blocked(
+    args: &HostBridgeCompletionResultArgs<'_>,
+    result: Option<&serde_json::Value>,
+) -> bool {
+    if args.indicates_blocked() {
+        return true;
+    }
+    let Some(result) = result else {
+        return false;
+    };
+    ["status", "execution_state", "decision", "verdict"]
+        .into_iter()
+        .filter_map(|field| result.get(field).and_then(serde_json::Value::as_str))
+        .any(host_bridge_completion_result_value_is_blocked)
+        || result
+            .get("rework_target")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        || !supplied_host_bridge_completion_result_blocker_codes(args, Some(result)).is_empty()
+}
+
 struct HostBridgeReceiptPaths {
     request_path: PathBuf,
     packet_path: Option<PathBuf>,
@@ -2835,240 +2678,7 @@ struct HostBridgeCompletionRequestContext {
     packet_path: String,
 }
 
-fn host_bridge_request_identity_field(request: &serde_json::Value, field: &str) -> Option<String> {
-    request
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn host_bridge_packet_active_field(packet: &serde_json::Value, field: &str) -> Option<String> {
-    let packet_template_kind = packet
-        .get("packet_template_kind")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    packet_template_kind
-        .and_then(|kind| packet.get(kind))
-        .and_then(|active| active.get(field))
-        .or_else(|| packet.get(field))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn host_bridge_request_packet_identity_field(
-    request: &serde_json::Value,
-    field: &str,
-) -> Option<String> {
-    let packet_path = host_bridge_request_identity_field(request, "packet_path")?;
-    let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(&packet_path);
-    let packet = read_host_bridge_json_artifact_at_path(&packet_path).ok()?;
-    host_bridge_packet_active_field(&packet, field)
-}
-
 const MAX_HOST_BRIDGE_REQUEST_BYTES: u64 = 1024 * 1024;
-
-fn host_bridge_completion_result_args_present(args: &HostBridgeCompletionResultArgs) -> bool {
-    args.result_file
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        || args
-            .decision
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        || args
-            .verdict
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        || args
-            .blocker_codes_json
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        || args
-            .blocker_codes
-            .iter()
-            .any(|value| !value.trim().is_empty())
-        || args
-            .rework_target
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        || args
-            .allowed_next_node
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-}
-
-fn parse_host_bridge_blocker_codes(
-    args: &HostBridgeCompletionResultArgs,
-) -> Result<Vec<String>, String> {
-    let mut blocker_codes = Vec::new();
-    if let Some(raw) = args
-        .blocker_codes_json
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if raw.starts_with('[') {
-            let parsed: serde_json::Value = serde_json::from_str(raw)
-                .map_err(|error| format!("Invalid --blocker-codes JSON array: {error}"))?;
-            let Some(rows) = parsed.as_array() else {
-                return Err("--blocker-codes must be a JSON string array or comma list".to_string());
-            };
-            for row in rows {
-                let Some(code) = row
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                else {
-                    return Err("--blocker-codes entries must be non-empty strings".to_string());
-                };
-                blocker_codes.push(code.to_string());
-            }
-        } else {
-            blocker_codes.extend(
-                raw.split(',')
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-            );
-        }
-    }
-    blocker_codes.extend(
-        args.blocker_codes
-            .iter()
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-    );
-    blocker_codes.sort();
-    blocker_codes.dedup();
-    Ok(blocker_codes)
-}
-
-fn read_host_bridge_completion_result_file(
-    state_root: &Path,
-    result_file: &str,
-) -> Result<serde_json::Value, String> {
-    let normalized_path =
-        crate::runtime_dispatch_state::normalize_persisted_runtime_path(result_file);
-    let canonical_path =
-        canonicalize_existing_regular_state_path(state_root, &normalized_path, "result")?;
-    read_host_bridge_json_artifact_at_path(&canonical_path)
-}
-
-fn normalized_host_bridge_completion_result(
-    state_root: &Path,
-    args: &HostBridgeCompletionResultArgs,
-) -> Result<Option<serde_json::Value>, String> {
-    if !host_bridge_completion_result_args_present(args) {
-        return Ok(None);
-    }
-    let mut result = if let Some(result_file) = args
-        .result_file
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        read_host_bridge_completion_result_file(state_root, result_file)?
-    } else {
-        serde_json::json!({})
-    };
-    let Some(object) = result.as_object_mut() else {
-        return Err("Host bridge typed result must be a JSON object.".to_string());
-    };
-    if let Some(decision) = args
-        .decision
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert("decision".to_string(), serde_json::json!(decision));
-    }
-    if let Some(verdict) = args
-        .verdict
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert("verdict".to_string(), serde_json::json!(verdict));
-    }
-    if args.blocker_codes_json.is_some() || !args.blocker_codes.is_empty() {
-        object.insert(
-            "blocker_codes".to_string(),
-            serde_json::json!(parse_host_bridge_blocker_codes(args)?),
-        );
-    }
-    if let Some(rework_target) = args
-        .rework_target
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert(
-            "rework_target".to_string(),
-            serde_json::json!(rework_target),
-        );
-    }
-    if let Some(allowed_next_node) = args
-        .allowed_next_node
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert(
-            "allowed_next_node".to_string(),
-            serde_json::json!(allowed_next_node),
-        );
-    }
-
-    let decision = object
-        .get("decision")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .map(ToOwned::to_owned);
-    let verdict = object
-        .get("verdict")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .map(ToOwned::to_owned);
-    if decision
-        .as_deref()
-        .is_some_and(host_bridge_result_decision_is_pass)
-        && verdict
-            .as_deref()
-            .is_some_and(host_bridge_result_verdict_is_pass)
-    {
-        object.insert("status".to_string(), serde_json::json!("pass"));
-        object.insert("execution_state".to_string(), serde_json::json!("executed"));
-        object
-            .entry("blocker_codes".to_string())
-            .or_insert_with(|| serde_json::json!([]));
-        object
-            .entry("rework_target".to_string())
-            .or_insert(serde_json::Value::Null);
-    } else if decision
-        .as_deref()
-        .is_some_and(host_bridge_result_decision_is_blocked)
-        || verdict
-            .as_deref()
-            .is_some_and(host_bridge_result_verdict_is_blocked)
-    {
-        object.insert("status".to_string(), serde_json::json!("blocked"));
-        object.insert("execution_state".to_string(), serde_json::json!("blocked"));
-    }
-    Ok(Some(result))
-}
 
 fn read_host_bridge_json_artifact_at_path(path: &Path) -> Result<serde_json::Value, String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
@@ -3151,10 +2761,9 @@ fn host_bridge_packet_confirms_active_request(
         .get("downstream_dispatch_status")
         .and_then(serde_json::Value::as_str)
         .map(str::trim);
-    (direct_target == Some(dispatch_target)
+    direct_target == Some(dispatch_target)
         && downstream_active_target == Some(dispatch_target)
-        && downstream_status == Some("blocked"))
-        || (direct_target == Some(dispatch_target) && downstream_status.is_none())
+        && downstream_status == Some("blocked")
 }
 
 fn host_bridge_request_is_retryable_completion_state(request: &serde_json::Value) -> bool {
@@ -3398,42 +3007,7 @@ fn validated_host_bridge_paths_from_receipt(
                 );
             }
         }
-        let request_paths = host_bridge_request_paths_from_request_object(&request)?;
-        let authoritative_paths = if let Some(dispatch_result_path) =
-            receipt.dispatch_result_path.as_deref()
-        {
-            let dispatch_result_path =
-                crate::runtime_dispatch_state::normalize_persisted_runtime_path(
-                    dispatch_result_path,
-                );
-            let dispatch_result_path = canonicalize_existing_regular_state_path(
-                state_root,
-                &dispatch_result_path,
-                "dispatch result",
-            )?;
-            if std::fs::symlink_metadata(&dispatch_result_path)
-                .map(|metadata| metadata.len() > MAX_HOST_BRIDGE_REQUEST_BYTES)
-                .unwrap_or(true)
-            {
-                None
-            } else {
-                let result = read_host_bridge_json_artifact_at_path(&dispatch_result_path)?;
-                match host_bridge_request_paths_from_dispatch_result(&result) {
-                    Ok(paths) => Some(paths),
-                    Err(error)
-                        if error.contains(
-                            "Persisted host bridge dispatch result is missing `host_tool_bridge_request`",
-                        ) =>
-                    {
-                        None
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-        } else {
-            None
-        };
-        authoritative_paths.unwrap_or(request_paths)
+        host_bridge_request_paths_from_request_object(&request)?
     } else {
         let Some(dispatch_result_path) = receipt.dispatch_result_path.as_deref() else {
             return Err(
@@ -3803,9 +3377,13 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
         Ok(request) => request,
         Err(_) => return HostBridgeTaskflowImplementationEvidence::default(),
     };
-    let task_id = host_bridge_request_identity_field(&request, "task_id")
-        .unwrap_or_else(|| run_id.to_string());
-    if task_id != run_id {
+    if request
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|task_id| task_id != run_id)
+    {
         return HostBridgeTaskflowImplementationEvidence {
             authority: None,
             taskflow_artifacts:
@@ -3813,21 +3391,7 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
             blocker_codes: vec!["host_bridge_request_task_mismatch".to_string()],
         };
     }
-    if request
-        .get("run_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|request_run_id| request_run_id != run_id)
-    {
-        return HostBridgeTaskflowImplementationEvidence {
-            authority: None,
-            taskflow_artifacts:
-                crate::runtime_dispatch_packets::TaskflowImplementationArtifacts::default(),
-            blocker_codes: vec!["host_bridge_request_run_mismatch".to_string()],
-        };
-    }
-    let task = match store.show_task(&task_id).await {
+    let task = match store.show_task(run_id).await {
         Ok(task) => task,
         Err(_) => {
             return HostBridgeTaskflowImplementationEvidence {
@@ -3842,7 +3406,7 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
         task_id: task.id.clone(),
         task_updated_at: task.updated_at.clone(),
     };
-    let taskflow_artifacts = match store.task_stage_attempts(&task_id, "implementation").await {
+    let taskflow_artifacts = match store.task_stage_attempts(run_id, "implementation").await {
         Ok(attempts) => {
             match crate::runtime_dispatch_packets::taskflow_attempt_implementation_artifacts(
                 &attempts,
@@ -3909,294 +3473,6 @@ fn host_bridge_completion_request_required(
                     .any(|blocker| host_bridge_completion_retryable_blocker(blocker))))
 }
 
-fn host_bridge_request_role_selection(
-    request: &serde_json::Value,
-) -> Option<crate::RuntimeConsumptionLaneSelection> {
-    let packet_path = request
-        .get("packet_path")
-        .or_else(|| request.get("source_dispatch_packet_path"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
-    let packet = crate::read_json_file_if_present(&packet_path)?;
-    serde_json::from_value::<crate::RuntimeConsumptionLaneSelection>(
-        packet.get("role_selection_full")?.clone(),
-    )
-    .ok()
-}
-
-fn typed_completion_result_is_pass(result: &serde_json::Value) -> bool {
-    result
-        .get("decision")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .is_some_and(host_bridge_result_decision_is_pass)
-        && result
-            .get("verdict")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .is_some_and(host_bridge_result_verdict_is_pass)
-}
-
-fn allowed_next_node_is_terminal_closure(allowed_next_node: &str) -> bool {
-    matches!(
-        allowed_next_node.trim().replace('-', "_").as_str(),
-        "terminal_closure" | "closure" | "closure_lane"
-    )
-}
-
-fn configured_completion_expected_next_target(
-    role_selection: &crate::RuntimeConsumptionLaneSelection,
-    dispatch_target: &str,
-) -> Option<String> {
-    crate::runtime_dispatch_state::resolve_completion_allowed_next_node(
-        role_selection,
-        dispatch_target,
-        "next",
-    )
-    .map(|resolution| resolution.dispatch_target)
-}
-
-fn configured_completion_allowed_next_node_is_match(
-    expected_next_target: &str,
-    allowed_next_node: &str,
-) -> bool {
-    let expected = crate::runtime_assignment_policy::canonical_dispatch_target_name(
-        expected_next_target.trim(),
-    );
-    let actual =
-        crate::runtime_assignment_policy::canonical_dispatch_target_name(allowed_next_node.trim());
-    expected == actual
-}
-
-fn configured_completion_allowed_next_node_is_valid(
-    role_selection: &crate::RuntimeConsumptionLaneSelection,
-    dispatch_target: &str,
-    allowed_next_node: &str,
-) -> bool {
-    if crate::runtime_dispatch_state::resolve_completion_allowed_next_node(
-        role_selection,
-        dispatch_target,
-        allowed_next_node,
-    )
-    .is_some()
-    {
-        return true;
-    }
-    allowed_next_node_is_terminal_closure(allowed_next_node)
-        && crate::runtime_dispatch_state::resolve_completion_allowed_next_node(
-            role_selection,
-            dispatch_target,
-            "next",
-        )
-        .is_none()
-}
-
-fn configured_rework_transition_target(value: &serde_json::Value) -> Option<String> {
-    if let Some(target) = value
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Some(target.to_string());
-    }
-    let object = value.as_object()?;
-    for key in [
-        "blocked_target",
-        "rework_target",
-        "target",
-        "dispatch_target",
-        "role_id",
-    ] {
-        if let Some(target) = object
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Some(target.to_string());
-        }
-    }
-    None
-}
-
-fn configured_completion_rework_target(
-    role_selection: &crate::RuntimeConsumptionLaneSelection,
-    dispatch_target: &str,
-    reported_rework_target: Option<&str>,
-) -> Option<String> {
-    let lane = crate::taskflow_routing::dispatch_contract_lane(
-        &role_selection.execution_plan,
-        dispatch_target,
-    )?;
-    let transitions = lane.get("rework_transitions")?;
-    let reported = reported_rework_target
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "none" && *value != "null");
-    let configured_target = transitions.as_object().and_then(|object| {
-        reported
-            .and_then(|key| object.get(key))
-            .or_else(|| object.get("rework"))
-            .or_else(|| object.values().next())
-            .and_then(configured_rework_transition_target)
-    });
-    let candidate = configured_target.or_else(|| reported.map(str::to_string))?;
-    crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
-        &role_selection.execution_plan,
-        &candidate,
-    )
-    .map(|resolution| resolution.dispatch_target)
-}
-
-fn normalize_host_bridge_typed_completion_transition(
-    result: &mut serde_json::Value,
-    role_selection: Option<&crate::RuntimeConsumptionLaneSelection>,
-    dispatch_target: &str,
-) {
-    let Some(role_selection) = role_selection else {
-        return;
-    };
-    let Some(object) = result.as_object_mut() else {
-        return;
-    };
-    let pass_result = object
-        .get("decision")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .is_some_and(host_bridge_result_decision_is_pass)
-        && object
-            .get("verdict")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .is_some_and(host_bridge_result_verdict_is_pass);
-    if pass_result {
-        let reported_next = object
-            .get("allowed_next_node")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if reported_next.is_none_or(host_bridge_allowed_next_node_is_abstract_next) {
-            if let Some(expected_next) =
-                configured_completion_expected_next_target(role_selection, dispatch_target)
-            {
-                object.insert(
-                    "allowed_next_node".to_string(),
-                    serde_json::json!(expected_next),
-                );
-            }
-        }
-        return;
-    }
-
-    let rework_result = object
-        .get("decision")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .is_some_and(host_bridge_result_decision_is_blocked)
-        || object
-            .get("verdict")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .is_some_and(host_bridge_result_verdict_is_blocked);
-    if !rework_result {
-        return;
-    }
-    let reported_rework_target = object
-        .get("rework_target")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "none" && *value != "null");
-    let Some(expected_rework_target) = configured_completion_rework_target(
-        role_selection,
-        dispatch_target,
-        reported_rework_target,
-    ) else {
-        return;
-    };
-    if reported_rework_target.is_none()
-        || reported_rework_target == Some("rework")
-        || reported_rework_target.is_some_and(|target| target != expected_rework_target.as_str())
-    {
-        object.insert(
-            "rework_target".to_string(),
-            serde_json::json!(expected_rework_target.clone()),
-        );
-    }
-    let reported_next = object
-        .get("allowed_next_node")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "none" && *value != "null");
-    if reported_next.is_none()
-        || reported_next.is_some_and(host_bridge_allowed_next_node_is_abstract_next)
-        || reported_next == Some("developer_rework")
-    {
-        object.insert(
-            "allowed_next_node".to_string(),
-            serde_json::json!(expected_rework_target),
-        );
-    }
-}
-
-fn configured_host_bridge_result_contract_blockers(
-    _state_root: &Path,
-    request: &serde_json::Value,
-    dispatch_target: &str,
-    typed_completion_result: Option<&serde_json::Value>,
-    mut blockers: Vec<String>,
-) -> Vec<String> {
-    let Some(result) = typed_completion_result else {
-        return blockers;
-    };
-    if !typed_completion_result_is_pass(result) {
-        return blockers;
-    }
-    let Some(allowed_next_node) = result
-        .get("allowed_next_node")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return blockers;
-    };
-    let Some(role_selection) = host_bridge_request_role_selection(request) else {
-        return blockers;
-    };
-    if let Some(expected_next_target) =
-        configured_completion_expected_next_target(&role_selection, dispatch_target)
-    {
-        blockers.retain(|blocker| {
-            blocker != "invalid_allowed_next_node"
-                && blocker != "missing_configured_downstream_dispatch_target"
-        });
-        if !host_bridge_allowed_next_node_is_abstract_next(allowed_next_node)
-            && !configured_completion_allowed_next_node_is_match(
-                &expected_next_target,
-                allowed_next_node,
-            )
-        {
-            blockers.push(
-                taskflow_contracts::BlockerCode::HostBridgeResultTransitionMismatch
-                    .as_str()
-                    .to_string(),
-            );
-        }
-    } else if configured_completion_allowed_next_node_is_valid(
-        &role_selection,
-        dispatch_target,
-        allowed_next_node,
-    ) {
-        blockers.retain(|blocker| blocker != "invalid_allowed_next_node");
-    } else if !blockers
-        .iter()
-        .any(|blocker| blocker == "missing_configured_downstream_dispatch_target")
-    {
-        blockers.push("missing_configured_downstream_dispatch_target".to_string());
-    }
-    blockers
-}
-
 fn materialize_host_bridge_completion_evidence(
     state_root: &Path,
     request_path: &str,
@@ -4206,7 +3482,6 @@ fn materialize_host_bridge_completion_evidence(
     receipt_id: &str,
     host_agent_id: Option<&str>,
     summary: Option<&str>,
-    typed_completion_result: Option<&serde_json::Value>,
     taskflow_evidence: HostBridgeTaskflowImplementationEvidence,
     authoritative_owned_paths: &[String],
     replace_existing_evidence: bool,
@@ -4249,60 +3524,10 @@ fn materialize_host_bridge_completion_evidence(
     }
     let typed_request =
         HostBridgeRequest::from_value(request.clone()).map_err(|error| error.to_string())?;
-    let expected_task_id = host_bridge_request_packet_identity_field(&request, "task_id")
-        .or_else(|| host_bridge_request_identity_field(&request, "task_id"))
-        .unwrap_or_else(|| run_id.to_string());
-    let expected_dispatch_generation_id =
-        crate::runtime_dispatch_receipt_helpers::dispatch_generation_id_for_receipt(
-            persisted_receipt,
-        );
-    let role_selection = host_bridge_request_role_selection(&request);
-    let normalized_typed_completion_result = typed_completion_result.cloned().map(|mut result| {
-        normalize_host_bridge_typed_completion_transition(
-            &mut result,
-            role_selection.as_ref(),
-            dispatch_target,
-        );
-        result
-    });
-    let typed_completion_result = normalized_typed_completion_result.as_ref();
-    let authorized_next_target = role_selection.as_ref().and_then(|selection| {
-        configured_completion_expected_next_target(selection, dispatch_target)
-    });
-    if let Some(typed_completion_result) = typed_completion_result {
-        let contract_decision =
-            host_bridge_result_contract_decision_for_target_with_authorized_next(
-                typed_completion_result,
-                &typed_request.required_result_fields,
-                dispatch_target,
-                authorized_next_target.as_deref(),
-            );
-        let adjusted_detail_blockers = configured_host_bridge_result_contract_blockers(
-            state_root,
-            &request,
-            dispatch_target,
-            Some(typed_completion_result),
-            contract_decision.detail_blocker_codes.clone(),
-        );
-        if !adjusted_detail_blockers.is_empty() {
-            let detail = adjusted_detail_blockers.join(",");
-            let primary = contract_decision
-                .blocker_codes
-                .first()
-                .cloned()
-                .unwrap_or_else(|| {
-                    taskflow_contracts::BlockerCode::HostBridgeResultContractInvalid
-                        .as_str()
-                        .to_string()
-                });
-            return Err(format!("{primary}: {detail}"));
-        }
-    }
     let provenance = validate_host_bridge_request_provenance(&HostBridgeProvenanceInput {
         request: typed_request.clone(),
         expected_run_id: Some(run_id.to_string()),
-        expected_task_id: Some(expected_task_id),
-        expected_dispatch_generation_id: Some(expected_dispatch_generation_id.clone()),
+        expected_task_id: Some(run_id.to_string()),
         expected_dispatch_target: Some(dispatch_target.to_string()),
     });
     let retryable_completion_request =
@@ -4370,13 +3595,6 @@ fn materialize_host_bridge_completion_evidence(
         .get("packet_path")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    let task_id = host_bridge_request_identity_field(&request, "task_id")
-        .unwrap_or_else(|| run_id.to_string());
-    let dispatch_generation_id =
-        host_bridge_request_identity_field(&request, "dispatch_generation_id")
-            .unwrap_or(expected_dispatch_generation_id);
-    let lane_id = host_bridge_request_identity_field(&request, "lane_id")
-        .unwrap_or_else(|| dispatch_target.to_string());
     let backend_id = request
         .get("backend_id")
         .and_then(serde_json::Value::as_str)
@@ -4385,6 +3603,8 @@ fn materialize_host_bridge_completion_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("parent host bridge reported internal agent completion");
+    let summary_blocker_code =
+        host_bridge_completion_summary_blocker_code(dispatch_target, summary);
     let implementation_artifacts = host_bridge_implementation_artifacts(
         &request,
         taskflow_evidence.taskflow_artifacts,
@@ -4433,46 +3653,8 @@ fn materialize_host_bridge_completion_evidence(
             &implementation_scope_validation,
         ));
     }
-    let typed_result_contract_blockers =
-        if let Some(typed_completion_result) = typed_completion_result {
-            host_bridge_result_verdict_contract_blockers_for_target_with_authorized_next(
-                typed_completion_result,
-                &typed_request.required_result_fields,
-                dispatch_target,
-                authorized_next_target.as_deref(),
-            )
-        } else {
-            host_bridge_result_verdict_contract_blockers_for_target_with_authorized_next(
-                &serde_json::json!({}),
-                &typed_request.required_result_fields,
-                dispatch_target,
-                authorized_next_target.as_deref(),
-            )
-        };
-    blocker_codes.extend(configured_host_bridge_result_contract_blockers(
-        state_root,
-        &request,
-        dispatch_target,
-        typed_completion_result,
-        typed_result_contract_blockers,
-    ));
-    if let Some(typed_completion_result) = typed_completion_result {
-        let fields = host_bridge_result_verdict_fields_from_typed_result(
-            typed_completion_result,
-            dispatch_target,
-        );
-        if host_bridge_result_decision_is_blocked(&fields.decision)
-            || host_bridge_result_verdict_is_blocked(&fields.verdict)
-        {
-            blocker_codes.extend(fields.blocker_codes);
-        }
-    }
-    if typed_completion_result.is_none() {
-        if let Some(summary_blocker_code) =
-            host_bridge_completion_summary_blocker_code(dispatch_target, summary)
-        {
-            blocker_codes.push(summary_blocker_code);
-        }
+    if let Some(summary_blocker_code) = summary_blocker_code {
+        blocker_codes.push(summary_blocker_code);
     }
     let shared_completion =
         materialize_shared_host_bridge_completion_evidence(&HostBridgeCompletionInput {
@@ -4490,34 +3672,9 @@ fn materialize_host_bridge_completion_evidence(
     blocker_codes.dedup();
     let blocker_code = blocker_codes.first().cloned();
     let verdict = host_bridge_completion_verdict(&blocker_codes);
-    let mut result_verdict = if blocker_codes.is_empty() {
-        typed_completion_result
-            .map(|result| {
-                host_bridge_result_verdict_fields_from_typed_result(result, dispatch_target)
-            })
-            .unwrap_or_else(|| {
-                host_bridge_result_verdict_fields_for_gate(dispatch_target, &blocker_codes, None)
-            })
-    } else if let Some(typed_completion_result) = typed_completion_result.filter(|result| {
-        let fields = host_bridge_result_verdict_fields_from_typed_result(result, dispatch_target);
-        host_bridge_result_decision_is_blocked(&fields.decision)
-            || host_bridge_result_verdict_is_blocked(&fields.verdict)
-    }) {
-        let mut fields = host_bridge_result_verdict_fields_from_typed_result(
-            typed_completion_result,
-            dispatch_target,
-        );
-        fields.blocker_codes = blocker_codes.clone();
-        fields
-    } else {
-        host_bridge_result_verdict_fields_for_gate(dispatch_target, &blocker_codes, None)
-    };
-    let typed_allowed_next_node_present = typed_completion_result
-        .and_then(|result| result.get("allowed_next_node"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    if blocker_codes.is_empty() && !typed_allowed_next_node_present {
+    let mut result_verdict =
+        host_bridge_result_verdict_fields_for_gate(dispatch_target, &blocker_codes, None);
+    if blocker_codes.is_empty() {
         if let Some(allowed_next_node) = persisted_receipt
             .downstream_dispatch_target
             .as_deref()
@@ -4532,19 +3689,16 @@ fn materialize_host_bridge_completion_evidence(
         "schema_version": 1,
         "status": verdict.status.clone(),
         "execution_state": verdict.execution_state.clone(),
-        "decision": result_verdict.decision.clone(),
-        "verdict": result_verdict.verdict.clone(),
+        "decision": result_verdict.decision,
+        "verdict": result_verdict.verdict,
         "request_id": request_id,
         "run_id": run_id,
-        "task_id": task_id,
-        "dispatch_generation_id": dispatch_generation_id,
-        "lane_id": lane_id,
         "dispatch_target": dispatch_target,
         "completion_receipt_id": receipt_id,
         "blocker_code": blocker_code.clone(),
         "blocker_codes": blocker_codes.clone(),
-        "rework_target": result_verdict.rework_target.clone(),
-        "allowed_next_node": result_verdict.allowed_next_node.clone(),
+        "rework_target": result_verdict.rework_target,
+        "allowed_next_node": result_verdict.allowed_next_node,
         "host_agent_id": host_agent_id,
         "summary": summary,
         "implementation_artifacts": implementation_artifacts.artifacts.clone(),
@@ -4560,9 +3714,6 @@ fn materialize_host_bridge_completion_evidence(
             "backend_id": backend_id,
             "request_id": request_id,
             "run_id": run_id,
-            "task_id": task_id,
-            "dispatch_generation_id": dispatch_generation_id,
-            "lane_id": lane_id,
             "dispatch_target": dispatch_target,
             "dispatch_transport": "host_tool_bridge"
         },
@@ -4591,9 +3742,6 @@ fn materialize_host_bridge_completion_evidence(
         "receipt_backed": true,
         "request_id": request_id,
         "run_id": run_id,
-        "task_id": task_id,
-        "dispatch_generation_id": dispatch_generation_id,
-        "lane_id": lane_id,
         "dispatch_target": dispatch_target,
         "completion_receipt_id": receipt_id,
         "blocker_code": blocker_code.clone(),
@@ -4662,7 +3810,6 @@ fn materialize_host_bridge_completion_evidence(
         execution_state: verdict.execution_state,
         blocker_code: blocker_code.clone(),
         blocker_codes,
-        result_verdict,
     })
 }
 
@@ -4750,285 +3897,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .latest_run_graph_dispatch_receipt_summary_for_current_session()
                 .await
             {
-                Ok(summary) => summary,
-                Err(error) => {
-                    eprintln!("Failed to read latest lane receipt summary: {error}");
-                    return ExitCode::from(1);
-                }
-            }) else {
-                return emit_missing_lane_receipt_envelope(*as_json, None, "vida lane show");
-            };
-            let status = store.run_graph_status(&summary.run_id).await.ok();
-            let retired_closed_task_status =
-                retired_closed_task_status_for_show(&store, status.as_ref()).await;
-            let closed_task_retired = retired_closed_task_status.is_some();
-            let status = retired_closed_task_status.or(status);
-            let recovery = status.as_ref().map(|status| {
-                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
-            });
-            let owned_write_scope_hint =
-                task_owned_write_scope_for_status(&store, status.as_ref()).await;
-            let summary = if closed_task_retired {
-                retired_closed_task_summary_for_show(summary)
-            } else {
-                summary
-            };
-            let exception_path_metadata_path = if closed_task_retired {
-                None
-            } else {
-                match exception_takeover_metadata_path(store.root(), &summary.run_id) {
-                    Ok(path) => path.exists().then(|| path.display().to_string()),
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                }
-            };
-            let exception_path_metadata = if closed_task_retired {
-                None
-            } else {
-                match read_exception_takeover_metadata(store.root(), &summary.run_id) {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                }
-            };
-            let truth = derive_lane_show_truth_with_exception_metadata(
-                &summary,
-                recovery.as_ref(),
-                exception_path_metadata.as_ref(),
-            );
-            let envelope = build_lane_envelope_with_owned_scope(
-                summary,
-                status,
-                exception_path_metadata_path,
-                exception_path_metadata,
-                operator_session_projection,
-                truth.blocked,
-                truth.blocker_codes,
-                truth.next_actions,
-                &owned_write_scope_hint,
-            );
-            return emit_lane_envelope_with_projection_cache(
-                &state_dir, "latest", &envelope, *as_json,
-            );
-        }
-        LaneCommand::ShowRun { run_id, as_json } => {
-            if *as_json {
-                if let Some(cached) =
-                    read_cached_lane_show_projection(&state_dir, &lane_show_projection_name(run_id))
-                {
-                    return emit_cached_lane_show_projection(cached);
-                }
-            }
-            let store = match StateStore::open_existing_read_only_with_timeout(
-                state_dir.clone(),
-                LANE_SURFACE_LOCK_TIMEOUT,
-            )
-            .await
-            {
-                Ok(store) => store,
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    return ExitCode::from(1);
-                }
-            };
-            let operator_session_projection =
-                match crate::operator_session_projection::build_operator_session_projection(&store)
-                    .await
-                {
-                    Ok(value) => value,
-                    Err(error) => {
-                        eprintln!("Failed to build operator session projection: {error}");
-                        return ExitCode::from(1);
-                    }
-                };
-            let Some(receipt) = (match store
-                .run_graph_dispatch_receipt_for_status(run_id, None)
-                .await
-            {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
-                    return ExitCode::from(1);
-                }
-            }) else {
-                return emit_missing_lane_receipt_envelope(
-                    *as_json,
-                    Some(run_id),
-                    "vida lane show",
-                );
-            };
-            let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let needs_status_projection = summary.lane_status
-                != crate::LaneStatus::LaneCompleted.as_str()
-                || summary.dispatch_status != "executed"
-                || summary.blocker_code.is_some()
-                || summary
-                    .downstream_dispatch_blockers
-                    .iter()
-                    .any(|value| !value.trim().is_empty());
-            let status = if needs_status_projection {
-                store.run_graph_status(run_id).await.ok()
-            } else {
-                None
-            };
-            let retired_closed_task_status =
-                retired_closed_task_status_for_show(&store, status.as_ref()).await;
-            let closed_task_retired = retired_closed_task_status.is_some();
-            let status = retired_closed_task_status.or(status);
-            let recovery = status.as_ref().map(|status| {
-                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
-            });
-            let owned_write_scope_hint =
-                task_owned_write_scope_for_status(&store, status.as_ref()).await;
-            let summary = if closed_task_retired {
-                retired_closed_task_summary_for_show(summary)
-            } else {
-                summary
-            };
-            let exception_path_metadata_path = if closed_task_retired {
-                None
-            } else {
-                match exception_takeover_metadata_path(store.root(), run_id) {
-                    Ok(path) => path.exists().then(|| path.display().to_string()),
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                }
-            };
-            let exception_path_metadata = if closed_task_retired {
-                None
-            } else {
-                match read_exception_takeover_metadata(store.root(), run_id) {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                }
-            };
-            let truth = derive_lane_show_truth_with_exception_metadata(
-                &summary,
-                recovery.as_ref(),
-                exception_path_metadata.as_ref(),
-            );
-            let envelope = build_lane_envelope_with_owned_scope(
-                summary,
-                status,
-                exception_path_metadata_path,
-                exception_path_metadata,
-                operator_session_projection,
-                truth.blocked,
-                truth.blocker_codes,
-                truth.next_actions,
-                &owned_write_scope_hint,
-            );
-            return emit_lane_envelope_with_projection_cache(
-                &state_dir, run_id, &envelope, *as_json,
-            );
-        }
-        LaneCommand::TakeoverReady { run_id, as_json } => {
-            let store = match StateStore::open_existing_read_only_with_timeout(
-                state_dir.clone(),
-                LANE_SURFACE_LOCK_TIMEOUT,
-            )
-            .await
-            {
-                Ok(store) => store,
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    return ExitCode::from(1);
-                }
-            };
-            let operator_session_projection =
-                match crate::operator_session_projection::build_operator_session_projection(&store)
-                    .await
-                {
-                    Ok(value) => value,
-                    Err(error) => {
-                        eprintln!("Failed to build operator session projection: {error}");
-                        return ExitCode::from(1);
-                    }
-                };
-            let Some(receipt) = (match store
-                .run_graph_dispatch_receipt_for_status(run_id, None)
-                .await
-            {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
-                    return ExitCode::from(1);
-                }
-            }) else {
-                return emit_missing_lane_receipt_envelope(
-                    *as_json,
-                    Some(run_id),
-                    "vida lane takeover-ready",
-                );
-            };
-            let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let status = store.run_graph_status(run_id).await.ok();
-            let recovery = status.as_ref().map(|status| {
-                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
-            });
-            let owned_write_scope_hint =
-                task_owned_write_scope_for_status(&store, status.as_ref()).await;
-            let exception_path_metadata_path =
-                match exception_takeover_metadata_path(store.root(), run_id) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
-            let exception_path_metadata =
-                match read_exception_takeover_metadata(store.root(), run_id) {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
-            let truth = derive_lane_show_truth_with_exception_metadata(
-                &summary,
-                recovery.as_ref(),
-                exception_path_metadata.as_ref(),
-            );
-            let lane_envelope = build_lane_envelope_with_owned_scope(
-                summary,
-                status,
-                exception_path_metadata_path
-                    .exists()
-                    .then(|| exception_path_metadata_path.display().to_string()),
-                exception_path_metadata,
-                operator_session_projection,
-                truth.blocked,
-                truth.blocker_codes,
-                truth.next_actions,
-                &owned_write_scope_hint,
-            );
-            let takeover_envelope = build_lane_takeover_ready_envelope(lane_envelope);
-            return emit_lane_takeover_ready_envelope(&takeover_envelope, *as_json);
-        }
-        _ => {}
-    }
-
-    let store = match StateStore::open_existing(state_dir.clone()).await {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
-        }
-    };
-    let operator_session_projection =
-        match crate::operator_session_projection::build_operator_session_projection(&store).await {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("Failed to build operator session projection: {error}");
+                eprintln!("Failed to persist lane completion commit record: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -5044,7 +3913,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             }) else {
                 return emit_missing_lane_receipt_envelope(as_json, None, "vida lane show");
             };
-            let status = store.run_graph_status(&summary.run_id).await.ok();
+            let status = match store.run_graph_status(&summary.run_id).await {
+                Ok(status) => Some(status),
+                Err(_) => None,
+            };
             let recovery = store.run_graph_recovery_summary(&summary.run_id).await.ok();
             let exception_path_metadata_path =
                 match exception_takeover_metadata_path(store.root(), &summary.run_id) {
@@ -5141,11 +4013,16 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
         LaneCommand::Complete {
             run_id,
             receipt_id,
-            idempotency_key,
             host_bridge_request,
             host_agent_id,
             host_bridge_summary,
-            host_bridge_result,
+            host_bridge_result_file,
+            decision,
+            verdict,
+            allowed_next_node,
+            blocker_codes: supplied_blocker_codes,
+            blocker_code: supplied_blocker_code,
+            rework_target,
             state_dir: complete_state_dir,
             as_json,
         } => {
@@ -5179,23 +4056,24 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     }
                 };
             let takeover_active = lane_takeover_state(&receipt, recovery.as_ref()).is_active();
-            let host_bridge_completion_context = if let Some(request_path) = host_bridge_request {
-                match trusted_host_bridge_completion_request_context(
-                    store.root(),
-                    run_id,
-                    request_path,
-                    status.as_ref(),
-                    &receipt,
-                ) {
-                    Ok(context) => context,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(2);
+            let host_bridge_completion_context =
+                if let Some(request_path) = host_bridge_request.as_deref() {
+                    match trusted_host_bridge_completion_request_context(
+                        store.root(),
+                        run_id,
+                        request_path,
+                        status.as_ref(),
+                        &receipt,
+                    ) {
+                        Ok(context) => context,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            return ExitCode::from(2);
+                        }
                     }
-                }
-            } else {
-                None
-            };
+                } else {
+                    None
+                };
             let (packet_path, allow_dispatch_packet) = if let Some(context) =
                 host_bridge_completion_context.as_ref()
             {
@@ -5279,6 +4157,34 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 eprintln!("{error}");
                 return ExitCode::from(2);
             }
+            let supplied_completion_result_args = HostBridgeCompletionResultArgs {
+                result_file: host_bridge_result_file,
+                decision,
+                verdict,
+                allowed_next_node,
+                blocker_codes: supplied_blocker_codes,
+                blocker_code: supplied_blocker_code,
+                rework_target,
+            };
+            let supplied_completion_result = match read_supplied_host_bridge_completion_result(
+                store.root(),
+                supplied_completion_result_args.result_file,
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let supplied_completion_blocker_codes =
+                supplied_host_bridge_completion_result_blocker_codes(
+                    &supplied_completion_result_args,
+                    supplied_completion_result.as_ref(),
+                );
+            let supplied_completion_blocked = supplied_host_bridge_completion_result_is_blocked(
+                &supplied_completion_result_args,
+                supplied_completion_result.as_ref(),
+            );
             let host_bridge_evidence = if let Some(request_path) = host_bridge_request {
                 let retrying_summary_guard = receipt.dispatch_status == "blocked"
                     && (receipt
@@ -5307,16 +4213,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 )
                 .await;
                 let authoritative_owned_paths = owned_paths_from_lane_packet(&packet);
-                let typed_completion_result = match normalized_host_bridge_completion_result(
-                    store.root(),
-                    &host_bridge_result,
-                ) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(2);
-                    }
-                };
                 match materialize_host_bridge_completion_evidence(
                     store.root(),
                     request_path,
@@ -5326,7 +4222,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     receipt_id,
                     host_agent_id,
                     host_bridge_summary,
-                    typed_completion_result.as_ref(),
                     taskflow_artifacts,
                     &authoritative_owned_paths,
                     retrying_summary_guard || retrying_request_guard,
@@ -5357,104 +4252,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(receipt.dispatch_target.as_str())
                 .to_string();
-            let completion_snapshot = lane_completion_snapshot(status.as_ref(), &receipt);
-            let effective_idempotency_key =
-                lane_completion_effective_idempotency_key(receipt_id, idempotency_key);
-            let completion_commit_record_id =
-                lane_completion_commit_record_id(run_id, &effective_idempotency_key);
-            let source_result_hash = lane_completion_source_result_hash(
-                run_id,
-                receipt_id,
-                &receipt.dispatch_target,
-                &completed_target,
-                &validated_packet_path,
-                host_bridge_request,
-                host_agent_id,
-                host_bridge_summary,
-                &host_bridge_result,
-            );
-            let source_receipt_hash = completion_snapshot.receipt_fingerprint.clone();
-            if let Some(existing) = match store
-                .run_graph_lane_completion_commit_record(&completion_commit_record_id)
-                .await
-            {
-                Ok(record) => record,
-                Err(error) => {
-                    eprintln!("Failed to read lane completion commit record: {error}");
-                    return ExitCode::from(1);
-                }
-            } {
-                let source_receipt_matches = existing.source_receipt_hash == source_receipt_hash
-                    || existing.status == "fully_projected";
-                if existing.source_result_hash != source_result_hash || !source_receipt_matches {
-                    eprintln!(
-                        "lane_completion_idempotency_conflict: lane `{run_id}` idempotency key `{}` was already used for different completion evidence",
-                        effective_idempotency_key
-                    );
-                    return ExitCode::from(2);
-                }
-                if existing.status == "fully_projected" {
-                    let updated_summary =
-                        crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(
-                            receipt.clone(),
-                        );
-                    let truth = derive_lane_show_truth_with_exception_metadata(
-                        &updated_summary,
-                        recovery.as_ref(),
-                        exception_path_metadata.as_ref(),
-                    );
-                    let exception_path_metadata_path =
-                        match exception_takeover_metadata_path(store.root(), run_id) {
-                            Ok(path) => path,
-                            Err(error) => {
-                                eprintln!("{error}");
-                                return ExitCode::from(1);
-                            }
-                        };
-                    let envelope = build_lane_envelope(
-                        updated_summary,
-                        status,
-                        exception_path_metadata_path
-                            .exists()
-                            .then(|| exception_path_metadata_path.display().to_string()),
-                        exception_path_metadata,
-                        operator_session_projection.clone(),
-                        truth.blocked,
-                        truth.blocker_codes,
-                        truth.next_actions,
-                    );
-                    return emit_lane_envelope_with_projection_cache(
-                        &state_dir, run_id, &envelope, as_json,
-                    );
-                }
-            }
-            let completion_commit_recorded_at = lane_completion_now();
-            let mut completion_commit_record =
-                crate::state_store::RunGraphLaneCompletionCommitRecord {
-                    record_id: completion_commit_record_id,
-                    run_id: run_id.to_string(),
-                    idempotency_key: effective_idempotency_key,
-                    receipt_id: receipt_id.to_string(),
-                    dispatch_target: receipt.dispatch_target.clone(),
-                    completed_target: completed_target.clone(),
-                    source_result_hash,
-                    source_receipt_hash,
-                    pre_status_fingerprint: completion_snapshot.status_fingerprint.clone(),
-                    pre_receipt_fingerprint: completion_snapshot.receipt_fingerprint.clone(),
-                    result_path: None,
-                    dispatch_result_path: None,
-                    phase: "prepared".to_string(),
-                    status: "prepared".to_string(),
-                    recorded_at: completion_commit_recorded_at.clone(),
-                    updated_at: completion_commit_recorded_at,
-                };
-            if let Err(error) = store
-                .record_run_graph_lane_completion_commit_record(&completion_commit_record)
-                .await
-            {
-                eprintln!("Failed to persist lane completion commit record: {error}");
-                return ExitCode::from(1);
-            }
             let completion_previous_target = packet
                 .get("source_dispatch_target")
                 .and_then(serde_json::Value::as_str)
@@ -5462,31 +4259,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string);
-            let completion_blocker_code = if host_bridge_evidence.is_some() {
-                None
-            } else {
+            let completion_blocker_code =
                 crate::runtime_dispatch_state::runtime_lane_completion_summary_blocker_code(
                     &completed_target,
                     host_bridge_summary,
-                )
-            };
-            let completion_result_path = if let Some(evidence) = host_bridge_evidence.as_ref() {
-                match crate::runtime_dispatch_state::write_runtime_lane_completion_result_with_verdict_fields(
-                    store.root(),
-                    run_id,
-                    &completed_target,
-                    receipt_id,
-                    &validated_packet_path,
-                    host_bridge_summary,
-                    &evidence.result_verdict,
-                ) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                }
-            } else {
+                );
+            let completion_result_path =
                 match crate::runtime_dispatch_state::write_runtime_lane_completion_result_with_summary(
                     store.root(),
                     run_id,
@@ -5500,13 +4278,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         eprintln!("{error}");
                         return ExitCode::from(1);
                     }
-                }
-            };
+                };
             let missing_owned_scope_handoff = receipt
                 .downstream_dispatch_blockers
                 .iter()
                 .any(|blocker| blocker == "missing_owned_write_scope");
             let completion_blocked = completion_blocker_code.is_some()
+                || supplied_completion_blocked
                 || host_bridge_evidence
                     .as_ref()
                     .is_some_and(|evidence| evidence.execution_state == "blocked");
@@ -5515,11 +4293,19 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 if let Some(evidence) = host_bridge_evidence.as_ref() {
                     blocker_codes.extend(evidence.blocker_codes.clone());
                 }
+                blocker_codes.extend(supplied_completion_blocker_codes.clone());
                 if let Some(completion_blocker_code) = completion_blocker_code.clone() {
                     blocker_codes.push(completion_blocker_code);
                 }
                 if blocker_codes.is_empty() {
-                    blocker_codes.push("lane_completion_blocked_by_summary".to_string());
+                    blocker_codes.push(
+                        if supplied_completion_blocked {
+                            "host_bridge_completion_result_blocked"
+                        } else {
+                            "lane_completion_blocked_by_summary"
+                        }
+                        .to_string(),
+                    );
                 }
                 blocker_codes.sort();
                 blocker_codes.dedup();
@@ -5561,13 +4347,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     crate::shell_quote(run_id),
                     crate::shell_quote(receipt_id)
                 );
-                if let Some(value) = idempotency_key
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    dispatch_command
-                        .push_str(&format!(" --idempotency-key {}", crate::shell_quote(value)));
-                }
                 if let Some(value) = host_bridge_request
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
@@ -5583,73 +4362,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 {
                     dispatch_command
                         .push_str(&format!(" --host-agent-id {}", crate::shell_quote(value)));
-                }
-                if let Some(value) = host_bridge_result
-                    .result_file
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    dispatch_command.push_str(&format!(
-                        " --host-bridge-result-file {}",
-                        crate::shell_quote(value)
-                    ));
-                }
-                if let Some(value) = host_bridge_result
-                    .decision
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    dispatch_command
-                        .push_str(&format!(" --decision {}", crate::shell_quote(value)));
-                }
-                if let Some(value) = host_bridge_result
-                    .verdict
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    dispatch_command.push_str(&format!(" --verdict {}", crate::shell_quote(value)));
-                }
-                if let Some(value) = host_bridge_result
-                    .allowed_next_node
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    dispatch_command.push_str(&format!(
-                        " --allowed-next-node {}",
-                        crate::shell_quote(value)
-                    ));
-                }
-                if let Some(value) = host_bridge_result
-                    .blocker_codes_json
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    dispatch_command
-                        .push_str(&format!(" --blocker-codes {}", crate::shell_quote(value)));
-                }
-                for value in host_bridge_result
-                    .blocker_codes
-                    .iter()
-                    .map(String::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    dispatch_command
-                        .push_str(&format!(" --blocker-code {}", crate::shell_quote(value)));
-                }
-                if let Some(value) = host_bridge_result
-                    .rework_target
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    dispatch_command
-                        .push_str(&format!(" --rework-target {}", crate::shell_quote(value)));
                 }
                 if let Some(value) = host_bridge_summary
                     .map(str::trim)
@@ -5740,348 +4452,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             if let Err(error) =
                 ensure_lane_completion_revision_unchanged(&store, run_id, &revision_guard_snapshot)
                     .await
-            {
-                eprintln!("{error}");
-                return ExitCode::from(2);
-            }
-            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
-                eprintln!("Failed to persist lane completion evidence: {error}");
-                return ExitCode::from(1);
-            }
-            if receipt.dispatch_status == "executed" {
-                if let Some(current_status) = status.as_ref() {
-                    let executed_status = crate::runtime_dispatch_state::apply_first_handoff_execution_to_run_graph_status(
-                        current_status,
-                        &receipt,
-                    );
-                    if let Err(error) = store.record_run_graph_status(&executed_status).await {
-                        eprintln!(
-                            "Failed to persist run-graph status after lane completion: {error}"
-                        );
-                        return ExitCode::from(1);
-                    }
-                    if let Err(error) =
-                        crate::taskflow_continuation::sync_run_graph_continuation_binding(
-                            &store,
-                            &executed_status,
-                            "lane_complete",
-                        )
-                        .await
-                    {
-                        eprintln!(
-                            "Failed to synchronize continuation binding after lane completion: {error}"
-                        );
-                        return ExitCode::from(1);
-                    }
-                }
-            }
-            status = store.run_graph_status(run_id).await.ok();
-            recovery = store.run_graph_recovery_summary(run_id).await.ok();
-            let completion_commit_updated_at = lane_completion_now();
-            completion_commit_record.result_path = Some(completion_result_path.clone());
-            completion_commit_record.dispatch_result_path = receipt.dispatch_result_path.clone();
-            completion_commit_record.phase = "fully_projected".to_string();
-            completion_commit_record.status = "fully_projected".to_string();
-            completion_commit_record.updated_at = completion_commit_updated_at;
-            if let Err(error) = store
-                .record_run_graph_lane_completion_commit_record(&completion_commit_record)
-                .await
-            {
-                eprintln!("Failed to finalize lane completion commit record: {error}");
-                return ExitCode::from(1);
-            }
-
-            let updated_summary =
-                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let truth = derive_lane_show_truth_with_exception_metadata(
-                &updated_summary,
-                recovery.as_ref(),
-                exception_path_metadata.as_ref(),
-            );
-            let exception_path_metadata_path =
-                match exception_takeover_metadata_path(store.root(), run_id) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
-            let envelope = build_lane_envelope(
-                updated_summary,
-                status,
-                exception_path_metadata_path
-                    .exists()
-                    .then(|| exception_path_metadata_path.display().to_string()),
-                exception_path_metadata,
-                operator_session_projection.clone(),
-                truth.blocked,
-                truth.blocker_codes,
-                truth.next_actions,
-            );
-            emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
-        }
-        LaneCommand::Retire {
-            run_id,
-            receipt_id,
-            reason: _reason,
-            as_json,
-        } => {
-            let Some(status) = (match store.run_graph_status(run_id).await {
-                Ok(status) => Some(status),
-                Err(error) => {
-                    eprintln!("Failed to read run-graph status `{run_id}`: {error}");
-                    return ExitCode::from(1);
-                }
-            }) else {
-                eprintln!("Missing run-graph status for `{run_id}`.");
-                return ExitCode::from(2);
-            };
-            let mut receipt = match store.run_graph_dispatch_receipt(run_id).await {
-                Ok(Some(receipt)) => receipt,
-                Ok(None) => {
-                    let verdict = match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
-                        &store,
-                        &status,
-                    )
-                    .await
-                    {
-                        Ok(verdict) => verdict,
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to verify TaskFlow authority before retiring lane `{run_id}` without receipt: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    };
-                    if !verdict.task_missing() {
-                        return emit_missing_lane_receipt_envelope(
-                            as_json,
-                            Some(run_id),
-                            "vida lane retire",
-                        );
-                    }
-                    match synthetic_missing_task_stale_run_receipt(store.root(), run_id, &status) {
-                        Ok(receipt) => receipt,
-                        Err(error) => {
-                            eprintln!("{error}");
-                            return ExitCode::from(1);
-                        }
-                    }
-                }
-                Err(error) => {
-                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
-                    return ExitCode::from(1);
-                }
-            };
-            if receipt.lane_status == crate::LaneStatus::LaneExceptionRecorded.as_str()
-                && receipt
-                    .supersedes_receipt_id
-                    .as_deref()
-                    .is_none_or(|receipt_id| receipt_id.trim().is_empty())
-            {
-                eprintln!(
-                    "Lane `{run_id}` has recorded exception evidence but no active exception takeover supersession; refusing retire."
-                );
-                return ExitCode::from(2);
-            }
-            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
-            if let Err(error) =
-                lane_mutation_status_guard(run_id, Some(&status), recovery.as_ref(), &receipt)
-            {
-                eprintln!("{error}");
-                return ExitCode::from(2);
-            }
-            let exception_path_metadata =
-                match read_exception_takeover_metadata(store.root(), run_id) {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
-            match store.show_task(&status.task_id).await {
-                Ok(task) if task.status == "closed" => {}
-                Ok(task) => {
-                    eprintln!(
-                        "Lane `{run_id}` can only be retired after task `{}` is closed; current task status is `{}`.",
-                        status.task_id, task.status
-                    );
-                    return ExitCode::from(2);
-                }
-                Err(error) => {
-                    let missing_task_stale_blocked_run = matches!(
-                        error,
-                        crate::state_store::StateStoreError::MissingTask { .. }
-                    )
-                        && missing_task_stale_blocked_run_can_retire(&status, &receipt);
-                    if !missing_task_stale_blocked_run {
-                        let metadata_task_id = if receipt.lane_status
-                            == crate::LaneStatus::LaneExceptionTakeover.as_str()
-                        {
-                            exception_path_metadata
-                                .as_ref()
-                                .map(|metadata| metadata.active_bounded_unit.trim())
-                                .filter(|task_id| !task_id.is_empty())
-                        } else {
-                            None
-                        };
-                        match metadata_task_id {
-                            Some(task_id) => match store.show_task(task_id).await {
-                                Ok(task) if task.status == "closed" => {}
-                                Ok(task) => {
-                                    eprintln!(
-                                        "Lane `{run_id}` can only be retired after exception bounded unit `{}` is closed; current task status is `{}`.",
-                                        task.id, task.status
-                                    );
-                                    return ExitCode::from(2);
-                                }
-                                Err(metadata_error) => {
-                                    let missing_exception_task = matches!(
-                                        metadata_error,
-                                        crate::state_store::StateStoreError::MissingTask { .. }
-                                    );
-                                    let stale_blocked_exception_takeover =
-                                        receipt.dispatch_status == "blocked";
-                                    if !missing_exception_task || !stale_blocked_exception_takeover
-                                    {
-                                        eprintln!(
-                                            "Failed to verify exception bounded unit `{task_id}` before retiring lane `{run_id}` after run task `{}` lookup failed: {metadata_error}",
-                                            status.task_id
-                                        );
-                                        return ExitCode::from(2);
-                                    }
-                                }
-                            },
-                            None => {
-                                eprintln!(
-                                    "Failed to verify closed task `{}` before retiring lane `{run_id}`: {error}",
-                                    status.task_id
-                                );
-                                return ExitCode::from(1);
-                            }
-                        }
-                    }
-                }
-            }
-            let Some(packet_path) = receipt
-                .downstream_dispatch_packet_path
-                .clone()
-                .or_else(|| receipt.dispatch_packet_path.clone())
-            else {
-                eprintln!("Lane `{run_id}` has no packet evidence for stale-run retirement.");
-                return ExitCode::from(2);
-            };
-            let validated_packet_path =
-                match validate_lane_packet_path(store.root(), run_id, &packet_path, true) {
-                    Ok(path) => path.display().to_string(),
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(2);
-                    }
-                };
-            let completion_result_path =
-                match crate::runtime_dispatch_state::write_runtime_lane_completion_result(
-                    store.root(),
-                    run_id,
-                    "closure",
-                    receipt_id,
-                    &validated_packet_path,
-                ) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
-            let retired_status = retired_closed_task_run_graph_status(status);
-            if let Err(error) = store.record_run_graph_status(&retired_status).await {
-                eprintln!("Failed to persist retired run-graph status `{run_id}`: {error}");
-                return ExitCode::from(1);
-            }
-            if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
-                &store,
-                &retired_status,
-                "lane_retire_closed_task_stale_run",
-            )
-            .await
-            {
-                eprintln!("Failed to clear retired run continuation binding `{run_id}`: {error}");
-                return ExitCode::from(1);
-            }
-            receipt.dispatch_status = "executed".to_string();
-            receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
-            receipt.blocker_code = None;
-            receipt.exception_path_receipt_id = None;
-            receipt.supersedes_receipt_id = None;
-            receipt.downstream_dispatch_target = None;
-            receipt.downstream_dispatch_command = None;
-            receipt.downstream_dispatch_packet_path = None;
-            receipt.downstream_dispatch_ready = false;
-            receipt.downstream_dispatch_blockers.clear();
-            receipt.downstream_dispatch_status = Some("retired_closed_task_run".to_string());
-            receipt.downstream_dispatch_result_path = Some(completion_result_path.clone());
-            receipt.downstream_dispatch_active_target = Some("closure".to_string());
-            receipt.downstream_dispatch_last_target = Some("closure".to_string());
-            receipt.dispatch_result_path = Some(completion_result_path);
-            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
-                eprintln!("Failed to persist retired lane receipt `{run_id}`: {error}");
-                return ExitCode::from(1);
-            }
-
-            let updated_summary =
-                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
-            let truth = derive_lane_show_truth_with_exception_metadata(
-                &updated_summary,
-                recovery.as_ref(),
-                exception_path_metadata.as_ref(),
-            );
-            let exception_path_metadata_path =
-                match exception_takeover_metadata_path(store.root(), run_id) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
-            let envelope = build_lane_envelope(
-                updated_summary,
-                Some(retired_status),
-                exception_path_metadata_path
-                    .exists()
-                    .then(|| exception_path_metadata_path.display().to_string()),
-                exception_path_metadata,
-                operator_session_projection.clone(),
-                truth.blocked,
-                truth.blocker_codes,
-                truth.next_actions,
-            );
-            emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
-        }
-        LaneCommand::ExceptionTakeover {
-            run_id,
-            receipt_id,
-            metadata,
-            activate,
-            as_json,
-        } => {
-            let Some(mut receipt) = (match store.run_graph_dispatch_receipt(run_id).await {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
-                    return ExitCode::from(1);
-                }
-            }) else {
-                return emit_missing_lane_receipt_envelope(
-                    as_json,
-                    Some(run_id),
-                    "vida lane exception-takeover",
-                );
-            };
-            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
-            let status = store.run_graph_status(run_id).await.ok();
-            if let Err(error) =
-                lane_mutation_status_guard(run_id, status.as_ref(), recovery.as_ref(), &receipt)
             {
                 eprintln!("{error}");
                 return ExitCode::from(2);
@@ -6368,6 +4738,55 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    #[test]
+    fn host_bridge_packet_requires_blocked_downstream_status_to_confirm_active_request() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-packet-confirmation-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&root).expect("create packet confirmation fixture dir");
+        let packet_path = root.join("dispatch-packet.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-1",
+                "dispatch_target": "implementer",
+                "downstream_dispatch_active_target": "implementer"
+            })
+            .to_string(),
+        )
+        .expect("write status-less dispatch packet");
+
+        assert!(
+            !host_bridge_packet_confirms_active_request(&packet_path, "run-1", "implementer"),
+            "a matching dispatch packet without blocked downstream status is not sufficient retryable completion evidence"
+        );
+
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-1",
+                "dispatch_target": "implementer",
+                "downstream_dispatch_active_target": "implementer",
+                "downstream_dispatch_status": "blocked"
+            })
+            .to_string(),
+        )
+        .expect("write blocked dispatch packet");
+
+        assert!(
+            host_bridge_packet_confirms_active_request(&packet_path, "run-1", "implementer"),
+            "a matching blocked downstream dispatch packet remains valid evidence"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn lane_complete_role_selection(dev_task_id: &str) -> crate::RuntimeConsumptionLaneSelection {
         crate::RuntimeConsumptionLaneSelection {
             ok: true,
@@ -6499,54 +4918,6 @@ mod tests {
     }
 
     #[test]
-    fn lane_completion_idempotency_key_defaults_to_receipt_identity() {
-        assert_eq!(
-            lane_completion_effective_idempotency_key("receipt-1", None),
-            "receipt:receipt-1"
-        );
-        assert_eq!(
-            lane_completion_effective_idempotency_key("receipt-1", Some(" completion-1 ")),
-            "explicit:completion-1"
-        );
-    }
-
-    #[test]
-    fn lane_completion_source_hash_changes_when_completion_payload_changes() {
-        let base = HostBridgeCompletionResultArgs {
-            decision: Some("pass".to_string()),
-            verdict: Some("implemented".to_string()),
-            ..HostBridgeCompletionResultArgs::default()
-        };
-        let mut changed = base.clone();
-        changed.verdict = Some("rework_required".to_string());
-
-        let left = lane_completion_source_result_hash(
-            "run-1",
-            "receipt-1",
-            "coder",
-            "qa_tester",
-            "packet.json",
-            Some("request.json"),
-            Some("agent-1"),
-            Some("done"),
-            &base,
-        );
-        let right = lane_completion_source_result_hash(
-            "run-1",
-            "receipt-1",
-            "coder",
-            "qa_tester",
-            "packet.json",
-            Some("request.json"),
-            Some("agent-1"),
-            Some("done"),
-            &changed,
-        );
-
-        assert_ne!(left, right);
-    }
-
-    #[test]
     fn parse_lane_show_latest_supports_json() {
         let args = vec![
             "show".to_string(),
@@ -6572,13 +4943,12 @@ mod tests {
             LaneCommand::Complete {
                 run_id: "run-1",
                 receipt_id: "receipt-1",
-                idempotency_key: None,
                 host_bridge_request: None,
                 host_agent_id: None,
                 host_bridge_summary: None,
-                host_bridge_result: _,
                 state_dir: None,
-                as_json: true
+                as_json: true,
+                ..
             }
         ));
     }
@@ -6590,8 +4960,6 @@ mod tests {
             "run-1".to_string(),
             "--receipt-id".to_string(),
             "receipt-1".to_string(),
-            "--idempotency-key".to_string(),
-            "completion-1".to_string(),
             "--host-bridge-request".to_string(),
             ".vida/data/state/host-tool-bridge/requests/request-1.json".to_string(),
             "--host-agent-id".to_string(),
@@ -6608,17 +4976,100 @@ mod tests {
             LaneCommand::Complete {
                 run_id: "run-1",
                 receipt_id: "receipt-1",
-                idempotency_key: Some("completion-1"),
                 host_bridge_request: Some(
                     ".vida/data/state/host-tool-bridge/requests/request-1.json"
                 ),
                 host_agent_id: Some("agent-1"),
                 host_bridge_summary: Some("agent completed"),
-                host_bridge_result: _,
                 state_dir: Some(".vida/data/state"),
-                as_json: true
+                as_json: true,
+                ..
             }
         ));
+    }
+
+    #[test]
+    fn parse_lane_complete_accepts_host_bridge_completion_result_options() {
+        let args = vec![
+            "complete".to_string(),
+            "run-1".to_string(),
+            "--receipt-id".to_string(),
+            "receipt-1".to_string(),
+            "--host-bridge-request".to_string(),
+            ".vida/data/state/host-tool-bridge/requests/request-1.json".to_string(),
+            "--host-agent-id".to_string(),
+            "agent-1".to_string(),
+            "--decision".to_string(),
+            "pass".to_string(),
+            "--verdict".to_string(),
+            "implemented".to_string(),
+            "--allowed-next-node".to_string(),
+            "coach".to_string(),
+            "--blocker-codes".to_string(),
+            "[]".to_string(),
+            "--blocker-code".to_string(),
+            "implementation_artifacts_missing".to_string(),
+            "--rework-target".to_string(),
+            "developer".to_string(),
+            "--host-bridge-result-file".to_string(),
+            ".vida/data/state/host-tool-bridge/results/result-1.json".to_string(),
+        ];
+        let command =
+            parse_lane_args(&args).expect("host bridge completion result options should parse");
+        assert!(matches!(
+            command,
+            LaneCommand::Complete {
+                run_id: "run-1",
+                receipt_id: "receipt-1",
+                host_bridge_request: Some(
+                    ".vida/data/state/host-tool-bridge/requests/request-1.json"
+                ),
+                host_agent_id: Some("agent-1"),
+                decision: Some("pass"),
+                verdict: Some("implemented"),
+                allowed_next_node: Some("coach"),
+                blocker_codes: Some("[]"),
+                blocker_code,
+                rework_target: Some("developer"),
+                host_bridge_result_file: Some(
+                    ".vida/data/state/host-tool-bridge/results/result-1.json"
+                ),
+                ..
+            } if blocker_code == vec!["implementation_artifacts_missing"]
+        ));
+    }
+
+    #[test]
+    fn supplied_host_bridge_completion_result_flags_mark_completion_blocked() {
+        let args = HostBridgeCompletionResultArgs {
+            result_file: None,
+            decision: Some("blocked"),
+            verdict: Some("rework_required"),
+            allowed_next_node: Some("developer"),
+            blocker_codes: Some(r#"["operator_supplied_blocker"]"#),
+            blocker_code: vec!["another_operator_blocker"],
+            rework_target: Some("developer"),
+        };
+
+        let result = serde_json::json!({
+            "status": "blocked",
+            "execution_state": "blocked",
+            "blocker_codes": ["result_file_blocker"]
+        });
+
+        assert!(supplied_host_bridge_completion_result_is_blocked(
+            &args,
+            Some(&result)
+        ));
+        assert_eq!(
+            supplied_host_bridge_completion_result_blocker_codes(&args, Some(&result)),
+            vec![
+                "another_operator_blocker",
+                "operator_supplied_blocker",
+                "result_file_blocker"
+            ]
+        );
+        assert_eq!(args.allowed_next_node, Some("developer"));
     }
 
     #[test]
@@ -6831,143 +5282,7 @@ mod tests {
         assert!(truth
             .next_actions
             .iter()
-            .any(|action| action.contains("vida taskflow recovery status run-lane-test")));
-        assert!(truth
-            .next_actions
-            .iter()
-            .all(|action| !action.contains("--json")));
-    }
-
-    #[test]
-    fn derive_lane_show_truth_accepts_terminal_closure_recovery_over_stale_blockers() {
-        let mut receipt = sample_receipt("executed");
-        receipt.dispatch_target = "closure".to_string();
-        receipt.blocker_code = Some("tool_execution_failed".to_string());
-        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
-        receipt
-            .downstream_dispatch_blockers
-            .push("tool_execution_failed".to_string());
-        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-        let recovery = crate::state_store::RunGraphRecoverySummary {
-            run_id: "run-lane-test".to_string(),
-            task_id: "task-lane-test".to_string(),
-            active_node: "closure".to_string(),
-            lifecycle_stage: "closure_complete".to_string(),
-            resume_node: None,
-            resume_status: "completed".to_string(),
-            checkpoint_kind: "none".to_string(),
-            resume_target: "none".to_string(),
-            policy_gate: "not_required".to_string(),
-            handoff_state: "none".to_string(),
-            recovery_ready: false,
-            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
-                active_node: "closure".to_string(),
-                delegated_cycle_open: false,
-                delegated_cycle_state: "clear".to_string(),
-                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
-                reporting_pause_gate: "closure_candidate".to_string(),
-                continuation_signal: "continue_after_reports".to_string(),
-                blocker_code: None,
-                lifecycle_stage: "closure_complete".to_string(),
-            },
-        };
-
-        let truth = derive_lane_show_truth_with_exception_metadata(&summary, Some(&recovery), None);
-
-        assert!(!truth.blocked);
-        assert!(truth.blocker_codes.is_empty());
-        assert!(truth.next_actions.is_empty());
-    }
-
-    #[tokio::test]
-    async fn lane_show_run_surfaces_terminal_closure_over_stale_receipt_blockers() {
-        let _guard = acquire_lane_surface_test_lock();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-lane-show-terminal-closure-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        let store = StateStore::open(root.clone()).await.expect("open store");
-        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
-        let run_id = "run-lane-show-terminal-closure";
-        let mut status =
-            crate::taskflow_run_graph::default_run_graph_status(run_id, "specification", "closure");
-        status.task_id = run_id.to_string();
-        status.active_node = "closure".to_string();
-        status.next_node = None;
-        status.status = "completed".to_string();
-        status.selected_backend = "middle".to_string();
-        status.lane_id = "closure_direct".to_string();
-        status.lifecycle_stage = "closure_complete".to_string();
-        status.policy_gate = "not_required".to_string();
-        status.handoff_state = "none".to_string();
-        status.context_state = "sealed".to_string();
-        status.checkpoint_kind = "terminal_closure".to_string();
-        status.resume_target = "none".to_string();
-        status.recovery_ready = false;
-        store
-            .record_run_graph_status(&status)
-            .await
-            .expect("persist terminal status");
-
-        let result_dir = root.join("runtime-consumption/dispatch-results");
-        std::fs::create_dir_all(&result_dir).expect("create result dir");
-        let result_path = result_dir.join(format!("{run_id}-closure-pass.json"));
-        std::fs::write(
-            &result_path,
-            serde_json::to_string_pretty(&serde_json::json!({
-                "artifact_kind": "runtime_lane_completion_result",
-                "status": "pass",
-                "execution_state": "executed",
-                "dispatch_target": "closure"
-            }))
-            .expect("result serializes"),
-        )
-        .expect("write closure pass result");
-
-        let mut receipt = sample_receipt("executed");
-        receipt.run_id = run_id.to_string();
-        receipt.dispatch_target = "closure".to_string();
-        receipt.dispatch_kind = "agent_lane".to_string();
-        receipt.dispatch_surface = Some("vida agent-init".to_string());
-        receipt.dispatch_result_path = Some(result_path.display().to_string());
-        receipt.blocker_code = Some("tool_execution_failed".to_string());
-        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
-        receipt.selected_backend = Some("middle".to_string());
-        receipt
-            .downstream_dispatch_blockers
-            .push("tool_execution_failed".to_string());
-        receipt.downstream_dispatch_status = Some("blocked".to_string());
-        receipt.downstream_dispatch_result_path = Some(result_path.display().to_string());
-        receipt.downstream_dispatch_active_target = Some("closure".to_string());
-        receipt.downstream_dispatch_last_target = Some("closure".to_string());
-        store
-            .record_run_graph_dispatch_receipt(&receipt)
-            .await
-            .expect("persist stale receipt");
-        drop(store);
-        wait_for_state_unlock(&root);
-
-        let show_args = ProxyArgs {
-            args: vec!["show".to_string(), run_id.to_string(), "--json".to_string()],
-        };
-        assert_eq!(run_lane(show_args).await, ExitCode::SUCCESS);
-
-        let cached = read_cached_lane_show_projection(&root, &lane_show_projection_name(run_id))
-            .expect("lane show projection cache should be written");
-        let cached_json: serde_json::Value =
-            serde_json::from_str(&cached).expect("cached lane show projection should be json");
-        assert_eq!(cached_json["status"], "pass");
-        assert_eq!(cached_json["lane_status"], "lane_completed");
-        assert_eq!(cached_json["blocker_codes"], serde_json::json!([]));
-        assert_eq!(cached_json["next_actions"], serde_json::json!([]));
-        assert_eq!(cached_json["lane_id"], "closure_direct");
-
-        let _ = std::fs::remove_dir_all(&root);
+            .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
     }
 
     #[test]
@@ -7047,11 +5362,7 @@ mod tests {
         assert!(truth
             .next_actions
             .iter()
-            .any(|action| action.contains("vida taskflow recovery status run-lane-test")));
-        assert!(truth
-            .next_actions
-            .iter()
-            .all(|action| !action.contains("--json")));
+            .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
     }
 
     #[test]
@@ -7260,7 +5571,7 @@ mod tests {
 
         assert_eq!(
             envelope.recommended_command.as_deref(),
-            Some("vida lane supersede run-recorded-exception --receipt-id receipt-1")
+            Some("vida lane supersede run-recorded-exception --receipt-id receipt-1 --json")
         );
         assert_eq!(
             envelope.recommended_surface.as_deref(),
@@ -7848,10 +6159,6 @@ mod tests {
         assert!(truth.next_actions.iter().any(|value| {
             value.contains("vida lane supersede run-lane-test --receipt-id exception-1")
         }));
-        assert!(truth
-            .next_actions
-            .iter()
-            .all(|action| !action.contains("--json")));
     }
 
     #[test]
@@ -7872,8 +6179,8 @@ mod tests {
             lane_mutation_status_guard("run-lane-test", Some(&status), Some(&recovery), &receipt)
                 .expect_err("terminal lane should fail closed");
 
-        assert!(error.contains("vida lane show run-lane-test"));
-        assert!(error.contains("vida taskflow run-graph status run-lane-test"));
+        assert!(error.contains("vida lane show run-lane-test --json"));
+        assert!(error.contains("vida taskflow run-graph status run-lane-test --json"));
         assert!(error.contains("vida taskflow continuation bind"));
     }
 
@@ -9741,7 +8048,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["src/lib.rs"],
@@ -9846,10 +8152,10 @@ mod tests {
         assert_eq!(packet_json["downstream_dispatch_status"], "packet_ready");
         assert_eq!(packet_json["downstream_lane_status"], "packet_ready");
         assert_eq!(packet_json["downstream_dispatch_result_path"], result_path);
-        assert_eq!(advanced_status.active_node, "coach");
+        assert_eq!(advanced_status.active_node, "implementer");
         assert_eq!(advanced_status.next_node.as_deref(), Some("coach"));
         assert_eq!(advanced_status.status, "ready");
-        assert_eq!(advanced_status.lifecycle_stage, "coach_active");
+        assert_eq!(advanced_status.lifecycle_stage, "implementer_complete");
         assert_eq!(advanced_status.handoff_state, "awaiting_coach");
         assert_eq!(advanced_status.resume_target, "dispatch.coach_lane");
         assert!(advanced_status.recovery_ready);
@@ -9858,6 +8164,19 @@ mod tests {
         assert_eq!(binding.active_bounded_unit["active_node"], "implementer");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_result_routes_reviewer_rework_to_tester_gate() {
+        let blocker_codes = vec!["review_rework_required".to_string()];
+        let result_verdict =
+            host_bridge_result_verdict_fields_for_gate("reviewer", &blocker_codes, None);
+
+        assert_eq!(result_verdict.decision, "rework_required");
+        assert_eq!(result_verdict.verdict, "rework_required");
+        assert_eq!(result_verdict.blocker_codes, blocker_codes);
+        assert_eq!(result_verdict.rework_target.as_deref(), Some("tester"));
+        assert_eq!(result_verdict.allowed_next_node, "tester");
     }
 
     #[tokio::test]
@@ -9962,7 +8281,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "developer",
-                "dispatch_generation_id": format!("{run_id}::developer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lane_surface.rs"],
@@ -10009,7 +8327,6 @@ mod tests {
                 "request_id": "run-host-bridge-developer",
                 "run_id": run_id,
                 "dispatch_target": "developer",
-                "dispatch_generation_id": format!("{run_id}::developer::2026-04-09T00:00:00Z"),
                 "task_class": "implementation",
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
@@ -10084,14 +8401,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "verifier proof passed focused host-bridge tests and confirmed pending receipt was the only closure blocker".to_string(),
                 "--state-dir".to_string(),
@@ -10131,11 +8440,6 @@ mod tests {
         assert!(dispatch_command.contains("--receipt-id host-bridge-completion-1"));
         assert!(dispatch_command.contains("--host-bridge-request"));
         assert!(dispatch_command.contains("--host-agent-id agent-1"));
-        assert!(dispatch_command.contains("--decision pass"));
-        assert!(dispatch_command.contains("--verdict implemented"));
-        assert!(dispatch_command.contains("--allowed-next-node coach"));
-        assert!(dispatch_command.contains("--blocker-codes"));
-        assert!(dispatch_command.contains("[]"));
         assert!(dispatch_command.contains("--host-bridge-summary"));
         assert!(dispatch_command.contains("pending receipt was the only closure blocker"));
         assert!(dispatch_command.contains("--state-dir"));
@@ -10147,8 +8451,6 @@ mod tests {
         assert_eq!(bridge_result["artifact_kind"], "host_tool_bridge_result");
         assert_eq!(bridge_result["execution_evidence"]["receipt_backed"], true);
         assert_eq!(bridge_result["dispatch_target"], "developer");
-        assert_eq!(bridge_result["decision"], "pass");
-        assert_eq!(bridge_result["verdict"], "implemented");
         assert_eq!(bridge_result["allowed_next_node"], "coach");
         let bridge_receipt: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(&bridge_receipt_path).expect("read host bridge receipt"),
@@ -10160,7 +8462,7 @@ mod tests {
             .run_graph_status(run_id)
             .await
             .expect("read advanced run graph status");
-        assert_eq!(advanced_status.active_node, "coach");
+        assert_eq!(advanced_status.active_node, "developer");
         assert_eq!(advanced_status.next_node.as_deref(), Some("coach"));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -10265,7 +8567,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lane_surface.rs"],
@@ -10313,7 +8614,6 @@ mod tests {
                 "run_id": run_id,
                 "task_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "carrier_id": "junior",
@@ -10358,7 +8658,6 @@ mod tests {
                 "request_id": "run-host-bridge-stale-result",
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "blocker_code": "implementation_artifacts_missing",
                 "blocker_codes": ["implementation_artifacts_missing"],
                 "rework_target": "developer",
@@ -10379,7 +8678,6 @@ mod tests {
                 "request_id": "run-host-bridge-stale-result",
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "blocker_code": "implementation_artifacts_missing",
                 "blocker_codes": ["implementation_artifacts_missing"],
                 "rework_target": "developer",
@@ -10421,14 +8719,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "internal agent completed".to_string(),
                 "--state-dir".to_string(),
@@ -10676,7 +8966,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lane_surface.rs"],
@@ -10725,7 +9014,6 @@ mod tests {
                 "run_id": run_id,
                 "task_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "carrier_id": "junior",
@@ -10809,16 +9097,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "rework_required".to_string(),
-                "--verdict".to_string(),
-                "rework_required".to_string(),
-                "--blocker-code".to_string(),
-                "host_agent_execution_failed".to_string(),
-                "--rework-target".to_string(),
-                "developer".to_string(),
-                "--allowed-next-node".to_string(),
-                "developer_rework".to_string(),
                 "--host-bridge-summary".to_string(),
                 "verdict: blocker; read-only host evidence blocked by explicit rework wording"
                     .to_string(),
@@ -10838,7 +9116,7 @@ mod tests {
         assert_eq!(blocked.dispatch_status, "blocked");
         assert_eq!(
             blocked.blocker_code.as_deref(),
-            Some("host_agent_execution_failed")
+            Some("lane_completion_blocked_by_summary")
         );
         blocked.blocker_code = None;
         store
@@ -10858,14 +9136,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "internal agent completed".to_string(),
                 "--json".to_string(),
@@ -10946,7 +9216,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lib.rs"],
@@ -11017,14 +9286,6 @@ mod tests {
                 "host-bridge-missing-request".to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "internal agent completed".to_string(),
                 "--json".to_string(),
@@ -11146,7 +9407,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": owned_paths,
@@ -11189,7 +9449,6 @@ mod tests {
                 "run_id": run_id,
                 "task_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "carrier_id": "middle",
@@ -11257,14 +9516,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "internal agent completed".to_string(),
                 "--json".to_string(),
@@ -11373,7 +9624,6 @@ mod tests {
                 "run_id": run_id,
                 "task_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "implementation_artifacts": []
             })
             .to_string(),
@@ -11480,7 +9730,6 @@ mod tests {
                 "run_id": run_id,
                 "task_id": "other-task",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "implementation_artifacts": []
             })
             .to_string(),
@@ -11749,7 +9998,6 @@ mod tests {
                 "run_id": run_id,
                 "task_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "implementation_artifacts": []
             })
             .to_string(),
@@ -11844,7 +10092,6 @@ mod tests {
                 "run_id": run_id,
                 "task_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "implementation_artifacts": []
             })
             .to_string(),
@@ -11924,7 +10171,6 @@ mod tests {
                 serde_json::json!({
                     "run_id": "run-host-bridge-retryable-receipt-bound",
                     "dispatch_target": "implementer",
-                    "dispatch_generation_id": "run-host-bridge-retryable-receipt-bound::implementer::2026-04-09T00:00:00Z",
                     "downstream_dispatch_active_target": "implementer",
                     "downstream_dispatch_status": "blocked"
                 })
@@ -11944,7 +10190,6 @@ mod tests {
                 "run_id": "run-host-bridge-retryable-receipt-bound",
                 "task_id": "run-host-bridge-retryable-receipt-bound",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": "run-host-bridge-retryable-receipt-bound::implementer::2026-04-09T00:00:00Z",
                 "packet_path": request_packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge"
@@ -12003,7 +10248,6 @@ mod tests {
             serde_json::json!({
                 "run_id": "run-host-bridge-pending-original-packet",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": "run-host-bridge-pending-original-packet::implementer::2026-04-09T00:00:00Z",
                 "downstream_dispatch_active_target": "implementer",
                 "downstream_dispatch_status": "blocked"
             })
@@ -12022,7 +10266,6 @@ mod tests {
                 "run_id": "run-host-bridge-pending-original-packet",
                 "task_id": "run-host-bridge-pending-original-packet",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": "run-host-bridge-pending-original-packet::implementer::2026-04-09T00:00:00Z",
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge"
@@ -12086,7 +10329,6 @@ mod tests {
             serde_json::json!({
                 "run_id": "run-host-bridge-retryable-original-packet",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": "run-host-bridge-retryable-original-packet::implementer::2026-04-09T00:00:00Z",
                 "downstream_dispatch_active_target": "implementer",
                 "downstream_dispatch_status": "blocked"
             })
@@ -12105,7 +10347,6 @@ mod tests {
                 "run_id": "run-host-bridge-retryable-original-packet",
                 "task_id": "run-host-bridge-retryable-original-packet",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": "run-host-bridge-retryable-original-packet::implementer::2026-04-09T00:00:00Z",
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge"
@@ -12167,7 +10408,6 @@ mod tests {
             serde_json::json!({
                 "run_id": "run-host-bridge-retryable-receipt-target",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": "run-host-bridge-retryable-receipt-target::implementer::2026-04-09T00:00:00Z",
                 "downstream_dispatch_active_target": "implementer",
                 "downstream_dispatch_status": "blocked"
             })
@@ -12186,7 +10426,6 @@ mod tests {
                 "run_id": "run-host-bridge-retryable-receipt-target",
                 "task_id": "run-host-bridge-retryable-receipt-target",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": "run-host-bridge-retryable-receipt-target::implementer::2026-04-09T00:00:00Z",
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge"
@@ -12335,12 +10574,6 @@ mod tests {
             .record_run_graph_status(&status)
             .await
             .expect("persist run graph status");
-        let dispatch_generation_id =
-            crate::runtime_dispatch_receipt_helpers::dispatch_generation_id_for_parts(
-                run_id,
-                "implementer",
-                "2026-04-09T00:00:00Z",
-            );
 
         let packet_path =
             root.join("runtime-consumption/downstream-dispatch-packets/run-immutable-scope.json");
@@ -12350,8 +10583,6 @@ mod tests {
             &packet_path,
             serde_json::json!({
                 "run_id": run_id,
-                "task_id": run_id,
-                "dispatch_generation_id": dispatch_generation_id.as_str(),
                 "dispatch_target": "implementer",
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
@@ -12394,7 +10625,6 @@ mod tests {
                 "request_id": "run-immutable-scope",
                 "run_id": run_id,
                 "task_id": run_id,
-                "dispatch_generation_id": dispatch_generation_id.as_str(),
                 "dispatch_target": "implementer",
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
@@ -12463,14 +10693,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "internal agent completed".to_string(),
                 "--json".to_string(),
@@ -12564,7 +10786,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lib.rs"],
@@ -12607,7 +10828,6 @@ mod tests {
                 "run_id": run_id,
                 "task_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "carrier_id": "middle",
@@ -12683,14 +10903,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "internal agent completed".to_string(),
                 "--json".to_string(),
@@ -12709,286 +10921,6 @@ mod tests {
         assert_eq!(
             blocked.blocker_code.as_deref(),
             Some("implementation_artifact_receipt_unverified")
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
-    async fn lane_complete_host_bridge_rejects_invalid_typed_result_without_mutation() {
-        let _guard = acquire_lane_surface_test_lock();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-lane-surface-host-bridge-invalid-typed-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        let store = StateStore::open(root.clone()).await.expect("open store");
-        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
-        let run_id = "run-host-bridge-invalid-typed";
-        let task = store
-            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
-                task_id: run_id,
-                title: "Host bridge invalid typed result",
-                display_id: None,
-                description: "",
-                issue_type: "task",
-                status: "open",
-                priority: 1,
-                parent_id: None,
-                labels: &[],
-                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-                planner_metadata: crate::state_store::TaskPlannerMetadata {
-                    owned_paths: vec!["crates/vida/src/lane_surface.rs".to_string()],
-                    ..Default::default()
-                },
-                created_by: "test",
-                source_repo: "",
-            })
-            .await
-            .expect("create task");
-        let artifact_path = root.join("attempt-artifacts/invalid-typed-attempt.json");
-        std::fs::create_dir_all(artifact_path.parent().expect("artifact parent"))
-            .expect("create artifact parent");
-        std::fs::write(
-            &artifact_path,
-            serde_json::json!({
-                "artifact_kind": "patch_proposal",
-                "task_id": run_id,
-                "stage_id": "implementation",
-                "changed_files": ["crates/vida/src/lane_surface.rs"]
-            })
-            .to_string(),
-        )
-        .expect("write invalid typed attempt artifact");
-        store
-            .record_task_attempt(crate::state_store::RecordTaskAttemptRequest {
-                attempt_id: Some("invalid-typed-attempt-1".to_string()),
-                task_id: run_id.to_string(),
-                stage_id: "implementation".to_string(),
-                backend: "internal_subagents".to_string(),
-                model_profile: "middle".to_string(),
-                isolation: "patch_proposal".to_string(),
-                freshness: None,
-                status: "accepted".to_string(),
-                artifact_refs: vec![artifact_path.display().to_string()],
-                consolidation_receipt_id: Some("invalid-typed-consolidation-receipt".to_string()),
-                selected_model_profile_readiness_status: None,
-                budget_posture: None,
-                cap_posture: None,
-                write_scope_classification: None,
-            })
-            .await
-            .expect("record invalid typed attempt");
-        let mut status = crate::taskflow_run_graph::default_run_graph_status(
-            run_id,
-            "implementation",
-            "implementation",
-        );
-        status.task_id = run_id.to_string();
-        status.active_node = "implementer".to_string();
-        status.next_node = Some("implementer".to_string());
-        status.status = "blocked".to_string();
-        status.lifecycle_stage = "implementer_blocked".to_string();
-        status.handoff_state = "none".to_string();
-        status.resume_target = "dispatch.implementer".to_string();
-        status.recovery_ready = false;
-        store
-            .record_run_graph_status(&status)
-            .await
-            .expect("persist run graph status");
-
-        let packet_path = root.join(
-            "runtime-consumption/downstream-dispatch-packets/run-host-bridge-invalid-typed.json",
-        );
-        std::fs::create_dir_all(
-            packet_path
-                .parent()
-                .expect("downstream packet path should have parent"),
-        )
-        .expect("create downstream packet dir");
-        std::fs::write(
-            &packet_path,
-            serde_json::json!({
-                "run_id": run_id,
-                "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
-                "activation_runtime_role": "worker",
-                "packet_template_kind": "delivery_task_packet",
-                "owned_paths": ["crates/vida/src/lane_surface.rs"],
-                "read_only_paths": [".vida/data/state/runtime-consumption"],
-                "delivery_task_packet": {
-                    "goal": "Complete host bridge lane evidence.",
-                    "scope_in": ["dispatch_target:implementer"],
-                    "handoff_task_class": "implementation",
-                    "handoff_runtime_role": "worker",
-                    "owned_paths": ["crates/vida/src/lane_surface.rs"],
-                    "read_only_paths": [".vida/data/state/runtime-consumption"],
-                    "definition_of_done": ["host bridge evidence is recorded"],
-                    "verification_command": "cargo test -p vida lane_complete",
-                    "proof_target": "host bridge completion receipt",
-                    "stop_rules": ["stop if bridge evidence is missing"],
-                    "blocking_question": "none"
-                },
-                "downstream_dispatch_target": "coach",
-                "downstream_dispatch_active_target": "implementer",
-                "downstream_dispatch_ready": false,
-                "downstream_dispatch_blockers": ["pending_implementation_evidence"],
-                "downstream_dispatch_status": "blocked",
-                "downstream_lane_status": "lane_blocked"
-            })
-            .to_string(),
-        )
-        .expect("write downstream packet");
-
-        let request_path =
-            root.join("host-tool-bridge/requests/run-host-bridge-invalid-typed.json");
-        let result_path = root.join("host-tool-bridge/results/run-host-bridge-invalid-typed.json");
-        let bridge_receipt_path =
-            root.join("host-tool-bridge/receipts/run-host-bridge-invalid-typed.json");
-        std::fs::create_dir_all(
-            request_path
-                .parent()
-                .expect("request path should have parent"),
-        )
-        .expect("create request dir");
-        let original_request = serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": "run-host-bridge-invalid-typed",
-            "run_id": run_id,
-            "task_id": run_id,
-            "dispatch_target": "implementer",
-            "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
-            "task_class": "implementation",
-            "packet_path": packet_path.display().to_string(),
-            "backend_id": "internal_subagents",
-            "carrier_id": "junior",
-            "execution_boundary": "parent_host_session",
-            "dispatch_transport": "host_tool_bridge",
-            "required_result_fields": [
-                "decision",
-                "verdict",
-                "blocker_codes",
-                "rework_target",
-                "allowed_next_node"
-            ],
-            "implementation_isolation": {
-                "schema_version": "implementation-isolation-v1",
-                "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                "owned_paths": ["crates/vida/src/lane_surface.rs"]
-            },
-            "implementation_artifacts": [{
-                "artifact_kind": "patch_proposal",
-                "attempt_id": "invalid-typed-attempt-1",
-                "task_id": run_id,
-                "stage_id": "implementation",
-                "freshness": task.updated_at,
-                "receipt_backed": true,
-                "consolidation_receipt_id": "invalid-typed-consolidation-receipt",
-                "changed_files": ["crates/vida/src/lane_surface.rs"]
-            }],
-            "result_path": result_path.display().to_string(),
-            "receipt_path": bridge_receipt_path.display().to_string()
-        });
-        std::fs::write(&request_path, original_request.to_string())
-            .expect("write host bridge request");
-
-        let activation_result_path = root.join(
-            "runtime-consumption/dispatch-results/run-host-bridge-invalid-typed-activation.json",
-        );
-        std::fs::create_dir_all(
-            activation_result_path
-                .parent()
-                .expect("activation result path should have parent"),
-        )
-        .expect("create activation result dir");
-        std::fs::write(
-            &activation_result_path,
-            serde_json::json!({
-                "artifact_kind": "runtime_dispatch_result",
-                "status": "blocked",
-                "execution_state": "bridge_request_pending",
-                "host_tool_bridge_request": {
-                    "request_path": request_path.display().to_string(),
-                    "result_path": result_path.display().to_string(),
-                    "receipt_path": bridge_receipt_path.display().to_string()
-                }
-            })
-            .to_string(),
-        )
-        .expect("write activation result");
-
-        let mut receipt = sample_receipt("bridge_request_pending");
-        receipt.run_id = run_id.to_string();
-        receipt.dispatch_target = "implementer".to_string();
-        receipt.dispatch_kind = "agent_lane".to_string();
-        receipt.dispatch_surface = Some("vida agent-init".to_string());
-        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
-        receipt.downstream_dispatch_target = Some("coach".to_string());
-        receipt.downstream_dispatch_command = Some("vida agent-init".to_string());
-        receipt.downstream_dispatch_ready = false;
-        receipt.downstream_dispatch_blockers = vec!["pending_implementation_evidence".to_string()];
-        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
-        receipt.downstream_dispatch_status = Some("blocked".to_string());
-        receipt.downstream_dispatch_active_target = Some("implementer".to_string());
-        receipt.selected_backend = Some("internal_subagents".to_string());
-        store
-            .record_run_graph_dispatch_receipt(&receipt)
-            .await
-            .expect("persist dispatch receipt");
-        drop(store);
-        wait_for_state_unlock(&root);
-
-        let invalid_typed_args = ProxyArgs {
-            args: vec![
-                "complete".to_string(),
-                run_id.to_string(),
-                "--receipt-id".to_string(),
-                "host-bridge-invalid-typed".to_string(),
-                "--host-bridge-request".to_string(),
-                request_path.display().to_string(),
-                "--host-agent-id".to_string(),
-                "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-code".to_string(),
-                "unexpected_runtime_blocker".to_string(),
-                "--host-bridge-summary".to_string(),
-                "internal agent completed".to_string(),
-                "--json".to_string(),
-            ],
-        };
-        assert_eq!(run_lane(invalid_typed_args).await, ExitCode::from(2));
-
-        assert!(!result_path.exists());
-        assert!(!bridge_receipt_path.exists());
-        let persisted_request: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&request_path).expect("read unchanged request"),
-        )
-        .expect("request should still parse");
-        assert_eq!(persisted_request, original_request);
-        assert_eq!(persisted_request["status"], "pending");
-        assert!(persisted_request.get("completion_receipt_id").is_none());
-        let store = StateStore::open_existing(root.clone())
-            .await
-            .expect("reopen store after invalid typed result");
-        let after = store
-            .run_graph_dispatch_receipt(run_id)
-            .await
-            .expect("read receipt after invalid typed result")
-            .expect("receipt should still exist");
-        assert_eq!(after.dispatch_status, "bridge_request_pending");
-        assert_eq!(
-            after.downstream_dispatch_blockers,
-            receipt.downstream_dispatch_blockers
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -13090,7 +11022,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lib.rs"],
@@ -13133,7 +11064,6 @@ mod tests {
                 "run_id": run_id,
                 "task_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "carrier_id": "middle",
@@ -13209,14 +11139,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "internal agent completed".to_string(),
                 "--json".to_string(),
@@ -13252,14 +11174,6 @@ mod tests {
                 "host-bridge-attempt-scope-no-request".to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "internal agent completed".to_string(),
                 "--json".to_string(),
@@ -13282,7 +11196,7 @@ mod tests {
             still_blocked.blocker_code.as_deref(),
             Some("implementation_attempt_scope_guard_violation")
         );
-        assert!(!still_blocked.downstream_dispatch_ready);
+        assert_eq!(still_blocked.downstream_dispatch_ready, false);
         assert_eq!(
             still_blocked.downstream_dispatch_status.as_deref(),
             Some("blocked")
@@ -13309,14 +11223,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-1".to_string(),
-                "--decision".to_string(),
-                "pass".to_string(),
-                "--verdict".to_string(),
-                "implemented".to_string(),
-                "--allowed-next-node".to_string(),
-                "coach".to_string(),
-                "--blocker-codes".to_string(),
-                "[]".to_string(),
                 "--host-bridge-summary".to_string(),
                 "internal agent completed".to_string(),
                 "--json".to_string(),
@@ -13380,7 +11286,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "verification",
-                "dispatch_generation_id": format!("{run_id}::verification::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "verifier",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lane_surface.rs"],
@@ -13427,7 +11332,6 @@ mod tests {
                 "request_id": "run-host-bridge-verification",
                 "run_id": run_id,
                 "dispatch_target": "verification",
-                "dispatch_generation_id": format!("{run_id}::verification::2026-04-09T00:00:00Z"),
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "carrier_id": "verifier",
@@ -13496,16 +11400,6 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "verifier-1".to_string(),
-                "--decision".to_string(),
-                "rework_required".to_string(),
-                "--verdict".to_string(),
-                "rework_required".to_string(),
-                "--blocker-code".to_string(),
-                "verification_rework_required".to_string(),
-                "--rework-target".to_string(),
-                "developer".to_string(),
-                "--allowed-next-node".to_string(),
-                "developer_rework".to_string(),
                 "--host-bridge-summary".to_string(),
                 "verdict: blocker; rework required; product implementation evidence missing; not closure-ready".to_string(),
                 "--json".to_string(),
@@ -13538,10 +11432,7 @@ mod tests {
             .await
             .expect("read run graph status");
         assert_eq!(current_status.active_node, "verification");
-        assert_eq!(
-            current_status.lifecycle_stage,
-            "verification_rework_required"
-        );
+        assert_eq!(current_status.lifecycle_stage, "verification_blocked");
 
         let bridge_result: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(&result_path).expect("read host bridge result"),
@@ -13617,7 +11508,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "verification",
-                "dispatch_generation_id": format!("{run_id}::verification::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "verifier",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lane_surface.rs"],
@@ -13665,7 +11555,6 @@ mod tests {
                 "request_id": "run-host-bridge-no-request-redirect",
                 "run_id": run_id,
                 "dispatch_target": "verification",
-                "dispatch_generation_id": format!("{run_id}::verification::2026-04-09T00:00:00Z"),
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "carrier_id": "verifier",
@@ -13735,7 +11624,6 @@ mod tests {
             "host-bridge-no-request-redirect",
             Some("verifier-1"),
             Some("internal agent completed"),
-            None,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
             false,
@@ -13814,7 +11702,6 @@ mod tests {
                 "request_id": "run-custom",
                 "run_id": "run-custom",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": "run-custom::implementer::2026-04-09T00:00:00Z",
                 "packet_path": root.join("runtime-consumption/downstream-dispatch-packets/run-custom.json").display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge",
@@ -13857,7 +11744,6 @@ mod tests {
             "receipt-custom",
             None,
             None,
-            None,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
             false,
@@ -13869,779 +11755,6 @@ mod tests {
         assert_eq!(evidence.receipt_path, receipt_path.display().to_string());
         assert!(result_path.exists());
         assert!(receipt_path.exists());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn host_bridge_completion_preserves_typed_allowed_next_over_receipt_fallback() {
-        let _guard = acquire_lane_surface_test_lock();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "vida-host-bridge-typed-next-complete-{}-{nanos}",
-            std::process::id()
-        ));
-        let request_path = root.join("host-tool-bridge/requests/run-analyst.json");
-        let result_path = root.join("host-tool-bridge/results/run-analyst.json");
-        let receipt_path = root.join("host-tool-bridge/receipts/run-analyst.json");
-        std::fs::create_dir_all(request_path.parent().expect("request parent"))
-            .expect("create request parent");
-        std::fs::write(
-            &request_path,
-            serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "run-analyst",
-                "run_id": "run-analyst",
-                "task_id": "run-analyst",
-                "dispatch_generation_id": "run-analyst::analyst::2026-04-09T00:00:00Z",
-                "lane_id": "analyst_lane",
-                "dispatch_target": "analyst",
-                "task_class": "specification",
-                "packet_path": root.join("runtime-consumption/downstream-dispatch-packets/run-analyst.json").display().to_string(),
-                "backend_id": "internal_subagents",
-                "dispatch_transport": "host_tool_bridge",
-                "required_result_fields": [
-                    "decision",
-                    "verdict",
-                    "blocker_codes",
-                    "rework_target",
-                    "allowed_next_node"
-                ],
-                "result_path": result_path.display().to_string(),
-                "receipt_path": receipt_path.display().to_string()
-            })
-            .to_string(),
-        )
-        .expect("write request");
-        let activation_result_path =
-            root.join("runtime-consumption/dispatch-results/run-analyst-activation.json");
-        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
-            .expect("create activation parent");
-        std::fs::write(
-            &activation_result_path,
-            serde_json::json!({
-                "artifact_kind": "runtime_dispatch_result",
-                "status": "blocked",
-                "execution_state": "bridge_request_pending",
-                "host_tool_bridge_request": {
-                    "request_path": request_path.display().to_string(),
-                    "result_path": result_path.display().to_string(),
-                    "receipt_path": receipt_path.display().to_string()
-                }
-            })
-            .to_string(),
-        )
-        .expect("write activation result");
-        let mut receipt = sample_receipt("bridge_request_pending");
-        receipt.run_id = "run-analyst".to_string();
-        receipt.dispatch_target = "analyst".to_string();
-        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
-        receipt.downstream_dispatch_target = Some("closure".to_string());
-
-        let typed_result = serde_json::json!({
-            "status": "pass",
-            "execution_state": "executed",
-            "decision": "pass",
-            "verdict": "pass",
-            "blocker_codes": [],
-            "rework_target": "none",
-            "allowed_next_node": "test_author"
-        });
-        let evidence = materialize_host_bridge_completion_evidence(
-            &root,
-            request_path.to_str().expect("utf8 request path"),
-            "run-analyst",
-            "analyst",
-            &receipt,
-            "receipt-analyst",
-            Some("analyst-agent-1"),
-            Some("analyst typed pass"),
-            Some(&typed_result),
-            HostBridgeTaskflowImplementationEvidence::default(),
-            &[],
-            false,
-            false,
-        )
-        .expect("typed pass completion should materialize");
-
-        assert_eq!(evidence.blocker_codes, Vec::<String>::new());
-        assert_eq!(evidence.result_verdict.allowed_next_node, "test_author");
-        let bridge_result: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&result_path).expect("read host bridge result"),
-        )
-        .expect("host bridge result should parse");
-        assert_eq!(bridge_result["allowed_next_node"], "test_author");
-        assert_ne!(bridge_result["allowed_next_node"], "closure");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn host_bridge_completion_resolves_abstract_next_from_compiled_flow() {
-        let _guard = acquire_lane_surface_test_lock();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "vida-host-bridge-compiled-next-{}-{nanos}",
-            std::process::id()
-        ));
-        let request_path = root.join("host-tool-bridge/requests/run-analyst.json");
-        let result_path = root.join("host-tool-bridge/results/run-analyst.json");
-        let receipt_path = root.join("host-tool-bridge/receipts/run-analyst.json");
-        let packet_path = root.join("runtime-consumption/dispatch-packets/run-analyst.json");
-        std::fs::create_dir_all(request_path.parent().expect("request parent"))
-            .expect("create request parent");
-        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
-            .expect("create packet parent");
-        let role_selection = crate::RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "compiled_flow_test".to_string(),
-            fallback_role: "analyst".to_string(),
-            request: "analyst to designer".to_string(),
-            selected_role: "analyst".to_string(),
-            conversational_mode: None,
-            single_task_only: true,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "test".to_string(),
-            matched_terms: vec!["analyst".to_string()],
-            compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "orchestration_contract": {},
-                "runtime_assignment": {
-                    "activation_agent_type": "middle",
-                    "activation_runtime_role": "business_analyst",
-                    "selected_backend_id": "internal_subagents"
-                },
-                "development_flow": {
-                    "dispatch_contract": {
-                        "execution_lane_sequence": ["analyst", "designer"],
-                        "lane_catalog": {
-                            "analyst": {
-                                "dispatch_target": "analyst",
-                                "runtime_role": "business_analyst",
-                                "task_class": "specification"
-                            },
-                            "designer": {
-                                "dispatch_target": "designer",
-                                "runtime_role": "solution_architect",
-                                "task_class": "architecture"
-                            }
-                        }
-                    }
-                }
-            }),
-            reason: "test compiled flow next".to_string(),
-        };
-        std::fs::write(
-            &packet_path,
-            serde_json::json!({
-                "packet_kind": "runtime_dispatch_packet",
-                "run_id": "run-analyst",
-                "task_id": "run-analyst",
-                "dispatch_generation_id": "run-analyst::analyst::2026-04-09T00:00:00Z",
-                "lane_id": "analyst_lane",
-                "dispatch_target": "analyst",
-                "role_selection_full": role_selection
-            })
-            .to_string(),
-        )
-        .expect("write packet");
-        std::fs::write(
-            &request_path,
-            serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "run-analyst",
-                "run_id": "run-analyst",
-                "task_id": "run-analyst",
-                "dispatch_generation_id": "run-analyst::analyst::2026-04-09T00:00:00Z",
-                "lane_id": "analyst_lane",
-                "dispatch_target": "analyst",
-                "task_class": "specification",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "dispatch_transport": "host_tool_bridge",
-                "required_result_fields": [
-                    "decision",
-                    "verdict",
-                    "blocker_codes",
-                    "rework_target",
-                    "allowed_next_node"
-                ],
-                "result_path": result_path.display().to_string(),
-                "receipt_path": receipt_path.display().to_string()
-            })
-            .to_string(),
-        )
-        .expect("write request");
-        let activation_result_path =
-            root.join("runtime-consumption/dispatch-results/run-analyst-activation.json");
-        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
-            .expect("create activation parent");
-        std::fs::write(
-            &activation_result_path,
-            serde_json::json!({
-                "artifact_kind": "runtime_dispatch_result",
-                "status": "blocked",
-                "execution_state": "bridge_request_pending",
-                "host_tool_bridge_request": {
-                    "request_path": request_path.display().to_string(),
-                    "result_path": result_path.display().to_string(),
-                    "receipt_path": receipt_path.display().to_string()
-                }
-            })
-            .to_string(),
-        )
-        .expect("write activation result");
-        let mut receipt = sample_receipt("bridge_request_pending");
-        receipt.run_id = "run-analyst".to_string();
-        receipt.dispatch_target = "analyst".to_string();
-        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
-
-        let typed_result = serde_json::json!({
-            "status": "pass",
-            "execution_state": "executed",
-            "decision": "pass",
-            "verdict": "implemented",
-            "blocker_codes": [],
-            "rework_target": null,
-            "allowed_next_node": "next"
-        });
-        let evidence = materialize_host_bridge_completion_evidence(
-            &root,
-            request_path.to_str().expect("utf8 request path"),
-            "run-analyst",
-            "analyst",
-            &receipt,
-            "receipt-analyst",
-            Some("analyst-agent-1"),
-            Some("analyst typed pass"),
-            Some(&typed_result),
-            HostBridgeTaskflowImplementationEvidence::default(),
-            &[],
-            false,
-            false,
-        )
-        .expect("abstract next should resolve through compiled flow");
-
-        assert_eq!(evidence.blocker_codes, Vec::<String>::new());
-        assert_eq!(evidence.result_verdict.allowed_next_node, "designer");
-        let bridge_result: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&result_path).expect("read host bridge result"),
-        )
-        .expect("host bridge result should parse");
-        assert_eq!(bridge_result["allowed_next_node"], "designer");
-        assert_ne!(bridge_result["allowed_next_node"], "next");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn host_bridge_completion_rejects_wrong_concrete_flow_next_before_mutation() {
-        let _guard = acquire_lane_surface_test_lock();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "vida-host-bridge-wrong-next-{}-{nanos}",
-            std::process::id()
-        ));
-        let request_path = root.join("host-tool-bridge/requests/run-analyst.json");
-        let result_path = root.join("host-tool-bridge/results/run-analyst.json");
-        let receipt_path = root.join("host-tool-bridge/receipts/run-analyst.json");
-        let packet_path = root.join("runtime-consumption/dispatch-packets/run-analyst.json");
-        std::fs::create_dir_all(request_path.parent().expect("request parent"))
-            .expect("create request parent");
-        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
-            .expect("create packet parent");
-        let role_selection = crate::RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "compiled_flow_test".to_string(),
-            fallback_role: "analyst".to_string(),
-            request: "analyst to designer".to_string(),
-            selected_role: "analyst".to_string(),
-            conversational_mode: None,
-            single_task_only: true,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "test".to_string(),
-            matched_terms: vec!["analyst".to_string()],
-            compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "orchestration_contract": {},
-                "runtime_assignment": {
-                    "activation_agent_type": "middle",
-                    "activation_runtime_role": "business_analyst",
-                    "selected_backend_id": "internal_subagents"
-                },
-                "development_flow": {
-                    "dispatch_contract": {
-                        "execution_lane_sequence": ["analyst", "designer"],
-                        "lane_catalog": {
-                            "analyst": {
-                                "dispatch_target": "analyst",
-                                "runtime_role": "business_analyst",
-                                "task_class": "specification"
-                            },
-                            "designer": {
-                                "dispatch_target": "designer",
-                                "runtime_role": "solution_architect",
-                                "task_class": "architecture"
-                            },
-                            "qa": {
-                                "dispatch_target": "qa",
-                                "runtime_role": "verifier",
-                                "task_class": "verification"
-                            }
-                        }
-                    }
-                }
-            }),
-            reason: "test compiled flow mismatch".to_string(),
-        };
-        std::fs::write(
-            &packet_path,
-            serde_json::json!({
-                "packet_kind": "runtime_dispatch_packet",
-                "run_id": "run-analyst",
-                "task_id": "run-analyst",
-                "dispatch_generation_id": "run-analyst::analyst::2026-04-09T00:00:00Z",
-                "lane_id": "analyst_lane",
-                "dispatch_target": "analyst",
-                "role_selection_full": role_selection
-            })
-            .to_string(),
-        )
-        .expect("write packet");
-        std::fs::write(
-            &request_path,
-            serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "run-analyst",
-                "run_id": "run-analyst",
-                "task_id": "run-analyst",
-                "dispatch_generation_id": "run-analyst::analyst::2026-04-09T00:00:00Z",
-                "lane_id": "analyst_lane",
-                "dispatch_target": "analyst",
-                "task_class": "specification",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "dispatch_transport": "host_tool_bridge",
-                "required_result_fields": [
-                    "decision",
-                    "verdict",
-                    "blocker_codes",
-                    "rework_target",
-                    "allowed_next_node"
-                ],
-                "result_path": result_path.display().to_string(),
-                "receipt_path": receipt_path.display().to_string()
-            })
-            .to_string(),
-        )
-        .expect("write request");
-        let activation_result_path =
-            root.join("runtime-consumption/dispatch-results/run-analyst-activation.json");
-        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
-            .expect("create activation parent");
-        std::fs::write(
-            &activation_result_path,
-            serde_json::json!({
-                "artifact_kind": "runtime_dispatch_result",
-                "status": "blocked",
-                "execution_state": "bridge_request_pending",
-                "host_tool_bridge_request": {
-                    "request_path": request_path.display().to_string(),
-                    "result_path": result_path.display().to_string(),
-                    "receipt_path": receipt_path.display().to_string()
-                }
-            })
-            .to_string(),
-        )
-        .expect("write activation result");
-        let mut receipt = sample_receipt("bridge_request_pending");
-        receipt.run_id = "run-analyst".to_string();
-        receipt.dispatch_target = "analyst".to_string();
-        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
-
-        let typed_result = serde_json::json!({
-            "status": "pass",
-            "execution_state": "executed",
-            "decision": "pass",
-            "verdict": "implemented",
-            "blocker_codes": [],
-            "rework_target": null,
-            "allowed_next_node": "qa"
-        });
-        let error = materialize_host_bridge_completion_evidence(
-            &root,
-            request_path.to_str().expect("utf8 request path"),
-            "run-analyst",
-            "analyst",
-            &receipt,
-            "receipt-analyst",
-            Some("analyst-agent-1"),
-            Some("analyst typed pass"),
-            Some(&typed_result),
-            HostBridgeTaskflowImplementationEvidence::default(),
-            &[],
-            false,
-            false,
-        )
-        .expect_err("wrong concrete next should block before materialization");
-
-        assert!(error.contains("host_bridge_result_contract_invalid"));
-        assert!(error.contains("host_bridge_result_transition_mismatch"));
-        assert!(!result_path.exists());
-        assert!(!receipt_path.exists());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn host_bridge_typed_rework_uses_configured_flow_policy() {
-        let role_selection = crate::RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "compiled_flow_test".to_string(),
-            fallback_role: "adversarial_reviewer".to_string(),
-            request: "adversarial review rework".to_string(),
-            selected_role: "adversarial_reviewer".to_string(),
-            conversational_mode: None,
-            single_task_only: true,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "test".to_string(),
-            matched_terms: vec!["adversarial_reviewer".to_string()],
-            compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "orchestration_contract": {},
-                "runtime_assignment": {
-                    "activation_agent_type": "middle",
-                    "activation_runtime_role": "coach",
-                    "selected_backend_id": "internal_subagents"
-                },
-                "development_flow": {
-                    "dispatch_contract": {
-                        "execution_lane_sequence": ["coder", "adversarial_reviewer", "qa_tester"],
-                        "lane_catalog": {
-                            "coder": {
-                                "dispatch_target": "coder",
-                                "runtime_role": "worker",
-                                "task_class": "implementation"
-                            },
-                            "adversarial_reviewer": {
-                                "dispatch_target": "adversarial_reviewer",
-                                "runtime_role": "coach",
-                                "task_class": "review",
-                                "rework_transitions": {
-                                    "rework": {
-                                        "blocked_target": "coder",
-                                        "resume_after_findings_addressed": "qa_tester"
-                                    }
-                                }
-                            },
-                            "qa_tester": {
-                                "dispatch_target": "qa_tester",
-                                "runtime_role": "verifier",
-                                "task_class": "verification"
-                            }
-                        }
-                    }
-                }
-            }),
-            reason: "test rework policy".to_string(),
-        };
-        let mut result = serde_json::json!({
-            "status": "blocked",
-            "execution_state": "blocked",
-            "decision": "rework_required",
-            "verdict": "rework_required",
-            "blocker_codes": ["adversarial_findings_unanswered"],
-            "rework_target": null,
-            "allowed_next_node": "next"
-        });
-
-        normalize_host_bridge_typed_completion_transition(
-            &mut result,
-            Some(&role_selection),
-            "adversarial_reviewer",
-        );
-
-        assert_eq!(result["rework_target"], "coder");
-        assert_eq!(result["allowed_next_node"], "coder");
-    }
-
-    #[test]
-    fn host_bridge_completion_rejects_invalid_typed_result_before_mutation() {
-        let _guard = acquire_lane_surface_test_lock();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "vida-host-bridge-invalid-typed-result-{}-{nanos}",
-            std::process::id()
-        ));
-        let request_path = root.join("host-tool-bridge/requests/run-invalid.json");
-        let result_path = root.join("host-tool-bridge/results/run-invalid.json");
-        let receipt_path = root.join("host-tool-bridge/receipts/run-invalid.json");
-        std::fs::create_dir_all(request_path.parent().expect("request parent"))
-            .expect("create request parent");
-        let original_request = serde_json::json!({
-            "schema_version": 1,
-            "status": "pending",
-            "request_id": "run-invalid",
-            "run_id": "run-invalid",
-            "dispatch_target": "implementer",
-            "dispatch_generation_id": "run-invalid::implementer::2026-04-09T00:00:00Z",
-            "task_class": "implementation",
-            "packet_path": root.join("runtime-consumption/downstream-dispatch-packets/run-invalid.json").display().to_string(),
-            "backend_id": "internal_subagents",
-            "dispatch_transport": "host_tool_bridge",
-            "required_result_fields": [
-                "decision",
-                "verdict",
-                "blocker_codes",
-                "rework_target",
-                "allowed_next_node"
-            ],
-            "result_path": result_path.display().to_string(),
-            "receipt_path": receipt_path.display().to_string()
-        });
-        std::fs::write(&request_path, original_request.to_string()).expect("write request");
-        let activation_result_path =
-            root.join("runtime-consumption/dispatch-results/run-invalid-activation.json");
-        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
-            .expect("create activation parent");
-        std::fs::write(
-            &activation_result_path,
-            serde_json::json!({
-                "artifact_kind": "runtime_dispatch_result",
-                "status": "blocked",
-                "execution_state": "bridge_request_pending",
-                "host_tool_bridge_request": {
-                    "request_path": request_path.display().to_string(),
-                    "result_path": result_path.display().to_string(),
-                    "receipt_path": receipt_path.display().to_string()
-                }
-            })
-            .to_string(),
-        )
-        .expect("write activation result");
-        let mut receipt = sample_receipt("bridge_request_pending");
-        receipt.run_id = "run-invalid".to_string();
-        receipt.dispatch_target = "implementer".to_string();
-        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
-
-        let typed_result = serde_json::json!({
-            "status": "pass",
-            "execution_state": "executed",
-            "decision": "pass",
-            "verdict": "implemented",
-            "blocker_codes": ["unexpected_runtime_blocker"],
-            "rework_target": null,
-            "allowed_next_node": "coach"
-        });
-        let error = materialize_host_bridge_completion_evidence(
-            &root,
-            request_path.to_str().expect("utf8 request path"),
-            "run-invalid",
-            "implementer",
-            &receipt,
-            "receipt-invalid",
-            Some("implementer-agent-1"),
-            Some("typed result should fail closed"),
-            Some(&typed_result),
-            HostBridgeTaskflowImplementationEvidence::default(),
-            &[],
-            false,
-            false,
-        )
-        .expect_err("invalid typed result should fail before materialization");
-
-        assert!(error.contains("host_bridge_result_contract_invalid"));
-        assert!(error.contains("host_bridge_result_blocker_codes_mismatch"));
-        assert!(!result_path.exists());
-        assert!(!receipt_path.exists());
-        let persisted_request: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&request_path).expect("read persisted request"),
-        )
-        .expect("persisted request should parse");
-        assert_eq!(persisted_request, original_request);
-        assert_eq!(persisted_request["status"], "pending");
-        assert!(persisted_request.get("completion_receipt_id").is_none());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn host_bridge_completion_accepts_terminal_closure_for_final_configured_lane() {
-        let _guard = acquire_lane_surface_test_lock();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "vida-host-bridge-terminal-final-complete-{}-{nanos}",
-            std::process::id()
-        ));
-        let request_path = root.join("host-tool-bridge/requests/run-tester.json");
-        let result_path = root.join("host-tool-bridge/results/run-tester.json");
-        let receipt_path = root.join("host-tool-bridge/receipts/run-tester.json");
-        let packet_path = root.join("runtime-consumption/dispatch-packets/run-tester.json");
-        std::fs::create_dir_all(request_path.parent().expect("request parent"))
-            .expect("create request parent");
-        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
-            .expect("create packet parent");
-        let role_selection = crate::RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "configured_dev_team_test".to_string(),
-            fallback_role: "tester".to_string(),
-            request: "tester final lane can close".to_string(),
-            selected_role: "tester".to_string(),
-            conversational_mode: None,
-            single_task_only: true,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "test".to_string(),
-            matched_terms: vec!["tester".to_string()],
-            compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "orchestration_contract": {},
-                "runtime_assignment": {
-                    "activation_agent_type": "senior",
-                    "activation_runtime_role": "tester",
-                    "selected_backend_id": "internal_subagents"
-                },
-                "development_flow": {
-                    "dispatch_contract": {
-                        "execution_lane_sequence": ["coach_implementation_gate", "tester"],
-                        "lane_catalog": {
-                            "coach_implementation_gate": {
-                                "runtime_role": "coach",
-                                "task_class": "coach",
-                                "closure_class": "implementation",
-                                "packet_template_kind": "coach_review_packet"
-                            },
-                            "tester": {
-                                "runtime_role": "tester",
-                                "task_class": "verification",
-                                "closure_class": "verification",
-                                "packet_template_kind": "verifier_proof_packet"
-                            }
-                        }
-                    }
-                }
-            }),
-            reason: "test final tester terminal closure".to_string(),
-        };
-        std::fs::write(
-            &packet_path,
-            serde_json::json!({
-                "packet_kind": "runtime_dispatch_packet",
-                "packet_template_kind": "verifier_proof_packet",
-                "run_id": "run-tester",
-                "dispatch_target": "tester",
-                "dispatch_generation_id": "run-tester::tester::2026-04-09T00:00:00Z",
-                "role_selection_full": role_selection
-            })
-            .to_string(),
-        )
-        .expect("write packet");
-        std::fs::write(
-            &request_path,
-            serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "run-tester",
-                "run_id": "run-tester",
-                "dispatch_target": "tester",
-                "dispatch_generation_id": "run-tester::tester::2026-04-09T00:00:00Z",
-                "task_class": "verification",
-                "packet_path": packet_path.display().to_string(),
-                "backend_id": "internal_subagents",
-                "dispatch_transport": "host_tool_bridge",
-                "required_result_fields": [
-                    "decision",
-                    "verdict",
-                    "blocker_codes",
-                    "rework_target",
-                    "allowed_next_node"
-                ],
-                "result_path": result_path.display().to_string(),
-                "receipt_path": receipt_path.display().to_string()
-            })
-            .to_string(),
-        )
-        .expect("write request");
-        let activation_result_path =
-            root.join("runtime-consumption/dispatch-results/run-tester-activation.json");
-        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
-            .expect("create activation parent");
-        std::fs::write(
-            &activation_result_path,
-            serde_json::json!({
-                "artifact_kind": "runtime_dispatch_result",
-                "status": "blocked",
-                "execution_state": "bridge_request_pending",
-                "host_tool_bridge_request": {
-                    "request_path": request_path.display().to_string(),
-                    "result_path": result_path.display().to_string(),
-                    "receipt_path": receipt_path.display().to_string()
-                }
-            })
-            .to_string(),
-        )
-        .expect("write activation result");
-        let mut receipt = sample_receipt("bridge_request_pending");
-        receipt.run_id = "run-tester".to_string();
-        receipt.dispatch_target = "tester".to_string();
-        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
-
-        let typed_result = serde_json::json!({
-            "status": "pass",
-            "execution_state": "executed",
-            "decision": "pass",
-            "verdict": "pass",
-            "blocker_codes": [],
-            "rework_target": "none",
-            "allowed_next_node": "terminal_closure"
-        });
-        let evidence = materialize_host_bridge_completion_evidence(
-            &root,
-            request_path.to_str().expect("utf8 request path"),
-            "run-tester",
-            "tester",
-            &receipt,
-            "receipt-tester",
-            Some("tester-agent-1"),
-            Some("tester typed pass"),
-            Some(&typed_result),
-            HostBridgeTaskflowImplementationEvidence::default(),
-            &[],
-            false,
-            false,
-        )
-        .expect("final configured tester pass should materialize terminal closure");
-
-        assert_eq!(evidence.blocker_codes, Vec::<String>::new());
-        assert_eq!(
-            evidence.result_verdict.allowed_next_node,
-            "terminal_closure"
-        );
-        let bridge_result: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&result_path).expect("read host bridge result"),
-        )
-        .expect("host bridge result should parse");
-        assert_eq!(bridge_result["allowed_next_node"], "terminal_closure");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -14672,7 +11785,6 @@ mod tests {
                 "request_id": "run-guard",
                 "run_id": "run-guard",
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": "run-guard::implementer::2026-04-09T00:00:00Z",
                 "packet_path": root.join("runtime-consumption/downstream-dispatch-packets/run-guard.json").display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge",
@@ -14715,7 +11827,6 @@ mod tests {
             "receipt-guard",
             None,
             None,
-            None,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
             false,
@@ -14733,7 +11844,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lane_complete_advances_duplication_reviewer_to_closure_without_reentry() {
+    async fn lane_complete_advances_duplication_reviewer_to_tester_without_reentry() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -14834,7 +11945,6 @@ mod tests {
                 "run_id": run_id,
                 "source_dispatch_target": "developer",
                 "dispatch_target": "duplication_reviewer",
-                "dispatch_generation_id": format!("{run_id}::duplication_reviewer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "reviewer",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lane_surface.rs"],
@@ -14847,7 +11957,7 @@ mod tests {
                     "owned_paths": ["crates/vida/src/lane_surface.rs"],
                     "read_only_paths": [".vida/data/state/runtime-consumption"],
                     "definition_of_done": ["duplication reviewer completion advances to tester"],
-                    "verification_command": "cargo test -p vida lane_complete_advances_duplication_reviewer_to_closure_without_reentry",
+                    "verification_command": "cargo test -p vida lane_complete_advances_duplication_reviewer_to_tester_without_reentry",
                     "proof_target": "duplication reviewer advances to tester without re-entry",
                     "stop_rules": ["stop if packet contract is invalid"],
                     "blocking_question": "none"
@@ -14910,7 +12020,7 @@ mod tests {
             .await
             .expect("read receipt after")
             .expect("receipt should exist");
-        assert_eq!(after.downstream_dispatch_target.as_deref(), Some("closure"));
+        assert_eq!(after.downstream_dispatch_target.as_deref(), Some("tester"));
         assert!(
             after
                 .downstream_dispatch_packet_path
@@ -14926,8 +12036,8 @@ mod tests {
             &std::fs::read_to_string(downstream_packet_path).expect("read downstream packet"),
         )
         .expect("downstream packet should parse");
-        assert_eq!(downstream_packet["dispatch_target"], "closure");
-        assert_eq!(downstream_packet["downstream_dispatch_target"], "closure");
+        assert_eq!(downstream_packet["dispatch_target"], "tester");
+        assert_eq!(downstream_packet["downstream_dispatch_target"], "tester");
         assert_eq!(
             downstream_packet["source_dispatch_target"],
             "duplication_reviewer"
@@ -15002,7 +12112,6 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
-                "dispatch_generation_id": format!("{run_id}::implementer::2026-04-09T00:00:00Z"),
                 "activation_runtime_role": "worker",
                 "packet_template_kind": "delivery_task_packet",
                 "owned_paths": ["crates/vida/src/lane_surface.rs"],
@@ -15191,10 +12300,10 @@ mod tests {
         assert_eq!(packet_json["downstream_dispatch_status"], "packet_ready");
         assert_eq!(packet_json["downstream_lane_status"], "packet_ready");
         assert_eq!(packet_json["downstream_dispatch_result_path"], result_path);
-        assert_eq!(advanced_status.active_node, "coach");
+        assert_eq!(advanced_status.active_node, "implementer");
         assert_eq!(advanced_status.next_node.as_deref(), Some("coach"));
         assert_eq!(advanced_status.status, "ready");
-        assert_eq!(advanced_status.lifecycle_stage, "coach_active");
+        assert_eq!(advanced_status.lifecycle_stage, "implementer_complete");
         assert_eq!(advanced_status.handoff_state, "awaiting_coach");
         assert_eq!(advanced_status.resume_target, "dispatch.coach_lane");
         assert!(advanced_status.recovery_ready);

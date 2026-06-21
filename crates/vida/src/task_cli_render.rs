@@ -1,4 +1,4 @@
-use crate::release1_operator_output::build_release1_operator_output_payload;
+use crate::release1_operator_output::Release1OperatorOutputBuilder;
 use crate::state_store::{
     BlockedTaskRecord, TaskBulkReparentResult, TaskCriticalPath, TaskDefectBatchRehomeResult,
     TaskDependencyBulkAddResult, TaskDependencyRecord, TaskDependencyStatus,
@@ -224,16 +224,15 @@ fn build_operator_surface_payload(
     next_actions: Vec<String>,
     extra_fields: serde_json::Value,
 ) -> serde_json::Value {
-    build_release1_operator_output_payload(
-        surface,
-        blocker_codes,
-        next_actions,
-        serde_json::json!({
+    Release1OperatorOutputBuilder::new(surface)
+        .blocker_codes(blocker_codes)
+        .next_actions(next_actions)
+        .artifact_refs(serde_json::json!({
             "surface": surface,
-        }),
-        extra_fields,
-    )
-    .expect("task operator surface should finalize release-1 operator output")
+        }))
+        .extra_fields(extra_fields)
+        .build()
+        .expect("task operator surface should finalize release-1 operator output")
 }
 
 pub(crate) fn build_pass_operator_surface_payload(
@@ -2456,6 +2455,24 @@ mod tests {
         assert_eq!(
             blocked_payload["operator_contracts"]["status"],
             blocked_payload["status"]
+        );
+        let mut pass_keys = pass_payload
+            .as_object()
+            .expect("pass payload object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut blocked_keys = blocked_payload
+            .as_object()
+            .expect("blocked payload object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        pass_keys.sort();
+        blocked_keys.sort();
+        assert_eq!(
+            pass_keys, blocked_keys,
+            "pass and blocked task graph issue payloads must expose the same top-level operator contract skeleton"
         );
         assert_eq!(
             shared_operator_output_contract_parity_error(&blocked_payload),

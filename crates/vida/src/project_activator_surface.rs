@@ -34,6 +34,8 @@ pub(crate) const HOST_CLI_PLACEHOLDER: &str = "__HOST_CLI_SYSTEM__";
 pub(crate) const HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE: &str = "codex_toml_catalog_render";
 pub(crate) const PI_AGENT_PROJECTION_RENDER_MODE: &str = "pi_agent_projection_render";
 const PROJECT_ACTIVATOR_ACTIVATION_OPEN_TIMEOUT_SECONDS: u64 = 30;
+const MATERIALIZATION_SNAPSHOT_MAX_DEPTH: usize = 64;
+const MATERIALIZATION_SNAPSHOT_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MaterializationSurfaceReport {
@@ -1354,8 +1356,15 @@ fn collect_file_snapshot(
     roots: &[PathBuf],
 ) -> Result<BTreeMap<String, Vec<u8>>, String> {
     let mut snapshot = BTreeMap::new();
+    let project_root = project_root.canonicalize().map_err(|error| {
+        format!(
+            "Failed to resolve project root {}: {error}",
+            project_root.display()
+        )
+    })?;
+    let mut visited_dirs = BTreeSet::new();
     for root in roots {
-        collect_file_snapshot_entry(project_root, root, &mut snapshot)?;
+        collect_file_snapshot_entry(&project_root, root, &mut snapshot, &mut visited_dirs, 0)?;
     }
     Ok(snapshot)
 }
@@ -1364,19 +1373,55 @@ fn collect_file_snapshot_entry(
     project_root: &Path,
     path: &Path,
     snapshot: &mut BTreeMap<String, Vec<u8>>,
+    visited_dirs: &mut BTreeSet<PathBuf>,
+    depth: usize,
 ) -> Result<(), String> {
-    if !path.exists() {
+    if depth > MATERIALIZATION_SNAPSHOT_MAX_DEPTH {
+        return Err(format!(
+            "Refusing to snapshot {}: maximum materialization snapshot depth of {} exceeded",
+            path.display(),
+            MATERIALIZATION_SNAPSHOT_MAX_DEPTH
+        ));
+    }
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("Failed to inspect {}: {error}", path.display())),
+    };
+    if metadata.file_type().is_symlink() {
         return Ok(());
     }
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))?;
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve {}: {error}", path.display()))?;
+    if !canonical_path.starts_with(project_root) {
+        return Err(format!(
+            "Refusing to snapshot {}: path resolves outside project root {}",
+            path.display(),
+            project_root.display()
+        ));
+    }
     if metadata.is_file() {
+        if metadata.len() > MATERIALIZATION_SNAPSHOT_MAX_FILE_BYTES {
+            return Err(format!(
+                "Refusing to snapshot {}: file is {} bytes, exceeding the {} byte limit",
+                path.display(),
+                metadata.len(),
+                MATERIALIZATION_SNAPSHOT_MAX_FILE_BYTES
+            ));
+        }
         let contents = fs::read(path)
             .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
-        snapshot.insert(project_relative_report_path(project_root, path), contents);
+        snapshot.insert(
+            project_relative_report_path(project_root, &canonical_path),
+            contents,
+        );
         return Ok(());
     }
     if !metadata.is_dir() {
+        return Ok(());
+    }
+    if !visited_dirs.insert(canonical_path.clone()) {
         return Ok(());
     }
     let mut entries = fs::read_dir(path)
@@ -1385,7 +1430,13 @@ fn collect_file_snapshot_entry(
         .map_err(|error| format!("Failed to iterate {}: {error}", path.display()))?;
     entries.sort_by_key(|entry| entry.path());
     for entry in entries {
-        collect_file_snapshot_entry(project_root, &entry.path(), snapshot)?;
+        collect_file_snapshot_entry(
+            project_root,
+            &entry.path(),
+            snapshot,
+            visited_dirs,
+            depth + 1,
+        )?;
     }
     Ok(())
 }
@@ -1517,8 +1568,9 @@ fn repair_materialization_scopes(project_root: &Path) -> Vec<MaterializationSurf
 fn host_cli_materialization_scopes(
     project_root: &Path,
     runtime_surface: &str,
-) -> Vec<MaterializationSurfaceScope> {
-    vec![
+) -> Result<Vec<MaterializationSurfaceScope>, String> {
+    validate_project_relative_path(runtime_surface, "runtime_root")?;
+    Ok(vec![
         MaterializationSurfaceScope {
             surface: "host_cli_selection".to_string(),
             potential_scope: "vida.config.yaml".to_string(),
@@ -1538,7 +1590,7 @@ fn host_cli_materialization_scopes(
                 project_root.join(WORKER_STRATEGY_STATE),
             ],
         },
-    ]
+    ])
 }
 
 fn repair_project_activation_assets(project_root: &Path) -> Result<(), String> {
@@ -1730,10 +1782,18 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         };
         let runtime_surface =
             host_cli_system_runtime_surface(host_cli_entry, &normalized_host_cli_system);
-        let (_runtime_root, host_materialization_report) = match record_materialization_result(
-            &project_root,
-            host_cli_materialization_scopes(&project_root, &runtime_surface),
-            || {
+        let host_materialization_scopes =
+            match host_cli_materialization_scopes(&project_root, &runtime_surface) {
+                Ok(scopes) => scopes,
+                Err(error) => {
+                    eprintln!(
+                        "Project activation failed closed before host CLI materialization: {error}"
+                    );
+                    return ExitCode::from(1);
+                }
+            };
+        let (_runtime_root, host_materialization_report) =
+            match record_materialization_result(&project_root, host_materialization_scopes, || {
                 apply_host_cli_selection(&project_root, &normalized_host_cli_system).and_then(
                     |()| {
                         materialize_host_cli_template(
@@ -1743,14 +1803,13 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
                         )
                     },
                 )
-            },
-        ) {
-            Ok(result) => result,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::from(1);
-            }
-        };
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            };
         materialization_report.extend(host_materialization_report);
         host_cli_activated = Some(normalized_host_cli_system.to_string());
     }
@@ -2563,6 +2622,7 @@ mod tests {
     use crate::WORKER_STRATEGY_STATE;
     use serde_json::json;
     use std::fs;
+    use std::path::PathBuf;
     use std::process::ExitCode;
 
     #[test]
@@ -3278,6 +3338,48 @@ host_environment:
             view["normal_work_defaults"]["default_agent_topology"],
             serde_json::json!(["pi-primary"])
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn materialization_snapshot_skips_symlinks_without_reading_targets() {
+        use std::os::unix::fs::symlink;
+
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let docs = harness.path().join("docs");
+        fs::create_dir_all(&docs).expect("docs directory should be created");
+        fs::write(docs.join("kept.md"), "kept").expect("regular file should be written");
+        let external = harness.path().join("external-large.bin");
+        fs::write(
+            &external,
+            vec![b'x'; (super::MATERIALIZATION_SNAPSHOT_MAX_FILE_BYTES + 1) as usize],
+        )
+        .expect("external large target should be written");
+        symlink(&external, docs.join("large-link")).expect("symlink should be created");
+        symlink("..", docs.join("loop")).expect("loop symlink should be created");
+
+        let snapshot = super::collect_file_snapshot(harness.path(), &[PathBuf::from("docs")])
+            .expect("snapshot should skip symlink entries without following them");
+
+        assert_eq!(
+            snapshot.keys().cloned().collect::<Vec<_>>(),
+            vec!["docs/kept.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn host_cli_materialization_scopes_rejects_unvalidated_runtime_root() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+
+        let absolute = super::host_cli_materialization_scopes(harness.path(), "/tmp/escape")
+            .expect_err("absolute runtime roots must be rejected before snapshotting");
+        assert!(absolute.contains("runtime_root"));
+        assert!(absolute.contains("absolute paths are not allowed"));
+
+        let parent = super::host_cli_materialization_scopes(harness.path(), "../escape")
+            .expect_err("parent runtime roots must be rejected before snapshotting");
+        assert!(parent.contains("runtime_root"));
+        assert!(parent.contains("`..` segments are not allowed"));
     }
 
     #[test]

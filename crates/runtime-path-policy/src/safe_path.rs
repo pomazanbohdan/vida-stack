@@ -182,12 +182,11 @@ pub fn existing_regular_file_under_root(
     let raw_path = raw_path.as_ref();
     reject_dot_segment(raw_path, kind)?;
     let path = root.resolve_raw(raw_path);
-    let metadata =
-        std::fs::symlink_metadata(&path).map_err(|source| PathPolicyError::Metadata {
-            kind,
-            path: path.clone(),
-            source,
-        })?;
+    let metadata = fs_err::symlink_metadata(&path).map_err(|source| PathPolicyError::Metadata {
+        kind,
+        path: path.clone(),
+        source,
+    })?;
     if is_symlink(&metadata) {
         return Err(PathPolicyError::Symlink { kind, path });
     }
@@ -224,7 +223,7 @@ pub fn new_output_path_under_root(
             path: path.clone(),
         })?;
     ensure_parent_safe_to_create(root, parent, kind)?;
-    std::fs::create_dir_all(parent).map_err(|source| PathPolicyError::ParentCreate {
+    fs_err::create_dir_all(parent).map_err(|source| PathPolicyError::ParentCreate {
         kind,
         path: parent.to_path_buf(),
         source,
@@ -238,7 +237,7 @@ pub fn new_output_path_under_root(
                 source,
             })?;
     ensure_under_root(root, &parent_canonical, kind)?;
-    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+    if let Ok(metadata) = fs_err::symlink_metadata(&path) {
         if is_symlink(&metadata) {
             return Err(PathPolicyError::Symlink { kind, path });
         }
@@ -267,7 +266,7 @@ fn ensure_parent_safe_to_create(
                     path: parent.to_path_buf(),
                 })?;
     }
-    let metadata = std::fs::symlink_metadata(existing_ancestor).map_err(|source| {
+    let metadata = fs_err::symlink_metadata(existing_ancestor).map_err(|source| {
         PathPolicyError::Metadata {
             kind,
             path: existing_ancestor.to_path_buf(),

@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::verify::task_verify_label_is_runtime_proof_blocker;
 use crate::{TaskStatus, parse_task_status, task_status_is_closed_like};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +41,7 @@ pub struct TaskProgressRow {
     pub priority: u32,
     pub labels: Vec<String>,
     pub proof_targets: Vec<String>,
+    pub proof_satisfied: bool,
     pub parent_id: Option<String>,
 }
 
@@ -259,10 +261,11 @@ fn descendant_progress_summary(
         && is_non_container_work_item
         && non_container_descendants_clear
         && !root_task.proof_targets.is_empty()
+        && !root_task.proof_satisfied
         && root_task
             .labels
             .iter()
-            .any(|label| label == "proof-blocked-by-runtime" || label == "runtime-proof-blocked");
+            .any(|label| task_verify_label_is_runtime_proof_blocker(label));
     let blocked_by_runtime = proof_blocked_by_runtime
         || (!root_closed
             && is_non_container_work_item
@@ -275,6 +278,7 @@ fn descendant_progress_summary(
         && is_non_container_work_item
         && non_container_descendants_clear
         && !root_task.proof_targets.is_empty()
+        && !root_task.proof_satisfied
         && !proof_blocked_by_runtime;
     let leaf_ready_for_close = !root_closed
         && is_non_container_work_item
@@ -453,6 +457,7 @@ mod tests {
             priority: 1,
             labels: Vec::new(),
             proof_targets: Vec::new(),
+            proof_satisfied: false,
             parent_id: parent_id.map(str::to_string),
         }
     }
@@ -480,6 +485,46 @@ mod tests {
         assert_eq!(summary.closed_count, 2);
         assert_eq!(summary.descendant_count, 2);
         assert_eq!(summary.percent_closed, 100.0);
+    }
+
+    #[test]
+    fn descendant_progress_blocks_open_grandchild_when_direct_children_are_closed() {
+        let rows = vec![
+            row("parent", "open", "epic", None),
+            row("child", "closed", "task", Some("parent")),
+            row("grandchild", "open", "task", Some("child")),
+        ];
+
+        let direct = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DirectChildren,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+        let descendants = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(direct.progress_basis, "direct_children");
+        assert!(direct.ready_for_close);
+        assert_eq!(direct.direct_child_count, 1);
+        assert_eq!(direct.descendant_count, 1);
+        assert_eq!(descendants.progress_basis, "descendants_excluding_root");
+        assert!(!descendants.ready_for_close);
+        assert_eq!(
+            descendants.closure_candidate_state,
+            "active_descendants_remaining"
+        );
+        assert_eq!(descendants.direct_child_count, 1);
+        assert_eq!(descendants.descendant_count, 2);
+        assert_eq!(descendants.open_count, 1);
     }
 
     #[test]
@@ -562,5 +607,49 @@ mod tests {
         assert!(!summary.ready_for_close);
         assert!(summary.missing_proof);
         assert_eq!(summary.closure_candidate_state, "leaf_missing_proof");
+    }
+
+    #[test]
+    fn descendant_progress_uses_canonical_runtime_proof_blocker_label_helper() {
+        let mut parent = row("leaf", "in_progress", "task", None);
+        parent.proof_targets = vec!["cargo test".to_string()];
+        parent.labels = vec!["runtime-proof-blocked".to_string()];
+
+        let summary = task_progress_summary_from_rows(
+            &[parent],
+            "leaf",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.replace(" --json", ""),
+        )
+        .unwrap();
+
+        assert!(!summary.ready_for_close);
+        assert!(!summary.missing_proof);
+        assert!(summary.proof_blocked_by_runtime);
+        assert!(summary.blocked_by_runtime);
+        assert_eq!(
+            summary.closure_candidate_state,
+            "leaf_proof_blocked_by_runtime"
+        );
+    }
+
+    #[test]
+    fn descendant_progress_allows_leaf_when_proof_is_satisfied() {
+        let mut parent = row("leaf", "in_progress", "task", None);
+        parent.proof_targets = vec!["cargo test".to_string()];
+        parent.proof_satisfied = true;
+        let summary = task_progress_summary_from_rows(
+            &[parent],
+            "leaf",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.replace(" --json", ""),
+        )
+        .unwrap();
+
+        assert!(summary.ready_for_close);
+        assert!(!summary.missing_proof);
+        assert_eq!(summary.closure_candidate_state, "leaf_ready_for_close");
     }
 }

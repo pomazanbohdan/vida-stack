@@ -1,6 +1,9 @@
 use std::process::ExitCode;
 
 use serde_json::Value;
+use taskflow_core::task::verify::{
+    TaskBrowserProofArtifact, TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION,
+};
 
 use crate::release1_contracts::{blocker_code_str, BlockerCode};
 use crate::release1_operator_output::{
@@ -34,6 +37,8 @@ fn run_browser_proof(args: crate::ProofBrowserArgs) -> ExitCode {
 }
 
 fn build_browser_proof_payload(route: &str, expected_text: Option<&str>) -> Value {
+    let proof_artifact = TaskBrowserProofArtifact::new(route, "blocked", expected_text, None, &[])
+        .expect("browser proof artifact should build for non-empty CLI route");
     let blocker_codes = vec![blocker_code_str(BROWSER_AUTOMATION_BLOCKER).to_string()];
     let next_actions = vec![BROWSER_AUTOMATION_NEXT_ACTION.to_string()];
     let observed_request = serde_json::json!({
@@ -49,6 +54,7 @@ fn build_browser_proof_payload(route: &str, expected_text: Option<&str>) -> Valu
         "surface": BROWSER_PROOF_SURFACE,
         "route": route,
         "expect": expected_text,
+        "browser_proof_artifact": proof_artifact.clone(),
         "observed_request": observed_request,
         "screenshot": null,
         "dom_snapshot": null,
@@ -74,7 +80,10 @@ fn build_browser_proof_payload(route: &str, expected_text: Option<&str>) -> Valu
         "shared_fields": finalized.shared_fields,
         "operator_contracts": finalized.operator_contracts,
         "proof": {
+            "schema_version": TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION,
             "kind": "browser",
+            "proof_target": proof_artifact.proof_target.clone(),
+            "command": proof_artifact.command.clone(),
             "route": route,
             "expect": expected_text,
             "result": "blocked",
@@ -185,6 +194,18 @@ mod tests {
         assert_eq!(payload["expect"], "My Tasks");
         assert_eq!(payload["proof_blocked"], true);
         assert_eq!(payload["proof"]["result"], "blocked");
+        assert_eq!(
+            payload["proof"]["schema_version"],
+            TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            payload["proof"]["proof_target"],
+            "vida proof browser --route http://127.0.0.1:51235/#/module/project --expect My Tasks"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["browser_proof_artifact"]["schema_version"],
+            TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+        );
         assert_eq!(payload["proof"]["expect"], "My Tasks");
         assert_eq!(
             payload["proof"]["collection_state"],

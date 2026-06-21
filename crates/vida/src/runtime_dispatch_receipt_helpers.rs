@@ -93,12 +93,10 @@ pub(crate) fn dispatch_summary_has_clean_ready_downstream_handoff(
                     .as_deref()
                     .map(str::trim)
                     .is_some_and(|path| !path.is_empty()))
-            && (receipt.downstream_dispatch_target.as_deref() == Some("closure")
-                || receipt
-                    .downstream_dispatch_command
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|command| command.starts_with("vida agent-init")))
+            && downstream_dispatch_command_is_executable(
+                receipt.downstream_dispatch_target.as_deref(),
+                receipt.downstream_dispatch_command.as_deref(),
+            )
     })
 }
 
@@ -126,12 +124,25 @@ pub(crate) fn dispatch_receipt_has_clean_ready_downstream_handoff(
                 .as_deref()
                 .map(str::trim)
                 .is_some_and(|path| !path.is_empty()))
-        && (receipt.downstream_dispatch_target.as_deref() == Some("closure")
-            || receipt
-                .downstream_dispatch_command
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|command| command.starts_with("vida agent-init")))
+        && downstream_dispatch_command_is_executable(
+            receipt.downstream_dispatch_target.as_deref(),
+            receipt.downstream_dispatch_command.as_deref(),
+        )
+}
+
+fn downstream_dispatch_command_is_executable(target: Option<&str>, command: Option<&str>) -> bool {
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return false;
+    };
+    if target == "closure" {
+        return true;
+    }
+    let Some(command) = command.map(str::trim).filter(|command| !command.is_empty()) else {
+        return false;
+    };
+    command.starts_with("vida agent-init")
+        || (matches!(target, "work-pool-pack" | "dev-pack")
+            && command.starts_with("vida task ensure"))
 }
 
 pub(crate) fn dispatch_summary_has_clean_completed_lane(
@@ -239,6 +250,14 @@ pub(crate) fn recovery_summary_is_terminal_retired_runtime_run(
             && summary.resume_target == "none"
             && summary.task_id == summary.run_id
     })
+}
+
+pub(crate) fn recovery_summary_is_reconciled_terminal_retired_runtime_run(
+    status: Option<&crate::state_store::RunGraphStatus>,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> bool {
+    status.is_some_and(crate::state_store::RunGraphStatus::is_reconciled_terminal_closure)
+        && recovery_summary_is_terminal_retired_runtime_run(recovery)
 }
 
 pub(crate) fn dispatch_receipt_downstream_blockers_superseded_by_ready_handoff(
@@ -430,9 +449,7 @@ mod tests {
             dispatch_result_path: Some("result.json".to_string()),
             blocker_code: None,
             downstream_dispatch_target: Some("verifier".to_string()),
-            downstream_dispatch_command: Some(
-                "vida agent-init --dispatch-packet downstream.json --execute-dispatch".to_string(),
-            ),
+            downstream_dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
             downstream_dispatch_note: Some("continue".to_string()),
             downstream_dispatch_ready: true,
             downstream_dispatch_blockers: Vec::new(),
@@ -486,6 +503,67 @@ mod tests {
             selected_backend: None,
             recorded_at: "2026-06-05T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn materialization_only_task_ensure_classifier_rejects_preview_as_execution() {
+        for target in ["work-pool-pack", "dev-pack"] {
+            assert!(
+                dispatch_fields_are_materialization_only_blocked_task_ensure(
+                    "blocked",
+                    Some("vida task ensure"),
+                    target,
+                    Some("internal_activation_view_only"),
+                ),
+                "blocked task ensure materialization must be classified for {target}"
+            );
+            assert!(
+                dispatch_fields_are_materialization_only_blocked_task_ensure(
+                    "blocked",
+                    Some("vida task ensure"),
+                    target,
+                    None,
+                ),
+                "legacy materialization receipts without blocker_code still remain materialization-only for {target}"
+            );
+            assert!(
+                !dispatch_fields_are_materialization_only_blocked_task_ensure(
+                    "executed",
+                    Some("vida task ensure"),
+                    target,
+                    None,
+                ),
+                "executed task ensure receipt is no longer preview/materialization-only for {target}"
+            );
+        }
+
+        assert!(
+            !dispatch_fields_are_materialization_only_blocked_task_ensure(
+                "blocked",
+                Some("vida agent-init"),
+                "dev-pack",
+                Some("internal_activation_view_only"),
+            ),
+            "agent-lane activation blockers are handled by the retry/exception gates, not the materialization-only classifier"
+        );
+        assert!(
+            !dispatch_fields_are_materialization_only_blocked_task_ensure(
+                "blocked",
+                Some("vida task ensure"),
+                "closure",
+                Some("internal_activation_view_only"),
+            ),
+            "closure receipts must not be folded into tracked-flow materialization"
+        );
+        assert!(
+            !dispatch_fields_are_materialization_only_blocked_task_ensure(
+                "blocked",
+                Some("vida task ensure"),
+                "dev-pack",
+                Some("tool_execution_failed"),
+            ),
+            "real task ensure failures are not safe to classify as materialization-only"
+        );
     }
 
     fn ready_status_for(run_id: &str) -> crate::state_store::RunGraphStatus {
@@ -706,6 +784,27 @@ mod tests {
         }
     }
 
+    fn terminal_status_for(run_id: &str) -> crate::state_store::RunGraphStatus {
+        crate::state_store::RunGraphStatus {
+            run_id: run_id.to_string(),
+            task_id: run_id.to_string(),
+            task_class: "runtime_diagnostic".to_string(),
+            active_node: "closure".to_string(),
+            next_node: None,
+            status: "completed".to_string(),
+            route_task_class: "runtime_diagnostic".to_string(),
+            selected_backend: "local".to_string(),
+            lane_id: "root".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            policy_gate: "closed_task_stale_run_retired".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        }
+    }
+
     #[test]
     fn terminal_retired_runtime_run_requires_closed_clear_self_task_recovery() {
         let terminal = recovery_summary_for("vida-scope");
@@ -724,5 +823,28 @@ mod tests {
         assert!(!recovery_summary_is_terminal_retired_runtime_run(Some(
             &task_backed
         )));
+    }
+
+    #[test]
+    fn reconciled_terminal_retired_runtime_run_requires_retired_policy_gate() {
+        let recovery = recovery_summary_for("vida-scope");
+        let reconciled_status = terminal_status_for("vida-scope");
+        assert!(recovery_summary_is_reconciled_terminal_retired_runtime_run(
+            Some(&reconciled_status),
+            Some(&recovery)
+        ));
+
+        let mut unreconciled_status = reconciled_status;
+        unreconciled_status.policy_gate = "not_required".to_string();
+        assert!(
+            !recovery_summary_is_reconciled_terminal_retired_runtime_run(
+                Some(&unreconciled_status),
+                Some(&recovery)
+            )
+        );
+
+        assert!(
+            !recovery_summary_is_reconciled_terminal_retired_runtime_run(None, Some(&recovery))
+        );
     }
 }

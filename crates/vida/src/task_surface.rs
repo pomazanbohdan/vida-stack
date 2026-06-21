@@ -7,7 +7,7 @@ use crate::task_cli_render::{
     task_show_payload, task_show_payload_with_context, TaskProjectionContext,
 };
 use crate::taskflow_proxy::paths_intersect;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use taskflow_core::task::block::{append_task_block_note, normalize_task_block_list};
 use taskflow_core::task::dependencies::{
     parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
@@ -22,8 +22,11 @@ use taskflow_core::task::progress::{
     TaskProgressSummary as CoreTaskProgressSummary,
 };
 use taskflow_core::task::verify::{
-    append_task_verify_note, normalized_task_verify_evidence, task_reports_runtime_proof_blocker,
-    task_verify_labels,
+    all_structured_task_proof_targets_satisfied, append_task_browser_proof_note,
+    append_task_proof_evidence_note, append_task_verify_note, canonical_task_proof_result,
+    normalized_task_verify_evidence, structured_task_proof_evidence_match,
+    task_browser_proof_target, task_reports_runtime_proof_blocker, task_verify_labels,
+    TaskBrowserProofArtifact,
 };
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -117,6 +120,7 @@ struct TaskEpicReconcileReceipt {
     surface: &'static str,
     status: String,
     scope: String,
+    progress_basis: String,
     dry_run: bool,
     close_if_complete: bool,
     inspected_epic_count: usize,
@@ -131,6 +135,8 @@ struct TaskEpicReconcileReceipt {
 struct TaskEpicReconcileClosedRow {
     epic_id: String,
     child_count: usize,
+    descendant_count: usize,
+    progress_basis: String,
     reason: String,
 }
 
@@ -138,8 +144,12 @@ struct TaskEpicReconcileClosedRow {
 struct TaskEpicReconcileBlockedRow {
     epic_id: String,
     child_count: usize,
+    descendant_count: usize,
     open_child_count: usize,
     in_progress_child_count: usize,
+    open_descendant_count: usize,
+    in_progress_descendant_count: usize,
+    progress_basis: String,
     reason: String,
 }
 
@@ -179,7 +189,9 @@ struct TaskEpicProgressRow {
     recommended_next_action: String,
 }
 
-async fn reconcile_epics_from_direct_children(
+const EPIC_RECONCILE_PROGRESS_BASIS: &str = "descendants_excluding_root";
+
+async fn reconcile_epics_from_descendant_progress(
     store: &StateStore,
     close_if_complete: bool,
     dry_run: bool,
@@ -207,6 +219,9 @@ async fn reconcile_epics_from_direct_children(
             continue;
         }
 
+        let progress =
+            task_progress_summary_for_basis(&tasks, &epic.id, EPIC_RECONCILE_PROGRESS_BASIS)?;
+
         let children = tasks
             .iter()
             .filter(|task| {
@@ -218,8 +233,12 @@ async fn reconcile_epics_from_direct_children(
             blocked_epics.push(TaskEpicReconcileBlockedRow {
                 epic_id: epic.id,
                 child_count,
+                descendant_count: progress.descendant_count,
                 open_child_count: 0,
                 in_progress_child_count: 0,
+                open_descendant_count: progress.open_count,
+                in_progress_descendant_count: progress.in_progress_count,
+                progress_basis: progress.progress_basis,
                 reason: "no_direct_children".to_string(),
             });
             continue;
@@ -236,13 +255,22 @@ async fn reconcile_epics_from_direct_children(
         let all_children_closed = children
             .iter()
             .all(|child| StateStore::task_status_is_closed_like(&child.status));
-        if !all_children_closed {
+        if !progress.closure_candidate {
+            let reason = if !all_children_closed {
+                "active_descendants_remaining".to_string()
+            } else {
+                progress.closure_candidate_state.clone()
+            };
             blocked_epics.push(TaskEpicReconcileBlockedRow {
                 epic_id: epic.id,
                 child_count,
+                descendant_count: progress.descendant_count,
                 open_child_count,
                 in_progress_child_count,
-                reason: "direct_children_not_all_closed".to_string(),
+                open_descendant_count: progress.open_count,
+                in_progress_descendant_count: progress.in_progress_count,
+                progress_basis: progress.progress_basis,
+                reason,
             });
             continue;
         }
@@ -251,7 +279,7 @@ async fn reconcile_epics_from_direct_children(
             match store
                 .close_task(
                     &epic.id,
-                    "all direct child tasks closed by epic auto-reconcile",
+                    "all descendant tasks closed by epic auto-reconcile",
                 )
                 .await
             {
@@ -260,14 +288,20 @@ async fn reconcile_epics_from_direct_children(
                     closed_epics.push(TaskEpicReconcileClosedRow {
                         epic_id: closed.id,
                         child_count,
-                        reason: "all_direct_children_closed".to_string(),
+                        descendant_count: progress.descendant_count,
+                        progress_basis: progress.progress_basis,
+                        reason: "all_descendants_closed".to_string(),
                     });
                 }
                 Err(error) => blocked_epics.push(TaskEpicReconcileBlockedRow {
                     epic_id: epic.id,
                     child_count,
+                    descendant_count: progress.descendant_count,
                     open_child_count,
                     in_progress_child_count,
+                    open_descendant_count: progress.open_count,
+                    in_progress_descendant_count: progress.in_progress_count,
+                    progress_basis: progress.progress_basis,
                     reason: format!("close_failed:{error}"),
                 }),
             }
@@ -275,7 +309,9 @@ async fn reconcile_epics_from_direct_children(
             closed_epics.push(TaskEpicReconcileClosedRow {
                 epic_id: epic.id,
                 child_count,
-                reason: "eligible_all_direct_children_closed".to_string(),
+                descendant_count: progress.descendant_count,
+                progress_basis: progress.progress_basis,
+                reason: "eligible_all_descendants_closed".to_string(),
             });
         }
     }
@@ -293,6 +329,7 @@ async fn reconcile_epics_from_direct_children(
         surface: "vida task reconcile",
         status: "pass".to_string(),
         scope: "epics".to_string(),
+        progress_basis: EPIC_RECONCILE_PROGRESS_BASIS.to_string(),
         dry_run,
         close_if_complete,
         inspected_epic_count,
@@ -342,6 +379,7 @@ struct TaskPruneProtectedRow {
     issue_type: String,
     reason: String,
     blocking_task_ids: Vec<String>,
+    runtime_refs: Vec<String>,
 }
 
 struct TaskPruneClosedEpicsPlan {
@@ -399,6 +437,29 @@ fn retained_task_refs_to_prune_subtree(
     referrers.into_iter().collect()
 }
 
+fn runtime_refs_to_prune_subtree(
+    runtime_refs_by_task: &BTreeMap<String, Vec<String>>,
+    subtree_ids: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    let mut blocking_task_ids = Vec::new();
+    let mut runtime_refs = Vec::new();
+    for task_id in subtree_ids {
+        let Some(refs) = runtime_refs_by_task.get(task_id) else {
+            continue;
+        };
+        if refs.is_empty() {
+            continue;
+        }
+        blocking_task_ids.push(task_id.clone());
+        for runtime_ref in refs {
+            runtime_refs.push(format!("{task_id}:{runtime_ref}"));
+        }
+    }
+    runtime_refs.sort();
+    runtime_refs.dedup();
+    (blocking_task_ids, runtime_refs)
+}
+
 fn task_prune_row(
     task: &state_store::TaskRecord,
     reason: impl Into<String>,
@@ -416,6 +477,7 @@ fn task_prune_protected_row(
     task: &state_store::TaskRecord,
     reason: impl Into<String>,
     blocking_task_ids: Vec<String>,
+    runtime_refs: Vec<String>,
 ) -> TaskPruneProtectedRow {
     TaskPruneProtectedRow {
         task_id: task.id.clone(),
@@ -424,11 +486,13 @@ fn task_prune_protected_row(
         issue_type: task.issue_type.clone(),
         reason: reason.into(),
         blocking_task_ids,
+        runtime_refs,
     }
 }
 
 fn build_task_prune_closed_epics_plan(
     rows: &[state_store::TaskRecord],
+    runtime_refs_by_task: &BTreeMap<String, Vec<String>>,
     dry_run: bool,
     state_dir: &std::path::Path,
     archive_path: Option<&std::path::Path>,
@@ -450,6 +514,7 @@ fn build_task_prune_closed_epics_plan(
             protected.push(task_prune_protected_row(
                 task,
                 "open_or_in_progress_container",
+                Vec::new(),
                 Vec::new(),
             ));
             continue;
@@ -474,6 +539,7 @@ fn build_task_prune_closed_epics_plan(
                 task,
                 "non_closed_descendant",
                 non_closed_descendants,
+                Vec::new(),
             ));
             continue;
         }
@@ -484,6 +550,19 @@ fn build_task_prune_closed_epics_plan(
                 task,
                 "referenced_by_retained_task",
                 retained_refs,
+                Vec::new(),
+            ));
+            continue;
+        }
+
+        let (runtime_linked_task_ids, runtime_refs) =
+            runtime_refs_to_prune_subtree(runtime_refs_by_task, &subtree_ids);
+        if !runtime_linked_task_ids.is_empty() {
+            protected.push(task_prune_protected_row(
+                task,
+                "runtime_linked_task",
+                runtime_linked_task_ids,
+                runtime_refs,
             ));
             continue;
         }
@@ -674,8 +753,23 @@ async fn run_task_prune_closed_epics(command: TaskPruneClosedEpicsArgs) -> ExitC
             let archive_path = command
                 .apply
                 .then(|| task_prune_archive_path(&state_dir, command.archive_dir.as_deref()));
+            let task_ids = rows
+                .iter()
+                .map(|task| task.id.clone())
+                .collect::<BTreeSet<_>>();
+            let runtime_refs_by_task = match store
+                .task_runtime_reference_labels_for_tasks(&task_ids)
+                .await
+            {
+                Ok(refs) => refs,
+                Err(error) => {
+                    eprintln!("Failed to read task runtime references for prune: {error}");
+                    return ExitCode::from(1);
+                }
+            };
             let mut plan = build_task_prune_closed_epics_plan(
                 &rows,
+                &runtime_refs_by_task,
                 !command.apply,
                 &state_dir,
                 archive_path.as_deref(),
@@ -760,6 +854,7 @@ struct TaskProofTargetStatus {
     evidence_source: String,
     evidence_detail: String,
     artifact_status: String,
+    legacy_close_reason_match: bool,
     next_action: String,
 }
 
@@ -774,6 +869,21 @@ struct TaskProofAttachBrowserReceipt {
     screenshot: Option<String>,
     evidence: Vec<String>,
     proof_target: String,
+    artifact: TaskBrowserProofArtifact,
+    notes_appended: bool,
+    task: state_store::TaskRecord,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskProofAttachEvidenceReceipt {
+    surface: &'static str,
+    status: &'static str,
+    task_id: String,
+    proof_target: String,
+    command: String,
+    result: String,
+    artifact_ref: Option<String>,
+    evidence: Vec<String>,
     notes_appended: bool,
     task: state_store::TaskRecord,
 }
@@ -958,110 +1068,25 @@ fn proof_target_has_close_reason_evidence(task: &state_store::TaskRecord, target
 }
 
 fn normalize_browser_proof_result(result: &str) -> Result<String, String> {
-    let result = result.trim().to_ascii_lowercase();
-    match result.as_str() {
-        "pass" | "passed" | "success" | "satisfied" => Ok("pass".to_string()),
-        "fail" | "failed" | "failure" => Ok("fail".to_string()),
-        "blocked" | "block" => Ok("blocked".to_string()),
-        _ => Err("--result must be one of: pass, fail, blocked".to_string()),
-    }
-}
-
-fn browser_proof_target(route: &str, expect: Option<&str>) -> String {
-    match expect.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(expect) => format!(
-            "vida proof browser --route {} --expect {}",
-            route.trim(),
-            expect
-        ),
-        None => format!("vida proof browser --route {}", route.trim()),
-    }
-}
-
-fn task_notes_have_browser_proof_evidence(task: &state_store::TaskRecord, target: &str) -> bool {
-    let Some(notes) = task.notes.as_deref() else {
-        return false;
-    };
-    let target = target.trim();
-    if target.is_empty() {
-        return false;
-    }
-
-    let mut in_browser_proof_record = false;
-    let mut proof_target: Option<&str> = None;
-    let mut command: Option<&str> = None;
-    let mut expect: Option<&str> = None;
-    let mut result: Option<&str> = None;
-
-    for line in notes.lines() {
-        let trimmed = line.trim();
-        if trimmed == "task_browser_proof:" {
-            if browser_proof_record_satisfies_target(proof_target, command, expect, result, target)
-            {
-                return true;
-            }
-            in_browser_proof_record = true;
-            proof_target = None;
-            command = None;
-            expect = None;
-            result = None;
-            continue;
-        }
-
-        if !in_browser_proof_record {
-            continue;
-        }
-
-        let field = line.trim_start();
-        if proof_target.is_none() {
-            proof_target = field.strip_prefix("proof_target:").map(str::trim);
-        }
-        if command.is_none() {
-            command = field.strip_prefix("command:").map(str::trim);
-        }
-        if expect.is_none() {
-            expect = field.strip_prefix("expect:").map(str::trim);
-        }
-        if result.is_none() {
-            result = field.strip_prefix("result:").map(str::trim);
-        }
-    }
-
-    browser_proof_record_satisfies_target(proof_target, command, expect, result, target)
-}
-
-fn browser_proof_record_satisfies_target(
-    proof_target: Option<&str>,
-    command: Option<&str>,
-    expect: Option<&str>,
-    result: Option<&str>,
-    target: &str,
-) -> bool {
-    result == Some("pass")
-        && (proof_target == Some(target) || command == Some(target) || expect == Some(target))
+    canonical_task_proof_result(result)
+        .map(str::to_string)
+        .ok_or_else(|| "--result must be one of: pass, fail, blocked".to_string())
 }
 
 fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
     let target = target.trim().to_string();
     let runtime_blocked =
         task_reports_runtime_proof_blocker(&task.labels, task.close_reason.as_deref());
-    if proof_target_has_close_reason_evidence(task, &target) {
+    let legacy_close_reason_match = proof_target_has_close_reason_evidence(task, &target);
+    if let Some(proof_match) = structured_task_proof_evidence_match(task.notes.as_deref(), &target)
+    {
         return TaskProofTargetStatus {
             target,
             status: "satisfied".to_string(),
-            evidence_source: "close_reason".to_string(),
-            evidence_detail: "target text is present in task close_reason".to_string(),
-            artifact_status: "not_recorded".to_string(),
-            next_action: "No action for this proof target.".to_string(),
-        };
-    }
-    if task_notes_have_browser_proof_evidence(task, &target) {
-        return TaskProofTargetStatus {
-            target,
-            status: "satisfied".to_string(),
-            evidence_source: "task_browser_proof_note".to_string(),
-            evidence_detail: "attached browser proof note reports result pass".to_string(),
-            artifact_status: "recorded_in_task_notes".to_string(),
+            evidence_source: proof_match.evidence_source,
+            evidence_detail: proof_match.evidence_detail,
+            artifact_status: proof_match.artifact_status,
+            legacy_close_reason_match,
             next_action: "No action for this proof target.".to_string(),
         };
     }
@@ -1072,6 +1097,7 @@ fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> Tas
             evidence_source: "close_reason".to_string(),
             evidence_detail: "task close_reason reports runtime proof blocker context".to_string(),
             artifact_status: "not_recorded".to_string(),
+            legacy_close_reason_match,
             next_action: format!(
                 "Resolve runtime proof blocker, then record evidence for proof target `{}`.",
                 target
@@ -1087,8 +1113,14 @@ fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> Tas
         target: target.clone(),
         status: status.to_string(),
         evidence_source: "planner_metadata.proof_targets".to_string(),
-        evidence_detail: "no matching close_reason or structured proof artifact found".to_string(),
+        evidence_detail: if legacy_close_reason_match {
+            "legacy close_reason text matches target, but structured proof evidence is required"
+                .to_string()
+        } else {
+            "no matching structured proof evidence found".to_string()
+        },
         artifact_status: "not_recorded".to_string(),
+        legacy_close_reason_match,
         next_action: format!(
             "Run or attach evidence for proof target `{}`, then close or update `{}`.",
             target, task.id
@@ -1134,7 +1166,8 @@ fn task_proof_status_payload(
             ))
         )
     } else if missing_count == 0 {
-        "No proof action required; all configured proof targets have close evidence.".to_string()
+        "No proof action required; all configured proof targets have structured proof evidence."
+            .to_string()
     } else {
         format!(
             "Run or attach missing proof evidence, then inspect again with `{}`.",
@@ -1144,27 +1177,135 @@ fn task_proof_status_payload(
             ))
         )
     };
-    serde_json::json!({
-        "surface": "vida task proof status",
-        "status": task_json_success_status(),
-        "task_id": task.id,
-        "task_status": task.status,
-        "configured_proof_target_count": configured_count,
-        "satisfied_count": satisfied_count,
-        "missing_count": missing_count,
-        "runtime_blocked_count": runtime_blocked_count,
-        "missing_proof": configured_count > 0 && missing_count > 0,
-        "proof_blocked_by_runtime": runtime_blocked_count > 0,
-        "proof_targets": targets,
-        "missing_targets": missing_targets,
-        "next_required_command": next_required_command,
+    crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task proof status")
+        .artifact_refs(serde_json::json!({
+            "surface": "vida task proof status",
+            "task_id": task.id,
+        }))
+        .extra_fields(serde_json::json!({
+            "task_id": task.id,
+            "task_status": task.status,
+            "configured_proof_target_count": configured_count,
+            "satisfied_count": satisfied_count,
+            "missing_count": missing_count,
+            "runtime_blocked_count": runtime_blocked_count,
+            "missing_proof": configured_count > 0 && missing_count > 0,
+            "proof_blocked_by_runtime": runtime_blocked_count > 0,
+            "proof_targets": targets,
+            "missing_targets": missing_targets,
+            "next_required_command": next_required_command,
             "evidence_model": {
                 "configured_targets_source": "task.planner_metadata.proof_targets",
-                "satisfaction_source": "task.close_reason substring match or task_browser_proof note",
-                "artifact_registry": "task_notes.task_browser_proof"
+                "satisfaction_source": "task_proof_evidence structured registry entries or schema-backed browser proof artifacts",
+                "artifact_registry": "task_notes.task_proof_evidence|task_notes.task_browser_proof",
+                "browser_proof_artifact_schema": taskflow_core::task::verify::TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION,
+                "browser_proof_note_schema": taskflow_core::task::verify::TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+                "legacy_close_reason_text": "migration_context_not_authority"
             },
-        "state_access": task_read_metadata_value(read_metadata),
-    })
+            "state_access": task_read_metadata_value(read_metadata),
+        }))
+        .build()
+        .expect("task proof status payload should satisfy release-1 operator contract")
+}
+
+fn task_close_structured_proof_gate_payload(
+    task: &state_store::TaskRecord,
+) -> Option<serde_json::Value> {
+    let proof_status = task_proof_status_payload(task, None);
+    let configured_count = proof_status["configured_proof_target_count"]
+        .as_u64()
+        .unwrap_or(0);
+    let missing_count = proof_status["missing_count"].as_u64().unwrap_or(0);
+    if configured_count == 0 || missing_count == 0 {
+        return None;
+    }
+
+    let proof_blocked_by_runtime = proof_status["proof_blocked_by_runtime"]
+        .as_bool()
+        .unwrap_or(false);
+    let blocker_code = if proof_blocked_by_runtime {
+        "proof_blocked_by_runtime"
+    } else {
+        "missing_structured_proof_evidence"
+    };
+    let quoted_task_id = crate::shell_quote(&task.id);
+    let next_actions = vec![format!(
+        "Attach structured proof evidence for missing target(s), then rerun `{}`.",
+        operator_output::command_text::human_command(&format!(
+            "vida task proof status {} --json",
+            quoted_task_id
+        ))
+    )];
+    Some(
+        crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task close")
+            .blocker_codes(vec![blocker_code.to_string()])
+            .next_actions(next_actions)
+            .artifact_refs(serde_json::json!({
+                "surface": "vida task close",
+                "task_id": task.id,
+                "proof_status_surface": "vida task proof status",
+            }))
+            .extra_fields(serde_json::json!({
+                "closed": false,
+                "continuation_blocked": true,
+                "automation_blocked": false,
+                "feedback_blocked": false,
+                "task_id": task.id,
+                "reason": "task has configured proof targets without matching structured task_proof_evidence pass receipt",
+                "missing_targets": proof_status["missing_targets"].clone(),
+                "proof_status": proof_status,
+                "task": task,
+            }))
+            .build()
+            .expect("task close structured proof gate should satisfy release-1 operator contract"),
+    )
+}
+
+fn print_task_close_structured_proof_gate_block(
+    render: RenderMode,
+    payload: &serde_json::Value,
+    as_json: bool,
+) {
+    if as_json {
+        crate::print_json_pretty(payload);
+        return;
+    }
+    print_surface_header(render, "vida task close");
+    print_surface_line(render, "status", "blocked");
+    print_surface_line(
+        render,
+        "task",
+        payload["task_id"].as_str().unwrap_or("unknown"),
+    );
+    let blockers = payload["blocker_codes"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    print_surface_line(render, "blockers", &blockers);
+    let missing_targets = payload["missing_targets"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .unwrap_or_default();
+    print_surface_line(render, "missing targets", &missing_targets);
+    if let Some(next_action) = payload["next_actions"]
+        .as_array()
+        .and_then(|values| values.first())
+        .and_then(serde_json::Value::as_str)
+    {
+        print_surface_line(render, "next", next_action);
+    }
 }
 
 fn print_task_proof_status(
@@ -1534,65 +1675,6 @@ fn task_verify_planner_metadata(
     }
 }
 
-fn browser_proof_note_scalar(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string()
-}
-
-fn append_task_browser_proof_note(
-    existing_notes: Option<&str>,
-    proof_target: &str,
-    route: &str,
-    result: &str,
-    expect: Option<&str>,
-    screenshot: Option<&str>,
-    evidence: &[String],
-) -> String {
-    let proof_target = browser_proof_note_scalar(proof_target);
-    let route = browser_proof_note_scalar(route);
-    let result = browser_proof_note_scalar(result);
-    let mut note = format!(
-        "task_browser_proof:\n  recorded_at_unix_nanos: {}\n  proof_target: {}\n  command: {}\n  route: {}\n  result: {}",
-        time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
-        proof_target, proof_target, route, result
-    );
-    if let Some(expect) = expect
-        .map(browser_proof_note_scalar)
-        .filter(|value| !value.is_empty())
-    {
-        note.push_str("\n  expect: ");
-        note.push_str(&expect);
-    }
-    if let Some(screenshot) = screenshot
-        .map(browser_proof_note_scalar)
-        .filter(|value| !value.is_empty())
-    {
-        note.push_str("\n  screenshot: ");
-        note.push_str(&screenshot);
-    }
-    let evidence = evidence
-        .iter()
-        .map(|value| browser_proof_note_scalar(value))
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    if !evidence.is_empty() {
-        note.push_str("\n  evidence: ");
-        note.push_str(&evidence.join(" | "));
-    }
-
-    match existing_notes
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(existing) => format!("{existing}\n\n{note}"),
-        None => note,
-    }
-}
-
 fn task_browser_proof_planner_metadata(
     existing: &state_store::TaskPlannerMetadata,
     proof_target: &str,
@@ -1639,6 +1721,26 @@ fn print_task_browser_proof_receipt(
     print_surface_line(render, "proof target", &receipt.proof_target);
     if let Some(screenshot) = receipt.screenshot.as_deref() {
         print_surface_line(render, "screenshot", screenshot);
+    }
+}
+
+fn print_task_evidence_proof_receipt(
+    render: RenderMode,
+    receipt: &TaskProofAttachEvidenceReceipt,
+    as_json: bool,
+) {
+    if as_json {
+        let payload = serde_json::to_value(receipt)
+            .expect("task proof evidence receipt should serialize to JSON");
+        crate::print_json_pretty(&payload);
+        return;
+    }
+    print_task_mutation(render, receipt.surface, &receipt.task, false);
+    print_surface_line(render, "result", &receipt.result);
+    print_surface_line(render, "proof target", &receipt.proof_target);
+    print_surface_line(render, "command", &receipt.command);
+    if let Some(artifact_ref) = receipt.artifact_ref.as_deref() {
+        print_surface_line(render, "artifact", artifact_ref);
     }
 }
 
@@ -2533,6 +2635,10 @@ fn task_progress_row_from_record(task: &state_store::TaskRecord) -> TaskProgress
         priority: task.priority,
         labels: task.labels.clone(),
         proof_targets: task.planner_metadata.proof_targets.clone(),
+        proof_satisfied: all_structured_task_proof_targets_satisfied(
+            task.notes.as_deref(),
+            &task.planner_metadata.proof_targets,
+        ),
         parent_id: task_parent_id(task),
     }
 }
@@ -3000,46 +3106,7 @@ fn resolve_optional_text_arg(
     direct: Option<&str>,
     file_path: Option<&std::path::Path>,
 ) -> Result<Option<String>, String> {
-    const MAX_FILE_BYTES: u64 = 64 * 1024;
-
-    if direct.is_some() && file_path.is_some() {
-        return Err(format!(
-            "Use only one {label} source: --{label} <text> or --{label}-file <path>"
-        ));
-    }
-    if let Some(path) = file_path {
-        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-            format!(
-                "Failed to inspect {label} file `{}` metadata: {error}",
-                path.display()
-            )
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "Refusing to read {label} file `{}`: symlinks are not allowed",
-                path.display()
-            ));
-        }
-        if !metadata.is_file() {
-            return Err(format!(
-                "Refusing to read {label} file `{}`: expected a regular file",
-                path.display()
-            ));
-        }
-        if metadata.len() > MAX_FILE_BYTES {
-            return Err(format!(
-                "Refusing to read {label} file `{}`: file is {} bytes, limit is {} bytes",
-                path.display(),
-                metadata.len(),
-                MAX_FILE_BYTES
-            ));
-        }
-        let value = std::fs::read_to_string(path).map_err(|error| {
-            format!("Failed to read {label} file `{}`: {error}", path.display())
-        })?;
-        return Ok(Some(value));
-    }
-    Ok(direct.map(ToOwned::to_owned))
+    taskflow_core::task::note::resolve_optional_text_arg(label, direct, file_path)
 }
 
 fn task_execution_semantics_from_create_args(
@@ -3053,188 +3120,72 @@ fn task_execution_semantics_from_create_args(
     }
 }
 
+fn task_execution_semantics_input_from_create_args(
+    command: &TaskCreateArgs,
+) -> taskflow_core::task::create::TaskExecutionSemanticsInput<'_> {
+    taskflow_core::task::create::TaskExecutionSemanticsInput {
+        execution_mode: command.execution_mode.as_deref(),
+        order_bucket: command.order_bucket.as_deref(),
+        parallel_group: command.parallel_group.as_deref(),
+        conflict_domain: command.conflict_domain.as_deref(),
+    }
+}
+
+fn task_execution_semantics_input_from_record(
+    semantics: &state_store::TaskExecutionSemantics,
+) -> taskflow_core::task::create::TaskExecutionSemanticsInput<'_> {
+    taskflow_core::task::create::TaskExecutionSemanticsInput {
+        execution_mode: semantics.execution_mode.as_deref(),
+        order_bucket: semantics.order_bucket.as_deref(),
+        parallel_group: semantics.parallel_group.as_deref(),
+        conflict_domain: semantics.conflict_domain.as_deref(),
+    }
+}
+
 fn task_create_semantics_requested(command: &TaskCreateArgs) -> bool {
-    command.execution_mode.is_some()
-        || command.order_bucket.is_some()
-        || command.parallel_group.is_some()
-        || command.conflict_domain.is_some()
+    taskflow_core::task::create::task_create_semantics_requested(
+        task_execution_semantics_input_from_create_args(command),
+    )
 }
 
 fn task_create_semantics_mismatch(
     existing: &state_store::TaskExecutionSemantics,
     command: &TaskCreateArgs,
 ) -> bool {
-    command
-        .execution_mode
-        .as_deref()
-        .is_some_and(|expected| existing.execution_mode.as_deref() != Some(expected))
-        || command
-            .order_bucket
-            .as_deref()
-            .is_some_and(|expected| existing.order_bucket.as_deref() != Some(expected))
-        || command
-            .parallel_group
-            .as_deref()
-            .is_some_and(|expected| existing.parallel_group.as_deref() != Some(expected))
-        || command
-            .conflict_domain
-            .as_deref()
-            .is_some_and(|expected| existing.conflict_domain.as_deref() != Some(expected))
+    taskflow_core::task::create::task_create_semantics_mismatch(
+        task_execution_semantics_input_from_record(existing),
+        task_execution_semantics_input_from_create_args(command),
+    )
 }
 
 fn task_update_semantics_arg(
     value: Option<&str>,
     clear: bool,
 ) -> Result<Option<Option<&str>>, String> {
-    if value.is_some() && clear {
-        return Err(
-            "Use either the value flag or the matching clear flag for execution semantics, not both."
-                .to_string(),
-        );
-    }
-    if clear {
-        Ok(Some(None))
-    } else {
-        Ok(value.map(Some))
-    }
+    taskflow_core::task::update::task_update_semantics_arg(value, clear)
 }
 
 fn task_update_parent_arg(
     value: Option<&str>,
     clear: bool,
 ) -> Result<Option<Option<&str>>, String> {
-    if value.is_some() && clear {
-        return Err("Use either --parent-id or --clear-parent-id, not both.".to_string());
-    }
-    if clear {
-        Ok(Some(None))
-    } else {
-        Ok(value.map(Some))
-    }
+    taskflow_core::task::update::task_update_parent_arg(value, clear)
 }
 
 fn parse_label_values(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .flat_map(|value| value.split(','))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .collect::<Vec<_>>()
+    taskflow_core::task::update::parse_label_values(values)
 }
 
 fn parse_proof_target_values(values: &[String]) -> Vec<String> {
-    normalize_proof_target_commands(parse_label_values(values))
+    taskflow_core::task::update::parse_proof_target_values(values)
 }
 
 fn normalize_proof_target_commands(values: Vec<String>) -> Vec<String> {
-    values
-        .into_iter()
-        .flat_map(|value| normalize_proof_target_command(&value))
-        .collect()
-}
-
-fn normalize_proof_target_command(value: &str) -> Vec<String> {
-    let command = normalize_stale_proof_target_command(value);
-    split_cargo_test_proof_target(&command).unwrap_or_else(|| vec![command])
-}
-
-fn normalize_stale_proof_target_command(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed == "vida diagnostics --json" {
-        return "vida diagnostics post-commit --json".to_string();
-    }
-    if trimmed.starts_with("vida docflow protocol-coverage-check ") {
-        let mut tokens = trimmed.split_whitespace().peekable();
-        let mut normalized = Vec::new();
-        while let Some(token) = tokens.next() {
-            if token == "--format" {
-                let _ = tokens.next();
-                continue;
-            }
-            normalized.push(token);
-        }
-        return normalized.join(" ");
-    }
-    trimmed.to_string()
-}
-
-fn split_cargo_test_proof_target(command: &str) -> Option<Vec<String>> {
-    let tokens = command.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() < 4 || tokens[0] != "cargo" || tokens[1] != "test" {
-        return None;
-    }
-
-    let separator_index = tokens
-        .iter()
-        .position(|token| *token == "--")
-        .unwrap_or(tokens.len());
-    let mut base = vec![tokens[0], tokens[1]];
-    let mut filters = Vec::new();
-    let mut index = 2;
-    while index < separator_index {
-        let token = tokens[index];
-        if token.starts_with('-') {
-            base.push(token);
-            if cargo_test_option_takes_value(token) && index + 1 < separator_index {
-                index += 1;
-                base.push(tokens[index]);
-            }
-        } else {
-            filters.push(token);
-        }
-        index += 1;
-    }
-
-    if filters.len() <= 1 {
-        return None;
-    }
-
-    let tail = &tokens[separator_index..];
-    Some(
-        filters
-            .into_iter()
-            .map(|filter| {
-                base.iter()
-                    .chain(std::iter::once(&filter))
-                    .chain(tail.iter())
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect(),
-    )
-}
-
-fn cargo_test_option_takes_value(option: &str) -> bool {
-    matches!(
-        option,
-        "-p" | "--package"
-            | "--exclude"
-            | "--features"
-            | "--bin"
-            | "--bench"
-            | "--example"
-            | "--test"
-            | "--target"
-            | "--target-dir"
-            | "--manifest-path"
-            | "--message-format"
-            | "--profile"
-            | "--jobs"
-            | "-j"
-    )
+    taskflow_core::task::update::normalize_proof_target_commands(values)
 }
 
 fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
-    value.map(|value| {
-        value
-            .split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-            .map(|entry| entry.to_string())
-            .collect::<Vec<_>>()
-    })
+    taskflow_core::task::update::parse_optional_label_value(value)
 }
 
 fn task_update_planner_metadata_requested(command: &crate::TaskUpdateArgs) -> bool {
@@ -3277,6 +3228,7 @@ fn task_update_planner_metadata_arg(
 
 const TASK_BULK_IMPORT_SURFACE: &str = "vida task import";
 const TASK_BULK_IMPORT_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const TASK_BULK_IMPORT_MAX_TASKS: usize = 10_000;
 
 #[derive(Debug, Clone)]
 struct TaskBulkImportRawItem {
@@ -3449,6 +3401,13 @@ fn task_bulk_import_raw_items_from_value(
             );
         }
     };
+    if values.len() > TASK_BULK_IMPORT_MAX_TASKS {
+        return Err(format!(
+            "Task import contains {} tasks, limit is {} tasks.",
+            values.len(),
+            TASK_BULK_IMPORT_MAX_TASKS
+        ));
+    }
     Ok(values
         .into_iter()
         .enumerate()
@@ -3485,6 +3444,13 @@ fn parse_task_bulk_import_raw_items(
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
+                }
+                if items.len() >= TASK_BULK_IMPORT_MAX_TASKS {
+                    return Err(format!(
+                        "Task import contains more than {} tasks; first excess item is at line {}.",
+                        TASK_BULK_IMPORT_MAX_TASKS,
+                        line_index + 1
+                    ));
                 }
                 let value =
                     serde_json::from_str::<serde_json::Value>(trimmed).map_err(|error| {
@@ -4060,7 +4026,7 @@ fn task_bulk_import_validate_basic(
     }
 
     for task in tasks {
-        if let Some(previous_index) = batch_ids.insert(task.task_id.as_str(), task.index) {
+        if let Some(previous_index) = batch_ids.get(task.task_id.as_str()).copied() {
             errors.push(task_bulk_import_validation_error(
                 task.index,
                 task.line,
@@ -4068,7 +4034,30 @@ fn task_bulk_import_validate_basic(
                 Some("id"),
                 format!("duplicate task id also appears at index {previous_index}"),
             ));
+        } else {
+            batch_ids.insert(task.task_id.as_str(), task.index);
         }
+        if let Some(display_id) = task
+            .display_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if let Some(previous_index) = batch_display_ids.get(display_id).copied() {
+                errors.push(task_bulk_import_validation_error(
+                    task.index,
+                    task.line,
+                    Some(task.task_id.clone()),
+                    Some("display_id"),
+                    format!("duplicate display_id also appears at index {previous_index}"),
+                ));
+            } else {
+                batch_display_ids.insert(display_id, task.index);
+            }
+        }
+    }
+
+    for task in tasks {
         if existing_ids.contains(task.task_id.as_str()) {
             errors.push(task_bulk_import_validation_error(
                 task.index,
@@ -4109,9 +4098,7 @@ fn task_bulk_import_validate_basic(
                     "task parent_id cannot point to itself",
                 ));
             }
-            if !existing_ids.contains(parent_id)
-                && !tasks.iter().any(|other| other.task_id == parent_id)
-            {
+            if !existing_ids.contains(parent_id) && !batch_ids.contains_key(parent_id) {
                 errors.push(task_bulk_import_validation_error(
                     task.index,
                     task.line,
@@ -4149,12 +4136,10 @@ fn task_bulk_import_validate_basic(
                     ),
                 ));
             }
-            if let Some((other_index, _)) = tasks
-                .iter()
-                .map(|other| (other.index, other.task_id.as_str()))
-                .find(|(other_index, other_task_id)| {
-                    *other_index != task.index && *other_task_id == display_id
-                })
+            if let Some(other_index) = batch_ids
+                .get(display_id)
+                .copied()
+                .filter(|other_index| *other_index != task.index)
             {
                 errors.push(task_bulk_import_validation_error(
                     task.index,
@@ -4162,15 +4147,6 @@ fn task_bulk_import_validate_basic(
                     Some(task.task_id.clone()),
                     Some("display_id"),
                     format!("display_id `{display_id}` conflicts with batch task id at index {other_index}"),
-                ));
-            }
-            if let Some(previous_index) = batch_display_ids.insert(display_id, task.index) {
-                errors.push(task_bulk_import_validation_error(
-                    task.index,
-                    task.line,
-                    Some(task.task_id.clone()),
-                    Some("display_id"),
-                    format!("duplicate display_id also appears at index {previous_index}"),
                 ));
             }
         }
@@ -4248,33 +4224,58 @@ fn task_bulk_import_apply_order(
         .iter()
         .map(|task| task.id.clone())
         .collect::<BTreeSet<_>>();
-    let mut remaining = (0..tasks.len()).collect::<Vec<_>>();
-    let mut ordered = Vec::new();
+    let batch_index_by_id = tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| (task.task_id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut child_indexes_by_parent = BTreeMap::<&str, Vec<usize>>::new();
+    let mut pending_parent_counts = vec![0usize; tasks.len()];
+    let mut ready = VecDeque::new();
 
-    while !remaining.is_empty() {
-        let before = remaining.len();
-        let mut index = 0;
-        while index < remaining.len() {
-            let task_index = remaining[index];
-            let parent_ready = tasks[task_index]
-                .parent_id
-                .as_deref()
-                .map(|parent_id| available.contains(parent_id))
-                .unwrap_or(true);
-            if parent_ready {
-                available.insert(tasks[task_index].task_id.clone());
-                ordered.push(task_index);
-                remaining.remove(index);
-            } else {
-                index += 1;
+    for (task_index, task) in tasks.iter().enumerate() {
+        match task.parent_id.as_deref() {
+            Some(parent_id) if available.contains(parent_id) => ready.push_back(task_index),
+            Some(parent_id) => {
+                if let Some(parent_task_index) = batch_index_by_id.get(parent_id) {
+                    pending_parent_counts[task_index] += 1;
+                    child_indexes_by_parent
+                        .entry(tasks[*parent_task_index].task_id.as_str())
+                        .or_default()
+                        .push(task_index);
+                } else {
+                    return Err(
+                        "could not order imported tasks parent-first; inspect parent_id cycles or missing parents"
+                            .to_string(),
+                    );
+                }
+            }
+            None => ready.push_back(task_index),
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(tasks.len());
+    while let Some(task_index) = ready.pop_front() {
+        if !available.insert(tasks[task_index].task_id.clone()) {
+            continue;
+        }
+        ordered.push(task_index);
+        if let Some(child_indexes) = child_indexes_by_parent.get(tasks[task_index].task_id.as_str())
+        {
+            for child_index in child_indexes {
+                pending_parent_counts[*child_index] =
+                    pending_parent_counts[*child_index].saturating_sub(1);
+                if pending_parent_counts[*child_index] == 0 {
+                    ready.push_back(*child_index);
+                }
             }
         }
-        if remaining.len() == before {
-            return Err(
-                "could not order imported tasks parent-first; inspect parent_id cycles or missing parents"
-                    .to_string(),
-            );
-        }
+    }
+    if ordered.len() != tasks.len() {
+        return Err(
+            "could not order imported tasks parent-first; inspect parent_id cycles or missing parents"
+                .to_string(),
+        );
     }
     Ok(ordered)
 }
@@ -5780,18 +5781,35 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
     let title = match task_create_title(&command) {
         Ok(title) => title,
         Err(error) => {
+            let surface = if ensure_existing {
+                "vida task ensure"
+            } else {
+                "vida task create"
+            };
+            let usage =
+                "vida task create <task-id> <title> OR vida task create <task-id> --title <title>";
+            let next_action = format!("Provide a non-empty title with `{usage}`.");
             if command.json {
-                crate::print_json_pretty(&serde_json::json!({
-                    "status": "blocked",
-                    "blocker_codes": ["invalid_task_title_input"],
-                    "reason": error,
-                    "usage": "vida task create <task-id> <title> OR vida task create <task-id> --title <title>",
-                }));
+                let payload =
+                    crate::release1_operator_output::Release1OperatorOutputBuilder::new(surface)
+                        .blocker_codes(vec!["invalid_task_title_input".to_string()])
+                        .next_actions(vec![next_action])
+                        .artifact_refs(serde_json::json!({
+                            "surface": surface,
+                            "task_id": command.task_id.clone(),
+                        }))
+                        .extra_fields(serde_json::json!({
+                            "reason": error,
+                            "usage": usage,
+                        }))
+                        .build()
+                        .expect(
+                            "task create title error should satisfy release-1 operator contract",
+                        );
+                crate::print_json_pretty(&payload);
             } else {
                 eprintln!("{error}");
-                eprintln!(
-                    "Usage: vida task create <task-id> <title> OR vida task create <task-id> --title <title>"
-                );
+                eprintln!("Usage: {usage}");
             }
             return ExitCode::from(2);
         }
@@ -5809,15 +5827,29 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
             )),
         );
         if command.json {
-            crate::print_json_pretty(&serde_json::json!({
-                "status": "blocked",
-                "blocker_codes": ["untrusted_create_notes_file"],
-                "surface": if ensure_existing { "vida task ensure" } else { "vida task create" },
+            let surface = if ensure_existing {
+                "vida task ensure"
+            } else {
+                "vida task create"
+            };
+            let payload = crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                surface,
+            )
+            .blocker_codes(vec!["untrusted_create_notes_file".to_string()])
+            .next_actions(vec![action.clone()])
+            .artifact_refs(serde_json::json!({
+                "surface": surface,
+                "task_id": command.task_id.clone(),
+                "rejected_option": "--notes-file",
+            }))
+            .extra_fields(serde_json::json!({
                 "rejected_option": "--notes-file",
                 "rejected_path": path,
                 "next_action": action,
-                "next_actions": [action],
-            }));
+            }))
+            .build()
+            .expect("task create notes-file rejection should satisfy release-1 operator contract");
+            crate::print_json_pretty(&payload);
         } else {
             eprintln!(
                 "Refusing --notes-file for `vida task {}`: path `{}` is outside the trusted inline intake boundary.",
@@ -6041,14 +6073,34 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
 
                 if has_conflict {
                     if command.json {
-                        crate::print_json_pretty(&serde_json::json!({
-                            "status": "blocked",
-                            "blocker_codes": ["foreign_claim_conflict_blocked"],
-                            "reason": "Another orchestrator session holds an active exclusive claim on the same task, run, conflict domain, or intersecting paths. Wait for that session to complete or explicitly reclaim/supersede the claim before continuing.",
-                            "next_action": operator_output::command_text::human_command("vida orchestrator-session show --json"),
-                            "blocking_surface": "vida orchestrator-session show",
-                            "current_session_id": current_session_id,
-                        }));
+                        let surface = if ensure_existing {
+                            "vida task ensure"
+                        } else {
+                            "vida task create"
+                        };
+                        let next_action = operator_output::command_text::human_command(
+                            "vida orchestrator-session show --json",
+                        );
+                        let payload =
+                            crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                surface,
+                            )
+                            .blocker_codes(vec!["foreign_claim_conflict_blocked".to_string()])
+                            .next_actions(vec![next_action.clone()])
+                            .artifact_refs(serde_json::json!({
+                                "surface": surface,
+                                "current_session_id": current_session_id,
+                                "blocking_surface": "vida orchestrator-session show",
+                            }))
+                            .extra_fields(serde_json::json!({
+                                "reason": "Another orchestrator session holds an active exclusive claim on the same task, run, conflict domain, or intersecting paths. Wait for that session to complete or explicitly reclaim/supersede the claim before continuing.",
+                                "next_action": next_action,
+                                "blocking_surface": "vida orchestrator-session show",
+                                "current_session_id": current_session_id,
+                            }))
+                            .build()
+                            .expect("foreign claim conflict payload should satisfy release-1 operator contract");
+                        crate::print_json_pretty(&payload);
                     } else {
                         eprintln!(
                             "Another orchestrator session holds an active exclusive claim on this work scope."
@@ -6144,81 +6196,35 @@ fn ensure_existing_task_mismatch_reason(
     expected_parent_id: Option<&str>,
     expected_labels: &[String],
 ) -> Option<String> {
-    if task.title != expected_title {
-        return Some(format!(
-            "existing task '{}' title mismatch (expected '{}', got '{}')",
-            task.id, expected_title, task.title
-        ));
-    }
-    if task.display_id.as_deref() != expected_display_id {
-        return Some(format!(
-            "existing task '{}' display_id mismatch (expected '{}', got '{}')",
-            task.id,
-            expected_display_id.unwrap_or(""),
-            task.display_id.as_deref().unwrap_or("")
-        ));
-    }
-    if task.issue_type != expected_issue_type {
-        return Some(format!(
-            "existing task '{}' issue_type mismatch (expected '{}', got '{}')",
-            task.id, expected_issue_type, task.issue_type
-        ));
-    }
-    if task.status != expected_status {
-        return Some(format!(
-            "existing task '{}' status mismatch (expected '{}', got '{}')",
-            task.id, expected_status, task.status
-        ));
-    }
     let existing_parent_id = task_parent_id(task);
-    if existing_parent_id.as_deref() != expected_parent_id {
-        return Some(format!(
-            "existing task '{}' parent_id mismatch (expected '{}', got '{}')",
-            task.id,
-            expected_parent_id.unwrap_or(""),
-            existing_parent_id.as_deref().unwrap_or("")
-        ));
-    }
-    if expected_labels
-        .iter()
-        .any(|label| !task.labels.iter().any(|existing| existing == label))
-    {
-        let missing_labels: Vec<String> = expected_labels
-            .iter()
-            .filter(|label| !task.labels.iter().any(|existing| existing == *label))
-            .cloned()
-            .collect();
-        return Some(format!(
-            "existing task '{}' missing required labels: {}",
-            task.id,
-            missing_labels.join(",")
-        ));
-    }
-    None
+    taskflow_core::task::create::ensure_existing_task_mismatch_reason(
+        taskflow_core::task::create::ExistingTaskActual {
+            task_id: &task.id,
+            title: &task.title,
+            display_id: task.display_id.as_deref(),
+            issue_type: &task.issue_type,
+            status: &task.status,
+            parent_id: existing_parent_id.as_deref(),
+            labels: &task.labels,
+        },
+        taskflow_core::task::create::ExistingTaskExpectation {
+            title: expected_title,
+            display_id: expected_display_id,
+            issue_type: expected_issue_type,
+            status: expected_status,
+            parent_id: expected_parent_id,
+            labels: expected_labels,
+        },
+    )
 }
 
 fn task_create_title(command: &TaskCreateArgs) -> Result<String, String> {
-    let positional = command
-        .positional_title
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let option = command
-        .title
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    match (positional, option) {
-        (Some(_), Some(_)) => Err(
-            "Provide only one task title source: positional <TITLE> or --title <TITLE>."
-                .to_string(),
-        ),
-        (Some(title), None) | (None, Some(title)) => Ok(title.to_string()),
-        (None, None) => {
-            Err("Missing task title. Use positional <TITLE> or --title <TITLE>.".to_string())
-        }
-    }
+    taskflow_core::task::create::task_create_title(
+        taskflow_core::task::create::TaskCreateTitleInput {
+            positional_title: command.positional_title.as_deref(),
+            title_option: command.title.as_deref(),
+        },
+    )
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -10182,14 +10188,31 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
-                        let proof_target = browser_proof_target(route, command.expect.as_deref());
                         let evidence = normalized_task_verify_evidence(&command.evidence);
-                        let notes = append_task_browser_proof_note(
-                            existing.notes.as_deref(),
-                            &proof_target,
+                        let browser_artifact = match TaskBrowserProofArtifact::new(
                             route,
                             &result,
                             command.expect.as_deref(),
+                            command.screenshot.as_deref(),
+                            &evidence,
+                        ) {
+                            Some(artifact) => artifact,
+                            None => {
+                                eprintln!("Failed to build browser proof artifact");
+                                return ExitCode::from(2);
+                            }
+                        };
+                        let proof_target = browser_artifact.proof_target.clone();
+                        let browser_notes = append_task_browser_proof_note(
+                            existing.notes.as_deref(),
+                            &browser_artifact,
+                        );
+                        let notes = append_task_proof_evidence_note(
+                            Some(&browser_notes),
+                            &proof_target,
+                            Some(&proof_target),
+                            &result,
+                            "browser",
                             command.screenshot.as_deref(),
                             &evidence,
                         );
@@ -10236,6 +10259,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     screenshot: command.screenshot,
                                     evidence,
                                     proof_target,
+                                    artifact: browser_artifact,
                                     notes_appended: true,
                                     task,
                                 };
@@ -10253,6 +10277,115 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     }
                     Err(code) => code,
+                }
+            }
+            TaskProofCommand::AttachEvidence(command) => {
+                let proof_target = command.proof_target.trim();
+                if proof_target.is_empty() {
+                    eprintln!("--proof-target cannot be empty");
+                    return ExitCode::from(2);
+                }
+                let result = match normalize_browser_proof_result(&command.result) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
+                };
+                let evidence = normalized_task_verify_evidence(&command.evidence);
+                let command_text = command
+                    .command
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(proof_target)
+                    .to_string();
+                let state_dir = command
+                    .state_dir
+                    .clone()
+                    .unwrap_or_else(state_store::default_state_dir);
+                match StateStore::open_existing(state_dir).await {
+                    Ok(store) => {
+                        let existing = match store.show_task(&command.task_id).await {
+                            Ok(task) => task,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read task before proof evidence attachment: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        let notes = append_task_proof_evidence_note(
+                            existing.notes.as_deref(),
+                            proof_target,
+                            Some(&command_text),
+                            &result,
+                            "command",
+                            command.artifact_ref.as_deref(),
+                            &evidence,
+                        );
+                        let planner_metadata = task_browser_proof_planner_metadata(
+                            &existing.planner_metadata,
+                            proof_target,
+                        );
+                        match store
+                            .update_task(state_store::UpdateTaskRequest {
+                                task_id: &command.task_id,
+                                title: None,
+                                status: None,
+                                priority: None,
+                                notes: Some(&notes),
+                                description: None,
+                                parent_id: None,
+                                add_labels: &[],
+                                remove_labels: &[],
+                                set_labels: None,
+                                execution_mode: None,
+                                order_bucket: None,
+                                parallel_group: None,
+                                conflict_domain: None,
+                                planner_metadata: Some(planner_metadata),
+                            })
+                            .await
+                        {
+                            Ok(task) => {
+                                if let Err(code) = refresh_task_snapshot_after_mutation(
+                                    &store,
+                                    "vida task proof attach-evidence",
+                                )
+                                .await
+                                {
+                                    return code;
+                                }
+                                let receipt = TaskProofAttachEvidenceReceipt {
+                                    surface: "vida task proof attach-evidence",
+                                    status: task_json_success_status(),
+                                    task_id: task.id.clone(),
+                                    proof_target: proof_target.to_string(),
+                                    command: command_text,
+                                    result,
+                                    artifact_ref: command.artifact_ref,
+                                    evidence,
+                                    notes_appended: true,
+                                    task,
+                                };
+                                print_task_evidence_proof_receipt(
+                                    command.render,
+                                    &receipt,
+                                    command.json,
+                                );
+                                ExitCode::SUCCESS
+                            }
+                            Err(error) => {
+                                eprintln!("Failed to attach proof evidence to task: {error}");
+                                ExitCode::from(1)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to open authoritative state store: {error}");
+                        ExitCode::from(1)
+                    }
                 }
             }
         },
@@ -10371,7 +10504,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     };
                     let current_binding = match latest_run_graph_status.as_ref() {
                         Some(status) => match store
-                            .run_graph_status_is_stale_after_release_admission_complete(status)
+                            .run_graph_status_is_stale_for_task_continuation_binding(status)
                             .await
                         {
                             Ok(true) => None,
@@ -10388,7 +10521,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             }
                             Err(error) => {
                                 eprintln!(
-                                    "Failed to classify release-admitted stale run-graph status: {error}"
+                                    "Failed to classify stale run-graph status for task continuation: {error}"
                                 );
                                 return ExitCode::from(1);
                             }
@@ -11189,18 +11322,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             .await
             {
                 Ok(store) => {
+                    let preclose_task = match store.show_task(&command.task_id).await {
+                        Ok(task) => task,
+                        Err(error) => {
+                            eprintln!("Failed to close task: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    if let Some(payload) = task_close_structured_proof_gate_payload(&preclose_task)
+                    {
+                        print_task_close_structured_proof_gate_block(
+                            command.render,
+                            &payload,
+                            command.json,
+                        );
+                        return ExitCode::from(1);
+                    }
                     if crate::agent_feedback_surface::canonical_close_status_from_reason(
                         &close_reason,
                     )
                     .is_some()
                     {
-                        let preclose_task = match store.show_task(&command.task_id).await {
-                            Ok(task) => task,
-                            Err(error) => {
-                                eprintln!("Failed to close task: {error}");
-                                return ExitCode::from(1);
-                            }
-                        };
                         let task_value = serde_json::to_value(&preclose_task)
                             .expect("task close payload should serialize");
                         let telemetry = task_close_host_agent_telemetry(
@@ -11215,14 +11357,25 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             task_close_feedback_blocker_summary(&telemetry)
                         {
                             if command.json {
-                                crate::print_json_pretty(&serde_json::json!({
-                                    "status": "blocked",
-                                    "blocker_codes": blocker_codes,
-                                    "next_actions": next_actions,
-                                    "task": preclose_task,
-                                    "host_agent_telemetry": telemetry,
-                                    "automation": null,
-                                }));
+                                let payload =
+                                    crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                        "vida task close",
+                                    )
+                                    .blocker_codes(blocker_codes)
+                                    .next_actions(next_actions)
+                                    .artifact_refs(serde_json::json!({
+                                        "surface": "vida task close",
+                                        "task_id": preclose_task.id.clone(),
+                                        "feedback_source": feedback_source,
+                                    }))
+                                    .extra_fields(serde_json::json!({
+                                        "task": preclose_task,
+                                        "host_agent_telemetry": telemetry,
+                                        "automation": null,
+                                    }))
+                                    .build()
+                                    .expect("task close feedback blocker should satisfy release-1 operator contract");
+                                crate::print_json_pretty(&payload);
                             } else {
                                 print_task_mutation(
                                     command.render,
@@ -11420,15 +11573,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            match open_task_mutation_store(
-                state_dir,
-                "vida task reconcile",
-                command.render,
-                command.json,
-            )
-            .await
-            {
-                Ok(store) => match reconcile_epics_from_direct_children(
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match reconcile_epics_from_descendant_progress(
                     &store,
                     command.close_if_complete,
                     command.dry_run,
@@ -11503,13 +11649,20 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             })
                             .unwrap_or_default();
                         if command.json {
-                            crate::print_json_pretty(&serde_json::json!({
-                                "status": "pass",
-                                "surface": "vida task reconcile-closed-runs",
-                                "summary": summary,
-                                "blocker_codes": [],
-                                "next_actions": next_actions,
-                            }));
+                            let payload =
+                                crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                    "vida task reconcile-closed-runs",
+                                )
+                                .artifact_refs(serde_json::json!({
+                                    "surface": "vida task reconcile-closed-runs",
+                                }))
+                                .extra_fields(serde_json::json!({
+                                    "summary": summary,
+                                    "recommended_next_actions": next_actions,
+                                }))
+                                .build()
+                                .expect("task reconcile closed runs payload should satisfy release-1 operator contract");
+                            crate::print_json_pretty(&payload);
                         } else {
                             print_surface_line(
                                 command.render,
@@ -11694,15 +11847,24 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 "vida task children <task-id> --json"
                             )
                         );
-                        crate::print_json_pretty(&serde_json::json!({
-                            "status": "blocked",
-                            "surface": "vida task children",
-                            "blocker_codes": ["task_tree_traversal_failed"],
-                            "task_id": command.task_id,
-                            "reason": error.to_string(),
-                            "next_action": next_action.clone(),
-                            "next_actions": [next_action],
-                        }));
+                        let payload =
+                            crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                "vida task children",
+                            )
+                            .blocker_codes(vec!["task_tree_traversal_failed".to_string()])
+                            .next_actions(vec![next_action.clone()])
+                            .artifact_refs(serde_json::json!({
+                                "surface": "vida task children",
+                                "task_id": command.task_id.clone(),
+                            }))
+                            .extra_fields(serde_json::json!({
+                                "task_id": command.task_id.clone(),
+                                "reason": error.to_string(),
+                                "next_action": next_action,
+                            }))
+                            .build()
+                            .expect("task children traversal error should satisfy release-1 operator contract");
+                        crate::print_json_pretty(&payload);
                     } else {
                         eprintln!("Failed to read task direct children: {error}");
                     }
@@ -11730,15 +11892,24 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 "vida task children <task-id> --json"
                             )
                         );
-                        crate::print_json_pretty(&serde_json::json!({
-                            "status": "blocked",
-                            "surface": "vida task tree",
-                            "blocker_codes": ["task_tree_traversal_failed"],
-                            "task_id": command.task_id,
-                            "reason": error.to_string(),
-                            "next_action": next_action.clone(),
-                            "next_actions": [next_action],
-                        }));
+                        let payload =
+                            crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+                                "vida task tree",
+                            )
+                            .blocker_codes(vec!["task_tree_traversal_failed".to_string()])
+                            .next_actions(vec![next_action.clone()])
+                            .artifact_refs(serde_json::json!({
+                                "surface": "vida task tree",
+                                "task_id": command.task_id.clone(),
+                            }))
+                            .extra_fields(serde_json::json!({
+                                "task_id": command.task_id.clone(),
+                                "reason": error.to_string(),
+                                "next_action": next_action,
+                            }))
+                            .build()
+                            .expect("task tree traversal error should satisfy release-1 operator contract");
+                        crate::print_json_pretty(&payload);
                     } else {
                         eprintln!("Failed to read task dependency tree: {error}");
                     }
@@ -12098,7 +12269,8 @@ mod tests {
         parse_proof_target_values, pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
-        persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
+        persist_task_handoff_accept_receipt, reconcile_epics_from_descendant_progress,
+        runtime_binding_has_active_exception_takeover,
         runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
         select_task_next_lawful_binding, task_close_automation_is_blocked,
         task_close_automation_receipt, task_close_commit_allowlist_next_actions,
@@ -12114,7 +12286,8 @@ mod tests {
         task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
         task_ready_authoritative_first, task_takeover_status_receipt,
         task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        TaskCloseAutomationReceipt, TaskContinuationCandidate, ADAPTIVE_REPLAN_FINDING_KINDS,
+        TaskCloseAutomationReceipt, TaskContinuationCandidate, TaskProofAttachBrowserReceipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -12123,6 +12296,10 @@ mod tests {
     use crate::test_cli_support::EnvVarGuard;
     use std::fs;
     use std::process::ExitCode;
+    use taskflow_core::task::verify::{
+        append_task_browser_proof_note, task_browser_proof_target, TaskBrowserProofArtifact,
+        TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION, TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+    };
 
     async fn create_task_for_test(
         store: &crate::StateStore,
@@ -12292,6 +12469,65 @@ mod tests {
     }
 
     #[test]
+    fn task_bulk_import_rejects_jsonl_batches_above_task_count_limit() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let source = harness.path().join("too-many.jsonl");
+        let mut text = String::new();
+        for index in 0..=super::TASK_BULK_IMPORT_MAX_TASKS {
+            text.push_str(
+                &serde_json::json!({
+                    "id": format!("bulk-{index}"),
+                    "title": "Bulk task",
+                    "type": "epic"
+                })
+                .to_string(),
+            );
+            text.push('\n');
+        }
+        fs::write(&source, text).expect("oversized jsonl fixture should write");
+
+        let command = task_bulk_import_command_for_test(source, harness.path().to_path_buf());
+        let error = super::parse_task_bulk_import_input(&command)
+            .expect_err("jsonl batch above task count limit should fail before validation");
+
+        assert!(error.contains("more than 10000 tasks"));
+    }
+
+    #[test]
+    fn task_bulk_import_apply_order_handles_large_reversed_chains() {
+        let mut tasks = Vec::new();
+        for index in (0..512).rev() {
+            tasks.push(super::TaskBulkImportPlannedTask {
+                index,
+                line: None,
+                task_id: format!("chain-{index}"),
+                title: format!("Chain task {index}"),
+                display_id: None,
+                description: String::new(),
+                issue_type: "epic".to_string(),
+                status: "open".to_string(),
+                priority: 2,
+                parent_id: (index > 0).then(|| format!("chain-{}", index - 1)),
+                notes: None,
+                labels: Vec::new(),
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+            });
+        }
+
+        let order = super::task_bulk_import_apply_order(&[], &tasks)
+            .expect("reversed chain should order parent-first");
+        let ordered_ids = order
+            .into_iter()
+            .map(|task_index| tasks[task_index].task_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ordered_ids.first().copied(), Some("chain-0"));
+        assert_eq!(ordered_ids.last().copied(), Some("chain-511"));
+        assert_eq!(ordered_ids.len(), 512);
+    }
+
+    #[test]
     fn task_bulk_import_dry_run_validates_yaml_without_mutating_store() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let source = harness.path().join("tasks.yaml");
@@ -12446,6 +12682,106 @@ mod tests {
         });
 
         runtime.shutdown_timeout(std::time::Duration::from_millis(250));
+    }
+
+    #[test]
+    fn reconcile_epics_blocks_legacy_closed_direct_child_with_open_grandchild() {
+        run_on_runtime_stack_for_test(|| {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+            runtime.block_on(async {
+                let harness =
+                    TempStateHarness::new().expect("temp state harness should initialize");
+                let store = crate::StateStore::open(harness.path().to_path_buf())
+                    .await
+                    .expect("state store should open");
+
+                create_task_for_test(
+                    &store,
+                    "legacy-epic",
+                    "Legacy Epic",
+                    "epic",
+                    "open",
+                    1,
+                    None,
+                )
+                .await;
+                create_task_for_test(
+                    &store,
+                    "legacy-child",
+                    "Legacy Child",
+                    "task",
+                    "open",
+                    2,
+                    Some("legacy-epic"),
+                )
+                .await;
+                create_task_for_test(
+                    &store,
+                    "legacy-grandchild",
+                    "Legacy Grandchild",
+                    "task",
+                    "open",
+                    3,
+                    Some("legacy-child"),
+                )
+                .await;
+
+                let mut child = store
+                    .show_task("legacy-child")
+                    .await
+                    .expect("legacy child should exist");
+                child.status = "closed".to_string();
+                child.closed_at = Some("2026-03-08T00:10:00Z".to_string());
+                child.close_reason =
+                    Some("legacy fixture closed before graph validation".to_string());
+                store
+                    .persist_task_record(child)
+                    .await
+                    .expect("legacy fixture should persist directly");
+
+                let rows = store.all_tasks().await.expect("tasks should read");
+                let direct_summary =
+                    task_progress_summary_for_basis(&rows, "legacy-epic", "direct_children")
+                        .expect("direct child progress should compute");
+                assert!(direct_summary.ready_for_close);
+
+                let dry_run = reconcile_epics_from_descendant_progress(&store, false, true)
+                    .await
+                    .expect("reconcile should inspect legacy state");
+                assert_eq!(dry_run.progress_basis, "descendants_excluding_root");
+                assert!(dry_run
+                    .closed_epics
+                    .iter()
+                    .all(|row| row.epic_id != "legacy-epic"));
+                let blocked = dry_run
+                    .blocked_epics
+                    .iter()
+                    .find(|row| row.epic_id == "legacy-epic")
+                    .expect("legacy epic should be blocked by open grandchild");
+                assert_eq!(blocked.reason, "active_descendants_remaining");
+                assert_eq!(blocked.progress_basis, "descendants_excluding_root");
+                assert_eq!(blocked.child_count, 1);
+                assert_eq!(blocked.open_child_count, 0);
+                assert_eq!(blocked.descendant_count, 2);
+                assert_eq!(blocked.open_descendant_count, 1);
+
+                let close_if_complete =
+                    reconcile_epics_from_descendant_progress(&store, true, false)
+                        .await
+                        .expect("close-if-complete should still block legacy state");
+                assert!(close_if_complete
+                    .closed_epics
+                    .iter()
+                    .all(|row| row.epic_id != "legacy-epic"));
+                let epic = store
+                    .show_task("legacy-epic")
+                    .await
+                    .expect("legacy epic should remain readable");
+                assert_eq!(epic.status, "open");
+            });
+
+            runtime.shutdown_timeout(std::time::Duration::from_millis(250));
+        });
     }
 
     #[test]
@@ -12797,6 +13133,7 @@ mod tests {
             assert!(task
                 .labels
                 .contains(&"proof-blocked-by-runtime".to_string()));
+            assert!(!task.labels.contains(&"runtime-proof-blocked".to_string()));
             assert_eq!(
                 task.planner_metadata.proof_targets,
                 vec!["cargo test -p vida task_verify".to_string()]
@@ -12943,7 +13280,9 @@ mod tests {
                     task_id: "blocked-task".to_string(),
                     reason: "runtime bridge unavailable".to_string(),
                     evidence: Some("agent-init returned host_tool_capability_missing".to_string()),
-                    blockers: vec!["host_tool_capability_missing".to_string()],
+                    blockers: vec![
+                        "Host-Tool-Capability-Missing, bridge request pending".to_string()
+                    ],
                     next_actions: vec!["retry after host bridge repair".to_string()],
                     state_dir: Some(harness.path().to_path_buf()),
                     render: crate::RenderMode::Plain,
@@ -12969,6 +13308,9 @@ mod tests {
             assert!(notes.contains("task_block:"));
             assert!(notes.contains("runtime bridge unavailable"));
             assert!(notes.contains("host_tool_capability_missing"));
+            assert!(notes.contains("bridge_request_pending"));
+            assert!(!notes.contains("Host-Tool-Capability-Missing"));
+            assert!(!notes.contains("bridge request pending"));
             assert!(notes.contains("retry after host bridge repair"));
         });
     }
@@ -13393,15 +13735,49 @@ mod tests {
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["task_id"], "proof-task");
         assert_eq!(payload["configured_proof_target_count"], 2);
+        assert_eq!(payload["satisfied_count"], 0);
+        assert_eq!(payload["missing_count"], 2);
+        assert_eq!(payload["missing_proof"], true);
+        assert_eq!(payload["proof_targets"][0]["status"], "missing_evidence");
+        assert_eq!(
+            payload["proof_targets"][0]["legacy_close_reason_match"],
+            true
+        );
+        assert!(payload["proof_targets"][0]["evidence_detail"]
+            .as_str()
+            .expect("evidence detail should render")
+            .contains("structured proof evidence is required"));
+        assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
+        assert_eq!(
+            payload["missing_targets"],
+            serde_json::json!([
+                "cargo test -p vida proof_status_payload",
+                "cargo build -p vida"
+            ])
+        );
+
+        task.notes = Some(super::append_task_proof_evidence_note(
+            None,
+            "cargo test -p vida proof_status_payload",
+            Some("cargo test -p vida proof_status_payload"),
+            "pass",
+            "command",
+            Some("artifacts/proof-status-payload.json"),
+            &["test passed".to_string()],
+        ));
+        let payload = super::task_proof_status_payload(&task, None);
+
         assert_eq!(payload["satisfied_count"], 1);
         assert_eq!(payload["missing_count"], 1);
-        assert_eq!(payload["missing_proof"], true);
         assert_eq!(payload["proof_targets"][0]["status"], "satisfied");
         assert_eq!(
-            payload["proof_targets"][0]["evidence_source"],
-            "close_reason"
+            payload["proof_targets"][0]["legacy_close_reason_match"],
+            true
         );
-        assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
+        assert_eq!(
+            payload["proof_targets"][0]["evidence_source"],
+            "task_proof_evidence_registry"
+        );
         assert_eq!(payload["missing_targets"][0], "cargo build -p vida");
     }
 
@@ -13444,16 +13820,109 @@ mod tests {
     }
 
     #[test]
-    fn task_proof_status_payload_accepts_browser_attach_note() {
-        let mut task = owned_task_record("proof-task", vec![]);
-        let proof_target = super::browser_proof_target("/odoo", Some("My Tasks"));
-        task.planner_metadata.proof_targets = vec![proof_target.clone()];
-        task.notes = Some(super::append_task_browser_proof_note(
-            None,
-            &proof_target,
+    fn task_proof_attach_browser_receipt_serializes_versioned_artifact() {
+        let artifact = TaskBrowserProofArtifact::new(
             "/odoo",
             "pass",
             Some("My Tasks"),
+            Some("artifacts/proof.png"),
+            &["console clean".to_string()],
+        )
+        .expect("browser proof artifact should build");
+        let receipt = TaskProofAttachBrowserReceipt {
+            surface: "vida task proof attach-browser",
+            status: task_json_success_status(),
+            task_id: "proof-task".to_string(),
+            route: "/odoo".to_string(),
+            result: "pass".to_string(),
+            expect: Some("My Tasks".to_string()),
+            screenshot: Some("artifacts/proof.png".to_string()),
+            evidence: artifact.evidence.clone(),
+            proof_target: artifact.proof_target.clone(),
+            artifact,
+            notes_appended: true,
+            task: owned_task_record("proof-task", vec![]),
+        };
+
+        let payload =
+            serde_json::to_value(&receipt).expect("browser proof receipt should serialize");
+
+        assert_eq!(
+            payload["artifact"]["schema_version"],
+            TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            payload["artifact"]["proof_target"],
+            "vida proof browser --route /odoo --expect My Tasks"
+        );
+        assert_eq!(payload["artifact"]["result"], "pass");
+        assert_eq!(payload["proof_target"], payload["artifact"]["proof_target"]);
+    }
+
+    #[test]
+    fn task_proof_attach_evidence_cli_accepts_structured_fields() {
+        let parsed = cli(&[
+            "task",
+            "proof",
+            "attach-evidence",
+            "proof-task",
+            "--proof-target",
+            "cargo test -p vida proof_registry",
+            "--result",
+            "pass",
+            "--command",
+            "cargo test -p vida proof_registry",
+            "--artifact-ref",
+            "artifacts/proof.json",
+            "--evidence",
+            "tests green",
+            "--json",
+        ]);
+        let Some(crate::Command::Task(args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let crate::TaskCommand::Proof(proof) = args.command else {
+            panic!("task proof command should parse");
+        };
+        let crate::TaskProofCommand::AttachEvidence(command) = proof.command else {
+            panic!("attach-evidence command should parse");
+        };
+
+        assert_eq!(command.task_id, "proof-task");
+        assert_eq!(command.proof_target, "cargo test -p vida proof_registry");
+        assert_eq!(command.result, "pass");
+        assert_eq!(
+            command.command.as_deref(),
+            Some("cargo test -p vida proof_registry")
+        );
+        assert_eq!(
+            command.artifact_ref.as_deref(),
+            Some("artifacts/proof.json")
+        );
+        assert_eq!(command.evidence, vec!["tests green".to_string()]);
+        assert!(command.json);
+    }
+
+    #[test]
+    fn task_proof_status_payload_accepts_browser_attach_registry_note() {
+        let mut task = owned_task_record("proof-task", vec![]);
+        let artifact = TaskBrowserProofArtifact::new(
+            "/odoo",
+            "pass",
+            Some("My Tasks"),
+            Some("artifacts/proof.png"),
+            &["console clean".to_string()],
+        )
+        .expect("browser proof artifact should build");
+        let proof_target = artifact.proof_target.clone();
+        task.planner_metadata.proof_targets = vec![proof_target.clone()];
+        let browser_notes = append_task_browser_proof_note(None, &artifact);
+        task.notes = Some(super::append_task_proof_evidence_note(
+            Some(&browser_notes),
+            &proof_target,
+            Some(&proof_target),
+            "pass",
+            "browser",
             Some("artifacts/proof.png"),
             &["console clean".to_string()],
         ));
@@ -13465,11 +13934,19 @@ mod tests {
         assert_eq!(payload["proof_targets"][0]["status"], "satisfied");
         assert_eq!(
             payload["proof_targets"][0]["evidence_source"],
-            "task_browser_proof_note"
+            "task_proof_evidence_registry"
         );
         assert_eq!(
             payload["evidence_model"]["artifact_registry"],
-            "task_notes.task_browser_proof"
+            "task_notes.task_proof_evidence|task_notes.task_browser_proof"
+        );
+        assert_eq!(
+            payload["evidence_model"]["browser_proof_artifact_schema"],
+            TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            payload["evidence_model"]["browser_proof_note_schema"],
+            TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION
         );
     }
 
@@ -13507,17 +13984,16 @@ mod tests {
     #[test]
     fn task_proof_status_payload_rejects_failed_browser_note_with_pass_text_in_evidence() {
         let mut task = owned_task_record("proof-task", vec![]);
-        let proof_target = super::browser_proof_target("/secure", Some("OK"));
-        task.planner_metadata.proof_targets = vec![proof_target.clone()];
-        task.notes = Some(super::append_task_browser_proof_note(
-            None,
-            &proof_target,
+        let artifact = TaskBrowserProofArtifact::new(
             "/secure",
             "fail",
             Some("OK"),
             Some("artifacts/proof.png"),
             &["console included result: pass text".to_string()],
-        ));
+        )
+        .expect("browser proof artifact should build");
+        task.planner_metadata.proof_targets = vec![artifact.proof_target.clone()];
+        task.notes = Some(append_task_browser_proof_note(None, &artifact));
 
         let payload = super::task_proof_status_payload(&task, None);
 
@@ -13529,26 +14005,17 @@ mod tests {
     #[test]
     fn task_proof_status_payload_scopes_browser_pass_to_matching_target_record() {
         let mut task = owned_task_record("proof-task", vec![]);
-        let other_target = super::browser_proof_target("/other", None);
-        let secure_target = super::browser_proof_target("/secure", None);
+        let other_artifact = TaskBrowserProofArtifact::new("/other", "pass", None, None, &[])
+            .expect("browser proof artifact should build");
+        let secure_artifact = TaskBrowserProofArtifact::new("/secure", "fail", None, None, &[])
+            .expect("browser proof artifact should build");
+        let other_target = task_browser_proof_target("/other", None);
+        let secure_target = task_browser_proof_target("/secure", None);
         task.planner_metadata.proof_targets = vec![other_target.clone(), secure_target.clone()];
-        let notes = super::append_task_browser_proof_note(
-            None,
-            &other_target,
-            "/other",
-            "pass",
-            None,
-            None,
-            &[],
-        );
-        task.notes = Some(super::append_task_browser_proof_note(
+        let notes = append_task_browser_proof_note(None, &other_artifact);
+        task.notes = Some(append_task_browser_proof_note(
             Some(&notes),
-            &secure_target,
-            "/secure",
-            "fail",
-            None,
-            None,
-            &[],
+            &secure_artifact,
         ));
 
         let payload = super::task_proof_status_payload(&task, None);
@@ -13562,20 +14029,38 @@ mod tests {
 
     #[test]
     fn append_task_browser_proof_note_normalizes_newlines_in_untrusted_fields() {
-        let note = super::append_task_browser_proof_note(
-            None,
-            "vida proof browser --route /secure",
+        let artifact = TaskBrowserProofArtifact::new(
             "/secure",
             "fail",
             Some("OK\n  result: pass"),
             Some("artifacts/proof.png\n  result: pass"),
             &["first line\n  result: pass".to_string()],
-        );
+        )
+        .expect("browser proof artifact should build");
+        let note = append_task_browser_proof_note(None, &artifact);
 
         assert!(note.contains("  result: fail\n"));
+        assert!(note.contains("  schema_version: task_browser_proof.v1\n"));
         assert!(!note.contains("\n  expect: OK\n  result: pass"));
         assert!(!note.contains("\n  screenshot: artifacts/proof.png\n  result: pass"));
         assert!(!note.contains("\n  evidence: first line\n  result: pass"));
+    }
+
+    #[test]
+    fn task_proof_status_payload_rejects_unversioned_browser_note() {
+        let mut task = owned_task_record("proof-task", vec![]);
+        let proof_target = task_browser_proof_target("/odoo", Some("My Tasks"));
+        task.planner_metadata.proof_targets = vec![proof_target.clone()];
+        task.notes = Some(
+            "task_browser_proof:\n  proof_target: vida proof browser --route /odoo --expect My Tasks\n  command: vida proof browser --route /odoo --expect My Tasks\n  route: /odoo\n  result: pass\n  screenshot: artifacts/proof.png"
+                .to_string(),
+        );
+
+        let payload = super::task_proof_status_payload(&task, None);
+
+        assert_eq!(payload["satisfied_count"], 0);
+        assert_eq!(payload["missing_count"], 1);
+        assert_eq!(payload["missing_targets"][0], proof_target);
     }
 
     #[test]
@@ -13903,113 +14388,112 @@ mod tests {
 
     #[test]
     fn task_handoff_accept_isolated_state_dir_writes_receipt_under_state_dir() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let project_root = harness.path().join("project");
-        fs::create_dir_all(project_root.join(".vida/receipts"))
-            .expect("project receipt directory should initialize");
-        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
-            .expect("project marker should write");
-        fs::write(project_root.join("AGENTS.md"), "test project\n")
-            .expect("agents marker should write");
-        fs::create_dir_all(project_root.join(".vida/config"))
-            .expect("config marker directory should initialize");
-        fs::create_dir_all(project_root.join(".vida/db"))
-            .expect("db marker directory should initialize");
-        fs::create_dir_all(project_root.join(".vida/project"))
-            .expect("project marker directory should initialize");
-        let isolated_state_dir = harness.path().join("isolated-state");
-        runtime.block_on(async {
-            let store = crate::StateStore::open(isolated_state_dir.clone())
-                .await
-                .expect("isolated state store should open");
-            create_task_for_test(
-                &store,
-                "task-handoff",
-                "Task handoff",
-                "epic",
-                "open",
-                2,
-                None,
-            )
-            .await;
-            store
-                .refresh_task_snapshot()
-                .await
-                .expect("snapshot should refresh");
-        });
+        std::thread::Builder::new()
+            .name("task-handoff-isolated-state-dir-receipt".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+                let harness =
+                    TempStateHarness::new().expect("temp state harness should initialize");
+                let project_root = harness.path().join("project");
+                fs::create_dir_all(project_root.join(".vida/receipts"))
+                    .expect("project receipt directory should initialize");
+                fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+                    .expect("project marker should write");
+                fs::write(project_root.join("AGENTS.md"), "test project\n")
+                    .expect("agents marker should write");
+                fs::create_dir_all(project_root.join(".vida/config"))
+                    .expect("config marker directory should initialize");
+                fs::create_dir_all(project_root.join(".vida/db"))
+                    .expect("db marker directory should initialize");
+                fs::create_dir_all(project_root.join(".vida/project"))
+                    .expect("project marker directory should initialize");
+                let isolated_state_dir = harness.path().join("isolated-state");
+                runtime.block_on(async {
+                    let store = crate::StateStore::open(isolated_state_dir.clone())
+                        .await
+                        .expect("isolated state store should open");
+                    create_task_for_test(
+                        &store,
+                        "task-handoff",
+                        "Task handoff",
+                        "epic",
+                        "open",
+                        2,
+                        None,
+                    )
+                    .await;
+                    store
+                        .refresh_task_snapshot()
+                        .await
+                        .expect("snapshot should refresh");
+                });
 
-        let (receipt_root, isolation) = task_handoff_receipt_root(&isolated_state_dir, true);
-        assert_eq!(isolation, "isolated_state_dir");
-        assert_eq!(receipt_root, isolated_state_dir.join("receipts"));
+                let (receipt_root, isolation) =
+                    task_handoff_receipt_root(&isolated_state_dir, true);
+                assert_eq!(isolation, "isolated_state_dir");
+                assert_eq!(receipt_root, isolated_state_dir.join("receipts"));
 
-        let _vida_root = EnvVarGuard::unset("VIDA_ROOT");
-        let _cwd = guard_current_dir(&project_root);
-        let command = crate::TaskHandoffAcceptArgs {
-            task_id: "task-handoff".to_string(),
-            agent: Some("worker-1".to_string()),
-            files: vec![std::path::PathBuf::from("crates/vida/src/task_surface.rs")],
-            proofs: vec!["cargo check -p vida --bin vida".to_string()],
-            status: crate::TaskHandoffStatusArg::Pass,
-            blockers: Vec::new(),
-            next_actions: Vec::new(),
-            state_dir: Some(isolated_state_dir.clone()),
-            render: crate::RenderMode::Plain,
-            json: true,
-        };
-        runtime
-            .block_on(super::task_show_authoritative_first(
-                isolated_state_dir.clone(),
-                &command.task_id,
-            ))
-            .expect("handoff task should exist in isolated state dir");
-        let receipt_path = task_handoff_receipt_path(&receipt_root, &command.task_id, "123");
-        let receipt = task_handoff_accept_receipt(
-            &command,
-            &receipt_path,
-            &receipt_root,
-            isolation,
-            "2026-04-24T00:00:00Z".to_string(),
-        );
-        validate_task_handoff_accept_receipt(&receipt)
-            .expect("isolated handoff receipt should validate");
-        persist_task_handoff_accept_receipt(&receipt, &receipt_path)
-            .expect("isolated handoff receipt should persist");
-        drop(_cwd);
-        let project_handoff_receipts = project_root.join(".vida/receipts/task-handoffs");
-        assert!(
-            !project_handoff_receipts.exists(),
-            "isolated handoff must not write project receipts at {}",
-            project_handoff_receipts.display()
-        );
-        let isolated_handoff_receipts = isolated_state_dir.join("receipts/task-handoffs");
-        let receipts = fs::read_dir(&isolated_handoff_receipts)
-            .expect("isolated receipt directory should exist")
-            .collect::<Result<Vec<_>, _>>()
-            .expect("isolated receipts should list");
-        assert_eq!(receipts.len(), 1);
-        let receipt_text =
-            fs::read_to_string(receipts[0].path()).expect("isolated receipt should read");
-        let receipt: serde_json::Value =
-            serde_json::from_str(&receipt_text).expect("isolated receipt should parse");
-        assert_eq!(receipt["status"], "pass");
-        assert_eq!(receipt["task_id"], "task-handoff");
-        assert_eq!(receipt["isolation"], "isolated_state_dir");
-        assert_eq!(
-            receipt["receipt_root"],
-            isolated_state_dir.join("receipts").display().to_string()
-        );
-        assert!(receipt["receipt_path"]
-            .as_str()
-            .expect("receipt path should be string")
-            .replace('\\', "/")
-            .starts_with(
-                isolated_handoff_receipts
-                    .to_str()
-                    .expect("receipt dir should be utf8")
-                    .replace('\\', "/")
+                let _vida_root = EnvVarGuard::unset("VIDA_ROOT");
+                let _cwd = guard_current_dir(&project_root);
+                let code = runtime.block_on(crate::run(cli(&[
+                    "task",
+                    "handoff",
+                    "accept",
+                    "task-handoff",
+                    "--agent",
+                    "worker-1",
+                    "--file",
+                    "crates/vida/src/task_surface.rs",
+                    "--proof",
+                    "cargo check -p vida --bin vida",
+                    "--state-dir",
+                    isolated_state_dir
+                        .to_str()
+                        .expect("state dir should be utf8"),
+                    "--json",
+                ])));
+                drop(_cwd);
+
+                assert_eq!(code, ExitCode::SUCCESS);
+                let project_handoff_receipts = project_root.join(".vida/receipts/task-handoffs");
+                assert!(
+                    !project_handoff_receipts.exists(),
+                    "isolated handoff must not write project receipts at {}",
+                    project_handoff_receipts.display()
+                );
+                let isolated_handoff_receipts = isolated_state_dir.join("receipts/task-handoffs");
+                let receipts = fs::read_dir(&isolated_handoff_receipts)
+                    .expect("isolated receipt directory should exist")
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("isolated receipts should list");
+                assert_eq!(receipts.len(), 1);
+                let receipt_text =
+                    fs::read_to_string(receipts[0].path()).expect("isolated receipt should read");
+                let receipt: serde_json::Value =
+                    serde_json::from_str(&receipt_text).expect("isolated receipt should parse");
+                assert_eq!(receipt["status"], "pass");
+                assert_eq!(receipt["task_id"], "task-handoff");
+                assert_eq!(receipt["isolation"], "isolated_state_dir");
+                assert_eq!(
+                    receipt["receipt_root"],
+                    isolated_state_dir.join("receipts").display().to_string()
+                );
+                assert!(receipt["receipt_path"]
                     .as_str()
-            ));
+                    .expect("receipt path should be string")
+                    .replace('\\', "/")
+                    .starts_with(
+                        isolated_handoff_receipts
+                            .to_str()
+                            .expect("receipt dir should be utf8")
+                            .replace('\\', "/")
+                            .as_str()
+                    ));
+            })
+            .expect("high-stack receipt test thread should spawn")
+            .join()
+            .expect("high-stack receipt test thread should complete");
     }
 
     #[test]
@@ -15715,6 +16199,107 @@ mod tests {
     }
 
     #[test]
+    fn task_next_lawful_command_ignores_reconciled_terminal_closure_latest_run() {
+        run_on_runtime_stack_for_test(
+            task_next_lawful_command_ignores_reconciled_terminal_closure_latest_run_body,
+        );
+    }
+
+    fn task_next_lawful_command_ignores_reconciled_terminal_closure_latest_run_body() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "task-ready-after-stale-closure",
+                "Ready after stale closure",
+                "task",
+                "open",
+                2,
+                Some("parent-epic"),
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "closed-runtime-task",
+                "Closed runtime task",
+                "task",
+                "closed",
+                1,
+                Some("parent-epic"),
+            )
+            .await;
+            store
+                .record_run_graph_status(&crate::state_store::RunGraphStatus {
+                    run_id: "terminal-closure-run".to_string(),
+                    task_id: "closed-runtime-task".to_string(),
+                    task_class: "worker".to_string(),
+                    active_node: "closure".to_string(),
+                    next_node: None,
+                    status: "completed".to_string(),
+                    route_task_class: "implementation".to_string(),
+                    selected_backend: "taskflow_state_store".to_string(),
+                    lane_id: "closure_lane".to_string(),
+                    lifecycle_stage: "closure_complete".to_string(),
+                    policy_gate: "historical_closed_task_stale_run_retired".to_string(),
+                    handoff_state: "none".to_string(),
+                    context_state: "sealed".to_string(),
+                    checkpoint_kind: "execution_cursor".to_string(),
+                    resume_target: "none".to_string(),
+                    recovery_ready: false,
+                })
+                .await
+                .expect("run graph status should record");
+            let binding = test_continuation_binding(
+                "terminal-closure-run",
+                "closed-runtime-task",
+                "consume_continue_after_downstream_chain",
+                "run_graph_task",
+            );
+            store
+                .record_run_graph_continuation_binding(&binding)
+                .await
+                .expect("continuation binding should record");
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("snapshot should refresh");
+        });
+
+        let code = runtime.block_on(crate::run(cli(&[
+            "task",
+            "next-lawful",
+            "--state-dir",
+            harness.path().to_str().expect("state path should be utf8"),
+            "--json",
+        ])));
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        let projection_path = harness
+            .path()
+            .join("operator-projections")
+            .join("task-next-lawful-latest.json");
+        let projection: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(projection_path).expect("next-lawful projection should be written"),
+        )
+        .expect("next-lawful projection should parse");
+        assert_eq!(projection["status"], task_json_success_status());
+        assert_eq!(
+            projection["active_bounded_unit"]["task_id"],
+            "task-ready-after-stale-closure"
+        );
+        assert_eq!(projection["binding_source"], serde_json::Value::Null);
+        assert!(projection["blocker_codes"]
+            .as_array()
+            .expect("blockers should be an array")
+            .is_empty());
+    }
+
+    #[test]
     fn task_next_lawful_command_preserves_timeout_blocker_without_bind_command() {
         run_on_runtime_stack_for_test(
             task_next_lawful_command_preserves_timeout_blocker_without_bind_command_body,
@@ -16034,6 +16619,48 @@ mod tests {
             "status": "closed",
         });
         let reason = "Closed after verification: implementation and tests passed. Evidence: prior close attempt output quoted blocker details: close_feedback_canonical_status_blocked/canonical_gate_blocked and failure-state wording.";
+
+        let telemetry = task_close_host_agent_telemetry(
+            &project_root.join(crate::state_store::default_state_dir()),
+            false,
+            Some(project_root),
+            &task_value,
+            reason,
+            "vida task close",
+        );
+
+        assert_eq!(telemetry["status"], "recorded");
+        assert_eq!(telemetry.get("canonical_status"), None);
+        assert!(task_close_feedback_blocker_summary(&telemetry).is_none());
+        assert_eq!(
+            telemetry["feedback_outcome_inference"]["outcome"],
+            "success"
+        );
+        assert_eq!(
+            telemetry["feedback_outcome_inference"]["failure_markers"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn task_close_feedback_records_proved_blocked_receipt_rejection_policy() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let project_root = harness.path();
+        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+            .expect("project marker should write");
+        fs::write(project_root.join("AGENTS.md"), "test project\n")
+            .expect("agents marker should write");
+        fs::create_dir_all(project_root.join(".vida/config"))
+            .expect("config marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/db"))
+            .expect("db marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/project"))
+            .expect("project marker directory should initialize");
+        let task_value = serde_json::json!({
+            "id": "task-close-feedback-blocked-receipt-policy",
+            "status": "closed",
+        });
+        let reason = "Rejected materialization-only blocked task-ensure receipts before terminal closure and persisted final-snapshot resume paths. Proof: cargo test -p vida taskflow_consume_continue_rejects_materialization_only_receipt_before_final_snapshot_replay passed.";
 
         let telemetry = task_close_host_agent_telemetry(
             &project_root.join(crate::state_store::default_state_dir()),

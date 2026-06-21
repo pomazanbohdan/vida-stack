@@ -20,6 +20,7 @@ impl RepoPathError {
     }
 }
 
+#[must_use]
 pub fn normalize_repo_relative_path(path: &str) -> Result<String, RepoPathError> {
     let normalized = path.trim().replace('\\', "/");
     let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);

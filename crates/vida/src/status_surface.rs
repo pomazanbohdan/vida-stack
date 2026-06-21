@@ -858,10 +858,17 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                         _ => false,
                     };
-                let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
-                    || global_closed_run_is_current
-                    || terminal_closed_run_is_current
-                    || latest_run_graph_terminal_closure_without_truth;
+                let latest_recovery_is_terminal_retired_runtime_run = crate::runtime_dispatch_receipt_helpers::
+                    recovery_summary_is_reconciled_terminal_retired_runtime_run(
+                        latest_run_graph_status.as_ref(),
+                        latest_run_graph_recovery.as_ref(),
+                    );
+                let closed_task_active_run_projection_mismatch =
+                    !latest_recovery_is_terminal_retired_runtime_run
+                        && (latest_run_graph_task_closed
+                            || global_closed_run_is_current
+                            || terminal_closed_run_is_current
+                            || latest_run_graph_terminal_closure_without_truth);
                 let in_progress_tasks = all_tasks
                     .iter()
                     .filter(|task| task.status == "in_progress")
@@ -886,6 +893,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         store.root(),
                         latest_run_graph_dispatch_receipt.as_ref(),
                         &taskflow_active_candidates,
+                    );
+                let latest_run_graph_dispatch_receipt_signal_ambiguous =
+                    latest_run_graph_dispatch_receipt_signal_is_actionable(
+                        latest_run_graph_dispatch_receipt_signal_ambiguous,
+                        latest_run_graph_task_orthogonal_to_taskflow,
+                        exception_takeover_matches_active_taskflow_work,
                     );
                 let latest_run_graph_dispatch_receipt =
                     if !exception_takeover_matches_active_taskflow_work
@@ -1453,6 +1466,16 @@ fn latest_run_graph_task_orthogonal_to_taskflow_active_work(
         latest_run_graph_receipt_run_id,
         &[active_candidate],
     )
+}
+
+fn latest_run_graph_dispatch_receipt_signal_is_actionable(
+    raw_signal_ambiguous: bool,
+    latest_run_graph_task_orthogonal_to_taskflow: bool,
+    exception_takeover_matches_active_taskflow_work: bool,
+) -> bool {
+    raw_signal_ambiguous
+        && (!latest_run_graph_task_orthogonal_to_taskflow
+            || exception_takeover_matches_active_taskflow_work)
 }
 
 fn exception_takeover_metadata_matches_taskflow_active_work(
@@ -2109,6 +2132,37 @@ async fn refresh_cached_status_projection_runtime_fields(
         }
         None => false,
     };
+    let in_progress_tasks = all_tasks
+        .iter()
+        .filter(|task| task.status == "in_progress")
+        .cloned()
+        .collect::<Vec<_>>();
+    let taskflow_active_candidates =
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
+            &in_progress_tasks,
+        );
+    let exception_takeover_matches_active_taskflow_work =
+        exception_takeover_metadata_matches_taskflow_active_work(
+            store.root(),
+            latest_run_graph_dispatch_receipt.as_ref(),
+            &taskflow_active_candidates,
+        );
+    let latest_run_graph_task_orthogonal_to_taskflow =
+        latest_run_graph_task_orthogonal_to_taskflow_active_work(
+            latest_run_graph_status
+                .as_ref()
+                .map(|status| status.task_id.as_str()),
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+            &taskflow_active_candidates,
+        );
+    let latest_run_graph_dispatch_receipt_signal_ambiguous =
+        latest_run_graph_dispatch_receipt_signal_is_actionable(
+            latest_run_graph_dispatch_receipt_signal_ambiguous,
+            latest_run_graph_task_orthogonal_to_taskflow,
+            exception_takeover_matches_active_taskflow_work,
+        );
     let terminal_consume_continue_run_id = if latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
@@ -2139,40 +2193,13 @@ async fn refresh_cached_status_projection_runtime_fields(
             latest_run_graph_task_closed,
             latest_run_graph_task_missing,
         );
-    let in_progress_tasks = all_tasks
-        .iter()
-        .filter(|task| task.status == "in_progress")
-        .cloned()
-        .collect::<Vec<_>>();
-    let taskflow_active_candidates =
-        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
-            &in_progress_tasks,
-        );
-    let exception_takeover_matches_active_taskflow_work =
-        exception_takeover_metadata_matches_taskflow_active_work(
-            store.root(),
-            latest_run_graph_dispatch_receipt.as_ref(),
-            &taskflow_active_candidates,
-        );
-    let terminal_retired_runtime_run =
-        crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
-            latest_run_graph_recovery.as_ref(),
-        );
     let latest_run_graph_task_stale_for_write_guard =
         taskflow_authority::stale_guard::latest_run_graph_task_stale_for_write_guard(
             latest_run_graph_task_missing,
             latest_run_graph_task_closed,
             terminal_retired_runtime_run,
             exception_takeover_matches_active_taskflow_work,
-            latest_run_graph_task_orthogonal_to_taskflow_active_work(
-                latest_run_graph_status
-                    .as_ref()
-                    .map(|status| status.task_id.as_str()),
-                latest_run_graph_dispatch_receipt
-                    .as_ref()
-                    .map(|receipt| receipt.run_id.as_str()),
-                &taskflow_active_candidates,
-            ),
+            latest_run_graph_task_orthogonal_to_taskflow,
         );
     let continuation_binding = add_taskflow_active_work_truth_for_status(
         &store,
@@ -2244,10 +2271,17 @@ async fn refresh_cached_status_projection_runtime_fields(
             }
             _ => false,
         };
-    let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
-        || global_closed_run_is_current
-        || terminal_closed_run_is_current
-        || latest_run_graph_terminal_closure_without_truth;
+    let latest_recovery_is_terminal_retired_runtime_run = crate::runtime_dispatch_receipt_helpers::
+        recovery_summary_is_reconciled_terminal_retired_runtime_run(
+            latest_run_graph_status.as_ref(),
+            latest_run_graph_recovery.as_ref(),
+        );
+    let closed_task_active_run_projection_mismatch =
+        !latest_recovery_is_terminal_retired_runtime_run
+            && (latest_run_graph_task_closed
+                || global_closed_run_is_current
+                || terminal_closed_run_is_current
+                || latest_run_graph_terminal_closure_without_truth);
     let continuation_binding = if terminal_task_active_run_graph_task_missing {
         match latest_terminal_task_active_run_graph_status.as_ref() {
             Some(status) => {
@@ -2839,6 +2873,16 @@ mod tests {
                     })
                 ]
             )
+        );
+    }
+
+    #[test]
+    fn latest_run_graph_dispatch_receipt_signal_ignores_orthogonal_stale_taskflow_work() {
+        assert!(!super::latest_run_graph_dispatch_receipt_signal_is_actionable(true, true, false));
+        assert!(super::latest_run_graph_dispatch_receipt_signal_is_actionable(true, false, false));
+        assert!(super::latest_run_graph_dispatch_receipt_signal_is_actionable(true, true, true));
+        assert!(
+            !super::latest_run_graph_dispatch_receipt_signal_is_actionable(false, false, false)
         );
     }
 

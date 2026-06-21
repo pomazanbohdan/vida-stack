@@ -99,6 +99,45 @@ pub struct TaskStageConsolidationReceipt {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, SurrealValue)]
+struct TaskRuntimeAttemptReferenceRow {
+    task_id: String,
+    attempt_id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, SurrealValue)]
+struct TaskRuntimeStageReferenceRow {
+    task_id: String,
+    stage_id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, SurrealValue)]
+struct TaskRuntimeConsolidationReferenceRow {
+    task_id: String,
+    receipt_id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, SurrealValue)]
+struct TaskRuntimeRunGraphReferenceRow {
+    task_id: String,
+    run_id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, SurrealValue)]
+struct TaskRuntimeRunGraphReplayReferenceRow {
+    resolved_task_id: String,
+    receipt_id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, SurrealValue)]
+struct TaskRuntimeDispatchIdentityReferenceRow {
+    run_id: String,
+    feature_epic_id: Option<String>,
+    spec_task_id: Option<String>,
+    work_pool_task_id: Option<String>,
+    dev_task_id: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConsolidateTaskStageAttemptsRequest {
     pub receipt_id: Option<String>,
@@ -129,6 +168,165 @@ const TASK_ATTEMPT_STATUSES: &[&str] = &[
 ];
 
 impl StateStore {
+    pub(crate) async fn task_runtime_reference_labels_for_tasks(
+        &self,
+        task_ids: &std::collections::BTreeSet<String>,
+    ) -> Result<std::collections::BTreeMap<String, Vec<String>>, StateStoreError> {
+        let mut references = std::collections::BTreeMap::<String, Vec<String>>::new();
+        if task_ids.is_empty() {
+            return Ok(references);
+        }
+
+        let task_id_list = task_ids
+            .iter()
+            .map(|task_id| format!("'{}'", escape_surql_literal(task_id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let attempt_rows: Vec<TaskRuntimeAttemptReferenceRow> = self
+            .task_runtime_reference_query(format!(
+                "SELECT task_id, attempt_id FROM task_attempt WHERE task_id IN [{task_id_list}] ORDER BY task_id ASC, attempt_id ASC;"
+            ))
+            .await?;
+        for row in attempt_rows {
+            push_task_runtime_reference(
+                &mut references,
+                row.task_id,
+                format!("task_attempt:{}", row.attempt_id),
+            );
+        }
+
+        let stage_rows: Vec<TaskRuntimeStageReferenceRow> = self
+            .task_runtime_reference_query(format!(
+                "SELECT task_id, stage_id FROM task_stage WHERE task_id IN [{task_id_list}] ORDER BY task_id ASC, stage_id ASC;"
+            ))
+            .await?;
+        for row in stage_rows {
+            push_task_runtime_reference(
+                &mut references,
+                row.task_id,
+                format!("task_stage:{}", row.stage_id),
+            );
+        }
+
+        let consolidation_rows: Vec<TaskRuntimeConsolidationReferenceRow> = self
+            .task_runtime_reference_query(format!(
+                "SELECT task_id, receipt_id FROM task_stage_consolidation_receipt WHERE task_id IN [{task_id_list}] ORDER BY task_id ASC, receipt_id ASC;"
+            ))
+            .await?;
+        for row in consolidation_rows {
+            push_task_runtime_reference(
+                &mut references,
+                row.task_id,
+                format!("task_stage_consolidation_receipt:{}", row.receipt_id),
+            );
+        }
+
+        let execution_plan_rows: Vec<TaskRuntimeRunGraphReferenceRow> = self
+            .task_runtime_reference_query(format!(
+                "SELECT task_id, run_id FROM execution_plan_state WHERE task_id IN [{task_id_list}] ORDER BY task_id ASC, run_id ASC;"
+            ))
+            .await?;
+        for row in execution_plan_rows {
+            push_task_runtime_reference(
+                &mut references,
+                row.task_id,
+                format!("execution_plan_state:{}", row.run_id),
+            );
+        }
+
+        let continuation_rows: Vec<TaskRuntimeRunGraphReferenceRow> = self
+            .task_runtime_reference_query(format!(
+                "SELECT task_id, run_id FROM run_graph_continuation_binding WHERE task_id IN [{task_id_list}] ORDER BY task_id ASC, run_id ASC;"
+            ))
+            .await?;
+        for row in continuation_rows {
+            push_task_runtime_reference(
+                &mut references,
+                row.task_id,
+                format!("run_graph_continuation_binding:{}", row.run_id),
+            );
+        }
+
+        let dispatch_context_rows: Vec<TaskRuntimeRunGraphReferenceRow> = self
+            .task_runtime_reference_query(format!(
+                "SELECT task_id, run_id FROM run_graph_dispatch_context WHERE task_id IN [{task_id_list}] ORDER BY task_id ASC, run_id ASC;"
+            ))
+            .await?;
+        for row in dispatch_context_rows {
+            push_task_runtime_reference(
+                &mut references,
+                row.task_id,
+                format!("run_graph_dispatch_context:{}", row.run_id),
+            );
+        }
+
+        let replay_rows: Vec<TaskRuntimeRunGraphReplayReferenceRow> = self
+            .task_runtime_reference_query(format!(
+                "SELECT resolved_task_id, receipt_id FROM run_graph_replay_lineage_receipt WHERE resolved_task_id IN [{task_id_list}] ORDER BY resolved_task_id ASC, receipt_id ASC;"
+            ))
+            .await?;
+        for row in replay_rows {
+            push_task_runtime_reference(
+                &mut references,
+                row.resolved_task_id,
+                format!("run_graph_replay_lineage_receipt:{}", row.receipt_id),
+            );
+        }
+
+        let identity_rows: Vec<TaskRuntimeDispatchIdentityReferenceRow> = self
+            .task_runtime_reference_query(format!(
+                "SELECT run_id, feature_epic_id, spec_task_id, work_pool_task_id, dev_task_id FROM run_graph_dispatch_task_identity WHERE feature_epic_id IN [{task_id_list}] OR spec_task_id IN [{task_id_list}] OR work_pool_task_id IN [{task_id_list}] OR dev_task_id IN [{task_id_list}] ORDER BY run_id ASC;"
+            ))
+            .await?;
+        for row in identity_rows {
+            for (field, task_id) in [
+                ("feature_epic_id", row.feature_epic_id),
+                ("spec_task_id", row.spec_task_id),
+                ("work_pool_task_id", row.work_pool_task_id),
+                ("dev_task_id", row.dev_task_id),
+            ] {
+                if let Some(task_id) = task_id.filter(|task_id| task_ids.contains(task_id)) {
+                    push_task_runtime_reference(
+                        &mut references,
+                        task_id,
+                        format!("run_graph_dispatch_task_identity:{}:{field}", row.run_id),
+                    );
+                }
+            }
+        }
+
+        for labels in references.values_mut() {
+            labels.sort();
+            labels.dedup();
+        }
+
+        Ok(references)
+    }
+
+    async fn task_runtime_reference_query<T>(
+        &self,
+        query: String,
+    ) -> Result<Vec<T>, StateStoreError>
+    where
+        T: serde::de::DeserializeOwned + SurrealValue,
+    {
+        let mut response = match self.db.query(query).await {
+            Ok(response) => response,
+            Err(error) if task_runtime_reference_missing_optional_table(&error.to_string()) => {
+                return Ok(Vec::new())
+            }
+            Err(error) => return Err(error.into()),
+        };
+        match response.take(0) {
+            Ok(rows) => Ok(rows),
+            Err(error) if task_runtime_reference_missing_optional_table(&error.to_string()) => {
+                Ok(Vec::new())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub async fn record_task_attempt(
         &self,
         request: RecordTaskAttemptRequest,
@@ -496,6 +694,18 @@ impl StateStore {
         }
         Ok(task)
     }
+}
+
+fn push_task_runtime_reference(
+    references: &mut std::collections::BTreeMap<String, Vec<String>>,
+    task_id: String,
+    reference: String,
+) {
+    references.entry(task_id).or_default().push(reference);
+}
+
+fn task_runtime_reference_missing_optional_table(message: &str) -> bool {
+    message.contains("does not exist") && message.contains("The table")
 }
 
 fn task_stage_summary_from_attempts(

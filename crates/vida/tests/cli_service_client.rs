@@ -1,7 +1,7 @@
 use std::process::Command;
 
 fn vida() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_vida"))
+    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
 }
 
 fn run_json(args: &[&str]) -> serde_json::Value {

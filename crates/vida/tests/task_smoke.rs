@@ -582,10 +582,104 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
         "closed",
         Some("prune-closed-subtree-epic"),
     );
+    create_task_fixture_row(
+        &state_dir,
+        "prune-runtime-linked-epic",
+        "Closed runtime-linked epic",
+        "epic",
+        "open",
+        None,
+    );
+    create_task_fixture_row(
+        &state_dir,
+        "prune-runtime-linked-task",
+        "Closed runtime-linked task",
+        "task",
+        "open",
+        Some("prune-runtime-linked-epic"),
+    );
+    let attempt = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            "prune-runtime-linked-task",
+            "--attempt-id",
+            "prune-runtime-linked-attempt",
+            "--stage-id",
+            "implementation",
+            "--backend",
+            "test-backend",
+            "--model-profile",
+            "test-model",
+            "--isolation",
+            "readonly",
+            "--status",
+            "accepted",
+            "--artifact-ref",
+            "runtime-receipts/prune-runtime-linked-attempt.json",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(attempt["status"], "pass");
+    let closed_runtime_task = run_command_json(
+        &[
+            "task",
+            "close",
+            "prune-runtime-linked-task",
+            "--reason",
+            "runtime attempt evidence accepted",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_runtime_task["status"], "pass");
+    let closed_runtime_epic = run_command_json(
+        &[
+            "task",
+            "close",
+            "prune-runtime-linked-epic",
+            "--reason",
+            "runtime-linked child task closed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_runtime_epic["status"], "pass");
     let runtime_sentinel = format!("{state_dir}/runtime-receipts/keep.json");
     fs::create_dir_all(format!("{state_dir}/runtime-receipts"))
         .expect("create runtime sentinel dir");
     fs::write(&runtime_sentinel, "{\"keep\":true}\n").expect("write runtime sentinel");
+
+    let dry_run = run_command_json(&["task", "prune-closed-epics", "--json"], &state_dir);
+    assert_eq!(dry_run["surface"], "vida task prune-closed-epics");
+    assert_eq!(dry_run["status"], "pass");
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["candidate_count"], 3);
+    assert_eq!(dry_run["archived_count"], 0);
+    assert_eq!(dry_run["pruned_count"], 0);
+    assert_eq!(dry_run["protected_count"], 3);
+    let dry_run_runtime_protected = dry_run["protected"]
+        .as_array()
+        .expect("dry-run protected rows should be an array")
+        .iter()
+        .find(|task| task["task_id"] == "prune-runtime-linked-epic")
+        .expect("runtime-linked closed epic should be protected");
+    assert_eq!(dry_run_runtime_protected["reason"], "runtime_linked_task");
+    assert_eq!(
+        dry_run_runtime_protected["blocking_task_ids"],
+        serde_json::json!(["prune-runtime-linked-task"])
+    );
+    let dry_run_runtime_refs = dry_run_runtime_protected["runtime_refs"]
+        .as_array()
+        .expect("runtime refs should be an array")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    assert!(dry_run_runtime_refs.iter().any(
+        |value| *value == "prune-runtime-linked-task:task_attempt:prune-runtime-linked-attempt"
+    ));
 
     let payload = run_command_json(
         &["task", "prune-closed-epics", "--apply", "--json"],
@@ -598,7 +692,7 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
     assert_eq!(payload["candidate_count"], 3);
     assert_eq!(payload["archived_count"], 3);
     assert_eq!(payload["pruned_count"], 3);
-    assert_eq!(payload["protected_count"], 2);
+    assert_eq!(payload["protected_count"], 3);
     assert_eq!(payload["blocker_codes"], serde_json::json!([]));
     let protected_ids = payload["protected"]
         .as_array()
@@ -608,6 +702,7 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
         .collect::<Vec<_>>();
     assert!(protected_ids.contains(&"prune-open-live-epic"));
     assert!(protected_ids.contains(&"prune-in-progress-live-epic"));
+    assert!(protected_ids.contains(&"prune-runtime-linked-epic"));
 
     let archive_path = payload["archive_path"]
         .as_str()
@@ -616,6 +711,8 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
     assert!(archive.contains("prune-closed-empty-epic"));
     assert!(archive.contains("prune-closed-subtree-epic"));
     assert!(archive.contains("prune-closed-subtree-task"));
+    assert!(!archive.contains("prune-runtime-linked-epic"));
+    assert!(!archive.contains("prune-runtime-linked-task"));
 
     let list = run_command_json(&["task", "list", "--all", "--json"], &state_dir);
     let task_ids = list["tasks"]
@@ -626,6 +723,8 @@ fn task_prune_closed_epics_applies_archive_and_preserves_live_runtime_state() {
         .collect::<Vec<_>>();
     assert!(task_ids.contains(&"prune-open-live-epic"));
     assert!(task_ids.contains(&"prune-in-progress-live-epic"));
+    assert!(task_ids.contains(&"prune-runtime-linked-epic"));
+    assert!(task_ids.contains(&"prune-runtime-linked-task"));
     assert!(!task_ids.contains(&"prune-closed-empty-epic"));
     assert!(!task_ids.contains(&"prune-closed-subtree-epic"));
     assert!(!task_ids.contains(&"prune-closed-subtree-task"));
@@ -2364,6 +2463,64 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
     }
 
     let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn test_cli_support_temp_fixture_snapshots_task_default_toon_and_json() {
+    let temp = vida_test_support::temp_fixture_dir();
+    let state_dir_path = temp.path().join("state");
+    let jsonl_path = state_dir_path.join("issues.jsonl");
+    fs::create_dir_all(&state_dir_path).expect("create assert_fs-backed state dir");
+    sample_jsonl(jsonl_path.to_str().expect("fixture path should be utf-8"));
+
+    let state_dir = state_dir_path
+        .to_str()
+        .expect("fixture state dir path should be utf-8");
+    let import_stdout = run_and_assert_success(
+        &[
+            "task",
+            "import-jsonl",
+            jsonl_path
+                .to_str()
+                .expect("fixture jsonl path should be utf-8"),
+            "--json",
+        ],
+        state_dir,
+    );
+    assert_json_status_pass(&import_stdout);
+
+    let default_stdout = run_and_assert_success(&["task", "list", "--all"], state_dir);
+    vida_test_support::assert_text_snapshot(
+        &default_stdout,
+        "vida task list\n  task_count: 4\n  tasks[4]{id,status,priority,title}:\n...\n",
+    );
+
+    let json_stdout = run_and_assert_success(
+        &[
+            "task",
+            "list",
+            "--all",
+            "--view",
+            "compact",
+            "--fields",
+            "id,status,title",
+            "--json",
+        ],
+        state_dir,
+    );
+    let json_payload: Value =
+        serde_json::from_str(&json_stdout).expect("task list json should parse");
+    let json_summary = serde_json::json!({
+        "task_count": json_payload["task_count"],
+        "fields": json_payload["fields"],
+        "view": json_payload["view"],
+        "first_task_id": json_payload["tasks"][0]["id"],
+        "status": json_payload["status"],
+    });
+    vida_test_support::assert_text_snapshot(
+        serde_json::to_string_pretty(&json_summary).expect("summary should serialize"),
+        "{\n  \"task_count\": 4,\n  \"fields\": \"id,status,title\",\n  \"view\": \"compact\",\n  \"first_task_id\": \"vida-b\",\n  \"status\": \"pass\"\n}",
+    );
 }
 
 #[test]
@@ -6790,6 +6947,544 @@ fn task_proof_status_uses_default_human_commands_without_json_bias() {
     assert!(
         !default_missing_target.contains("--json"),
         "proof status default missing-target output should not suggest JSON-first commands: {default_missing_target}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_proof_attach_evidence_satisfies_status_and_progress() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("proof-registry-parent");
+    let task_id = unique_test_id("proof-registry-task");
+    let proof_target = "cargo test -p vida --test task_smoke proof_registry";
+    create_epic_parent(&state_dir, &parent_id, "Proof registry parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Proof registry task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--status",
+            "in_progress",
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let missing_progress = run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(missing_progress["progress"]["missing_proof"], true);
+    assert_eq!(missing_progress["progress"]["ready_for_close"], false);
+    assert_eq!(
+        missing_progress["progress"]["closure_candidate_state"],
+        "leaf_missing_proof"
+    );
+    let missing_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(missing_status["satisfied_count"], 0);
+    assert_eq!(missing_status["missing_count"], 1);
+
+    let receipt = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--command",
+            proof_target,
+            "--artifact-ref",
+            "artifacts/proof-registry.json",
+            "--evidence",
+            "focused proof registry smoke passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(receipt["surface"], "vida task proof attach-evidence");
+    assert_eq!(receipt["status"], "pass");
+    assert_eq!(receipt["proof_target"], proof_target);
+    assert_eq!(receipt["result"], "pass");
+
+    let satisfied_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(satisfied_status["satisfied_count"], 1);
+    assert_eq!(satisfied_status["missing_count"], 0);
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["evidence_source"],
+        "task_proof_evidence_registry"
+    );
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["artifact_status"],
+        "recorded"
+    );
+    assert_eq!(
+        satisfied_status["evidence_model"]["legacy_close_reason_text"],
+        "migration_context_not_authority"
+    );
+
+    let satisfied_progress =
+        run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(satisfied_progress["progress"]["missing_proof"], false);
+    assert_eq!(satisfied_progress["progress"]["ready_for_close"], true);
+    assert_eq!(
+        satisfied_progress["progress"]["closure_candidate_state"],
+        "leaf_ready_for_close"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_browser_proof_progress_close_golden_workflow_satisfies_schema() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("browser-proof-parent");
+    let task_id = unique_test_id("browser-proof-task");
+    let route = "/secure/settings";
+    let expect = "Settings Ready";
+    let proof_target = format!("vida proof browser --route {route} --expect {expect}");
+    create_epic_parent(&state_dir, &parent_id, "Browser proof parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Browser proof task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--status",
+            "in_progress",
+            "--proof-target",
+            &proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let malformed_browser_note = format!(
+        "task_browser_proof:\n  proof_target: {proof_target}\n  command: {proof_target}\n  route: {route}\n  result: pass"
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--notes",
+            &malformed_browser_note,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let malformed_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(malformed_status["missing_count"], 1);
+    assert_eq!(malformed_status["satisfied_count"], 0);
+    assert_eq!(
+        malformed_status["proof_targets"][0]["evidence_detail"],
+        "no matching structured proof evidence found"
+    );
+    assert_eq!(
+        malformed_status["evidence_model"]["browser_proof_note_schema"],
+        "task_browser_proof.v1"
+    );
+
+    let blocked_close = run_command_json_allow_failure(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Browser proof target passed in plain text only",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!blocked_close.1);
+    assert_eq!(blocked_close.0["surface"], "vida task close");
+    assert_eq!(blocked_close.0["status"], "blocked");
+    assert_eq!(
+        blocked_close.0["blocker_codes"],
+        serde_json::json!(["missing_structured_proof_evidence"])
+    );
+    assert_shared_fields_consistency(&blocked_close.0, "browser proof close blocker");
+    assert_operator_contracts_consistency(&blocked_close.0, "browser proof close blocker");
+    assert_eq!(
+        blocked_close.0["proof_status"]["evidence_model"]["artifact_registry"],
+        "task_notes.task_proof_evidence|task_notes.task_browser_proof"
+    );
+
+    let failed_browser = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-browser",
+            &task_id,
+            "--route",
+            route,
+            "--expect",
+            expect,
+            "--result",
+            "fail",
+            "--screenshot",
+            "artifacts/browser-fail.png",
+            "--evidence",
+            "page text mentioned pass but assertion failed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(failed_browser["status"], "pass");
+    assert_eq!(
+        failed_browser["artifact"]["schema_version"],
+        "browser_proof_artifact.v1"
+    );
+    assert_eq!(failed_browser["proof_target"], proof_target);
+    let failed_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(failed_status["missing_count"], 1);
+    assert_eq!(failed_status["satisfied_count"], 0);
+
+    let passed_browser = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-browser",
+            &task_id,
+            "--route",
+            route,
+            "--expect",
+            expect,
+            "--result",
+            "pass",
+            "--screenshot",
+            "artifacts/browser-pass.png",
+            "--evidence",
+            "visible heading matched expected text",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(passed_browser["surface"], "vida task proof attach-browser");
+    assert_eq!(passed_browser["status"], "pass");
+    assert_eq!(passed_browser["proof_target"], proof_target);
+    assert_eq!(
+        passed_browser["artifact"]["schema_version"],
+        "browser_proof_artifact.v1"
+    );
+    assert_eq!(passed_browser["artifact"]["proof_target"], proof_target);
+    assert_eq!(passed_browser["artifact"]["result"], "pass");
+    assert_eq!(
+        passed_browser["artifact"]["screenshot"],
+        "artifacts/browser-pass.png"
+    );
+    let task_after_browser = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    assert_eq!(
+        task_after_browser["task"]["planner_metadata"]["proof_targets"],
+        serde_json::json!([proof_target])
+    );
+    assert!(task_after_browser["task"]["notes"]
+        .as_str()
+        .expect("task notes should be present")
+        .contains("schema_version: task_browser_proof.v1"));
+
+    let satisfied_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(satisfied_status["satisfied_count"], 1);
+    assert_eq!(satisfied_status["missing_count"], 0);
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["evidence_source"],
+        "task_proof_evidence_registry"
+    );
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["evidence_detail"],
+        "structured browser proof evidence reports result pass"
+    );
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["artifact_status"],
+        "recorded"
+    );
+    assert_eq!(
+        satisfied_status["evidence_model"]["browser_proof_artifact_schema"],
+        "browser_proof_artifact.v1"
+    );
+    assert_eq!(
+        satisfied_status["evidence_model"]["browser_proof_note_schema"],
+        "task_browser_proof.v1"
+    );
+
+    let default_status = run_and_assert_success(&["task", "proof", "status", &task_id], &state_dir);
+    assert!(default_status.starts_with("vida task proof status\n"));
+    assert!(default_status.contains("satisfied: 1"));
+    assert!(default_status.contains("missing: 0"));
+    assert!(!default_status.trim_start().starts_with('{'));
+
+    let satisfied_progress =
+        run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(satisfied_progress["progress"]["missing_proof"], false);
+    assert_eq!(satisfied_progress["progress"]["ready_for_close"], true);
+    assert_eq!(
+        satisfied_progress["progress"]["closure_candidate_state"],
+        "leaf_ready_for_close"
+    );
+
+    let allowed_close = run_command_json(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Schema-backed browser proof evidence recorded",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(allowed_close["status"], "pass");
+    assert_eq!(allowed_close["closed"], true);
+    assert_eq!(allowed_close["task"]["status"], "closed");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_close_requires_structured_proof_evidence_for_configured_targets() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("close-proof-parent");
+    let task_id = unique_test_id("close-proof-task");
+    let proof_target = "Close/progress proof gate integration tests";
+    create_epic_parent(&state_dir, &parent_id, "Close proof parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Close proof task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--status",
+            "in_progress",
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let (blocked_close, close_succeeded) = run_command_json_allow_failure(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Proof: Close/progress proof gate integration tests passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!close_succeeded);
+    assert_eq!(blocked_close["surface"], "vida task close");
+    assert_eq!(blocked_close["status"], "blocked");
+    assert_eq!(blocked_close["closed"], false);
+    assert_eq!(
+        blocked_close["blocker_codes"],
+        serde_json::json!(["missing_structured_proof_evidence"])
+    );
+    assert_shared_fields_consistency(&blocked_close, "structured proof close blocker");
+    assert_operator_contracts_consistency(&blocked_close, "structured proof close blocker");
+    assert_eq!(
+        blocked_close["missing_targets"],
+        serde_json::json!([proof_target])
+    );
+    assert_eq!(
+        blocked_close["proof_status"]["evidence_model"]["legacy_close_reason_text"],
+        "migration_context_not_authority"
+    );
+    let still_open = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    assert_ne!(still_open["task"]["status"], "closed");
+
+    let _ = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/close-proof-gate.json",
+            "--evidence",
+            "close gate integration proof passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let allowed_close = run_command_json(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Structured proof evidence recorded",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(allowed_close["status"], "pass");
+    assert_eq!(allowed_close["closed"], true);
+    assert_eq!(allowed_close["task"]["status"], "closed");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_verify_runtime_proof_blocker_is_golden_close_blocker_workflow() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("runtime-proof-parent");
+    let task_id = unique_test_id("runtime-proof-task");
+    let proof_target = "browser proof unavailable";
+    create_epic_parent(&state_dir, &parent_id, "Runtime proof parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Runtime proof task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            &parent_id,
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let receipt = run_command_json(
+        &[
+            "task",
+            "verify",
+            &task_id,
+            "--source-fixed",
+            "--tests-green",
+            "--proof-blocked",
+            "--proof-blocker",
+            proof_target,
+            "--evidence",
+            "vida proof browser returned browser_automation_unavailable",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(receipt["surface"], "vida task verify");
+    assert_eq!(receipt["status"], "pass");
+    assert_eq!(receipt["proof_blocked"], true);
+    assert_eq!(receipt["proof_blocked_by_runtime"], true);
+    assert_eq!(receipt["proof_blocker"], proof_target);
+    let labels = require_json_string_array(&receipt["task"]["labels"], "verify labels");
+    for label in ["source-fixed", "tests-green", "proof-blocked-by-runtime"] {
+        assert!(
+            labels.contains(&label.to_string()),
+            "verify receipt should include canonical label `{label}`: {labels:?}"
+        );
+    }
+
+    let proof_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(proof_status["satisfied_count"], 0);
+    assert_eq!(proof_status["missing_count"], 1);
+    assert_eq!(proof_status["runtime_blocked_count"], 1);
+    assert_eq!(proof_status["proof_blocked_by_runtime"], true);
+    assert_eq!(
+        proof_status["proof_targets"][0]["status"],
+        "blocked_by_runtime"
+    );
+    assert_eq!(
+        proof_status["proof_targets"][0]["artifact_status"],
+        "not_recorded"
+    );
+
+    let progress = run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(progress["progress"]["missing_proof"], false);
+    assert_eq!(progress["progress"]["proof_blocked_by_runtime"], true);
+    assert_eq!(progress["progress"]["blocked_by_runtime"], true);
+    assert_eq!(progress["progress"]["ready_for_close"], false);
+    assert_eq!(
+        progress["progress"]["closure_candidate_state"],
+        "leaf_proof_blocked_by_runtime"
+    );
+
+    let (blocked_close, close_succeeded) = run_command_json_allow_failure(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "runtime proof blocker still active",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!close_succeeded);
+    assert_eq!(blocked_close["surface"], "vida task close");
+    assert_eq!(blocked_close["status"], "blocked");
+    assert_eq!(blocked_close["closed"], false);
+    assert_eq!(
+        blocked_close["blocker_codes"],
+        serde_json::json!(["proof_blocked_by_runtime"])
+    );
+    assert_shared_fields_consistency(&blocked_close, "runtime proof close blocker");
+    assert_operator_contracts_consistency(&blocked_close, "runtime proof close blocker");
+    assert_eq!(
+        blocked_close["proof_status"]["proof_targets"][0]["status"],
+        "blocked_by_runtime"
     );
 
     let _ = fs::remove_dir_all(&state_dir);
@@ -14782,6 +15477,15 @@ fn task_reconcile_closed_runs_preserves_unevidenced_historical_active_batch() {
         &state_dir,
     );
     assert_eq!(reconcile["status"], "pass");
+    assert_shared_fields_consistency(&reconcile, "reconcile closed runs");
+    assert_operator_contracts_consistency(&reconcile, "reconcile closed runs");
+    assert_eq!(reconcile["next_actions"], serde_json::json!([]));
+    assert!(
+        reconcile["recommended_next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()),
+        "reconcile advisory next actions should remain available outside the release-1 pass contract: {reconcile}"
+    );
     assert_eq!(
         reconcile["summary"]["reconciled_count"], 0,
         "historical reconciliation must not retire closed-task active runs without receipt-backed execution evidence: {reconcile}"
@@ -15225,7 +15929,7 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
         .expect("inspect command should render")
         .contains("vida taskflow run-graph status task-reconcile-unproven-active --json"));
     assert!(
-        reconcile["next_actions"][0]
+        reconcile["recommended_next_actions"][0]
             .as_str()
             .expect("next action should render")
             .contains("vida taskflow run-graph status task-reconcile-unproven-active --json"),
@@ -15809,7 +16513,7 @@ fn task_reconcile_closed_runs_skips_stale_route_and_non_closure_receipt_evidence
         2
     );
     assert!(
-        reconcile["next_actions"][0]
+        reconcile["recommended_next_actions"][0]
             .as_str()
             .expect("next action should render")
             .contains("vida taskflow run-graph status"),
@@ -17092,14 +17796,16 @@ fn task_close_json_surfaces_canonical_feedback_blockers_without_masking_successf
     assert_eq!(
         blocked_json["blocker_codes"],
         serde_json::json!([
-            "close_feedback_canonical_status_blocked",
-            "canonical_gate_blocked"
+            "canonical_gate_blocked",
+            "close_feedback_canonical_status_blocked"
         ])
     );
+    assert_shared_fields_consistency(&blocked_json, "canonical feedback close blocker");
+    assert_operator_contracts_consistency(&blocked_json, "canonical feedback close blocker");
     assert!(blocked_json["next_actions"][0]
         .as_str()
         .expect("next action should render")
-        .contains("Resolve the blocked condition"));
+        .contains("resolve the blocked condition"));
 
     let _ = fs::remove_dir_all(project_root);
 }
@@ -18363,6 +19069,8 @@ fn task_create_rejects_notes_file_for_local_disclosure_boundary() {
         parsed["blocker_codes"],
         serde_json::json!(["untrusted_create_notes_file"])
     );
+    assert_shared_fields_consistency(&parsed, "task create notes-file blocker");
+    assert_operator_contracts_consistency(&parsed, "task create notes-file blocker");
     assert_eq!(parsed["rejected_option"], "--notes-file");
     assert!(
         parsed["next_action"]

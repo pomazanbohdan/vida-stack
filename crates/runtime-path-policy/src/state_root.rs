@@ -12,7 +12,7 @@ impl StateRoot {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, PathPolicyError> {
         let raw = path.as_ref().to_path_buf();
         let metadata =
-            std::fs::symlink_metadata(&raw).map_err(|source| PathPolicyError::StateRootOpen {
+            fs_err::symlink_metadata(&raw).map_err(|source| PathPolicyError::StateRootOpen {
                 path: raw.clone(),
                 source,
             })?;

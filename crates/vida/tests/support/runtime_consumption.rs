@@ -33,6 +33,10 @@ pub(crate) const RECEIPT_HELPER_LANE_STATUS_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_LANE_STATUS";
 pub(crate) const RECEIPT_HELPER_BLOCKER_CODE_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_BLOCKER_CODE";
+pub(crate) const RECEIPT_HELPER_DISPATCH_SURFACE_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DISPATCH_SURFACE";
+pub(crate) const RECEIPT_HELPER_DISPATCH_COMMAND_ENV: &str =
+    "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_DISPATCH_COMMAND";
 pub(crate) const RECEIPT_HELPER_TASK_CLASS_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_TASK_CLASS";
 pub(crate) const RECEIPT_HELPER_LIFECYCLE_STAGE_ENV: &str =
     "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_LIFECYCLE_STAGE";
@@ -160,6 +164,10 @@ pub(crate) fn persist_ready_downstream_receipt_from_env() {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    let dispatch_surface = std::env::var(RECEIPT_HELPER_DISPATCH_SURFACE_ENV)
+        .unwrap_or_else(|_| "vida agent-init".to_string());
+    let dispatch_command = std::env::var(RECEIPT_HELPER_DISPATCH_COMMAND_ENV)
+        .unwrap_or_else(|_| "vida agent-init".to_string());
     let task_class =
         std::env::var(RECEIPT_HELPER_TASK_CLASS_ENV).unwrap_or_else(|_| dispatch_target.clone());
     let lifecycle_stage = std::env::var(RECEIPT_HELPER_LIFECYCLE_STAGE_ENV)
@@ -180,6 +188,8 @@ pub(crate) fn persist_ready_downstream_receipt_from_env() {
         &dispatch_status,
         &lane_status,
         blocker_code,
+        &dispatch_surface,
+        &dispatch_command,
         &task_class,
         &lifecycle_stage,
         &handoff_state,
@@ -242,6 +252,8 @@ fn persist_ready_downstream_receipt(
     dispatch_status: &str,
     lane_status: &str,
     blocker_code: Option<String>,
+    dispatch_surface: &str,
+    dispatch_command: &str,
     task_class: &str,
     lifecycle_stage: &str,
     handoff_state: &str,
@@ -319,8 +331,8 @@ fn persist_ready_downstream_receipt(
             supersedes_receipt_id: None,
             exception_path_receipt_id: None,
             dispatch_kind: "taskflow_pack".to_string(),
-            dispatch_surface: Some("vida agent-init".to_string()),
-            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_surface: Some(dispatch_surface.to_string()),
+            dispatch_command: Some(dispatch_command.to_string()),
             dispatch_packet_path: Some(dispatch_packet_path.to_string()),
             dispatch_result_path: Some(result_path.to_string()),
             blocker_code,

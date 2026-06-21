@@ -20,6 +20,33 @@ pub(crate) const RELEASE1_OPERATOR_CONTRACT_SPEC: OperatorContractSpec = Operato
     status_error_label: "canonical release-1 pass/blocked",
 };
 
+const DOCUMENTED_LOCAL_OPERATOR_BLOCKER_CODES: &[&str] = &[
+    "canonical_gate_blocked",
+    "close_feedback_canonical_status_blocked",
+    "foreign_claim_conflict_blocked",
+    "invalid_task_title_input",
+    "missing_structured_proof_evidence",
+    "proof_blocked_by_runtime",
+    "task_tree_traversal_failed",
+    "untrusted_create_notes_file",
+];
+
+fn canonical_release1_operator_blocker_codes(entries: &[String]) -> Vec<String> {
+    let mut canonical = crate::contract_profile_adapter::canonical_blocker_codes(entries);
+    for entry in entries {
+        let normalized = entry.trim().to_ascii_lowercase();
+        if DOCUMENTED_LOCAL_OPERATOR_BLOCKER_CODES
+            .iter()
+            .any(|code| *code == normalized.as_str())
+        {
+            canonical.push(normalized);
+        }
+    }
+    canonical.sort();
+    canonical.dedup();
+    canonical
+}
+
 pub(crate) struct FinalizedRelease1OperatorTruth {
     pub(crate) status: &'static str,
     pub(crate) blocker_codes: Vec<String>,
@@ -27,6 +54,62 @@ pub(crate) struct FinalizedRelease1OperatorTruth {
     pub(crate) artifact_refs: Value,
     pub(crate) shared_fields: Value,
     pub(crate) operator_contracts: Value,
+}
+
+pub(crate) struct Release1OperatorOutputBuilder {
+    surface: String,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: Option<Value>,
+    extra_fields: Value,
+}
+
+impl Release1OperatorOutputBuilder {
+    pub(crate) fn new(surface: impl Into<String>) -> Self {
+        Self {
+            surface: surface.into(),
+            blocker_codes: Vec::new(),
+            next_actions: Vec::new(),
+            artifact_refs: None,
+            extra_fields: serde_json::json!({}),
+        }
+    }
+
+    pub(crate) fn blocker_codes(mut self, blocker_codes: Vec<String>) -> Self {
+        self.blocker_codes = blocker_codes;
+        self
+    }
+
+    pub(crate) fn next_actions(mut self, next_actions: Vec<String>) -> Self {
+        self.next_actions = next_actions;
+        self
+    }
+
+    pub(crate) fn artifact_refs(mut self, artifact_refs: Value) -> Self {
+        self.artifact_refs = Some(artifact_refs);
+        self
+    }
+
+    pub(crate) fn extra_fields(mut self, extra_fields: Value) -> Self {
+        self.extra_fields = extra_fields;
+        self
+    }
+
+    pub(crate) fn build(self) -> Result<Value, String> {
+        let surface = self.surface;
+        let artifact_refs = self.artifact_refs.unwrap_or_else(|| {
+            serde_json::json!({
+                "surface": surface.clone(),
+            })
+        });
+        build_release1_operator_output_payload(
+            &surface,
+            self.blocker_codes,
+            self.next_actions,
+            artifact_refs,
+            self.extra_fields,
+        )
+    }
 }
 
 pub(crate) const VIDA_GATE_RESULT_SCHEMA_VERSION: &str =
@@ -107,7 +190,7 @@ pub(crate) fn finalize_release1_operator_surface_verdict_with_status(
         .collect::<Vec<_>>();
     let blocker_codes = normalize_blocker_codes(
         &blocker_codes,
-        crate::contract_profile_adapter::canonical_blocker_codes,
+        canonical_release1_operator_blocker_codes,
         Some("unsupported_blocker_code".to_string()),
     );
     let next_actions =
@@ -136,7 +219,7 @@ pub(crate) fn finalize_release1_operator_truth(
 ) -> Result<FinalizedRelease1OperatorTruth, String> {
     let blocker_codes = normalize_blocker_codes(
         &blocker_codes,
-        crate::contract_profile_adapter::canonical_blocker_codes,
+        canonical_release1_operator_blocker_codes,
         Some("unsupported_blocker_code".to_string()),
     );
     let next_actions =
@@ -170,29 +253,45 @@ pub(crate) fn build_release1_operator_output_payload(
     extra_fields: Value,
 ) -> Result<Value, String> {
     let finalized = finalize_release1_operator_truth(blocker_codes, next_actions, artifact_refs)?;
-    let mut payload = serde_json::json!({
-        "surface": surface,
-        "status": finalized.status,
-        "trace_id": finalized.operator_contracts["trace_id"].clone(),
-        "workflow_class": finalized.operator_contracts["workflow_class"].clone(),
-        "risk_tier": finalized.operator_contracts["risk_tier"].clone(),
-        "blocker_codes": finalized.blocker_codes,
-        "next_actions": finalized.next_actions,
-        "artifact_refs": finalized.artifact_refs,
-        "shared_fields": finalized.shared_fields,
-        "operator_contracts": finalized.operator_contracts,
-    });
-    for key in ["trace_id", "workflow_class", "risk_tier"] {
-        payload["shared_fields"][key] = payload["operator_contracts"][key].clone();
-    }
     let extra_object = extra_fields
         .as_object()
         .ok_or_else(|| "release-1 operator output extra_fields must be an object".to_string())?
         .clone();
-    payload
+    let mut payload = Value::Object(extra_object);
+    let payload_object = payload
         .as_object_mut()
-        .ok_or_else(|| "release-1 operator output payload should be an object".to_string())?
-        .extend(extra_object);
+        .ok_or_else(|| "release-1 operator output payload should be an object".to_string())?;
+    payload_object.insert("surface".to_string(), serde_json::json!(surface));
+    payload_object.insert("status".to_string(), serde_json::json!(finalized.status));
+    payload_object.insert(
+        "trace_id".to_string(),
+        finalized.operator_contracts["trace_id"].clone(),
+    );
+    payload_object.insert(
+        "workflow_class".to_string(),
+        finalized.operator_contracts["workflow_class"].clone(),
+    );
+    payload_object.insert(
+        "risk_tier".to_string(),
+        finalized.operator_contracts["risk_tier"].clone(),
+    );
+    payload_object.insert(
+        "blocker_codes".to_string(),
+        serde_json::json!(finalized.blocker_codes),
+    );
+    payload_object.insert(
+        "next_actions".to_string(),
+        serde_json::json!(finalized.next_actions),
+    );
+    payload_object.insert("artifact_refs".to_string(), finalized.artifact_refs);
+    payload_object.insert("shared_fields".to_string(), finalized.shared_fields);
+    payload_object.insert(
+        "operator_contracts".to_string(),
+        finalized.operator_contracts,
+    );
+    for key in ["trace_id", "workflow_class", "risk_tier"] {
+        payload["shared_fields"][key] = payload["operator_contracts"][key].clone();
+    }
     if let Some(error) = shared_operator_output_contract_parity_error(&payload) {
         return Err(error.to_string());
     }
@@ -218,9 +317,7 @@ pub(crate) fn canonical_release1_operator_contract_status(value: &Value) -> Opti
 }
 
 pub(crate) fn canonical_release1_blocker_code_entries(value: &Value) -> Option<Vec<String>> {
-    canonical_blocker_code_entries(value, |entries| {
-        crate::release1_contracts::canonical_blocker_code_list(entries)
-    })
+    canonical_blocker_code_entries(value, canonical_release1_operator_blocker_codes)
 }
 
 pub(crate) fn release1_operator_contracts_consistency_error(
@@ -252,7 +349,7 @@ pub(crate) fn shared_operator_output_contract_parity_error(
     operator_output::operator_contracts::operator_output_contract_parity_error(
         &RELEASE1_OPERATOR_CONTRACT_SPEC,
         summary_json,
-        |entries| crate::release1_contracts::canonical_blocker_code_list(entries),
+        canonical_release1_operator_blocker_codes,
     )
 }
 
@@ -263,7 +360,7 @@ mod tests {
         canonical_release1_operator_contract_status,
         finalize_release1_operator_surface_verdict_with_status, finalize_release1_operator_truth,
         release1_operator_contracts_consistency_error,
-        shared_operator_output_contract_parity_error,
+        shared_operator_output_contract_parity_error, Release1OperatorOutputBuilder,
     };
     use serde_json::json;
 
@@ -282,6 +379,98 @@ mod tests {
         assert_eq!(payload["shared_fields"]["status"], "blocked");
         assert_eq!(payload["operator_contracts"]["status"], "blocked");
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn release1_operator_output_builder_protects_contract_keys_from_extra_fields() {
+        let payload = Release1OperatorOutputBuilder::new("surface")
+            .blocker_codes(vec!["missing_structured_proof_evidence".to_string()])
+            .next_actions(vec!["attach proof".to_string()])
+            .artifact_refs(json!({"surface": "surface", "task_id": "task-1"}))
+            .extra_fields(json!({
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "shared_fields": {"status": "pass"},
+                "operator_contracts": {"status": "pass"},
+                "extra": true,
+            }))
+            .build()
+            .expect("payload");
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            json!(["missing_structured_proof_evidence"])
+        );
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(payload["extra"], true);
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn release1_operator_output_builder_uses_same_contract_skeleton_for_pass_and_blocked() {
+        let pass_payload = Release1OperatorOutputBuilder::new("surface")
+            .extra_fields(json!({"payload_kind": "pass"}))
+            .build()
+            .expect("pass payload");
+        let blocked_payload = Release1OperatorOutputBuilder::new("surface")
+            .blocker_codes(vec!["missing_artifact".to_string()])
+            .next_actions(vec!["inspect artifact".to_string()])
+            .extra_fields(json!({"payload_kind": "blocked"}))
+            .build()
+            .expect("blocked payload");
+        let mut pass_keys = pass_payload
+            .as_object()
+            .expect("pass payload object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut blocked_keys = blocked_payload
+            .as_object()
+            .expect("blocked payload object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        pass_keys.sort();
+        blocked_keys.sort();
+
+        assert_eq!(pass_keys, blocked_keys);
+        for key in [
+            "status",
+            "trace_id",
+            "workflow_class",
+            "risk_tier",
+            "blocker_codes",
+            "next_actions",
+            "artifact_refs",
+        ] {
+            assert_eq!(
+                pass_payload[key], pass_payload["shared_fields"][key],
+                "pass shared_fields should mirror {key}"
+            );
+            assert_eq!(
+                blocked_payload[key], blocked_payload["shared_fields"][key],
+                "blocked shared_fields should mirror {key}"
+            );
+            assert_eq!(
+                pass_payload[key], pass_payload["operator_contracts"][key],
+                "pass operator_contracts should mirror {key}"
+            );
+            assert_eq!(
+                blocked_payload[key], blocked_payload["operator_contracts"][key],
+                "blocked operator_contracts should mirror {key}"
+            );
+        }
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&pass_payload),
+            None
+        );
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&blocked_payload),
+            None
+        );
     }
 
     #[test]
@@ -311,6 +500,20 @@ mod tests {
         assert_eq!(
             canonical_release1_blocker_code_entries(&json!(["migration_required"])),
             Some(vec!["migration_required".to_string()])
+        );
+        assert_eq!(
+            canonical_release1_blocker_code_entries(&json!(["missing_structured_proof_evidence"])),
+            Some(vec!["missing_structured_proof_evidence".to_string()])
+        );
+        assert_eq!(
+            canonical_release1_blocker_code_entries(&json!([
+                "foreign_claim_conflict_blocked",
+                "task_tree_traversal_failed"
+            ])),
+            Some(vec![
+                "foreign_claim_conflict_blocked".to_string(),
+                "task_tree_traversal_failed".to_string()
+            ])
         );
         assert_eq!(
             release1_operator_contracts_consistency_error("pass", &[], &[]),

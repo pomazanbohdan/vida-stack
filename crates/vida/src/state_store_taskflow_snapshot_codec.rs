@@ -111,8 +111,8 @@ pub(super) fn canonical_edge_to_task_dependency_record(
     dependency: &CanonicalDependencyEdge,
 ) -> TaskDependencyRecord {
     TaskDependencyRecord {
-        issue_id: dependency.issue_id.0.clone(),
-        depends_on_id: dependency.depends_on_id.0.clone(),
+        issue_id: dependency.issue_id.as_str().to_string(),
+        depends_on_id: dependency.depends_on_id.as_str().to_string(),
         edge_type: dependency.dependency_type.clone(),
         created_at: "canonical-taskflow-snapshot".to_string(),
         created_by: "taskflow-state-fs".to_string(),
@@ -124,7 +124,7 @@ pub(super) fn canonical_edge_to_task_dependency_record(
 pub(super) fn canonical_snapshot_row_to_task_record(
     task: &CanonicalTaskRecord,
 ) -> Result<TaskRecord, StateStoreError> {
-    let task_id = task.id.0.trim().to_string();
+    let task_id = task.id.as_str().trim().to_string();
     if task_id.is_empty() {
         return Err(StateStoreError::InvalidCanonicalTaskflowExport {
             reason: "canonical taskflow snapshot task id is empty".to_string(),
@@ -217,7 +217,7 @@ pub(super) fn task_records_from_canonical_snapshot_rows(
     let mut dependencies_by_issue = BTreeMap::<String, Vec<TaskDependencyRecord>>::new();
     for dependency in &snapshot.dependencies {
         dependencies_by_issue
-            .entry(dependency.issue_id.0.clone())
+            .entry(dependency.issue_id.as_str().to_string())
             .or_default()
             .push(canonical_edge_to_task_dependency_record(dependency));
     }
@@ -225,7 +225,7 @@ pub(super) fn task_records_from_canonical_snapshot_rows(
     let mut task_records = Vec::with_capacity(snapshot.tasks.len());
     for task in &snapshot.tasks {
         let mut task_record = canonical_snapshot_row_to_task_record(task)?;
-        if let Some(dependencies) = dependencies_by_issue.remove(&task.id.0) {
+        if let Some(dependencies) = dependencies_by_issue.remove(task.id.as_str()) {
             task_record.dependencies = dependencies;
         }
         task_records.push(task_record);

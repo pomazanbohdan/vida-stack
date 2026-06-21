@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("script-check", "quick", "focused-nextest", "package-nextest", "workspace-nextest", "vida-bin-shards", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy", "cargo-env-check")]
+    [ValidateSet("script-check", "quick", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy")]
     [string]$Mode = "quick",
     [string]$TestFilter = "",
     [string]$ReleaseVersion = "",
@@ -17,10 +17,9 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 $Records = New-Object System.Collections.Generic.List[object]
 $OriginalCargoTargetDir = $env:CARGO_TARGET_DIR
-. (Join-Path $PSScriptRoot "vida-windows-env.ps1")
 
 function Test-IsWindowsHost {
-    return Test-VidaWindowsHost
+    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 }
 
 function Set-EnvIfMissing {
@@ -61,11 +60,90 @@ function Add-PathEntries {
 }
 
 function Initialize-WindowsHostEnvironment {
-    Initialize-VidaWindowsEnvironment -NormalizeBuildTemp
+    if (-not (Test-IsWindowsHost)) {
+        return
+    }
+
+    $windowsRoot = $env:SystemRoot
+    if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
+        $windowsRoot = $env:windir
+    }
+    if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
+        $windowsRoot = "C:\Windows"
+    }
+    Set-EnvIfMissing "SystemRoot" $windowsRoot
+    Set-EnvIfMissing "windir" $windowsRoot
+    Set-EnvIfMissing "ComSpec" (Join-Path $windowsRoot "System32\cmd.exe")
+    Set-EnvIfMissing "ProgramData" "C:\ProgramData"
+    Set-EnvIfMissing "ProgramFiles" "C:\Program Files"
+    Set-EnvIfMissing "ProgramFiles(x86)" "C:\Program Files (x86)"
+
+    $userName = $env:USERNAME
+    if ([string]::IsNullOrWhiteSpace($userName)) {
+        $userName = [System.Environment]::UserName
+    }
+    $userProfile = $env:USERPROFILE
+    if ([string]::IsNullOrWhiteSpace($userProfile) -and
+        -not [string]::IsNullOrWhiteSpace($env:HOMEDRIVE) -and
+        -not [string]::IsNullOrWhiteSpace($env:HOMEPATH)) {
+        $userProfile = Join-Path $env:HOMEDRIVE $env:HOMEPATH
+    }
+    if ([string]::IsNullOrWhiteSpace($userProfile) -and -not [string]::IsNullOrWhiteSpace($userName)) {
+        $userProfile = Join-Path "C:\Users" $userName
+    }
+    Set-EnvIfMissing "USERPROFILE" $userProfile
+    if (-not [string]::IsNullOrWhiteSpace($userProfile)) {
+        Set-EnvIfMissing "HOMEDRIVE" ([System.IO.Path]::GetPathRoot($userProfile).TrimEnd('\'))
+        Set-EnvIfMissing "HOMEPATH" $userProfile.Substring(([System.IO.Path]::GetPathRoot($userProfile)).Length - 1)
+        Set-EnvIfMissing "LOCALAPPDATA" (Join-Path $userProfile "AppData\Local")
+        Set-EnvIfMissing "APPDATA" (Join-Path $userProfile "AppData\Roaming")
+        Set-EnvIfMissing "TEMP" (Join-Path $userProfile "AppData\Local\Temp")
+        Set-EnvIfMissing "TMP" $env:TEMP
+        if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) {
+            New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+        }
+    }
+
+    $pathEntries = @(
+        (Join-Path $windowsRoot "System32"),
+        $windowsRoot,
+        (Join-Path $windowsRoot "System32\Wbem"),
+        (Join-Path $windowsRoot "System32\WindowsPowerShell\v1.0"),
+        (Join-Path $env:ProgramFiles "PowerShell\7"),
+        "C:\Program Files\Git\cmd",
+        "C:\Program Files\Git\bin",
+        (Join-Path $userProfile ".cargo\bin"),
+        (Join-Path $env:LOCALAPPDATA "vida-stack\current\bin")
+    )
+    Add-PathEntries $pathEntries
 }
 
 function Import-VisualStudioBuildEnvironment {
-    Import-VidaMsvcEnvironment
+    if (-not (Test-IsWindowsHost)) {
+        return
+    }
+    if ((Get-Command "cl.exe" -ErrorAction SilentlyContinue) -and -not [string]::IsNullOrWhiteSpace($env:VCINSTALLDIR)) {
+        return
+    }
+
+    $vcvarsCandidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"),
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"),
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"),
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat")
+    )
+    $vcvarsPath = $vcvarsCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+    if (-not $vcvarsPath) {
+        return
+    }
+
+    $cmdPath = if ([string]::IsNullOrWhiteSpace($env:ComSpec)) { "C:\Windows\System32\cmd.exe" } else { $env:ComSpec }
+    & $cmdPath /d /s /c "`"$vcvarsPath`" >nul && set" | ForEach-Object {
+        if ($_ -match '^(.*?)=(.*)$') {
+            Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+        }
+    }
+    Initialize-WindowsHostEnvironment
 }
 
 function Test-ModeNeedsWindowsBuildEnvironment {
@@ -76,21 +154,34 @@ function Test-ModeNeedsWindowsBuildEnvironment {
         "focused-nextest",
         "package-nextest",
         "workspace-nextest",
-        "vida-bin-shards",
         "doc-test",
         "build-debug",
         "runtime-smoke",
-        "release-package",
-        "release-install",
-        "cargo-env-check"
+        "release-install"
     )
 }
 
 function Resolve-InstalledVidaPath {
-    $installedVidaPath = Join-Path $env:LOCALAPPDATA "vida-stack\current\bin\vida.exe"
-    if (Test-Path -LiteralPath $installedVidaPath) {
-        return $installedVidaPath
+    if (Test-IsWindowsHost) {
+        if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+            $installedVidaPath = Join-Path $env:LOCALAPPDATA "vida-stack\current\bin\vida.exe"
+            if (Test-Path -LiteralPath $installedVidaPath) {
+                return $installedVidaPath
+            }
+        }
+    } else {
+        $homePath = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+        if ([string]::IsNullOrWhiteSpace($homePath)) {
+            $homePath = $env:HOME
+        }
+        if (-not [string]::IsNullOrWhiteSpace($homePath)) {
+            $installedVidaPath = Join-Path $homePath ".local/share/vida-stack/current/bin/vida"
+            if (Test-Path -LiteralPath $installedVidaPath) {
+                return $installedVidaPath
+            }
+        }
     }
+
     return Resolve-CommandPath "vida"
 }
 
@@ -99,8 +190,8 @@ Initialize-WindowsHostEnvironment
 function Show-Help {
     @"
 Usage:
-  .\scripts\vida-dev-gate.cmd -Mode <mode> [-Json] [-Jobs <n>] [-TestFilter <filter>]
-  .\scripts\vida-dev-gate.cmd -Mode release-package -SkipBuild -Windows -ReleaseBinDir <dir> [-ReleaseVersion vX.Y.Z] [-Json]
+  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode <mode> [-Json] [-Jobs <n>] [-TestFilter <filter>]
+  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -SkipBuild -Windows -ReleaseBinDir <dir> [-ReleaseVersion vX.Y.Z] [-Json]
 
 Modes:
   script-check      No-Cargo proof for diffs, runtime boundaries, and script syntax.
@@ -108,18 +199,15 @@ Modes:
   focused-nextest   Focused vida package test proof; requires -TestFilter.
   package-nextest   Full vida package test proof with the default nextest profile.
   workspace-nextest Workspace nextest proof with the CI profile.
-  vida-bin-shards   Full vida --bin test proof split by top-level test module.
   doc-test          Workspace Rust doc tests.
   build-debug       Debug build of supported runtime entrypoints.
   runtime-smoke     Build debug vida and run status from the effective target dir.
   release-package   Build release archives with native PowerShell scripts/build-release.ps1.
   release-install   Installed launcher proof through vida release install.
   target-dir-policy Print the effective Cargo target directory policy.
-  cargo-env-check   Validate Windows Cargo/MSVC command and temp environment.
 
 Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
-  Windows wrapper mode resolves the current PowerShell Core pwsh.exe first; set VIDA_PWSH to override.
   release-package accepts explicit -SkipBuild, -Windows, -ReleaseBinDir, -ReleaseVersion, and -ReleaseSuffix flags for packaging already-built release binaries.
   release-package also honors VIDA_RELEASE_SKIP_BUILD=1, VIDA_RELEASE_BIN_DIR=<dir>, and VIDA_RELEASE_SUFFIX=<suffix> for compatibility.
   JSON mode records operation timing and log artifact paths under .vida/data/state/command-timing.
@@ -184,12 +272,43 @@ function Resolve-PrimaryWorktreeStateDir {
     return $null
 }
 
+function Resolve-PrimaryWorktreeStateDir {
+    if (-not [string]::IsNullOrWhiteSpace($env:VIDA_STATE_DIR)) {
+        return $env:VIDA_STATE_DIR
+    }
+
+    try {
+        $commonDirOutput = & $GitPath -C $RootDir rev-parse --path-format=absolute --git-common-dir 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commonDirOutput)) {
+            return $null
+        }
+
+        $commonDir = [System.IO.Path]::GetFullPath(($commonDirOutput | Select-Object -First 1).Trim())
+        if ((Split-Path -Leaf $commonDir) -ne ".git") {
+            return $null
+        }
+
+        $primaryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $commonDir))
+        $normalizedRoot = [System.IO.Path]::GetFullPath($RootDir)
+        if ($primaryRoot -eq $normalizedRoot) {
+            return $null
+        }
+
+        $candidateStateDir = Join-Path $primaryRoot ".vida\data\state"
+        if (Test-Path -LiteralPath $candidateStateDir) {
+            return $candidateStateDir
+        }
+    } catch {
+        return $null
+    }
+
+    return $null
+}
+
 $CargoTargetDirState = Resolve-CargoTargetDirPolicy
 $env:CARGO_TARGET_DIR = $CargoTargetDirState.effective_cargo_target_dir
 $DebugVidaPath = Join-Path $CargoTargetDirState.effective_cargo_target_dir "debug\vida.exe"
 $ReleaseVidaPath = Join-Path $CargoTargetDirState.effective_cargo_target_dir "release\vida.exe"
-$VidaBinTopLevelShardSplitThreshold = 200
-$VidaBinNestedShardSplitThreshold = 50
 
 function Resolve-CommandPath {
     param(
@@ -212,8 +331,10 @@ function Resolve-CommandPath {
 }
 
 $GitPath = Resolve-CommandPath "git" @("C:\Program Files\Git\cmd\git.exe")
-$CargoPath = Resolve-VidaCommandPath "cargo" @((Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe")) -Required
-$PwshPath = Resolve-VidaPowerShellPath -Required
+$PwshPath = Resolve-CommandPath "pwsh" @(
+    "C:\Program Files\PowerShell\7\pwsh.exe",
+    "$env:ProgramFiles\PowerShell\7\pwsh.exe"
+)
 $BashPath = Resolve-CommandPath "bash" @(
     "C:\Program Files\Git\bin\bash.exe",
     "$env:ProgramFiles\Git\bin\bash.exe"
@@ -427,15 +548,15 @@ function Get-ChangedBashScripts {
 
 function New-NextestCommand {
     param(
-        [string[]]$NextestArgs
+        [string[]]$Args
     )
 
     $command = New-Object System.Collections.Generic.List[string]
-    $command.Add($CargoPath)
+    $command.Add("cargo")
     $command.Add("nextest")
     $command.Add("run")
     $command.Add("--locked")
-    foreach ($arg in $NextestArgs) {
+    foreach ($arg in $Args) {
         $command.Add($arg)
     }
     if ($Jobs -gt 0) {
@@ -443,98 +564,6 @@ function New-NextestCommand {
         $command.Add([string]$Jobs)
     }
     return $command.ToArray()
-}
-
-function Get-VidaBinShardSplitThreshold {
-    param([int]$Depth)
-
-    if ($Depth -le 1) {
-        return $VidaBinTopLevelShardSplitThreshold
-    }
-    return $VidaBinNestedShardSplitThreshold
-}
-
-function Add-VidaBinShardFilters {
-    param(
-        [string[]]$TestPaths,
-        [int]$Depth,
-        [System.Collections.Generic.List[string]]$Filters
-    )
-
-    $groups = @{}
-    foreach ($testPath in $TestPaths) {
-        [string[]]$segments = $testPath -split '::'
-        if ($segments.Count -lt $Depth) {
-            continue
-        }
-        $prefix = ($segments[0..($Depth - 1)] -join '::')
-        if (-not $groups.ContainsKey($prefix)) {
-            $groups[$prefix] = New-Object System.Collections.Generic.List[string]
-        }
-        $groups[$prefix].Add($testPath)
-    }
-
-    foreach ($prefix in ($groups.Keys | Sort-Object)) {
-        [string[]]$groupPaths = @($groups[$prefix])
-        $hasChildren = $false
-        foreach ($testPath in $groupPaths) {
-            if (($testPath -split '::').Count -gt $Depth) {
-                $hasChildren = $true
-                break
-            }
-        }
-
-        if ($groupPaths.Count -gt (Get-VidaBinShardSplitThreshold -Depth $Depth) -and $hasChildren) {
-            Add-VidaBinShardFilters -TestPaths $groupPaths -Depth ($Depth + 1) -Filters $Filters
-        } elseif ($hasChildren) {
-            $Filters.Add(("{0}::" -f $prefix))
-        } else {
-            $Filters.Add($prefix)
-        }
-    }
-}
-
-function Get-VidaBinTestShardFilters {
-    $listOutput = & $CargoPath test --locked -p vida --bin vida -- --list
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
-
-    $testPaths = New-Object System.Collections.Generic.List[string]
-    foreach ($line in $listOutput) {
-        if ($line -match '^([A-Za-z0-9_]+::.+): test$') {
-            $testPaths.Add($Matches[1])
-        }
-    }
-
-    $filters = New-Object System.Collections.Generic.List[string]
-    Add-VidaBinShardFilters -TestPaths ([string[]]@($testPaths)) -Depth 1 -Filters $filters
-    return [string[]]@($filters)
-}
-
-function Invoke-VidaBinTestShards {
-    [string[]]$filters = @(Get-VidaBinTestShardFilters)
-    if ($filters.Count -eq 0) {
-        Write-Error "No vida --bin test shards were discovered."
-        exit 2
-    }
-
-    foreach ($filter in $filters) {
-        $operationName = $filter -replace ':+$', ''
-        $operationId = "cargo-test-vida-bin-$($operationName -replace '[^A-Za-z0-9_.-]', '-')"
-        Invoke-Timed $operationId @(
-            $CargoPath,
-            "test",
-            "--locked",
-            "-p",
-            "vida",
-            "--bin",
-            "vida",
-            $filter,
-            "--",
-            "--test-threads=1"
-        )
-    }
 }
 
 if ($Help) {
@@ -559,27 +588,6 @@ try {
             classification = "fast"
             target_dir_policy = $CargoTargetDirState.target_dir_policy
             effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
-            artifact_refs = @()
-        })
-    } elseif ($Mode -eq "cargo-env-check") {
-        $Records.Add([pscustomobject]@{
-            operation_id = "cargo-env-check"
-            command_or_surface = "scripts/vida-dev-gate.ps1 -Mode cargo-env-check"
-            cwd_or_context = $RootDir
-            started_at = (Get-Date).ToString("o")
-            duration_ms = 0
-            exit_status = "pass"
-            classification = "fast"
-            target_dir_policy = $CargoTargetDirState.target_dir_policy
-            effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
-            cargo_path = $CargoPath
-            pwsh_path = $PwshPath
-            git_path = $GitPath
-            cl_path = (Resolve-VidaCommandPath "cl.exe")
-            link_path = (Resolve-VidaCommandPath "link.exe")
-            temp = $env:TEMP
-            tmp = $env:TMP
-            vcinstalldir = $env:VCINSTALLDIR
             artifact_refs = @()
         })
     } elseif ($Mode -eq "script-check") {
@@ -648,28 +656,26 @@ try {
         }
     } elseif ($Mode -eq "quick") {
         Invoke-Timed "git-diff-check" @($GitPath, "diff", "--check")
-        Invoke-Timed "cargo-fmt-check" @($CargoPath, "fmt", "-p", "vida", "--", "--check")
-        Invoke-Timed "cargo-check-vida" @($CargoPath, "check", "--locked", "-p", "vida")
+        Invoke-Timed "cargo-fmt-check" @("cargo", "fmt", "-p", "vida", "--", "--check")
+        Invoke-Timed "cargo-check-vida" @("cargo", "check", "--locked", "-p", "vida")
     } elseif ($Mode -eq "focused-nextest") {
         if ($TestFilter.Trim().Length -eq 0) {
             Write-Error "-Mode focused-nextest requires -TestFilter <filter>."
             exit 2
         }
         if ($TestFilter.Trim().Length -gt 0) {
-            Invoke-Timed "nextest-focused" (New-NextestCommand -NextestArgs @("-p", "vida", "--profile", "default", $TestFilter))
+            Invoke-Timed "nextest-focused" (New-NextestCommand @("-p", "vida", "--profile", "default", $TestFilter))
         }
     } elseif ($Mode -eq "package-nextest") {
-        Invoke-Timed "nextest-package-vida" (New-NextestCommand -NextestArgs @("-p", "vida", "--profile", "default"))
+        Invoke-Timed "nextest-package-vida" (New-NextestCommand @("-p", "vida", "--profile", "default"))
     } elseif ($Mode -eq "workspace-nextest") {
-        Invoke-Timed "nextest-workspace" (New-NextestCommand -NextestArgs @("--workspace", "--profile", "ci"))
-    } elseif ($Mode -eq "vida-bin-shards") {
-        Invoke-VidaBinTestShards
+        Invoke-Timed "nextest-workspace" (New-NextestCommand @("--workspace", "--profile", "ci"))
     } elseif ($Mode -eq "doc-test") {
-        Invoke-Timed "cargo-doc-tests" @($CargoPath, "test", "--workspace", "--doc", "--locked")
+        Invoke-Timed "cargo-doc-tests" @("cargo", "test", "--workspace", "--doc", "--locked")
     } elseif ($Mode -eq "build-debug") {
-        Invoke-Timed "cargo-build-debug-entrypoints" @($CargoPath, "build", "--locked", "-p", "vida", "-p", "taskflow-cli", "-p", "docflow-cli", "-p", "vida-pi-agent")
+        Invoke-Timed "cargo-build-debug-entrypoints" @("cargo", "build", "--locked", "-p", "vida", "-p", "taskflow-cli", "-p", "docflow-cli", "-p", "vida-pi-agent")
     } elseif ($Mode -eq "runtime-smoke") {
-        Invoke-Timed "cargo-build-debug" @($CargoPath, "build", "--locked", "-p", "vida")
+        Invoke-Timed "cargo-build-debug" @("cargo", "build", "--locked", "-p", "vida")
         Invoke-Timed "debug-vida-status" @($DebugVidaPath, "status", "--json")
     } elseif ($Mode -eq "release-package") {
         $releaseCommand = New-Object System.Collections.Generic.List[string]

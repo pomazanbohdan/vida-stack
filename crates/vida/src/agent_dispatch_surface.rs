@@ -821,6 +821,13 @@ fn host_bridge_completion_lane_args(
     result_file: Option<&Path>,
     receipt_id_override: Option<&str>,
     state_dir: Option<&Path>,
+    result_file: Option<&Path>,
+    decision: Option<&str>,
+    verdict: Option<&str>,
+    allowed_next_node: Option<&str>,
+    blocker_codes: Option<&str>,
+    blocker_code: &[String],
+    rework_target: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let run_id = payload["host_bridge"]["run_id"]
         .as_str()
@@ -846,19 +853,33 @@ fn host_bridge_completion_lane_args(
         "--host-agent-id".to_string(),
         host_agent_id.to_string(),
     ];
-    for (flag, value) in [
-        ("--decision", decision),
-        ("--verdict", verdict),
-        ("--allowed-next-node", allowed_next_node),
-        ("--blocker-codes", blocker_codes_json),
-        ("--rework-target", rework_target),
-    ] {
-        if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
-            args.push(flag.to_string());
-            args.push(value.to_string());
-        }
+    if let Some(result_file) = result_file {
+        args.push("--host-bridge-result-file".to_string());
+        args.push(result_file.display().to_string());
     }
-    for blocker_code in blocker_codes
+    if let Some(decision) = decision.map(str::trim).filter(|value| !value.is_empty()) {
+        args.push("--decision".to_string());
+        args.push(decision.to_string());
+    }
+    if let Some(verdict) = verdict.map(str::trim).filter(|value| !value.is_empty()) {
+        args.push("--verdict".to_string());
+        args.push(verdict.to_string());
+    }
+    if let Some(allowed_next_node) = allowed_next_node
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--allowed-next-node".to_string());
+        args.push(allowed_next_node.to_string());
+    }
+    if let Some(blocker_codes) = blocker_codes
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--blocker-codes".to_string());
+        args.push(blocker_codes.to_string());
+    }
+    for blocker_code in blocker_code
         .iter()
         .map(String::as_str)
         .map(str::trim)
@@ -867,12 +888,13 @@ fn host_bridge_completion_lane_args(
         args.push("--blocker-code".to_string());
         args.push(blocker_code.to_string());
     }
-    if let Some(result_file) = result_file {
-        args.push("--host-bridge-result-file".to_string());
-        args.push(result_file.display().to_string());
+    if let Some(rework_target) = rework_target
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("--rework-target".to_string());
+        args.push(rework_target.to_string());
     }
-    args.push("--host-bridge-summary".to_string());
-    args.push(summary.to_string());
     if let Some(state_dir) = state_dir {
         args.push("--state-dir".to_string());
         args.push(state_dir.display().to_string());
@@ -1176,7 +1198,7 @@ async fn attach_host_bridge_implementation_artifacts(
         .as_str()
         .map(human_command)
         .unwrap_or_else(|| {
-            "vida lane complete <run-id> --host-bridge-request <request-path> --decision <decision> --verdict <verdict> --allowed-next-node <node> --blocker-codes <json-or-list>".to_string()
+            "vida lane complete <run-id> --receipt-id <receipt-id> --host-bridge-request <request-path> --host-agent-id <host-agent-id> --host-bridge-summary <summary>".to_string()
         });
     let artifact_refs_payload = serde_json::json!({
         "request_path": command.request.display().to_string(),
@@ -4381,6 +4403,13 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     command.result_file.as_deref(),
                     command.receipt_id.as_deref(),
                     command.state_dir.as_deref(),
+                    command.result_file.as_deref(),
+                    command.decision.as_deref(),
+                    command.verdict.as_deref(),
+                    command.allowed_next_node.as_deref(),
+                    command.blocker_codes.as_deref(),
+                    &command.blocker_code,
+                    command.rework_target.as_deref(),
                 ) {
                     Ok(args) => args,
                     Err(error) => {
@@ -5358,7 +5387,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_adapter_completion_command_uses_packet_next_target() {
+    fn host_bridge_adapter_completion_command_uses_supported_receipt_command() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -5413,10 +5442,16 @@ mod tests {
             host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
 
         assert_eq!(payload["status"], "pass");
-        assert!(payload["host_bridge"]["completion_command"]
+        let completion_command = payload["host_bridge"]["completion_command"]
             .as_str()
-            .expect("completion command")
-            .contains("--allowed-next-node designer --blocker-codes []"));
+            .expect("completion command");
+        assert!(completion_command.starts_with("vida lane complete run-analyst "));
+        assert!(completion_command.contains("--receipt-id run-analyst-analyst-host-bridge-receipt"));
+        assert!(completion_command.contains("--host-bridge-request"));
+        assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
+        assert!(completion_command.contains("--host-bridge-summary"));
+        assert!(!completion_command.contains("--allowed-next-node"));
+        assert!(!completion_command.contains("--blocker-codes"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -6316,6 +6351,13 @@ mod tests {
             Some(std::path::Path::new("result.json")),
             Some("receipt-1"),
             Some(std::path::Path::new("state-dir")),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
         )
         .expect("completion lane args should render");
 
@@ -8889,6 +8931,61 @@ mod tests {
         assert_eq!(preview.selected_lanes[1].task_id, "defect-a");
         assert_eq!(preview.selected_lanes[1].role_label, "tester");
         assert_eq!(preview.selected_lanes[1].task_class, "verification");
+        assert!(preview.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn dev_team_validation_step_uses_coach_assignment_alias_truth() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "runtime_defect_remediation",
+            "work_item_flow_bindings": {
+                "runtime_defect": "runtime_defect_remediation"
+            },
+            "roles": [
+                {"role_id": "coach_validator", "runtime_role": "coach", "task_classes": ["validation"]}
+            ],
+            "flows": [
+                {
+                    "flow_id": "runtime_defect_remediation",
+                    "enabled": true,
+                    "default": true,
+                    "work_item_bindings": ["runtime_defect"],
+                    "ordered_steps": [
+                        {"role_id": "coach_validator", "runtime_role": "coach", "task_class": "validation"}
+                    ]
+                }
+            ]
+        });
+
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: Some("runtime-defect-a".to_string()),
+                ready: vec![candidate_with_type(
+                    "runtime-defect-a",
+                    "Runtime defect A",
+                    true,
+                    false,
+                    "runtime_defect",
+                )],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            1,
+            1,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 1);
+        assert_eq!(preview.selected_lanes[0].runtime_role, "coach");
+        assert_eq!(preview.selected_lanes[0].task_class, "validation");
+        assert_eq!(
+            preview.selected_lanes[0].selection_truth.selected_carrier,
+            "coach-seat"
+        );
         assert!(preview.blocker_codes.is_empty());
     }
 

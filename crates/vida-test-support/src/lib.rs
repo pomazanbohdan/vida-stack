@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 const DEFAULT_TIMEOUT_ARGS: [&str; 3] = ["-k", "5s", "120s"];
 pub const STATE_LOCK_ERROR_MESSAGE: &str = "LOCK is already locked";
+const FIXTURE_CREATED_AT: &str = "2026-03-08T00:00:00Z";
 
 struct RecoveringMutex(Mutex<()>);
 
@@ -40,6 +41,14 @@ pub fn bounded_binary_command(binary_path: impl AsRef<OsStr>) -> Command {
         command.arg(binary_path);
         command
     }
+}
+
+pub fn temp_fixture_dir() -> assert_fs::TempDir {
+    assert_fs::TempDir::new().expect("assert_fs temp dir should create")
+}
+
+pub fn assert_text_snapshot(actual: impl AsRef<str>, expected: &str) {
+    snapbox::Assert::new().eq(actual.as_ref(), expected);
 }
 
 #[cfg(unix)]
@@ -78,6 +87,14 @@ pub fn simulated_state_lock_output() -> Output {
     }
 }
 
+pub fn simulated_success_output(stdout: impl Into<Vec<u8>>) -> Output {
+    Output {
+        status: successful_exit_status(),
+        stdout: stdout.into(),
+        stderr: Vec::new(),
+    }
+}
+
 #[cfg(unix)]
 fn failing_exit_status() -> ExitStatus {
     use std::os::unix::process::ExitStatusExt;
@@ -92,6 +109,20 @@ fn failing_exit_status() -> ExitStatus {
     ExitStatus::from_raw(1)
 }
 
+#[cfg(unix)]
+fn successful_exit_status() -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+
+    ExitStatus::from_raw(0)
+}
+
+#[cfg(windows)]
+fn successful_exit_status() -> ExitStatus {
+    use std::os::windows::process::ExitStatusExt;
+
+    ExitStatus::from_raw(0)
+}
+
 pub fn temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -100,6 +131,153 @@ pub fn temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{prefix}-{nanos}"));
     fs::create_dir_all(&path).expect("temp dir should create");
     path
+}
+
+#[derive(Debug, Clone)]
+pub struct LargeBacklogFixture {
+    pub root_id: String,
+    pub direct_child_count: usize,
+    pub total_task_count: usize,
+    pub open_child_count: usize,
+    pub closed_child_count: usize,
+    pub in_progress_child_count: usize,
+    pub blocked_open_child_count: usize,
+    pub primary_ready_id: String,
+    pub blocked_task_id: String,
+}
+
+pub fn write_large_backlog_jsonl(
+    path: &Path,
+    direct_child_count: usize,
+) -> io::Result<LargeBacklogFixture> {
+    assert!(
+        direct_child_count >= 12,
+        "large backlog fixture needs at least one full status bucket"
+    );
+
+    let root_id = "large-backlog-root".to_string();
+    let mut lines = Vec::with_capacity(direct_child_count + 1);
+    lines.push(task_json_line(
+        &root_id,
+        "Large backlog root",
+        "root",
+        "open",
+        "epic",
+        0,
+        &[],
+    ));
+
+    let mut open_child_count = 0;
+    let mut closed_child_count = 0;
+    let mut in_progress_child_count = 0;
+    let mut blocked_open_child_count = 0;
+    let mut primary_ready_id = String::new();
+    let mut blocked_task_id = String::new();
+
+    for index in 0..direct_child_count {
+        let task_id = format!("large-task-{index:04}");
+        let status_bucket = index % 10;
+        let status = match status_bucket {
+            0 => {
+                closed_child_count += 1;
+                "closed"
+            }
+            1 => {
+                in_progress_child_count += 1;
+                "in_progress"
+            }
+            _ => {
+                open_child_count += 1;
+                "open"
+            }
+        };
+        let is_blocked_open = status == "open" && status_bucket == 2;
+        if is_blocked_open {
+            blocked_open_child_count += 1;
+            if blocked_task_id.is_empty() {
+                blocked_task_id = task_id.clone();
+            }
+        } else if status == "open" && primary_ready_id.is_empty() {
+            primary_ready_id = task_id.clone();
+        }
+
+        let priority = if primary_ready_id == task_id { 0 } else { 5 };
+        let title = format!("Large backlog task {index:04}");
+        let description = format!("fixture task {index:04}");
+        let blocker_id = index
+            .checked_sub(1)
+            .map(|previous| format!("large-task-{previous:04}"));
+        let mut dependencies = vec![DependencySpec {
+            issue_id: &task_id,
+            depends_on_id: &root_id,
+            edge_type: "parent-child",
+        }];
+        if let (true, Some(blocker_id)) = (is_blocked_open, blocker_id.as_deref()) {
+            dependencies.push(DependencySpec {
+                issue_id: &task_id,
+                depends_on_id: blocker_id,
+                edge_type: "blocks",
+            });
+        }
+
+        lines.push(task_json_line(
+            &task_id,
+            &title,
+            &description,
+            status,
+            "task",
+            priority,
+            &dependencies,
+        ));
+    }
+
+    fs::write(path, lines.join("\n") + "\n")?;
+
+    Ok(LargeBacklogFixture {
+        root_id,
+        direct_child_count,
+        total_task_count: direct_child_count + 1,
+        open_child_count,
+        closed_child_count,
+        in_progress_child_count,
+        blocked_open_child_count,
+        primary_ready_id,
+        blocked_task_id,
+    })
+}
+
+struct DependencySpec<'a> {
+    issue_id: &'a str,
+    depends_on_id: &'a str,
+    edge_type: &'a str,
+}
+
+fn task_json_line(
+    id: &str,
+    title: &str,
+    description: &str,
+    status: &str,
+    issue_type: &str,
+    priority: usize,
+    dependencies: &[DependencySpec<'_>],
+) -> String {
+    let dependencies = dependencies
+        .iter()
+        .map(|dependency| {
+            format!(
+                "{{\"issue_id\":\"{}\",\"depends_on_id\":\"{}\",\"type\":\"{}\",\"created_at\":\"{}\",\"created_by\":\"tester\",\"metadata\":\"{{}}\",\"thread_id\":\"\"}}",
+                dependency.issue_id,
+                dependency.depends_on_id,
+                dependency.edge_type,
+                FIXTURE_CREATED_AT
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!(
+        "{{\"id\":\"{id}\",\"title\":\"{title}\",\"description\":\"{description}\",\"status\":\"{status}\",\"priority\":{priority},\"issue_type\":\"{issue_type}\",\"created_at\":\"{FIXTURE_CREATED_AT}\",\"created_by\":\"tester\",\"updated_at\":\"{FIXTURE_CREATED_AT}\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{dependencies}]}}"
+    )
 }
 
 pub struct CommandContext {

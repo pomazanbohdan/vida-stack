@@ -719,49 +719,49 @@ pub(crate) struct AgentHostBridgeArgs {
     #[arg(
         long = "decision",
         requires = "complete",
-        help = "Typed host bridge decision such as pass, blocked, or rework_required"
+        help = "Host bridge completion decision passed through to lane completion"
     )]
     pub(crate) decision: Option<String>,
 
     #[arg(
         long = "verdict",
         requires = "complete",
-        help = "Typed host bridge verdict such as implemented, pass, blocked, or rework_required"
+        help = "Host bridge completion verdict passed through to lane completion"
     )]
     pub(crate) verdict: Option<String>,
 
     #[arg(
         long = "allowed-next-node",
         requires = "complete",
-        help = "Typed next state-machine node authorized by the host bridge result"
+        help = "Next workflow node allowed by the host bridge completion result"
     )]
     pub(crate) allowed_next_node: Option<String>,
 
     #[arg(
         long = "blocker-codes",
         requires = "complete",
-        help = "Typed blocker code array for blocked/rework host bridge results; accepts JSON array or comma list"
+        help = "Completion blocker codes as a JSON array or compact list"
     )]
     pub(crate) blocker_codes: Option<String>,
 
     #[arg(
         long = "blocker-code",
         requires = "complete",
-        help = "One typed blocker code for blocked/rework host bridge results; accepts repeated flags"
+        help = "Completion blocker code; accepts repeated flags"
     )]
     pub(crate) blocker_code: Vec<String>,
 
     #[arg(
         long = "rework-target",
         requires = "complete",
-        help = "Typed rework target required for blocked/rework host bridge results"
+        help = "Workflow target that should receive rework when completion is blocked"
     )]
     pub(crate) rework_target: Option<String>,
 
     #[arg(
-        long = "result-file",
+        long = "host-bridge-result-file",
         requires = "complete",
-        help = "Typed host bridge result JSON file under the VIDA state root"
+        help = "Path to the parent host bridge result file used for completion"
     )]
     pub(crate) result_file: Option<PathBuf>,
 
@@ -1057,7 +1057,7 @@ pub(crate) enum TaskCommand {
     Takeover(TaskTakeoverArgs),
     #[command(about = "close one tracked task with evidence and optional release automation")]
     Close(TaskCloseArgs),
-    #[command(about = "reconcile open epics whose direct children are complete")]
+    #[command(about = "reconcile open epics whose descendants are complete")]
     Reconcile(TaskReconcileArgs),
     #[command(about = "retire historical run-graph rows for already-closed tasks")]
     ReconcileClosedRuns(TaskReconcileClosedRunsArgs),
@@ -1677,6 +1677,12 @@ pub(crate) enum TaskProofCommand {
         after_help = "Examples:\n  vida task proof attach-browser task-1 --route /odoo --result pass --screenshot artifacts/task-1.png --json\n\nOptions:\n  --route <route>       Browser route or URL that was checked\n  --result <result>     Proof result: pass, fail, or blocked\n  --screenshot <path>   Screenshot artifact path; optional but recommended\n  --expect <text>       Expected text or route marker\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
     )]
     AttachBrowser(TaskProofAttachBrowserArgs),
+    #[command(
+        name = "attach-evidence",
+        about = "attach structured proof evidence to one task",
+        after_help = "Examples:\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --evidence \"test log\" --json\n\nOptions:\n  --proof-target <text> Proof target this evidence satisfies\n  --result <result>     Proof result: pass, fail, or blocked\n  --command <command>   Command or artifact command equivalent; defaults to --proof-target\n  --artifact-ref <path> Receipt, log, screenshot, or artifact path\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
+    )]
+    AttachEvidence(TaskProofAttachEvidenceArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1720,6 +1726,58 @@ pub(crate) struct TaskProofAttachBrowserArgs {
 
     #[arg(long = "expect", help = "Expected text or route marker")]
     pub(crate) expect: Option<String>,
+
+    #[arg(
+        long = "evidence",
+        help = "Additional evidence detail; accepts repeated flags"
+    )]
+    pub(crate) evidence: Vec<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskProofAttachEvidenceArgs {
+    #[arg(help = "Task id whose structured proof evidence should be updated")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "proof-target",
+        help = "Configured proof target this evidence satisfies"
+    )]
+    pub(crate) proof_target: String,
+
+    #[arg(long = "result", help = "Proof result: pass, fail, or blocked")]
+    pub(crate) result: String,
+
+    #[arg(
+        long = "command",
+        help = "Command or artifact command equivalent; defaults to --proof-target"
+    )]
+    pub(crate) command: Option<String>,
+
+    #[arg(
+        long = "artifact-ref",
+        help = "Receipt, log, screenshot, or artifact path"
+    )]
+    pub(crate) artifact_ref: Option<String>,
 
     #[arg(
         long = "evidence",
@@ -2767,7 +2825,7 @@ pub(crate) struct TaskReconcileArgs {
 
     #[arg(
         long = "close-if-complete",
-        help = "Close eligible epics whose direct children are all closed-like"
+        help = "Close eligible epics whose descendants are all closed-like"
     )]
     pub(crate) close_if_complete: bool,
 

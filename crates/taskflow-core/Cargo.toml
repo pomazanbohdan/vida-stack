@@ -5,11 +5,13 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+derive_more = { version = "2.1.1", features = ["display"] }
 enum-map = "2.7.3"
+nutype = { version = "0.7.0", features = ["serde"] }
 petgraph = "0.8.3"
 serde.workspace = true
 serde_json.workspace = true
-strum = "0.28.0"
+strum = { version = "0.28.0", features = ["derive"] }
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true

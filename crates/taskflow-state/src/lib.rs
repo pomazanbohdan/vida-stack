@@ -26,18 +26,18 @@ pub struct InMemoryTaskStore {
 
 impl TaskStore for InMemoryTaskStore {
     fn upsert_task(&mut self, task: TaskRecord) {
-        self.tasks.insert(task.id.0.clone(), task);
+        self.tasks.insert(task.id.as_str().to_string(), task);
     }
 
     fn get_task(&self, id: &TaskId) -> Result<&TaskRecord, TaskflowStateError> {
         self.tasks
-            .get(&id.0)
-            .ok_or_else(|| TaskflowStateError::TaskNotFound(id.0.clone()))
+            .get(id.as_str())
+            .ok_or_else(|| TaskflowStateError::TaskNotFound(id.as_str().to_string()))
     }
 
     fn list_tasks(&self) -> Vec<&TaskRecord> {
         let mut rows: Vec<_> = self.tasks.values().collect();
-        rows.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+        rows.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
         rows
     }
 
@@ -48,7 +48,7 @@ impl TaskStore for InMemoryTaskStore {
     fn list_dependencies(&self, id: &TaskId) -> Vec<&DependencyEdge> {
         self.dependencies
             .iter()
-            .filter(|edge| edge.issue_id.0 == id.0)
+            .filter(|edge| edge.issue_id.as_str() == id.as_str())
             .collect()
     }
 }
@@ -101,6 +101,6 @@ mod tests {
 
         let rows = store.list_dependencies(&TaskId::new("vida-rf1-taskflow-state"));
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].depends_on_id.0, "vida-rf1-taskflow-core");
+        assert_eq!(rows[0].depends_on_id.as_str(), "vida-rf1-taskflow-core");
     }
 }

@@ -4533,7 +4533,7 @@ fn bundle_check_retrieval_trust_evidence_clears_status_and_doctor_retrieval_bloc
 }
 
 #[test]
-fn consume_bundle_check_fresh_reinit_materializes_retrieval_trust_baseline() {
+fn consume_bundle_check_without_final_snapshot_fails_closed_on_retrieval_trust() {
     let (_project_root, state_dir) = project_bound_state_dir();
 
     let reset = vida()
@@ -4568,7 +4568,7 @@ fn consume_bundle_check_fresh_reinit_materializes_retrieval_trust_baseline() {
         .expect("bundle check should run");
     assert!(
         !bundle_check.stdout.is_empty(),
-        "bundle check should emit JSON even when the minimal fixture has unrelated activation blockers: stderr={}",
+        "bundle check should emit JSON even when the minimal fixture has blockers: stderr={}",
         String::from_utf8_lossy(&bundle_check.stderr)
     );
     let bundle_check_json: serde_json::Value =
@@ -4576,13 +4576,21 @@ fn consume_bundle_check_fresh_reinit_materializes_retrieval_trust_baseline() {
     let blocker_codes = bundle_check_json["blocker_codes"]
         .as_array()
         .expect("blocker_codes should be an array");
-    assert!(
-        blocker_codes.iter().all(|code| !code
-            .as_str()
-            .unwrap_or_default()
-            .starts_with("missing_retrieval_trust")),
-        "fresh reinit bundle check must not emit retrieval-trust blockers: {blocker_codes:?}"
-    );
+    for expected in [
+        "missing_retrieval_trust_evidence_acl",
+        "missing_retrieval_trust_evidence_acl_context",
+        "missing_retrieval_trust_evidence_acl_propagation",
+        "missing_retrieval_trust_evidence_citation",
+        "missing_retrieval_trust_evidence_freshness",
+        "missing_retrieval_trust_evidence_freshness_posture",
+        "missing_retrieval_trust_evidence_source",
+        "missing_retrieval_trust_evidence_source_registry_ref",
+    ] {
+        assert!(
+            blocker_codes.iter().any(|code| code.as_str() == Some(expected)),
+            "bundle check must fail closed with `{expected}` when no final snapshot provides retrieval trust: {blocker_codes:?}"
+        );
+    }
 
     let snapshot_path = bundle_check_json["snapshot_path"]
         .as_str()
@@ -4591,33 +4599,10 @@ fn consume_bundle_check_fresh_reinit_materializes_retrieval_trust_baseline() {
         std::fs::read_to_string(snapshot_path).expect("bundle check snapshot should be readable");
     let snapshot: serde_json::Value =
         serde_json::from_str(&snapshot_body).expect("bundle check snapshot should parse");
-    let evidence = &snapshot["bundle"]["cache_delivery_contract"]["retrieval_trust_evidence"];
     assert_eq!(
-        evidence["source"],
-        serde_json::json!("runtime_consumption_snapshot_index")
+        snapshot["bundle"]["cache_delivery_contract"]["retrieval_trust_evidence"],
+        serde_json::json!({})
     );
-    assert_eq!(
-        evidence["source_registry_ref"],
-        serde_json::json!("runtime_consumption_snapshot_registry:fresh_reinit_baseline")
-    );
-    assert_eq!(
-        evidence["freshness_posture"],
-        serde_json::json!("fresh_reinit_protocol_binding_baseline")
-    );
-    for key in [
-        "citation",
-        "freshness",
-        "acl",
-        "acl_context",
-        "acl_propagation",
-    ] {
-        assert!(
-            evidence[key]
-                .as_str()
-                .is_some_and(|value| !value.trim().is_empty()),
-            "retrieval trust evidence field `{key}` must be populated: {evidence}"
-        );
-    }
 }
 
 #[test]

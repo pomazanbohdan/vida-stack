@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
-use std::io::ErrorKind;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub(crate) const RUNTIME_DISPATCH_ALIASES_PROJECTION: &str =
@@ -242,6 +242,81 @@ pub(crate) fn agent_extension_registry_projection_parities(
     Ok(parities)
 }
 
+fn write_runtime_projection_file(path: &Path, contents: &str, label: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        crate::ensure_dir(parent)?;
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to refresh runtime {label} projection `{}` because it is a symlink",
+                path.display()
+            ));
+        }
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "runtime {label} projection `{}` has no parent",
+            path.display()
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "runtime {label} projection `{}` has no file name",
+                path.display()
+            )
+        })?;
+    let temp_path = parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    ));
+
+    let write_result = (|| -> Result<(), String> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| {
+                format!(
+                    "failed to create temporary runtime {label} projection `{}`: {error}",
+                    temp_path.display()
+                )
+            })?;
+        file.write_all(contents.as_bytes()).map_err(|error| {
+            format!(
+                "failed to write temporary runtime {label} projection `{}`: {error}",
+                temp_path.display()
+            )
+        })?;
+        file.sync_all().map_err(|error| {
+            format!(
+                "failed to flush temporary runtime {label} projection `{}`: {error}",
+                temp_path.display()
+            )
+        })?;
+        drop(file);
+        std::fs::rename(&temp_path, path).map_err(|error| {
+            format!(
+                "failed to replace runtime {label} projection `{}`: {error}",
+                path.display()
+            )
+        })
+    })();
+
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
 pub(crate) fn refresh_runtime_dispatch_alias_projection_from_configured_source(
     config: &serde_yaml::Value,
     root: &Path,
@@ -259,15 +334,7 @@ pub(crate) fn refresh_runtime_dispatch_alias_projection_from_configured_source(
             parity.source_path.display()
         )
     })?;
-    if let Some(parent) = parity.runtime_projection_path.parent() {
-        crate::ensure_dir(parent)?;
-    }
-    std::fs::write(&parity.runtime_projection_path, source).map_err(|error| {
-        format!(
-            "failed to refresh runtime dispatch alias projection `{}`: {error}",
-            parity.runtime_projection_path.display()
-        )
-    })?;
+    write_runtime_projection_file(&parity.runtime_projection_path, &source, "dispatch alias")?;
     dispatch_alias_projection_parity(config, root)
 }
 
@@ -289,16 +356,11 @@ pub(crate) fn refresh_runtime_agent_extension_projections_from_configured_source
                 parity.source_path.display()
             )
         })?;
-        if let Some(parent) = parity.runtime_projection_path.parent() {
-            crate::ensure_dir(parent)?;
-        }
-        std::fs::write(&parity.runtime_projection_path, source).map_err(|error| {
-            format!(
-                "failed to refresh runtime {} projection `{}`: {error}",
-                parity.registry_label,
-                parity.runtime_projection_path.display()
-            )
-        })?;
+        write_runtime_projection_file(
+            &parity.runtime_projection_path,
+            &source,
+            &parity.registry_label,
+        )?;
     }
     agent_extension_registry_projection_parities(config, root)
 }
@@ -581,7 +643,7 @@ pub(crate) fn build_agent_extension_registry_projection(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_extension_registry_projection_parities, dispatch_alias_projection_parity,
+        dispatch_alias_projection_parity,
         refresh_runtime_agent_extension_projections_from_configured_sources,
         refresh_runtime_dispatch_alias_projection_from_configured_source,
     };
@@ -695,43 +757,33 @@ agent_extensions:
         assert!(refreshed.contains("alias_id: development_test_author"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn agent_extension_projection_refreshes_missing_runtime_pack_projection_from_source() {
+    fn agent_extension_projection_refresh_rejects_symlinked_runtime_projection() {
+        use std::os::unix::fs::symlink;
+
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let config = write_missing_runtime_pack_projection_fixture(harness.path());
+        let config = write_dispatch_alias_projection_fixture(harness.path());
+        let outside_victim = harness.path().join("outside-victim.yaml");
+        fs::write(&outside_victim, "original_victim_role\n")
+            .expect("outside victim should be writable");
+        let runtime_projection = harness
+            .path()
+            .join(".vida/project/agent-extensions/dispatch-aliases.yaml");
+        fs::remove_file(&runtime_projection).expect("fixture runtime projection should be removed");
+        symlink(&outside_victim, &runtime_projection)
+            .expect("runtime projection symlink should be created");
 
-        let parities = agent_extension_registry_projection_parities(&config, harness.path())
-            .expect("parity check should treat missing runtime pack projection as stale");
-        let parity = parities
-            .iter()
-            .find(|parity| parity.config_key == "packs")
-            .expect("pack parity should be reported");
-
-        assert!(!parity.in_sync);
-        assert_eq!(parity.source_alias_count, 1);
-        assert_eq!(parity.runtime_alias_count, 0);
-        assert_eq!(
-            parity.missing_runtime_aliases,
-            vec!["quick_two_pack".to_string()]
-        );
-
-        let refreshed = refresh_runtime_agent_extension_projections_from_configured_sources(
+        let error = refresh_runtime_agent_extension_projections_from_configured_sources(
             &config,
             harness.path(),
         )
-        .expect("projection refresh should create missing runtime pack projection");
-        let refreshed_pack = refreshed
-            .iter()
-            .find(|parity| parity.config_key == "packs")
-            .expect("pack parity should still be reported after refresh");
+        .expect_err("symlinked runtime projection should be rejected");
 
-        assert!(refreshed_pack.in_sync);
-        let runtime_projection = fs::read_to_string(
-            harness
-                .path()
-                .join(".vida/project/agent-extensions/packs.yaml"),
-        )
-        .expect("runtime pack projection should be readable");
-        assert!(runtime_projection.contains("pack_id: quick_two_pack"));
+        assert!(error.contains("refusing to refresh runtime dispatch alias projection"));
+        assert_eq!(
+            fs::read_to_string(&outside_victim).expect("outside victim should remain readable"),
+            "original_victim_role\n"
+        );
     }
 }
