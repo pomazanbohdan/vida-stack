@@ -38,12 +38,7 @@ fn relations_command_runs_as_binary() {
 
     assert!(output.status.success(), "{}", context.diagnostics(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        stdout.trim_end(),
-        "relations\n  total_edges: 3",
-        "{}",
-        context.diagnostics(&output)
-    );
+    vida_test_support::assert_text_snapshot(stdout.trim_end(), "relations\n  total_edges: 3");
 }
 
 #[test]

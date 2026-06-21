@@ -161,8 +161,8 @@ fn git_null_config_path() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_command_output, changed_markdown_paths, markdown_paths_from_status_stdout,
-        SafeGitStatusInput,
+        SafeGitStatusInput, bounded_command_output, changed_markdown_paths,
+        markdown_paths_from_status_stdout,
     };
     use crate::DocflowCoreError;
     use std::fs;

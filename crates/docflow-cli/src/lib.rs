@@ -3,14 +3,14 @@ use docflow_config::{resolve_profile_roots, resolve_scan_ignored_globs};
 use docflow_contracts::{ArtifactRelationKind, ReadinessRow, ScanRow};
 use docflow_core::{ArtifactPath, CheckedAt, ReadinessVerdict};
 use docflow_format_jsonl::encode_line;
-use docflow_inventory::{build_registry, InventoryScope};
+use docflow_inventory::{InventoryScope, build_registry};
 use docflow_operator::{
     render_artifact_impact, render_layer_status, render_overview, render_relation_summary,
     render_summary, render_task_impact,
 };
 use docflow_readiness::{issues_to_readiness_rows, summarize_verdict};
-use docflow_relations::{artifact_identity_edges, RelationEdge};
-use docflow_validation::{validate_markdown_footer, ValidationIssue};
+use docflow_relations::{RelationEdge, artifact_identity_edges};
+use docflow_validation::{ValidationIssue, validate_markdown_footer};
 use ignore::WalkBuilder;
 use serde::Serialize;
 use serde_json::Value;
@@ -21,8 +21,8 @@ use time::format_description::well_known::Rfc3339;
 mod closeout_verdict;
 
 use closeout_verdict::{
-    build_docflow_closeout_verdict, render_docflow_closeout_error, render_docflow_closeout_verdict,
-    DocflowCloseoutVerdict, DocflowCloseoutVerdictInput,
+    DocflowCloseoutVerdict, DocflowCloseoutVerdictInput, build_docflow_closeout_verdict,
+    render_docflow_closeout_error, render_docflow_closeout_verdict,
 };
 
 #[derive(Debug, Parser)]
@@ -4769,7 +4769,7 @@ fn collect_tree_issues(
 
 #[cfg(test)]
 mod tests {
-    use super::{activation_issue_for, protocol_coverage_issue_for, run, Cli};
+    use super::{Cli, activation_issue_for, protocol_coverage_issue_for, run};
     use clap::Parser;
     use serde_json::Value;
     use std::fs;
@@ -5641,9 +5641,11 @@ mod tests {
             .expect("readiness profile error should render valid JSON");
 
         assert_eq!(value["verdict"].as_str(), Some("blocking"));
-        assert!(value["error"]
-            .as_str()
-            .is_some_and(|error| error.contains(injected_profile)));
+        assert!(
+            value["error"]
+                .as_str()
+                .is_some_and(|error| error.contains(injected_profile))
+        );
         assert!(value.get("extra").is_none());
     }
 
@@ -6033,11 +6035,13 @@ mod tests {
         );
         assert!(payload.get("instructions").is_some());
         assert!(payload.get("next_actions").is_some());
-        assert!(payload
-            .get("artifact_init")
-            .and_then(|value| value.get("command"))
-            .and_then(|value| value.as_str())
-            .is_some());
+        assert!(
+            payload
+                .get("artifact_init")
+                .and_then(|value| value.get("command"))
+                .and_then(|value| value.as_str())
+                .is_some()
+        );
     }
 
     #[test]
@@ -6194,12 +6198,14 @@ mod tests {
             validation.get("issue_count").and_then(Value::as_u64),
             Some(1)
         );
-        assert!(validation
-            .get("issues")
-            .and_then(Value::as_array)
-            .expect("issues should be an array")
-            .iter()
-            .any(|issue| issue.get("code").and_then(Value::as_str) == Some("missing_footer")));
+        assert!(
+            validation
+                .get("issues")
+                .and_then(Value::as_array)
+                .expect("issues should be an array")
+                .iter()
+                .any(|issue| issue.get("code").and_then(Value::as_str) == Some("missing_footer"))
+        );
         fs::remove_file(path).expect("temp markdown should be removed");
     }
 

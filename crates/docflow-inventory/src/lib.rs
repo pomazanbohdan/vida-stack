@@ -88,7 +88,7 @@ fn path_to_string(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_registry, InventoryScope};
+    use super::{InventoryScope, build_registry};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
