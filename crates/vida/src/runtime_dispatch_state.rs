@@ -6055,7 +6055,10 @@ pub(crate) async fn maybe_bridge_closed_implementer_task_into_receipt(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     closed_task_id: Option<&str>,
 ) -> Result<bool, String> {
-    if !matches!(receipt.dispatch_kind.as_str(), "agent_lane" | "taskflow_pack") {
+    if !matches!(
+        receipt.dispatch_kind.as_str(),
+        "agent_lane" | "taskflow_pack"
+    ) {
         return Ok(false);
     }
     let (role_selection, run_graph_bootstrap) = decode_receipt_packet_context(receipt)?;

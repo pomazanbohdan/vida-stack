@@ -1031,7 +1031,9 @@ fn task_is_open_for_priority(task: &crate::state_store::TaskRecord) -> bool {
 fn task_parent_ids(task: &crate::state_store::TaskRecord) -> Vec<String> {
     task.dependencies
         .iter()
-        .filter(|dependency| dependency.edge_type == "parent-child" && dependency.issue_id == task.id)
+        .filter(|dependency| {
+            dependency.edge_type == "parent-child" && dependency.issue_id == task.id
+        })
         .map(|dependency| dependency.depends_on_id.clone())
         .collect()
 }
@@ -1192,12 +1194,13 @@ pub(crate) fn add_taskflow_active_work_truth(
         );
     }
 
+    if let Some(priority_summary) =
+        priority_epic_sequence_summary(summary.clone(), &taskflow_active_candidates)
+    {
+        return priority_summary;
+    }
+
     if summary_active_unit_missing {
-        if let Some(summary) =
-            priority_epic_sequence_summary(summary.clone(), &taskflow_active_candidates)
-        {
-            return summary;
-        }
         if let [candidate] = taskflow_active_candidates.as_slice() {
             if let serde_json::Value::Object(object) = &mut summary {
                 object.insert(
@@ -1369,14 +1372,12 @@ fn priority_epic_sequence_summary(
     summary: serde_json::Value,
     taskflow_active_candidates: &[serde_json::Value],
 ) -> Option<serde_json::Value> {
-    let required_priority_epic_id = taskflow_active_candidates
-        .iter()
-        .find_map(|candidate| {
-            candidate
-                .get("required_priority_epic_id")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })?;
+    let required_priority_epic_id = taskflow_active_candidates.iter().find_map(|candidate| {
+        candidate
+            .get("required_priority_epic_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    })?;
     let priority_candidates = taskflow_active_candidates
         .iter()
         .filter(|candidate| {
@@ -2137,6 +2138,8 @@ mod tests {
         status.lifecycle_stage = "closure_complete".to_string();
         status.next_node = None;
         status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
         status.resume_target = "none".to_string();
         status.recovery_ready = false;
         status.policy_gate = "historical_closed_task_stale_run_retired".to_string();
@@ -2393,6 +2396,63 @@ mod tests {
         let taskflow_candidates = taskflow_active_candidates_from_tasks(&[
             library_epic,
             shared_epic,
+            library_task,
+            active_library_todo,
+            active_runtime_residual,
+        ]);
+
+        let summary = add_taskflow_active_work_truth(runtime_summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["binding_source"], "taskflow_priority_epic_sequence");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "todo-runtime-library-validation-builders-receipt-20260621"
+        );
+        assert_eq!(
+            summary["active_bounded_unit"]["priority_epic_id"],
+            "runtime-library-adoption-epic"
+        );
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_overrides_latest_run_graph_outside_first_priority_epic() {
+        let runtime_summary = serde_json::json!({
+            "status": "bound",
+            "continuation_allowed": true,
+            "continuation_required_now": false,
+            "active_bounded_unit": {
+                "kind": "run_graph_task",
+                "task_id": "runtime-defect-taskflow-priority-epic-binding-20260621",
+                "run_id": "runtime-defect-taskflow-priority-epic-binding-20260621",
+                "active_node": "planning"
+            },
+            "binding_source": "latest_run_graph_status",
+            "why_this_unit": "Latest runtime state is still active for a later runtime residual.",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only_open_cycle",
+            "pause_boundary_gate": "forbidden_while_runtime_active",
+            "ambiguity_reason": serde_json::Value::Null,
+            "next_actions": []
+        });
+        let library_epic = task_record("runtime-library-adoption-epic", "open");
+        let library_task = task_with_parent(
+            "runtime-library-adoption-07-validation-builders",
+            "open",
+            "runtime-library-adoption-epic",
+        );
+        let active_library_todo = task_with_parent(
+            "todo-runtime-library-validation-builders-receipt-20260621",
+            "in_progress",
+            "runtime-library-adoption-07-validation-builders",
+        );
+        let active_runtime_residual = task_with_parent(
+            "runtime-defect-taskflow-priority-epic-binding-20260621",
+            "in_progress",
+            "github-114-runtime-diagnostics-closeout-20260620",
+        );
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[
+            library_epic,
             library_task,
             active_library_todo,
             active_runtime_residual,
