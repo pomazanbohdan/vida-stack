@@ -40,9 +40,8 @@ pub enum TaskflowCoreError {
 )]
 struct ValidatedTaskId(String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, derive_more::Display)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-#[display("{}", _0)]
 pub struct TaskId(ValidatedTaskId);
 
 impl TaskId {
@@ -65,6 +64,12 @@ impl TaskId {
     #[must_use]
     pub fn into_string(self) -> String {
         self.0.into_inner()
+    }
+}
+
+impl std::fmt::Display for TaskId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -214,6 +219,13 @@ mod tests {
     #[test]
     fn empty_task_id_is_rejected() {
         assert!(TaskId::try_new("   ").is_err());
+    }
+
+    #[test]
+    fn task_id_display_uses_validated_string_without_recursion() {
+        let id = TaskId::new(" vida-rf1 ");
+
+        assert_eq!(id.to_string(), "vida-rf1");
     }
 
     #[test]

@@ -14147,102 +14147,112 @@ mod tests {
 
     #[test]
     fn task_handoff_accept_isolated_state_dir_writes_receipt_under_state_dir() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let project_root = harness.path().join("project");
-        fs::create_dir_all(project_root.join(".vida/receipts"))
-            .expect("project receipt directory should initialize");
-        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
-            .expect("project marker should write");
-        fs::write(project_root.join("AGENTS.md"), "test project\n")
-            .expect("agents marker should write");
-        fs::create_dir_all(project_root.join(".vida/config"))
-            .expect("config marker directory should initialize");
-        fs::create_dir_all(project_root.join(".vida/db"))
-            .expect("db marker directory should initialize");
-        fs::create_dir_all(project_root.join(".vida/project"))
-            .expect("project marker directory should initialize");
-        let isolated_state_dir = harness.path().join("isolated-state");
-        runtime.block_on(async {
-            let store = crate::StateStore::open(isolated_state_dir.clone())
-                .await
-                .expect("isolated state store should open");
-            create_task_for_test(
-                &store,
-                "task-handoff",
-                "Task handoff",
-                "epic",
-                "open",
-                2,
-                None,
-            )
-            .await;
-            store
-                .refresh_task_snapshot()
-                .await
-                .expect("snapshot should refresh");
-        });
+        std::thread::Builder::new()
+            .name("task-handoff-isolated-state-dir-receipt".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+                let harness =
+                    TempStateHarness::new().expect("temp state harness should initialize");
+                let project_root = harness.path().join("project");
+                fs::create_dir_all(project_root.join(".vida/receipts"))
+                    .expect("project receipt directory should initialize");
+                fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+                    .expect("project marker should write");
+                fs::write(project_root.join("AGENTS.md"), "test project\n")
+                    .expect("agents marker should write");
+                fs::create_dir_all(project_root.join(".vida/config"))
+                    .expect("config marker directory should initialize");
+                fs::create_dir_all(project_root.join(".vida/db"))
+                    .expect("db marker directory should initialize");
+                fs::create_dir_all(project_root.join(".vida/project"))
+                    .expect("project marker directory should initialize");
+                let isolated_state_dir = harness.path().join("isolated-state");
+                runtime.block_on(async {
+                    let store = crate::StateStore::open(isolated_state_dir.clone())
+                        .await
+                        .expect("isolated state store should open");
+                    create_task_for_test(
+                        &store,
+                        "task-handoff",
+                        "Task handoff",
+                        "epic",
+                        "open",
+                        2,
+                        None,
+                    )
+                    .await;
+                    store
+                        .refresh_task_snapshot()
+                        .await
+                        .expect("snapshot should refresh");
+                });
 
-        let (receipt_root, isolation) = task_handoff_receipt_root(&isolated_state_dir, true);
-        assert_eq!(isolation, "isolated_state_dir");
-        assert_eq!(receipt_root, isolated_state_dir.join("receipts"));
+                let (receipt_root, isolation) =
+                    task_handoff_receipt_root(&isolated_state_dir, true);
+                assert_eq!(isolation, "isolated_state_dir");
+                assert_eq!(receipt_root, isolated_state_dir.join("receipts"));
 
-        let _vida_root = EnvVarGuard::unset("VIDA_ROOT");
-        let _cwd = guard_current_dir(&project_root);
-        let code = runtime.block_on(crate::run(cli(&[
-            "task",
-            "handoff",
-            "accept",
-            "task-handoff",
-            "--agent",
-            "worker-1",
-            "--file",
-            "crates/vida/src/task_surface.rs",
-            "--proof",
-            "cargo check -p vida --bin vida",
-            "--state-dir",
-            isolated_state_dir
-                .to_str()
-                .expect("state dir should be utf8"),
-            "--json",
-        ])));
-        drop(_cwd);
+                let _vida_root = EnvVarGuard::unset("VIDA_ROOT");
+                let _cwd = guard_current_dir(&project_root);
+                let code = runtime.block_on(crate::run(cli(&[
+                    "task",
+                    "handoff",
+                    "accept",
+                    "task-handoff",
+                    "--agent",
+                    "worker-1",
+                    "--file",
+                    "crates/vida/src/task_surface.rs",
+                    "--proof",
+                    "cargo check -p vida --bin vida",
+                    "--state-dir",
+                    isolated_state_dir
+                        .to_str()
+                        .expect("state dir should be utf8"),
+                    "--json",
+                ])));
+                drop(_cwd);
 
-        assert_eq!(code, ExitCode::SUCCESS);
-        let project_handoff_receipts = project_root.join(".vida/receipts/task-handoffs");
-        assert!(
-            !project_handoff_receipts.exists(),
-            "isolated handoff must not write project receipts at {}",
-            project_handoff_receipts.display()
-        );
-        let isolated_handoff_receipts = isolated_state_dir.join("receipts/task-handoffs");
-        let receipts = fs::read_dir(&isolated_handoff_receipts)
-            .expect("isolated receipt directory should exist")
-            .collect::<Result<Vec<_>, _>>()
-            .expect("isolated receipts should list");
-        assert_eq!(receipts.len(), 1);
-        let receipt_text =
-            fs::read_to_string(receipts[0].path()).expect("isolated receipt should read");
-        let receipt: serde_json::Value =
-            serde_json::from_str(&receipt_text).expect("isolated receipt should parse");
-        assert_eq!(receipt["status"], "pass");
-        assert_eq!(receipt["task_id"], "task-handoff");
-        assert_eq!(receipt["isolation"], "isolated_state_dir");
-        assert_eq!(
-            receipt["receipt_root"],
-            isolated_state_dir.join("receipts").display().to_string()
-        );
-        assert!(receipt["receipt_path"]
-            .as_str()
-            .expect("receipt path should be string")
-            .replace('\\', "/")
-            .starts_with(
-                isolated_handoff_receipts
-                    .to_str()
-                    .expect("receipt dir should be utf8")
-                    .replace('\\', "/")
+                assert_eq!(code, ExitCode::SUCCESS);
+                let project_handoff_receipts = project_root.join(".vida/receipts/task-handoffs");
+                assert!(
+                    !project_handoff_receipts.exists(),
+                    "isolated handoff must not write project receipts at {}",
+                    project_handoff_receipts.display()
+                );
+                let isolated_handoff_receipts = isolated_state_dir.join("receipts/task-handoffs");
+                let receipts = fs::read_dir(&isolated_handoff_receipts)
+                    .expect("isolated receipt directory should exist")
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("isolated receipts should list");
+                assert_eq!(receipts.len(), 1);
+                let receipt_text =
+                    fs::read_to_string(receipts[0].path()).expect("isolated receipt should read");
+                let receipt: serde_json::Value =
+                    serde_json::from_str(&receipt_text).expect("isolated receipt should parse");
+                assert_eq!(receipt["status"], "pass");
+                assert_eq!(receipt["task_id"], "task-handoff");
+                assert_eq!(receipt["isolation"], "isolated_state_dir");
+                assert_eq!(
+                    receipt["receipt_root"],
+                    isolated_state_dir.join("receipts").display().to_string()
+                );
+                assert!(receipt["receipt_path"]
                     .as_str()
-            ));
+                    .expect("receipt path should be string")
+                    .replace('\\', "/")
+                    .starts_with(
+                        isolated_handoff_receipts
+                            .to_str()
+                            .expect("receipt dir should be utf8")
+                            .replace('\\', "/")
+                            .as_str()
+                    ));
+            })
+            .expect("high-stack receipt test thread should spawn")
+            .join()
+            .expect("high-stack receipt test thread should complete");
     }
 
     #[test]
