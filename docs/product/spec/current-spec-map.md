@@ -1,7 +1,7 @@
 # VIDA Current Spec Map
 
 Status: active canonical map
-Revision: 2026-06-13
+Revision: 2026-06-21
 
 Purpose: provide the short routing map for the active current product/spec canon after the detailed catalog was split into a companion document.
 
@@ -42,6 +42,8 @@ Companion rule:
     - bootstrap carrier and project activator model
 14. [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md)
     - DocFlow and documentation operator-command map
+15. [typed-transition-state-store-extraction-contract.md](typed-transition-state-store-extraction-contract.md)
+    - typed transition/state-store extraction design contract for the active shared extraction epic
 
 ## Detailed Catalog Companions
 
@@ -84,7 +86,7 @@ Companion rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-13
+artifact_revision: 2026-06-21
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md

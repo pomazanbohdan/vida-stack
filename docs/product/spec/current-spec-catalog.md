@@ -1,7 +1,7 @@
 # VIDA Current Spec Catalog
 
 Status: active canonical companion
-Revision: 2026-06-13
+Revision: 2026-06-21
 
 Purpose: carry the detailed current product/spec artifact catalog that used to live inside current-spec-map.md, so the map can stay a short routing surface while preserving the full active canon list.
 
@@ -302,6 +302,9 @@ Companion rule:
 38. [runtime-web-restart-current-repo-command-contract.md](runtime-web-restart-current-repo-command-contract.md)
     Config families: current-repo scoped web proof restart command, explicit edge-proxy restart opt-in, stale listener ownership checks, compact JSON restart receipts, and TaskFlow proof consumption for `vida runtime web restart`
     Registered path: `docs/product/spec/runtime-web-restart-current-repo-command-contract.md`
+39. [typed-transition-state-store-extraction-contract.md](typed-transition-state-store-extraction-contract.md)
+    Config families: typed TaskFlow lifecycle transitions, run-graph reconciliation authority, state-store adapter extraction, persisted state compatibility, public surface parity, and shared/core transition law for the `typed-transition-state-store-extraction-epic`
+    Registered path: `docs/product/spec/typed-transition-state-store-extraction-contract.md`
 
 ## Routing Rule
 
@@ -312,7 +315,7 @@ Companion rule:
 artifact_path: product/spec/current-spec-catalog
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-13
+artifact_revision: 2026-06-21
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-catalog.md
