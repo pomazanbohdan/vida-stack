@@ -5,6 +5,7 @@ pub mod exception_takeover;
 pub mod final_snapshot;
 pub mod projection_cache;
 pub mod stale_guard;
+pub mod task_transition;
 pub mod terminal_closure;
 
 pub use errors::TaskflowAuthorityError;
@@ -21,9 +22,10 @@ mod tests {
             crate::projection_cache::MODULE,
             crate::final_snapshot::MODULE,
             crate::continuation_binding::MODULE,
+            crate::task_transition::MODULE,
         ];
 
-        assert_eq!(modules.len(), 7);
+        assert_eq!(modules.len(), 8);
         assert!(modules.contains(&"authority_chain"));
         assert!(modules.contains(&"terminal_closure"));
         assert!(modules.contains(&"stale_guard"));
@@ -31,5 +33,6 @@ mod tests {
         assert!(modules.contains(&"projection_cache"));
         assert!(modules.contains(&"final_snapshot"));
         assert!(modules.contains(&"continuation_binding"));
+        assert!(modules.contains(&"task_transition"));
     }
 }
