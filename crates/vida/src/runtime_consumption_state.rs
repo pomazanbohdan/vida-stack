@@ -1026,7 +1026,10 @@ mod tests {
         RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
         RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
     };
-    use crate::state_store::{RunGraphDispatchReceiptSummary, RunGraphStatus};
+    use crate::state_store::{
+        RunGraphDispatchReceiptSummary, RunGraphStatus, TaskExecutionSemantics,
+        TaskPlannerMetadata, TaskRecord,
+    };
     use std::{fs, path::Path, thread, time::Duration};
 
     fn sample_runtime_consumption_summary(
@@ -1040,6 +1043,32 @@ mod tests {
             final_snapshots: 1,
             latest_kind: latest_kind.map(str::to_string),
             latest_snapshot_path: latest_snapshot_path.map(str::to_string),
+        }
+    }
+
+    fn test_task_record(task_id: &str, status: &str) -> TaskRecord {
+        TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: task_id.to_string(),
+            description: task_id.to_string(),
+            status: status.to_string(),
+            priority: 1,
+            issue_type: "task".to_string(),
+            created_at: "2026-06-21T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "2026-06-21T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: TaskExecutionSemantics::default(),
+            planner_metadata: TaskPlannerMetadata::default(),
+            provider_mapping: None,
+            dependencies: Vec::new(),
         }
     }
 
@@ -2017,6 +2046,10 @@ mod tests {
         let store = crate::state_store::StateStore::open(root.clone())
             .await
             .expect("open store");
+        store
+            .persist_task_record(test_task_record("task-final", "open"))
+            .await
+            .expect("seed task authority");
 
         let latest_status = RunGraphStatus {
             run_id: "run-final".to_string(),
