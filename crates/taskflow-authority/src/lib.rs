@@ -7,6 +7,7 @@ pub mod final_snapshot;
 pub mod projection_cache;
 pub mod run_graph_evidence;
 pub mod run_graph_transition;
+pub mod scheduler_claim;
 pub mod stale_guard;
 pub mod task_attempts;
 pub mod task_transition;
@@ -26,6 +27,7 @@ mod tests {
             crate::projection_cache::MODULE,
             crate::run_graph_evidence::MODULE,
             crate::run_graph_transition::MODULE,
+            crate::scheduler_claim::MODULE,
             crate::final_snapshot::MODULE,
             crate::continuation_binding::MODULE,
             crate::continuation_transition::MODULE,
@@ -33,7 +35,7 @@ mod tests {
             crate::task_transition::MODULE,
         ];
 
-        assert_eq!(modules.len(), 12);
+        assert_eq!(modules.len(), 13);
         assert!(modules.contains(&"authority_chain"));
         assert!(modules.contains(&"terminal_closure"));
         assert!(modules.contains(&"stale_guard"));
@@ -41,6 +43,7 @@ mod tests {
         assert!(modules.contains(&"projection_cache"));
         assert!(modules.contains(&"run_graph_evidence"));
         assert!(modules.contains(&"run_graph_transition"));
+        assert!(modules.contains(&"scheduler_claim"));
         assert!(modules.contains(&"final_snapshot"));
         assert!(modules.contains(&"continuation_binding"));
         assert!(modules.contains(&"continuation_transition"));

@@ -3,6 +3,7 @@
 use super::*;
 use fs2::FileExt;
 use std::fs::OpenOptions;
+use taskflow_authority::scheduler_claim;
 
 const RESERVATION_ACQUIRE_GUARD_RETRY_DELAY_MS: u64 = 25;
 const RESERVATION_ACQUIRE_GUARD_MAX_WAIT_MS: u64 = 30_000;
@@ -145,50 +146,51 @@ fn scheduler_reservation_expiry(now: OffsetDateTime, lease_seconds: i64) -> Stri
     scheduler_reservation_timestamp(now + time::Duration::seconds(bounded_seconds))
 }
 
-fn scheduler_reservation_is_active(status: &str) -> bool {
-    matches!(status, "reserved" | "executing")
-}
-
 fn scheduler_reservation_is_expired(reservation: &SchedulerDispatchReservation, now: &str) -> bool {
-    scheduler_reservation_is_active(&reservation.lease_status)
-        && !reservation.lease_expires_at.trim().is_empty()
-        && reservation.lease_expires_at.as_str() <= now
+    scheduler_claim::scheduler_reservation_is_expired(
+        &scheduler_reservation_authority_input(reservation),
+        now,
+    )
 }
 
 fn scheduler_reservation_collision(
     request: &AcquireSchedulerDispatchReservationRequest,
     active: &[SchedulerDispatchReservation],
 ) -> Option<String> {
-    for reservation in active {
-        if reservation.task_id == request.task_id {
-            return Some(format!(
-                "scheduler_task_already_reserved:{}:{}",
-                request.task_id, reservation.reservation_id
-            ));
-        }
-        if let (Some(left), Some(right)) = (
-            request.conflict_domain.as_deref(),
-            reservation.conflict_domain.as_deref(),
-        ) {
-            if !left.trim().is_empty() && left == right {
-                return Some(format!(
-                    "scheduler_conflict_domain_reserved:{}:{}",
-                    left, reservation.reservation_id
-                ));
-            }
-        }
-    }
-    None
+    let active = active
+        .iter()
+        .map(scheduler_reservation_authority_input)
+        .collect::<Vec<_>>();
+    scheduler_claim::decide_scheduler_reservation_collision(
+        &scheduler_reservation_request_authority_input(request),
+        &active,
+    )
 }
 
 fn scheduler_reservation_blocker_codes(blocker_codes: &[String]) -> Vec<String> {
-    let mut seen = std::collections::BTreeSet::new();
-    blocker_codes
-        .iter()
-        .map(|code| code.trim())
-        .filter(|code| !code.is_empty())
-        .filter_map(|code| seen.insert(code.to_string()).then(|| code.to_string()))
-        .collect()
+    scheduler_claim::normalize_scheduler_reservation_blocker_codes(blocker_codes)
+}
+
+fn scheduler_reservation_request_authority_input(
+    request: &AcquireSchedulerDispatchReservationRequest,
+) -> scheduler_claim::SchedulerReservationRequestInput {
+    scheduler_claim::SchedulerReservationRequestInput {
+        reservation_id: request.reservation_id.clone(),
+        task_id: request.task_id.clone(),
+        conflict_domain: request.conflict_domain.clone(),
+    }
+}
+
+fn scheduler_reservation_authority_input(
+    reservation: &SchedulerDispatchReservation,
+) -> scheduler_claim::SchedulerReservationActiveInput {
+    scheduler_claim::SchedulerReservationActiveInput {
+        reservation_id: reservation.reservation_id.clone(),
+        task_id: reservation.task_id.clone(),
+        conflict_domain: reservation.conflict_domain.clone(),
+        lease_status: reservation.lease_status.clone(),
+        lease_expires_at: reservation.lease_expires_at.clone(),
+    }
 }
 
 impl StateStore {

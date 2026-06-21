@@ -3,6 +3,7 @@
 use super::*;
 use fs2::FileExt;
 use std::fs::OpenOptions;
+use taskflow_authority::scheduler_claim;
 
 const CLAIM_ACQUIRE_GUARD_RETRY_DELAY_MS: u64 = 25;
 const CLAIM_ACQUIRE_GUARD_MAX_WAIT_MS: u64 = 30_000;
@@ -179,144 +180,81 @@ fn claim_expiry(now: OffsetDateTime, lease_seconds: i64) -> String {
 }
 
 fn claim_is_active(status: &str) -> bool {
-    matches!(status, "active" | "renewed" | "blocked")
+    scheduler_claim::claim_is_active(status)
 }
 
 fn claim_is_expired(claim: &OrchestratorClaim, now: &str) -> bool {
-    claim_is_active(&claim.status)
-        && !claim.lease_expires_at.trim().is_empty()
-        && claim.lease_expires_at.as_str() <= now
+    scheduler_claim::claim_is_expired(&orchestrator_claim_authority_input(claim), now)
 }
 
 fn normalize_claim_path(path: &str) -> Option<String> {
-    let mut value = path.trim().replace('\\', "/");
-    while let Some(stripped) = value.strip_prefix("./") {
-        value = stripped.to_string();
-    }
-    let mut parts = Vec::new();
-    for part in value.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            value => parts.push(value),
-        }
-    }
-    value = parts.join("/");
-    #[cfg(windows)]
-    {
-        value = value.to_ascii_lowercase();
-    }
-    value = value.trim_matches('/').to_string();
-    (!value.is_empty()).then_some(value)
+    scheduler_claim::normalize_claim_path(path)
 }
 
 pub(crate) fn claim_paths_intersect(left: &str, right: &str) -> bool {
-    let Some(left) = normalize_claim_path(left) else {
-        return false;
-    };
-    let Some(right) = normalize_claim_path(right) else {
-        return false;
-    };
-    left == right
-        || left
-            .strip_prefix(right.as_str())
-            .is_some_and(|suffix| suffix.starts_with('/'))
-        || right
-            .strip_prefix(left.as_str())
-            .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
-fn claim_modes_conflict(request_mode: LeaseMode, active_mode: &str) -> bool {
-    if request_mode == LeaseMode::Observe || active_mode == LeaseMode::Observe.as_str() {
-        return false;
-    }
-    request_mode == LeaseMode::Exclusive || active_mode == LeaseMode::Exclusive.as_str()
+    scheduler_claim::claim_paths_intersect(left, right)
 }
 
 fn claim_conflict(
     request: &AcquireOrchestratorClaimRequest,
     claim: &OrchestratorClaim,
 ) -> Option<OrchestratorClaimCompatibilityConflict> {
-    if !claim_modes_conflict(request.lease_mode, &claim.lease_mode) {
-        return None;
-    }
-    // Process-level conflict: same process cannot have multiple conflicting claims.
-    if let (Some(req_pid), Some(claim_pid)) = (request.process_id, claim.process_id) {
-        if req_pid == claim_pid {
-            return Some(claim_conflict_payload("process", claim, None));
-        }
-    }
-    if request.task_id.is_some() && request.task_id == claim.task_id {
-        return Some(claim_conflict_payload("task", claim, None));
-    }
-    if request.run_id.is_some() && request.run_id == claim.run_id {
-        return Some(claim_conflict_payload("run", claim, None));
-    }
-    let active_write_paths = claim
-        .owned_paths
-        .iter()
-        .map(|path| (path, "owned_path"))
-        .collect::<Vec<_>>();
-    let active_paths = claim
-        .owned_paths
-        .iter()
-        .map(|path| (path, "owned_path"))
-        .chain(
-            claim
-                .read_only_paths
-                .iter()
-                .map(|path| (path, "read_only_path")),
-        )
-        .collect::<Vec<_>>();
-    for requested_path in &request.owned_paths {
-        for (active_path, conflict_kind) in &active_paths {
-            if claim_paths_intersect(requested_path, active_path) {
-                return Some(claim_conflict_payload(
-                    conflict_kind,
-                    claim,
-                    normalize_claim_path(requested_path),
-                ));
-            }
-        }
-    }
-    for requested_path in &request.read_only_paths {
-        for (active_path, conflict_kind) in &active_write_paths {
-            if claim_paths_intersect(requested_path, active_path) {
-                return Some(claim_conflict_payload(
-                    conflict_kind,
-                    claim,
-                    normalize_claim_path(requested_path),
-                ));
-            }
-        }
-    }
-    if let (Some(left), Some(right)) = (
-        request.conflict_domain.as_deref(),
-        claim.conflict_domain.as_deref(),
-    ) {
-        if !left.trim().is_empty() && left == right {
-            return Some(claim_conflict_payload("conflict_domain", claim, None));
-        }
-    }
-    None
+    scheduler_claim::decide_orchestrator_claim_conflict(
+        &orchestrator_claim_request_authority_input(request),
+        &orchestrator_claim_authority_input(claim),
+    )
+    .map(Into::into)
 }
 
-fn claim_conflict_payload(
-    conflict_kind: &str,
+impl From<scheduler_claim::OrchestratorClaimConflict> for OrchestratorClaimCompatibilityConflict {
+    fn from(conflict: scheduler_claim::OrchestratorClaimConflict) -> Self {
+        Self {
+            conflict_kind: conflict.conflict_kind,
+            claim_id: conflict.claim_id,
+            orchestrator_session_id: conflict.orchestrator_session_id,
+            task_id: conflict.task_id,
+            run_id: conflict.run_id,
+            conflict_domain: conflict.conflict_domain,
+            path: conflict.path,
+            blocker_code: conflict.blocker_code,
+        }
+    }
+}
+
+fn orchestrator_claim_request_authority_input(
+    request: &AcquireOrchestratorClaimRequest,
+) -> scheduler_claim::OrchestratorClaimRequestInput {
+    scheduler_claim::OrchestratorClaimRequestInput {
+        claim_id: request.claim_id.clone(),
+        state_root_id: request.state_root_id.clone(),
+        worktree_environment_id: request.worktree_environment_id.clone(),
+        orchestrator_session_id: request.orchestrator_session_id.clone(),
+        process_id: request.process_id,
+        task_id: request.task_id.clone(),
+        run_id: request.run_id.clone(),
+        claim_kind: request.claim_kind.clone(),
+        conflict_domain: request.conflict_domain.clone(),
+        owned_paths: request.owned_paths.clone(),
+        read_only_paths: request.read_only_paths.clone(),
+        lease_mode: request.lease_mode.as_str().to_string(),
+    }
+}
+
+fn orchestrator_claim_authority_input(
     claim: &OrchestratorClaim,
-    path: Option<String>,
-) -> OrchestratorClaimCompatibilityConflict {
-    OrchestratorClaimCompatibilityConflict {
-        conflict_kind: conflict_kind.to_string(),
+) -> scheduler_claim::OrchestratorClaimInput {
+    scheduler_claim::OrchestratorClaimInput {
         claim_id: claim.claim_id.clone(),
         orchestrator_session_id: claim.orchestrator_session_id.clone(),
+        process_id: claim.process_id,
         task_id: claim.task_id.clone(),
         run_id: claim.run_id.clone(),
         conflict_domain: claim.conflict_domain.clone(),
-        path,
-        blocker_code: format!("orchestrator_claim_conflict_{conflict_kind}"),
+        owned_paths: claim.owned_paths.clone(),
+        read_only_paths: claim.read_only_paths.clone(),
+        lease_mode: claim.lease_mode.clone(),
+        status: claim.status.clone(),
+        lease_expires_at: claim.lease_expires_at.clone(),
     }
 }
 
@@ -761,35 +699,10 @@ impl StateStore {
 fn validate_claim_request(
     request: &AcquireOrchestratorClaimRequest,
 ) -> Result<(), StateStoreError> {
-    let missing = [
-        ("claim_id", request.claim_id.as_str()),
-        ("state_root_id", request.state_root_id.as_str()),
-        (
-            "worktree_environment_id",
-            request.worktree_environment_id.as_str(),
-        ),
-        (
-            "orchestrator_session_id",
-            request.orchestrator_session_id.as_str(),
-        ),
-        ("claim_kind", request.claim_kind.as_str()),
-    ]
-    .into_iter()
-    .find_map(|(name, value)| value.trim().is_empty().then_some(name));
-    if let Some(name) = missing {
-        return Err(StateStoreError::InvalidTaskRecord {
-            reason: format!("orchestrator_claim_missing_required_field:{name}"),
-        });
-    }
-    if request.lease_mode != LeaseMode::Observe
-        && request.task_id.is_none()
-        && request.run_id.is_none()
-    {
-        return Err(StateStoreError::InvalidTaskRecord {
-            reason: "orchestrator_claim_missing_bounded_unit".to_string(),
-        });
-    }
-    Ok(())
+    scheduler_claim::validate_orchestrator_claim_request(
+        &orchestrator_claim_request_authority_input(request),
+    )
+    .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })
 }
 
 #[cfg(test)]
