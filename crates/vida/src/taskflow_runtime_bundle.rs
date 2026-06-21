@@ -288,15 +288,8 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             latest_run_graph_task_closed,
             latest_run_graph_task_missing,
         );
-    let in_progress_tasks = all_tasks
-        .iter()
-        .filter(|task| task.status == "in_progress")
-        .cloned()
-        .collect::<Vec<_>>();
     let taskflow_active_candidates =
-        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
-            &in_progress_tasks,
-        );
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let continuation_binding =
         match crate::orchestrator_session_surface::build_runtime_owner_evidence(store.root(), false)
             .ok()

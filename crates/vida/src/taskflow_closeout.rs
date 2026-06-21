@@ -345,13 +345,7 @@ pub(crate) async fn build_taskflow_closeout_summary(
         continuation_binding
     };
     let taskflow_active_candidates =
-        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
-            &all_tasks
-                .iter()
-                .filter(|task| task.status == "in_progress")
-                .cloned()
-                .collect::<Vec<_>>(),
-        );
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
         continuation_binding,
         taskflow_active_candidates,

@@ -875,14 +875,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             || global_closed_run_is_current
                             || terminal_closed_run_is_current
                             || latest_run_graph_terminal_closure_without_truth);
-                let in_progress_tasks = all_tasks
-                    .iter()
-                    .filter(|task| task.status == "in_progress")
-                    .cloned()
-                    .collect::<Vec<_>>();
                 let taskflow_active_candidates =
                     crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
-                        &in_progress_tasks,
+                        &all_tasks,
                     );
                 let latest_run_graph_task_orthogonal_to_taskflow =
                     latest_run_graph_task_orthogonal_to_taskflow_active_work(
@@ -1997,15 +1992,8 @@ async fn refresh_cached_status_projection_runtime_fields(
         }
         None => false,
     };
-    let in_progress_tasks = all_tasks
-        .iter()
-        .filter(|task| task.status == "in_progress")
-        .cloned()
-        .collect::<Vec<_>>();
     let taskflow_active_candidates =
-        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
-            &in_progress_tasks,
-        );
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let exception_takeover_matches_active_taskflow_work =
         exception_takeover_metadata_matches_taskflow_active_work(
             store.root(),
