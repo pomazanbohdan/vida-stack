@@ -2349,6 +2349,64 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
 }
 
 #[test]
+fn test_cli_support_temp_fixture_snapshots_task_default_toon_and_json() {
+    let temp = vida_test_support::temp_fixture_dir();
+    let state_dir_path = temp.path().join("state");
+    let jsonl_path = state_dir_path.join("issues.jsonl");
+    fs::create_dir_all(&state_dir_path).expect("create assert_fs-backed state dir");
+    sample_jsonl(jsonl_path.to_str().expect("fixture path should be utf-8"));
+
+    let state_dir = state_dir_path
+        .to_str()
+        .expect("fixture state dir path should be utf-8");
+    let import_stdout = run_and_assert_success(
+        &[
+            "task",
+            "import-jsonl",
+            jsonl_path
+                .to_str()
+                .expect("fixture jsonl path should be utf-8"),
+            "--json",
+        ],
+        state_dir,
+    );
+    assert_json_status_pass(&import_stdout);
+
+    let default_stdout = run_and_assert_success(&["task", "list", "--all"], state_dir);
+    vida_test_support::assert_text_snapshot(
+        &default_stdout,
+        "vida task list\n  task_count: 4\n  tasks[4]{id,status,priority,title}:\n...\n",
+    );
+
+    let json_stdout = run_and_assert_success(
+        &[
+            "task",
+            "list",
+            "--all",
+            "--view",
+            "compact",
+            "--fields",
+            "id,status,title",
+            "--json",
+        ],
+        state_dir,
+    );
+    let json_payload: Value =
+        serde_json::from_str(&json_stdout).expect("task list json should parse");
+    let json_summary = serde_json::json!({
+        "task_count": json_payload["task_count"],
+        "fields": json_payload["fields"],
+        "view": json_payload["view"],
+        "first_task_id": json_payload["tasks"][0]["id"],
+        "status": json_payload["status"],
+    });
+    vida_test_support::assert_text_snapshot(
+        serde_json::to_string_pretty(&json_summary).expect("summary should serialize"),
+        "{\n  \"task_count\": 4,\n  \"fields\": \"id,status,title\",\n  \"view\": \"compact\",\n  \"first_task_id\": \"vida-b\",\n  \"status\": \"pass\"\n}",
+    );
+}
+
+#[test]
 fn dead_code_proof_protects_public_command_entrypoints() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

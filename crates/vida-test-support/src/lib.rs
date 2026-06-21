@@ -43,6 +43,14 @@ pub fn bounded_binary_command(binary_path: impl AsRef<OsStr>) -> Command {
     }
 }
 
+pub fn temp_fixture_dir() -> assert_fs::TempDir {
+    assert_fs::TempDir::new().expect("assert_fs temp dir should create")
+}
+
+pub fn assert_text_snapshot(actual: impl AsRef<str>, expected: &str) {
+    snapbox::Assert::new().eq(actual.as_ref(), expected);
+}
+
 #[cfg(unix)]
 pub fn bounded_command(
     program: impl AsRef<OsStr>,
