@@ -22,15 +22,5 @@ description = "Level 4 Codex lane for architecture preparation, hard escalation,
 config_file = "agents/architect.toml"
 
 [shell_environment_policy]
-inherit = "none"
+inherit = "all"
 exclude = ["*_KEY", "*_SECRET", "*_TOKEN", "AWS_*", "AZURE_*"]
-
-[shell_environment_policy.set]
-"ComSpec" = "C:\\Windows\\System32\\cmd.exe"
-"LOCALAPPDATA" = "C:\\Users\\pomaz\\AppData\\Local"
-"PATH" = "C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Users\\pomaz\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.3.0_x64__8wekyb3d8bbwe;C:\\Program Files\\Git\\cmd;C:\\Program Files\\Git\\bin;C:\\Users\\pomaz\\.cargo\\bin;C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin"
-"SystemRoot" = "C:\\Windows"
-"TEMP" = "C:\\Users\\pomaz\\AppData\\Local\\Temp"
-"TMP" = "C:\\Users\\pomaz\\AppData\\Local\\Temp"
-"USERPROFILE" = "C:\\Users\\pomaz"
-"windir" = "C:\\Windows"
