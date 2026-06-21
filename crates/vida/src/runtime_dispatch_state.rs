@@ -663,6 +663,11 @@ fn apply_dispatch_handoff_timeout_to_receipt(
 pub(crate) fn runtime_dispatch_project_root_from_state_root<'a>(
     state_root: &'a Path,
 ) -> std::borrow::Cow<'a, Path> {
+    if let Some(project_root) =
+        crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+    {
+        return std::borrow::Cow::Owned(project_root);
+    }
     if let Some(project_root) = crate::resolve_status_project_root(state_root) {
         return std::borrow::Cow::Owned(project_root);
     }
@@ -2141,6 +2146,14 @@ fn runtime_assignment_selected_backend_for_target(
         .or_else(|| json_string(assignment.get("dispatch_backend_id")))
         .or_else(|| json_string(assignment.get("selected_backend_id")))
         .or_else(|| json_string(assignment.get("selected_backend")))
+        .or_else(|| {
+            json_string(
+                execution_plan
+                    .get("development_flow")
+                    .and_then(|flow| flow.get(dispatch_target))
+                    .and_then(|lane| lane.get("executor_backend")),
+            )
+        })
 }
 
 fn selected_backend_override_conflicts_with_runtime_assignment(
@@ -22575,10 +22588,14 @@ agent_system:
             receipt.dispatch_surface.as_deref(),
             Some("external_cli:hermes_cli")
         );
-        assert!(receipt
-            .dispatch_command
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty() && !value.contains("vida agent-init")));
+        assert!(
+            receipt.dispatch_command.as_deref().is_some_and(|value| {
+                let command = value.trim_start();
+                !command.is_empty() && !command.starts_with("vida agent-init")
+            }),
+            "external timeout receipt should preserve external dispatch command, got {:?}",
+            receipt.dispatch_command
+        );
         let dispatch_result_path = receipt
             .dispatch_result_path
             .as_deref()

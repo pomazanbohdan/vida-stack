@@ -3415,6 +3415,14 @@ fn dispatch_packet_json_and_path_from_current_project(
 fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
     path: &str,
 ) -> Option<(serde_json::Value, std::path::PathBuf)> {
+    let state_root = crate::taskflow_task_bridge::proxy_state_dir();
+    dispatch_packet_json_and_path_from_state_root_absolute_path(path, &state_root)
+}
+
+fn dispatch_packet_json_and_path_from_state_root_absolute_path(
+    path: &str,
+    state_root: &std::path::Path,
+) -> Option<(serde_json::Value, std::path::PathBuf)> {
     const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 
     let path = path.trim();
@@ -3445,9 +3453,7 @@ fn dispatch_packet_json_and_path_from_state_dir_absolute_path(
     let Ok(candidate) = candidate.canonicalize() else {
         return None;
     };
-    let state_root = crate::taskflow_task_bridge::proxy_state_dir()
-        .canonicalize()
-        .ok()?;
+    let state_root = state_root.canonicalize().ok()?;
     let runtime_consumption_root = state_root.join("runtime-consumption").canonicalize().ok()?;
     let dispatch_packets_root = runtime_consumption_root
         .join("dispatch-packets")
@@ -3548,6 +3554,23 @@ fn persist_normalized_dispatch_packet(
 pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, String> {
     let (mut packet, resolved_path) = dispatch_packet_json_and_path_from_current_project(path)
         .ok_or_else(|| format!("Failed to read persisted dispatch packet `{path}`"))?;
+    if normalize_runtime_dispatch_packet(&mut packet) {
+        persist_normalized_dispatch_packet(&resolved_path, &packet)?;
+    }
+    crate::validate_runtime_dispatch_packet_contract(&packet, "Persisted dispatch packet")
+        .map_err(|error| {
+            format!("execution_preparation_gate_blocked: {error}; dispatch packet `{path}`")
+        })?;
+    Ok(packet)
+}
+
+fn read_dispatch_packet_from_state_root(
+    path: &str,
+    state_root: &std::path::Path,
+) -> Result<serde_json::Value, String> {
+    let (mut packet, resolved_path) =
+        dispatch_packet_json_and_path_from_state_root_absolute_path(path, state_root)
+            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{path}`"))?;
     if normalize_runtime_dispatch_packet(&mut packet) {
         persist_normalized_dispatch_packet(&resolved_path, &packet)?;
     }
@@ -3946,7 +3969,7 @@ async fn recover_missing_first_dispatch_receipt(
         "consume_continue_missing_first_receipt_recovery",
     )
     .await?;
-    let packet = read_dispatch_packet(&dispatch_packet_path)?;
+    let packet = read_dispatch_packet_from_state_root(&dispatch_packet_path, store.root())?;
     Ok(Some(build_resume_inputs(
         dispatch_receipt,
         dispatch_packet_path,

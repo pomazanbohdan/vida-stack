@@ -12050,7 +12050,7 @@ mod tests {
         );
         assert_eq!(
             summary.recommended_command.as_deref(),
-            Some("vida taskflow consume continue --run-id run-2 --json")
+            Some("vida taskflow consume continue --run-id run-2")
         );
     }
 
