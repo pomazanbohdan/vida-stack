@@ -426,7 +426,7 @@ try {
     if (-not $SkipBuild) {
         Push-Location $RootDir
         try {
-            & cargo build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
+            & cargo build --release --target-dir $cargoTargetRoot -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
             if ($LASTEXITCODE -ne 0) {
                 Fail "Cargo release build failed."
             }
