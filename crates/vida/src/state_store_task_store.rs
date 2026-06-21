@@ -6,6 +6,11 @@ use crate::state_store::state_store_task_models::{
 use serde_json::Deserializer;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use taskflow_authority::task_transition::{
+    admit_task_lifecycle, lifecycle_status_from_str, TaskLifecycleAdmissionStatus,
+    TaskLifecycleRuntimeEvidence,
+};
+use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 
 const TASK_SNAPSHOT_META_SCHEMA_VERSION: &str = "task-snapshot-meta-v1";
 
@@ -79,6 +84,79 @@ impl StateStore {
 
     pub(crate) fn run_graph_status_is_reconciled_terminal_closure(status: &RunGraphStatus) -> bool {
         status.is_reconciled_terminal_closure()
+    }
+
+    fn task_lifecycle_status_for_authority(
+        task_id: &str,
+        status: &str,
+    ) -> Result<TaskLifecycleStatus, StateStoreError> {
+        lifecycle_status_from_str(status).map_err(|blocker_code| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task `{task_id}` lifecycle status `{}` rejected by authority: {blocker_code}",
+                    status.trim()
+                ),
+            }
+        })
+    }
+
+    fn admit_task_lifecycle_for_store(
+        task_id: &str,
+        event: TaskLifecycleEvent,
+        current_status: Option<TaskLifecycleStatus>,
+        requested_status: Option<TaskLifecycleStatus>,
+        active_child_count: usize,
+    ) -> taskflow_authority::task_transition::TaskLifecycleAdmission {
+        let mut input = TaskLifecycleInput::new(task_id, event);
+        input.current_status = current_status;
+        input.requested_status = requested_status;
+        admit_task_lifecycle(
+            input,
+            TaskLifecycleRuntimeEvidence {
+                active_child_count,
+                graph_issues: Vec::new(),
+                defer_lifecycle_mutation: false,
+            },
+        )
+    }
+
+    fn ensure_task_lifecycle_admitted(
+        task_id: &str,
+        admission: taskflow_authority::task_transition::TaskLifecycleAdmission,
+        active_child_ids: &[String],
+    ) -> Result<(), StateStoreError> {
+        if admission.status == TaskLifecycleAdmissionStatus::Admitted {
+            return Ok(());
+        }
+        if !active_child_ids.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "cannot close task `{task_id}` while non-closed child tasks exist: {}",
+                    active_child_ids.join(", ")
+                ),
+            });
+        }
+        Err(StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "task `{task_id}` lifecycle mutation rejected by authority: {}",
+                admission.blocker_codes.join(", ")
+            ),
+        })
+    }
+
+    fn non_closed_child_ids_for_task(tasks: &[TaskRecord], task_id: &str) -> Vec<String> {
+        tasks
+            .iter()
+            .filter(|candidate| {
+                candidate.id != task_id
+                    && !Self::task_status_is_closed_like(&candidate.status)
+                    && candidate.dependencies.iter().any(|dependency| {
+                        dependency.edge_type == "parent-child"
+                            && dependency.depends_on_id == task_id
+                    })
+            })
+            .map(|candidate| candidate.id.clone())
+            .collect()
     }
 
     pub(crate) async fn run_graph_terminal_closure_has_task_close_truth(
@@ -314,6 +392,20 @@ impl StateStore {
             };
             let next_parent_id = Self::parent_id_for_task(&tasks[parent_index]);
             if Self::task_status_is_closed_like(&tasks[parent_index].status) {
+                let admission = Self::admit_task_lifecycle_for_store(
+                    &tasks[parent_index].id,
+                    TaskLifecycleEvent::ExtendParent,
+                    Self::task_lifecycle_status_for_authority(
+                        &tasks[parent_index].id,
+                        &tasks[parent_index].status,
+                    )
+                    .ok(),
+                    Some(TaskLifecycleStatus::Open),
+                    0,
+                );
+                if !admission.admitted() {
+                    break;
+                }
                 tasks[parent_index].status = "in_progress".to_string();
                 tasks[parent_index].updated_at = now.to_string();
                 tasks[parent_index].closed_at = None;
@@ -409,6 +501,20 @@ impl StateStore {
 
             let next_parent_id = Self::parent_id_for_task(&tasks[parent_index]);
             if matches!(tasks[parent_index].status.as_str(), "open" | "in_progress") {
+                let admission = Self::admit_task_lifecycle_for_store(
+                    &tasks[parent_index].id,
+                    TaskLifecycleEvent::EmptyParent,
+                    Self::task_lifecycle_status_for_authority(
+                        &tasks[parent_index].id,
+                        &tasks[parent_index].status,
+                    )
+                    .ok(),
+                    Some(TaskLifecycleStatus::Closed),
+                    0,
+                );
+                if !admission.admitted() {
+                    break;
+                }
                 tasks_being_closed.insert(parent_id.clone());
                 tasks[parent_index].status = "closed".to_string();
                 tasks[parent_index].updated_at = now.to_string();
@@ -475,6 +581,20 @@ impl StateStore {
 
             let next_parent_id = Self::parent_id_for_task(&tasks[parent_index]);
             if matches!(tasks[parent_index].status.as_str(), "open" | "in_progress") {
+                let admission = Self::admit_task_lifecycle_for_store(
+                    &tasks[parent_index].id,
+                    TaskLifecycleEvent::EmptyParent,
+                    Self::task_lifecycle_status_for_authority(
+                        &tasks[parent_index].id,
+                        &tasks[parent_index].status,
+                    )
+                    .ok(),
+                    Some(TaskLifecycleStatus::Closed),
+                    0,
+                );
+                if !admission.admitted() {
+                    break;
+                }
                 tasks[parent_index].status = "closed".to_string();
                 tasks[parent_index].updated_at = now.to_string();
                 tasks[parent_index].closed_at = Some(now.to_string());
@@ -2484,6 +2604,18 @@ impl StateStore {
         }
         let (execution_semantics, planner_metadata) =
             Self::normalize_task_record_defaults(task_id, execution_semantics, planner_metadata)?;
+        let requested_status = Self::task_lifecycle_status_for_authority(task_id, status)?;
+        Self::ensure_task_lifecycle_admitted(
+            task_id,
+            Self::admit_task_lifecycle_for_store(
+                task_id,
+                TaskLifecycleEvent::Create,
+                None,
+                Some(requested_status),
+                0,
+            ),
+            &[],
+        )?;
 
         let now = unix_timestamp_nanos().to_string();
         let mut normalized_labels = labels
@@ -2660,29 +2792,38 @@ impl StateStore {
             task.title = trimmed.to_string();
         }
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
-            let requested_status_is_closed = Self::task_status_is_closed_like(status);
+            let current_status =
+                Self::task_lifecycle_status_for_authority(task_id, &task.status).ok();
+            let requested_lifecycle_status =
+                Self::task_lifecycle_status_for_authority(task_id, status)?;
+            let requested_status_is_closed =
+                requested_lifecycle_status == TaskLifecycleStatus::Closed;
             if requested_status_is_closed {
                 let tasks = self.all_tasks().await?;
-                let non_closed_children = tasks
-                    .iter()
-                    .filter(|candidate| {
-                        candidate.id != task_id
-                            && !Self::task_status_is_closed_like(&candidate.status)
-                            && candidate.dependencies.iter().any(|dependency| {
-                                dependency.edge_type == "parent-child"
-                                    && dependency.depends_on_id == task_id
-                            })
-                    })
-                    .map(|candidate| candidate.id.clone())
-                    .collect::<Vec<_>>();
-                if !non_closed_children.is_empty() {
-                    return Err(StateStoreError::InvalidTaskRecord {
-                        reason: format!(
-                            "cannot close task `{task_id}` while non-closed child tasks exist: {}",
-                            non_closed_children.join(", ")
-                        ),
-                    });
-                }
+                let non_closed_children = Self::non_closed_child_ids_for_task(&tasks, task_id);
+                Self::ensure_task_lifecycle_admitted(
+                    task_id,
+                    Self::admit_task_lifecycle_for_store(
+                        task_id,
+                        TaskLifecycleEvent::Close,
+                        current_status,
+                        Some(TaskLifecycleStatus::Closed),
+                        non_closed_children.len(),
+                    ),
+                    &non_closed_children,
+                )?;
+            } else {
+                Self::ensure_task_lifecycle_admitted(
+                    task_id,
+                    Self::admit_task_lifecycle_for_store(
+                        task_id,
+                        TaskLifecycleEvent::UpdateStatus,
+                        current_status,
+                        Some(requested_lifecycle_status),
+                        0,
+                    ),
+                    &[],
+                )?;
             }
             task.status = status.to_string();
             if requested_status_is_closed {
@@ -2924,6 +3065,19 @@ impl StateStore {
             if !moved_set.contains(&task.id) {
                 continue;
             }
+            let current_status =
+                Self::task_lifecycle_status_for_authority(&task.id, &task.status).ok();
+            Self::ensure_task_lifecycle_admitted(
+                &task.id,
+                Self::admit_task_lifecycle_for_store(
+                    &task.id,
+                    TaskLifecycleEvent::Reparent,
+                    current_status,
+                    None,
+                    0,
+                ),
+                &[],
+            )?;
             let created_at = task
                 .dependencies
                 .iter()
@@ -3209,28 +3363,21 @@ impl StateStore {
         reason: &str,
     ) -> Result<TaskRecord, StateStoreError> {
         let tasks = self.all_tasks().await?;
-        let non_closed_children = tasks
-            .iter()
-            .filter(|task| {
-                task.id != task_id
-                    && !Self::task_status_is_closed_like(&task.status)
-                    && task.dependencies.iter().any(|dependency| {
-                        dependency.edge_type == "parent-child"
-                            && dependency.depends_on_id == task_id
-                    })
-            })
-            .map(|task| task.id.clone())
-            .collect::<Vec<_>>();
-        if !non_closed_children.is_empty() {
-            return Err(StateStoreError::InvalidTaskRecord {
-                reason: format!(
-                    "cannot close task `{task_id}` while non-closed child tasks exist: {}",
-                    non_closed_children.join(", ")
-                ),
-            });
-        }
+        let non_closed_children = Self::non_closed_child_ids_for_task(&tasks, task_id);
 
         let mut task = self.show_task(task_id).await?;
+        let current_status = Self::task_lifecycle_status_for_authority(task_id, &task.status).ok();
+        Self::ensure_task_lifecycle_admitted(
+            task_id,
+            Self::admit_task_lifecycle_for_store(
+                task_id,
+                TaskLifecycleEvent::Close,
+                current_status,
+                Some(TaskLifecycleStatus::Closed),
+                non_closed_children.len(),
+            ),
+            &non_closed_children,
+        )?;
         let now = unix_timestamp_nanos().to_string();
         task.status = "closed".to_string();
         task.updated_at = now.clone();
