@@ -5524,6 +5524,7 @@ hierarchy: framework,contracts
         assert_eq!(receipts.cutover_readiness_receipts, 0);
         assert_eq!(receipts.rollback_notes, 0);
 
+        drop(reopened);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7371,6 +7372,7 @@ hierarchy: framework,contracts
             .expect_err("stale task should remain removed after reopen");
         assert!(matches!(stale, StateStoreError::MissingTask { .. }));
 
+        drop(reopened);
         let _ = fs::remove_dir_all(&root);
     }
 
