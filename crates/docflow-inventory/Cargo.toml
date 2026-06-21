@@ -8,4 +8,5 @@ license.workspace = true
 docflow-contracts = { path = "../docflow-contracts" }
 docflow-core = { path = "../docflow-core" }
 globset.workspace = true
+ignore = "0.4.26"
 walkdir.workspace = true

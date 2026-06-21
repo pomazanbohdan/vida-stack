@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GIT_BIN="${GIT:-git}"
 
 usage() {
   cat <<'EOF'
@@ -37,7 +38,7 @@ resolve_current_tag() {
 
 resolve_previous_tag() {
   local current_tag="$1"
-  git tag --list 'v*' --sort=-v:refname | awk -v current="$current_tag" '
+  "$GIT_BIN" tag --list 'v*' --sort=-v:refname | awk -v current="$current_tag" '
     $0 == current { seen = 1; next }
     seen == 1 { print; exit }
   '
@@ -53,13 +54,13 @@ else
 fi
 
 [[ -f "$SOURCE_PATH" ]] || fail "Release-note source not found: $SOURCE_PATH"
-command -v git >/dev/null 2>&1 || fail "git is required to render the public commit ledger"
+command -v "$GIT_BIN" >/dev/null 2>&1 || fail "git is required to render the public commit ledger"
 
 CURRENT_TAG="$(resolve_current_tag "$INPUT")"
-git rev-parse --verify "${CURRENT_TAG}^{commit}" >/dev/null 2>&1 || fail "Release tag not found: $CURRENT_TAG"
+"$GIT_BIN" rev-parse --verify "${CURRENT_TAG}^{commit}" >/dev/null 2>&1 || fail "Release tag not found: $CURRENT_TAG"
 PREVIOUS_TAG="$(resolve_previous_tag "$CURRENT_TAG")"
 [[ -n "$PREVIOUS_TAG" ]] || fail "Previous release tag not found before $CURRENT_TAG"
-git rev-parse --verify "${PREVIOUS_TAG}^{commit}" >/dev/null 2>&1 || fail "Previous release tag not found: $PREVIOUS_TAG"
+"$GIT_BIN" rev-parse --verify "${PREVIOUS_TAG}^{commit}" >/dev/null 2>&1 || fail "Previous release tag not found: $PREVIOUS_TAG"
 
 awk '
   BEGIN {
@@ -83,4 +84,4 @@ awk '
 
 printf '\n## Commit Ledger\n\n'
 printf 'Commits since `%s`:\n\n' "$PREVIOUS_TAG"
-git log --no-merges --format='- `%h` %s' "${PREVIOUS_TAG}..${CURRENT_TAG}"
+"$GIT_BIN" log --no-merges --format='- `%h` %s' "${PREVIOUS_TAG}..${CURRENT_TAG}"

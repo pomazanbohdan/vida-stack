@@ -6,6 +6,7 @@ VERSION="${1:-}"
 RELEASE_SUFFIX="${VIDA_RELEASE_SUFFIX:-}"
 WINDOWS_RELEASE="no"
 SKIP_BUILD="${VIDA_RELEASE_SKIP_BUILD:-0}"
+CARGO_BIN="${CARGO:-cargo}"
 
 fail() {
   printf '[release-build] ERROR: %s\n' "$*" >&2
@@ -52,7 +53,7 @@ infer_version() {
 }
 
 infer_cargo_host_triple() {
-  cargo -vV | awk '/^host:/ { print $2; exit }'
+  "$CARGO_BIN" -vV | awk '/^host:/ { print $2; exit }'
 }
 
 select_python() {
@@ -67,7 +68,7 @@ select_python() {
 }
 
 if ! skip_build_enabled; then
-  require_cmd cargo
+  require_cmd "$CARGO_BIN"
 fi
 PYTHON_BIN="$(select_python)"
 
@@ -76,7 +77,7 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 if [[ -z "$RELEASE_SUFFIX" ]]; then
-  if command -v cargo >/dev/null 2>&1; then
+  if command -v "$CARGO_BIN" >/dev/null 2>&1; then
     CARGO_HOST_TRIPLE="$(infer_cargo_host_triple || true)"
     if [[ "$CARGO_HOST_TRIPLE" == *windows* ]]; then
       RELEASE_SUFFIX="windows-x86_64"
@@ -98,7 +99,7 @@ fi
 DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_ROOT="$DIST_DIR/package"
 STAGE_DIR="$PACKAGE_ROOT/$ARCHIVE_BASE"
-CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
+CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-$ROOT_DIR/.vida/cargo-target}"
 RELEASE_BIN_DIR="${VIDA_RELEASE_BIN_DIR:-$CARGO_TARGET_ROOT/release}"
 if [[ "$WINDOWS_RELEASE" == "yes" ]]; then
   VIDA_BIN="$STAGE_DIR/bin/vida.exe"
@@ -142,7 +143,7 @@ find "$STAGE_DIR" -type f -name '*.pyc' -delete
 if skip_build_enabled; then
     printf '[release-build] Using existing release binaries from %s\n' "$RELEASE_BIN_DIR"
 else
-    cargo build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
+    "$CARGO_BIN" build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
 fi
 copy_runtime_binary() {
   local binary_name="$1"

@@ -16,7 +16,7 @@ $RootDir = Split-Path -Parent $PSScriptRoot
 function Show-Help {
     @"
 Usage:
-  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 [-Version vX.Y.Z] [-SkipBuild] [-Windows] [-ReleaseBinDir <dir>] [-Json]
+  .\scripts\vida-dev-gate.cmd -Mode release-package [-ReleaseVersion vX.Y.Z] [-SkipBuild] [-Windows] [-ReleaseBinDir <dir>] [-Json]
 
 Options:
   -Version <tag>        Release tag such as v0.9.7. Defaults to crates/vida/Cargo.toml.
@@ -28,7 +28,7 @@ Options:
   -Json                 Emit a machine-readable packaging receipt.
 
 Windows skip-build example:
-  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -SkipBuild -Windows -ReleaseBinDir .\.vida\cargo-target\release -Json
+  .\scripts\vida-dev-gate.cmd -Mode release-package -SkipBuild -Windows -ReleaseBinDir .\.vida\cargo-target\release -Json
 "@
 }
 
@@ -414,7 +414,7 @@ try {
         Fail "Resolved staging directory escapes package root: $stageDir"
     }
     $cargoTargetRoot = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
-        Join-Path $RootDir "target"
+        Join-Path $RootDir ".vida\cargo-target"
     } else {
         $env:CARGO_TARGET_DIR
     }

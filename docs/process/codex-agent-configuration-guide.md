@@ -409,7 +409,7 @@ At the current repository cut:
 15. GitHub `Publish Release` for `v0.9.3` succeeded and published Linux, macOS, and Windows release archives.
 16. Local Windows installation may still be blocked by host Application Control or Device Guard policy even when the release artifacts are valid.
 17. On the observed Windows host, Device Guard blocked newly installed `vida.exe`, `taskflow.exe`, and `docflow.exe` from `%LOCALAPPDATA%\vida-stack\current\bin`.
-18. After an explicit installer run, `%LOCALAPPDATA%\vida-stack\current` points to `v0.9.3` and `.bun\bin\vida.exe` was moved aside so Windows resolves the installer-managed `vida.cmd`.
+18. After an explicit installer run, `%LOCALAPPDATA%\vida-stack\current` points to `v0.9.3` and the stale PATH-shadowing user-level `vida.exe` was moved aside so Windows resolves the installer-managed `vida.cmd`.
 19. The local developer host then disabled Smart App Control by setting `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState=0` and applying `CiTool.exe -r`; `vida --version`, `taskflow --help`, and `docflow --help` now execute through the Windows launchers.
 20. The runtime bundle retrieval-trust blocker found during the release wave was fixed by allowing bundle trust evidence to cite the latest recorded final snapshot when no admissible final snapshot exists yet.
 21. `vida taskflow consume bundle check --json` run through the WSL-built `0.9.3` binary returned `blocker_codes=[]` and `check.ok=true`.
@@ -440,7 +440,7 @@ Local proof surfaces:
 3. WSL `bash scripts/build-release.sh v0.9.3`
    - result: release archives generated under `dist/`
 4. Windows installer `upgrade -Version v0.9.3` and `use -Version v0.9.3`
-   - result: active junction points to `v0.9.3`, launchers regenerated, stale `.bun\bin\vida.exe` moved into backup
+   - result: active junction points to `v0.9.3`, launchers regenerated, stale user-level `vida.exe` moved into backup
 5. Windows Smart App Control repair
    - result: `VerifiedAndReputablePolicyState=0`, Code Integrity policy refresh finished, `vida --version` returns `vida 0.9.3`
    - boundary: this disables Smart App Control on the local developer host; long-term release distribution should use trusted code signing or a managed App Control policy
