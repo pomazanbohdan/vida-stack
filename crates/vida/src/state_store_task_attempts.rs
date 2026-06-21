@@ -1,4 +1,10 @@
 use super::*;
+use taskflow_authority::task_attempts::{
+    decide_task_attempt_binding, decide_task_attempt_rollup,
+    normalize_task_attempt_status as normalize_authority_attempt_status,
+    summarize_task_stage_attempts, TaskAttemptBindingDecision, TaskAttemptBindingInput,
+    TaskAttemptRollupAttempt, TaskAttemptRollupInput, TaskAttemptSummaryInput,
+};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue, PartialEq, Eq)]
 pub struct TaskAttemptRecord {
@@ -153,19 +159,6 @@ pub struct ConsolidateTaskStageAttemptsRequest {
     pub timeout_attempt_ids: Vec<String>,
     pub cap_limited_attempt_ids: Vec<String>,
 }
-
-const TASK_ATTEMPT_STATUSES: &[&str] = &[
-    "submitted",
-    "running",
-    "produced",
-    "validating",
-    "accepted",
-    "partially_accepted",
-    "rejected",
-    "stale",
-    "failed",
-    "consumed",
-];
 
 impl StateStore {
     pub(crate) async fn task_runtime_reference_labels_for_tasks(
@@ -512,49 +505,31 @@ impl StateStore {
                 ),
             });
         }
-        let stale_attempt_ids = attempts
-            .iter()
-            .filter(|attempt| attempt.freshness != task.updated_at)
-            .map(|attempt| attempt.attempt_id.clone())
-            .collect::<Vec<_>>();
-        if !stale_attempt_ids.is_empty() {
+        let conflicts = normalize_artifact_refs(request.conflicts);
+        let rollup = decide_task_attempt_rollup(TaskAttemptRollupInput {
+            task_updated_at: task.updated_at.clone(),
+            attempts: attempts
+                .iter()
+                .map(|attempt| TaskAttemptRollupAttempt {
+                    attempt_id: attempt.attempt_id.clone(),
+                    status: attempt.status.clone(),
+                    freshness: attempt.freshness.clone(),
+                })
+                .collect(),
+            requested_partial_attempt_ids: normalize_artifact_refs(request.partial_attempt_ids),
+            conflicts: conflicts.clone(),
+        });
+        if !rollup.stale_attempt_ids.is_empty() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
                     "stale_task_binding: cannot consolidate stale attempts for task `{}` stage `{}`: {}",
                     task.id,
                     stage_id,
-                    stale_attempt_ids.join(", ")
+                    rollup.stale_attempt_ids.join(", ")
                 ),
             });
         }
 
-        let accepted_attempt_ids = attempts
-            .iter()
-            .filter(|attempt| attempt.status == "accepted")
-            .map(|attempt| attempt.attempt_id.clone())
-            .collect::<Vec<_>>();
-        let rejected_attempt_ids = attempts
-            .iter()
-            .filter(|attempt| attempt.status == "rejected")
-            .map(|attempt| attempt.attempt_id.clone())
-            .collect::<Vec<_>>();
-        let mut partial_attempt_ids = normalize_artifact_refs(request.partial_attempt_ids);
-        for attempt in attempts
-            .iter()
-            .filter(|attempt| attempt.status == "partially_accepted")
-        {
-            if !partial_attempt_ids.contains(&attempt.attempt_id) {
-                partial_attempt_ids.push(attempt.attempt_id.clone());
-            }
-        }
-
-        let conflicts = normalize_artifact_refs(request.conflicts);
-        let result_status = if conflicts.is_empty() {
-            "accepted"
-        } else {
-            "conflict"
-        }
-        .to_string();
         let receipt_id = request.receipt_id.unwrap_or_else(|| {
             format!(
                 "{}--{}--consolidation--{}",
@@ -572,22 +547,15 @@ impl StateStore {
                 &request.consolidator_profile,
             )?,
             merge_policy: normalize_non_empty("merge_policy", &request.merge_policy)?,
-            result_status,
+            result_status: rollup.result_status,
             attempt_count: attempts.len(),
-            accepted_attempt_ids,
-            rejected_attempt_ids,
+            accepted_attempt_ids: rollup.accepted_attempt_ids,
+            rejected_attempt_ids: rollup.rejected_attempt_ids,
             stale_attempt_ids: Vec::new(),
-            partial_attempt_ids,
+            partial_attempt_ids: rollup.partial_attempt_ids,
             timeout_attempt_ids: normalize_artifact_refs(request.timeout_attempt_ids),
             cap_limited_attempt_ids: normalize_artifact_refs(request.cap_limited_attempt_ids),
-            conflict_attempt_ids: if conflicts.is_empty() {
-                Vec::new()
-            } else {
-                attempts
-                    .iter()
-                    .map(|attempt| attempt.attempt_id.clone())
-                    .collect()
-            },
+            conflict_attempt_ids: rollup.conflict_attempt_ids,
             artifact_refs: normalize_artifact_refs(request.artifact_refs),
             facts: normalize_artifact_refs(request.facts),
             hypotheses: normalize_artifact_refs(request.hypotheses),
@@ -676,21 +644,30 @@ impl StateStore {
         let task_id = normalize_non_empty("task_id", task_id)?;
         normalize_non_empty("stage_id", stage_id)?;
         let task = self.show_task(&task_id).await?;
-        if Self::task_status_is_closed_like(&task.status) {
-            return Err(StateStoreError::InvalidTaskRecord {
-                reason: format!(
-                    "task attempt binding is stale because task `{}` is closed",
-                    task.id
-                ),
-            });
-        }
-        if work_item_is_program_container(&task.issue_type) {
-            return Err(StateStoreError::InvalidTaskRecord {
-                reason: format!(
-                    "task attempt binding requires a leaf task, got `{}` of type `{}`",
-                    task.id, task.issue_type
-                ),
-            });
+        match decide_task_attempt_binding(TaskAttemptBindingInput {
+            task_id: task.id.clone(),
+            task_status: task.status.clone(),
+            issue_type: task.issue_type.clone(),
+            program_container: work_item_is_program_container(&task.issue_type),
+        }) {
+            TaskAttemptBindingDecision::Admitted => {}
+            TaskAttemptBindingDecision::ClosedTask { task_id } => {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "task attempt binding is stale because task `{task_id}` is closed"
+                    ),
+                });
+            }
+            TaskAttemptBindingDecision::ProgramContainer {
+                task_id,
+                issue_type,
+            } => {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "task attempt binding requires a leaf task, got `{task_id}` of type `{issue_type}`"
+                    ),
+                });
+            }
         }
         Ok(task)
     }
@@ -714,49 +691,35 @@ fn task_stage_summary_from_attempts(
     stage: Option<&TaskStageRecord>,
     attempts: &[TaskAttemptRecord],
 ) -> TaskStageSummary {
-    let mut status_counts = BTreeMap::new();
-    let mut artifact_refs = Vec::new();
-    for attempt in attempts {
-        *status_counts.entry(attempt.status.clone()).or_insert(0) += 1;
-        for artifact_ref in &attempt.artifact_refs {
-            if !artifact_refs.contains(artifact_ref) {
-                artifact_refs.push(artifact_ref.clone());
-            }
-        }
-    }
-    let latest = attempts.iter().max_by(|left, right| {
-        left.updated_at
-            .cmp(&right.updated_at)
-            .then_with(|| left.attempt_id.cmp(&right.attempt_id))
-    });
+    let summary = summarize_task_stage_attempts(
+        &attempts
+            .iter()
+            .map(|attempt| TaskAttemptSummaryInput {
+                attempt_id: attempt.attempt_id.clone(),
+                status: attempt.status.clone(),
+                artifact_refs: attempt.artifact_refs.clone(),
+                consolidation_receipt_id: attempt.consolidation_receipt_id.clone(),
+                updated_at: attempt.updated_at.clone(),
+            })
+            .collect::<Vec<_>>(),
+        stage.and_then(|stage| stage.latest_consolidation_receipt_id.clone()),
+    );
     TaskStageSummary {
         task_id,
         stage_id,
         stage_status: stage.map(|stage| stage.status.clone()),
-        attempt_count: attempts.len(),
-        status_counts,
-        latest_attempt_id: latest.map(|attempt| attempt.attempt_id.clone()),
-        latest_attempt_status: latest.map(|attempt| attempt.status.clone()),
-        latest_consolidation_receipt_id: stage
-            .and_then(|stage| stage.latest_consolidation_receipt_id.clone())
-            .or_else(|| latest.and_then(|attempt| attempt.consolidation_receipt_id.clone())),
-        artifact_refs,
+        attempt_count: summary.attempt_count,
+        status_counts: summary.status_counts,
+        latest_attempt_id: summary.latest_attempt_id,
+        latest_attempt_status: summary.latest_attempt_status,
+        latest_consolidation_receipt_id: summary.latest_consolidation_receipt_id,
+        artifact_refs: summary.artifact_refs,
     }
 }
 
 fn normalize_task_attempt_status(value: &str) -> Result<String, StateStoreError> {
-    let normalized = normalize_non_empty("status", value)?.to_ascii_lowercase();
-    if TASK_ATTEMPT_STATUSES.contains(&normalized.as_str()) {
-        Ok(normalized)
-    } else {
-        Err(StateStoreError::InvalidTaskRecord {
-            reason: format!(
-                "task attempt status `{}` is invalid; expected one of {}",
-                value.trim(),
-                TASK_ATTEMPT_STATUSES.join(", ")
-            ),
-        })
-    }
+    normalize_authority_attempt_status(value)
+        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })
 }
 
 fn normalize_non_empty(field: &str, value: &str) -> Result<String, StateStoreError> {
