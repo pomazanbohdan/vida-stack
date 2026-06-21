@@ -6,6 +6,7 @@ pub mod close;
 pub mod closure_ready;
 pub mod create;
 pub mod dependencies;
+pub mod graph;
 pub mod handoff;
 pub mod import_export;
 pub mod note;
@@ -28,6 +29,7 @@ mod tests {
             "closure_ready",
             "create",
             "dependencies",
+            "graph",
             "handoff",
             "import_export",
             "note",
@@ -40,6 +42,6 @@ mod tests {
             "verify",
         ];
 
-        assert_eq!(modules.len(), 16);
+        assert_eq!(modules.len(), 17);
     }
 }

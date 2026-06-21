@@ -1845,6 +1845,17 @@ fn draft_cycles(draft: &TaskPlanGraphDraft) -> Vec<String> {
         .iter()
         .map(|node| node.task_id.as_str())
         .collect::<BTreeSet<_>>();
+    let graph_analysis = taskflow_core::task::graph::analyze_directed_dependencies(
+        node_ids.iter().copied(),
+        draft
+            .edges
+            .iter()
+            .map(|edge| (edge.task_id.as_str(), edge.depends_on_id.as_str())),
+    );
+    if graph_analysis.cycle_node_id.is_none() {
+        return Vec::new();
+    }
+
     let mut adjacency = BTreeMap::<&str, Vec<&str>>::new();
     for edge in &draft.edges {
         if node_ids.contains(edge.task_id.as_str())
