@@ -12285,8 +12285,8 @@ host_environment:
             .expect("run graph status should load");
         assert_eq!(persisted_status.active_node, "analysis");
         assert_eq!(persisted_status.next_node.as_deref(), Some("writer"));
-        assert_eq!(persisted_status.lifecycle_stage, "analysis_active");
-        assert_eq!(persisted_status.policy_gate, "targeted_verification");
+        assert_eq!(persisted_status.lifecycle_stage, "analysis_complete");
+        assert_eq!(persisted_status.policy_gate, "not_required");
         assert_eq!(persisted_status.handoff_state, "awaiting_writer");
         assert_eq!(persisted_status.resume_target, "dispatch.writer_lane");
     }

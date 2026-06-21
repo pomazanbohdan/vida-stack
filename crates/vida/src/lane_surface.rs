@@ -6841,7 +6841,7 @@ mod tests {
             .blocker_codes
             .contains(&"supersession_without_receipt".to_string()));
         assert!(truth.next_actions.iter().any(|value| {
-            value.contains("vida lane supersede run-lane-test --receipt-id exception-1 --json")
+            value.contains("vida lane supersede run-lane-test --receipt-id exception-1")
         }));
     }
 

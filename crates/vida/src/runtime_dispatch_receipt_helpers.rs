@@ -415,7 +415,7 @@ mod tests {
             dispatch_result_path: Some("result.json".to_string()),
             blocker_code: None,
             downstream_dispatch_target: Some("verifier".to_string()),
-            downstream_dispatch_command: Some("vida taskflow consume continue".to_string()),
+            downstream_dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
             downstream_dispatch_note: Some("continue".to_string()),
             downstream_dispatch_ready: true,
             downstream_dispatch_blockers: Vec::new(),
