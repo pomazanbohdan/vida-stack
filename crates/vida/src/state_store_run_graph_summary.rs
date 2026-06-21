@@ -9344,6 +9344,10 @@ mod tests {
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("task-replay-lineage-invalid", "open"))
+            .await
+            .expect("seed invalid replay lineage task");
 
         let mut status = sample_run_graph_status();
         status.run_id = "run-replay-lineage-invalid".to_string();
