@@ -1495,6 +1495,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "trycmd",
  "vida-test-support",
 ]
 

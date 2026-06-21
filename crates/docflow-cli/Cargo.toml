@@ -28,4 +28,5 @@ docflow-validation = { path = "../docflow-validation" }
 
 [dev-dependencies]
 rstest = "0.26.1"
+trycmd = "1.2.0"
 vida-test-support = { path = "../vida-test-support" }
