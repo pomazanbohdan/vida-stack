@@ -8,6 +8,14 @@ use crate::taskflow_run_graph::{
     is_dispatch_resume_handoff_complete,
 };
 use crate::RuntimeConsumptionLaneSelection;
+use taskflow_authority::run_graph_transition::{
+    admit_run_graph_transition, RunGraphAuthorityInput,
+};
+use taskflow_core::run_graph::model::{
+    DispatchReceiptSnapshot as CoreDispatchReceiptSnapshot,
+    RunGraphStatusSnapshot as CoreRunGraphStatusSnapshot,
+    RunGraphTransitionKind as CoreRunGraphTransitionKind,
+};
 
 const MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES: u64 = 1024 * 1024;
 
@@ -229,7 +237,9 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.recovery_ready = false;
         return Ok(status);
     }
-    if receipt.dispatch_status == "executed"
+    if run_graph_authority_transition_kind(&status, &receipt)
+        == Some(CoreRunGraphTransitionKind::DownstreamReadyHandoff)
+        && receipt.dispatch_status == "executed"
         && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
         && receipt.downstream_dispatch_ready
         && receipt.downstream_dispatch_blockers.is_empty()
@@ -302,6 +312,37 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         }
     }
     Ok(status)
+}
+
+fn run_graph_authority_transition_kind(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> Option<CoreRunGraphTransitionKind> {
+    let decision = admit_run_graph_transition(RunGraphAuthorityInput {
+        status: CoreRunGraphStatusSnapshot {
+            run_id: status.run_id.clone(),
+            task_id: status.task_id.clone(),
+            active_node: status.active_node.clone(),
+            next_node: status.next_node.clone(),
+            status: status.status.clone(),
+            lifecycle_stage: status.lifecycle_stage.clone(),
+            handoff_state: status.handoff_state.clone(),
+            resume_target: status.resume_target.clone(),
+            recovery_ready: status.recovery_ready,
+        },
+        receipt: Some(CoreDispatchReceiptSnapshot {
+            dispatch_target: receipt.dispatch_target.clone(),
+            dispatch_status: receipt.dispatch_status.clone(),
+            lane_status: receipt.lane_status.clone(),
+            supersedes_receipt_id: receipt.supersedes_receipt_id.clone(),
+            exception_path_receipt_id: receipt.exception_path_receipt_id.clone(),
+            downstream_dispatch_ready: receipt.downstream_dispatch_ready,
+            downstream_dispatch_target: receipt.downstream_dispatch_target.clone(),
+            downstream_dispatch_blockers: receipt.downstream_dispatch_blockers.clone(),
+        }),
+        closure: None,
+    });
+    Some(decision.decision.kind)
 }
 
 struct BlockedSourceLane {
@@ -4202,12 +4243,11 @@ impl StateStore {
         if receipt.downstream_dispatch_blockers.iter().any(|blocker| {
             let raw_blocker = blocker.as_str();
             let blocker = blocker.trim();
-            let collapsed = blocker.split_whitespace().collect::<Vec<_>>().join(" ");
             raw_blocker != blocker
                 || blocker.is_empty()
                 || !blocker.is_ascii()
-                || blocker.to_ascii_lowercase() != blocker
-                || collapsed != blocker
+                || blocker.bytes().any(|byte| byte.is_ascii_uppercase())
+                || blocker.bytes().any(|byte| byte.is_ascii_whitespace())
         }) {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
@@ -4221,7 +4261,7 @@ impl StateStore {
             });
         }
         if receipt.downstream_dispatch_blockers.iter().any(|blocker| {
-            let canonical_blocker = blocker.trim().to_ascii_lowercase();
+            let canonical_blocker = blocker.trim();
             !canonical_blockers.insert(canonical_blocker)
         }) {
             return Err(StateStoreError::InvalidTaskRecord {
