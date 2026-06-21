@@ -143,7 +143,7 @@ find "$STAGE_DIR" -type f -name '*.pyc' -delete
 if skip_build_enabled; then
     printf '[release-build] Using existing release binaries from %s\n' "$RELEASE_BIN_DIR"
 else
-    "$CARGO_BIN" build --release --target-dir "$CARGO_TARGET_ROOT" -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
+    "$CARGO_BIN" build --release --manifest-path "$ROOT_DIR/Cargo.toml" --target-dir "$CARGO_TARGET_ROOT" -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
 fi
 copy_runtime_binary() {
   local binary_name="$1"
