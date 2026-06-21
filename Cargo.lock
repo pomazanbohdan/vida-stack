@@ -1473,6 +1473,7 @@ dependencies = [
  "docflow-validation",
  "globset",
  "ignore",
+ "rstest",
  "serde",
  "serde_json",
  "time",

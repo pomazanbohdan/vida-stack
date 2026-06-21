@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rstest::rstest;
+
 fn unique_docflow_root(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -108,30 +110,19 @@ fn root_help_renders_as_binary() {
     assert!(stdout.contains("readiness-check"));
 }
 
-#[test]
-fn check_help_exposes_json_mode() {
+#[rstest]
+#[case::check_help_exposes_json_mode("check", true)]
+#[case::fastcheck_help_does_not_expose_json_mode("fastcheck", false)]
+fn help_exposes_json_mode_when_command_supports_it(#[case] command: &str, #[case] has_json: bool) {
     let context = vida_test_support::CommandContext::empty();
     let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
-        .args(["check", "--help"])
+        .args([command, "--help"])
         .output()
-        .expect("docflow check help should run");
+        .expect("docflow help should run");
 
     assert!(output.status.success(), "{}", context.diagnostics(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--json"));
-}
-
-#[test]
-fn fastcheck_help_does_not_expose_json_mode() {
-    let context = vida_test_support::CommandContext::empty();
-    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
-        .args(["fastcheck", "--help"])
-        .output()
-        .expect("docflow fastcheck help should run");
-
-    assert!(output.status.success(), "{}", context.diagnostics(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("--json"));
+    assert_eq!(stdout.contains("--json"), has_json);
 }
 
 #[test]

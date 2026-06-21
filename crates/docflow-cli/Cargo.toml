@@ -27,4 +27,5 @@ docflow-relations = { path = "../docflow-relations" }
 docflow-validation = { path = "../docflow-validation" }
 
 [dev-dependencies]
+rstest = "0.26.1"
 vida-test-support = { path = "../vida-test-support" }
