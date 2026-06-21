@@ -465,8 +465,8 @@ impl StateStore {
         }
 
         let archive_path = if root.exists() {
-            validate_state_reset_existing_root(&root)?;
             if state_reset_dir_has_existing_datastore_payload(&root)? {
+                validate_state_reset_existing_root(&root)?;
                 let store = Self::open_existing_with_timeout(
                     root.clone(),
                     std::time::Duration::from_secs(10),
@@ -625,6 +625,30 @@ mod tests {
         assert!(summary.reinitialized);
         assert_eq!(summary.task_count, 0);
         assert!(summary.state_spine_manifest_present);
+
+        let _ = fs::remove_dir_all(&root);
+        if let Some(archive_path) = summary.archive_path {
+            let _ = fs::remove_dir_all(archive_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn state_reset_archives_and_reinitializes_precreated_empty_state_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-precreated-empty-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create empty state dir");
+
+        let summary = StateStore::archive_and_reinit_state_root(root.clone(), true, true)
+            .await
+            .expect("precreated empty state dir should archive and reinit");
+
+        assert!(summary.archive_created);
+        assert!(summary.reinitialized);
+        assert!(summary.state_spine_manifest_present);
+        assert!(root.exists());
 
         let _ = fs::remove_dir_all(&root);
         if let Some(archive_path) = summary.archive_path {

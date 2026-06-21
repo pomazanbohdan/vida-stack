@@ -746,6 +746,7 @@ fn host_bridge_completion_lane_args(
     blocker_codes: Option<&str>,
     blocker_code: &[String],
     rework_target: Option<&str>,
+    as_json: bool,
 ) -> Result<Vec<String>, String> {
     let run_id = payload["host_bridge"]["run_id"]
         .as_str()
@@ -818,6 +819,9 @@ fn host_bridge_completion_lane_args(
     if let Some(state_dir) = state_dir {
         args.push("--state-dir".to_string());
         args.push(state_dir.display().to_string());
+    }
+    if as_json {
+        args.push("--json".to_string());
     }
     Ok(args)
 }
@@ -4061,6 +4065,7 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     command.blocker_codes.as_deref(),
                     &command.blocker_code,
                     command.rework_target.as_deref(),
+                    command.json,
                 ) {
                     Ok(args) => args,
                     Err(error) => {
@@ -5811,6 +5816,7 @@ mod tests {
             None,
             &[],
             None,
+            false,
         )
         .expect("completion lane args should render");
 
@@ -5831,6 +5837,26 @@ mod tests {
                 "state-dir",
             ]
         );
+
+        let json_args = host_bridge_completion_lane_args(
+            std::path::Path::new("request.json"),
+            &payload,
+            "agent-1",
+            Some("completed"),
+            Some("receipt-1"),
+            Some(std::path::Path::new("state-dir")),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            true,
+        )
+        .expect("json completion lane args should render");
+
+        assert!(json_args.iter().any(|arg| arg == "--json"));
     }
 
     #[test]

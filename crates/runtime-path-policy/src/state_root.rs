@@ -60,7 +60,7 @@ impl StateRoot {
 
     pub(crate) fn resolve_raw(&self, raw_path: impl AsRef<Path>) -> PathBuf {
         let raw_path = raw_path.as_ref();
-        if raw_path.is_absolute() {
+        if path_is_rooted(raw_path) {
             raw_path.to_path_buf()
         } else {
             self.raw.join(raw_path)
@@ -77,7 +77,7 @@ impl StateRoot {
         kind: ArtifactPathKind,
     ) -> Result<PathBuf, PathPolicyError> {
         let raw_path = raw_path.as_ref();
-        if raw_path.is_absolute() {
+        if path_is_rooted(raw_path) {
             raw_path
                 .strip_prefix(&self.canonical)
                 .or_else(|_| raw_path.strip_prefix(&self.raw))
@@ -91,4 +91,8 @@ impl StateRoot {
             Ok(raw_path.to_path_buf())
         }
     }
+}
+
+fn path_is_rooted(path: &Path) -> bool {
+    path.is_absolute() || path.has_root()
 }

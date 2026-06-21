@@ -1652,6 +1652,14 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "missing_edge_source",
     "missing_edge_type",
     "missing_execution_semantics",
+    "missing_retrieval_trust_evidence_acl",
+    "missing_retrieval_trust_evidence_acl_context",
+    "missing_retrieval_trust_evidence_acl_propagation",
+    "missing_retrieval_trust_evidence_citation",
+    "missing_retrieval_trust_evidence_freshness",
+    "missing_retrieval_trust_evidence_freshness_posture",
+    "missing_retrieval_trust_evidence_source",
+    "missing_retrieval_trust_evidence_source_registry_ref",
     "missing_lane_hint",
     "missing_order_bucket",
     "missing_owned_paths",
@@ -2131,7 +2139,11 @@ pub(crate) fn missing_retrieval_optional_boundary_entry_blocker_code(key: &str) 
 }
 
 pub(crate) fn missing_retrieval_trust_evidence_field_blocker_code(key: &str) -> Option<String> {
-    canonical_blocker_code_value_from_str(&format!("missing_retrieval_trust_evidence_field:{key}"))
+    let suffix = key.trim();
+    if !RETRIEVAL_TRUST_EVIDENCE_KEYS.contains(&suffix) {
+        return None;
+    }
+    Some(format!("missing_retrieval_trust_evidence_{suffix}"))
 }
 
 struct DecisionGateRule {

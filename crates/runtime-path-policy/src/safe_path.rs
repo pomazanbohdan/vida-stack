@@ -365,6 +365,31 @@ mod tests {
         assert_eq!(safe.path(), file.canonicalize().unwrap());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn existing_regular_file_accepts_windows_rooted_path_under_raw_state_root() {
+        let root_dir = PathBuf::from(format!(
+            "/tmp/runtime-path-policy-rooted-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root_dir);
+        std::fs::create_dir_all(&root_dir).unwrap();
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let file = root_dir.join("requests").join("request.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{}").unwrap();
+
+        let safe = existing_regular_file_under_root(
+            &state_root,
+            &file,
+            ArtifactPathKind::HostBridgeRequest,
+        )
+        .unwrap();
+
+        assert_eq!(safe.path(), file.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&root_dir);
+    }
+
     #[test]
     fn existing_regular_file_rejects_dot_segments() {
         let root_dir = temp_root("dot-segment");

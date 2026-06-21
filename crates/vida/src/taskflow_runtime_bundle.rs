@@ -483,6 +483,23 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             .as_ref()
             .map(|receipt| receipt.recorded_at.as_str()),
     );
+    let retrieval_trust_evidence_payload = if retrieval_trust_evidence
+        .as_object()
+        .is_some_and(serde_json::Map::is_empty)
+    {
+        serde_json::json!({})
+    } else {
+        serde_json::json!({
+            "source": retrieval_trust_evidence["source"].clone(),
+            "source_registry_ref": retrieval_trust_evidence["source_registry_ref"].clone(),
+            "citation": retrieval_trust_evidence["citation"].clone(),
+            "freshness": retrieval_trust_evidence["freshness"].clone(),
+            "freshness_posture": retrieval_trust_evidence["freshness_posture"].clone(),
+            "acl": retrieval_trust_evidence["acl"].clone(),
+            "acl_context": retrieval_trust_evidence["acl_context"].clone(),
+            "acl_propagation": retrieval_trust_evidence["acl_propagation"].clone(),
+        })
+    };
     let cache_delivery_contract = serde_json::json!({
         "always_on_core": control_core["mandatory_chain_order"],
         "project_startup_bundle": ["activation_bundle.project_protocol_projections.startup_bundle"],
@@ -509,16 +526,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             "protocol_binding_cache_token": metadata["protocol_binding_cache_token"],
             "startup_bundle_revision": startup_bundle_revision,
         },
-        "retrieval_trust_evidence": {
-            "source": retrieval_trust_evidence["source"].clone(),
-            "source_registry_ref": retrieval_trust_evidence["source_registry_ref"].clone(),
-            "citation": retrieval_trust_evidence["citation"].clone(),
-            "freshness": retrieval_trust_evidence["freshness"].clone(),
-            "freshness_posture": retrieval_trust_evidence["freshness_posture"].clone(),
-            "acl": retrieval_trust_evidence["acl"].clone(),
-            "acl_context": retrieval_trust_evidence["acl_context"].clone(),
-            "acl_propagation": retrieval_trust_evidence["acl_propagation"].clone(),
-        },
+        "retrieval_trust_evidence": retrieval_trust_evidence_payload,
     });
     let orchestrator_init_view = merge_project_activation_into_init_view(
         build_orchestrator_init_view(
@@ -2767,7 +2775,7 @@ mod tests {
         let blockers = retrieval_trust_evidence_blockers(&contract);
         assert!(blockers
             .iter()
-            .any(|row| row == "missing_retrieval_trust_evidence_field:acl_propagation"));
+            .any(|row| row == "missing_retrieval_trust_evidence_acl_propagation"));
     }
 
     #[test]
@@ -2787,16 +2795,16 @@ mod tests {
         let blockers = retrieval_trust_evidence_blockers(&contract);
         assert!(blockers
             .iter()
-            .any(|row| row == "missing_retrieval_trust_evidence_field:citation"));
+            .any(|row| row == "missing_retrieval_trust_evidence_citation"));
         assert!(blockers
             .iter()
-            .any(|row| row == "missing_retrieval_trust_evidence_field:acl"));
+            .any(|row| row == "missing_retrieval_trust_evidence_acl"));
         assert!(blockers
             .iter()
-            .any(|row| row == "missing_retrieval_trust_evidence_field:source_registry_ref"));
+            .any(|row| row == "missing_retrieval_trust_evidence_source_registry_ref"));
         assert!(blockers
             .iter()
-            .any(|row| row == "missing_retrieval_trust_evidence_field:acl_propagation"));
+            .any(|row| row == "missing_retrieval_trust_evidence_acl_propagation"));
     }
 
     #[test]
