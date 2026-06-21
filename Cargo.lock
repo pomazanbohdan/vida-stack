@@ -7247,6 +7247,7 @@ dependencies = [
  "serde",
  "serde_json",
  "taskflow-contracts",
+ "taskflow-core",
  "thiserror 2.0.18",
 ]
 

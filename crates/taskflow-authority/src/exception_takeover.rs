@@ -1,5 +1,7 @@
 pub const MODULE: &str = "exception_takeover";
 
+pub use taskflow_core::task::takeover::ExceptionTakeoverStateLabel;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExceptionTakeoverReceipt<'a> {
     pub lane_status: &'a str,
@@ -12,49 +14,20 @@ pub struct ExceptionTakeoverRecovery<'a> {
     pub local_exception_takeover_gate: &'a str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExceptionTakeoverStateLabel {
-    Active,
-    AdmissibleNotActive,
-    ReceiptRecorded,
-}
-
-impl ExceptionTakeoverStateLabel {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::AdmissibleNotActive => "admissible_not_active",
-            Self::ReceiptRecorded => "receipt_recorded",
-        }
-    }
-}
-
 pub fn exception_takeover_state_label(
     latest_receipt: Option<&ExceptionTakeoverReceipt<'_>>,
     latest_recovery: Option<&ExceptionTakeoverRecovery<'_>>,
 ) -> Option<ExceptionTakeoverStateLabel> {
     let receipt = latest_receipt?;
-    if !has_nonempty_value(receipt.exception_path_receipt_id) {
-        return None;
-    }
-
-    if has_nonempty_value(receipt.supersedes_receipt_id) {
-        return Some(ExceptionTakeoverStateLabel::Active);
-    }
-
-    let gate_clear = latest_recovery.is_some_and(|recovery| {
-        let gate = recovery.local_exception_takeover_gate.trim();
-        !gate.is_empty() && gate != "blocked_open_delegated_cycle"
-    });
-
-    if gate_clear && receipt.lane_status == "lane_exception_recorded" {
-        return Some(ExceptionTakeoverStateLabel::AdmissibleNotActive);
-    }
-    if receipt.lane_status == "lane_exception_takeover" {
-        return Some(ExceptionTakeoverStateLabel::AdmissibleNotActive);
-    }
-
-    Some(ExceptionTakeoverStateLabel::ReceiptRecorded)
+    taskflow_core::task::takeover::exception_takeover_state(
+        taskflow_core::task::takeover::ExceptionTakeoverDecisionInput {
+            lane_status: receipt.lane_status,
+            exception_path_receipt_id: receipt.exception_path_receipt_id,
+            supersedes_receipt_id: receipt.supersedes_receipt_id,
+            local_exception_takeover_gate: latest_recovery
+                .map(|recovery| recovery.local_exception_takeover_gate),
+        },
+    )
 }
 
 pub fn exception_takeover_is_lawfully_active(
@@ -63,10 +36,6 @@ pub fn exception_takeover_is_lawfully_active(
 ) -> bool {
     exception_takeover_state_label(latest_receipt, latest_recovery)
         == Some(ExceptionTakeoverStateLabel::Active)
-}
-
-fn has_nonempty_value(value: Option<&str>) -> bool {
-    value.is_some_and(|value| !value.trim().is_empty())
 }
 
 #[cfg(test)]
