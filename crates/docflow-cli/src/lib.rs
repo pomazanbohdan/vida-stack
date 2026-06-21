@@ -2119,30 +2119,24 @@ fn footer_map(content: &str) -> BTreeMap<String, String> {
 }
 
 fn extract_markdown_links(path: &str, body: &str) -> Vec<LinkRow> {
-    let mut rows = Vec::new();
-    let mut cursor = 0usize;
-    while let Some(start) = body[cursor..].find("](") {
-        let start = cursor + start + 2;
-        if let Some(end) = body[start..].find(')') {
-            let end = start + end;
-            let target = body[start..end].trim();
-            if !target.is_empty() && !target.contains("://") {
-                let resolved = resolve_link_target(path, target);
-                let exists = runtime_root().join(&resolved).exists();
-                rows.push(LinkRow {
-                    path: path.to_string(),
-                    artifact: String::new(),
-                    target: target.to_string(),
-                    resolved,
-                    exists,
-                });
+    docflow_markdown::extract_link_targets(body)
+        .into_iter()
+        .filter_map(|link| {
+            let target = link.target.trim();
+            if target.is_empty() || target.contains("://") {
+                return None;
             }
-            cursor = end + 1;
-        } else {
-            break;
-        }
-    }
-    rows
+            let resolved = resolve_link_target(path, target);
+            let exists = runtime_root().join(&resolved).exists();
+            Some(LinkRow {
+                path: path.to_string(),
+                artifact: String::new(),
+                target: target.to_string(),
+                resolved,
+                exists,
+            })
+        })
+        .collect()
 }
 
 fn resolve_link_target(path: &str, target: &str) -> String {

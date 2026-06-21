@@ -1,3 +1,4 @@
+use pulldown_cmark::{Event, Parser, Tag};
 use thiserror::Error;
 
 pub const FOOTER_DELIMITER: &str = "-----";
@@ -6,6 +7,11 @@ pub const FOOTER_DELIMITER: &str = "-----";
 pub struct MarkdownArtifact {
     pub body: String,
     pub footer: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownLink {
+    pub target: String,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -50,11 +56,26 @@ pub fn append_changelog_row(changelog: &str, row: &str) -> String {
     }
 }
 
+pub fn extract_link_targets(input: &str) -> Vec<MarkdownLink> {
+    Parser::new(input)
+        .filter_map(|event| match event {
+            Event::Start(Tag::Link { dest_url, .. })
+            | Event::Start(Tag::Image { dest_url, .. }) => {
+                let target = dest_url.trim();
+                (!target.is_empty()).then(|| MarkdownLink {
+                    target: target.to_string(),
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FOOTER_DELIMITER, MarkdownArtifact, MarkdownError, append_changelog_row, render_artifact,
-        split_footer,
+        FOOTER_DELIMITER, MarkdownArtifact, MarkdownError, append_changelog_row,
+        extract_link_targets, render_artifact, split_footer,
     };
 
     #[test]
@@ -86,5 +107,27 @@ mod tests {
     fn appends_jsonl_changelog_rows() {
         let rendered = append_changelog_row("{\"a\":1}", "{\"b\":2}");
         assert_eq!(rendered, "{\"a\":1}\n{\"b\":2}\n");
+    }
+
+    #[test]
+    fn extracts_commonmark_link_targets() {
+        let links = extract_link_targets(
+            "Inline [doc](docs/a.md#section), image ![alt](assets/pic.md), and [ref][r].\n\n[r]: docs/ref.md\n",
+        );
+
+        assert_eq!(
+            links,
+            vec![
+                super::MarkdownLink {
+                    target: "docs/a.md#section".into()
+                },
+                super::MarkdownLink {
+                    target: "assets/pic.md".into()
+                },
+                super::MarkdownLink {
+                    target: "docs/ref.md".into()
+                }
+            ]
+        );
     }
 }
