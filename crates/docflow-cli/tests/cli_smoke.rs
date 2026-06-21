@@ -128,7 +128,8 @@ fn help_exposes_json_mode_when_command_supports_it(#[case] command: &str, #[case
 #[test]
 fn check_json_renders_blocked_and_pass_envelopes() {
     let context = vida_test_support::CommandContext::empty();
-    let blocked_root = unique_docflow_root("blocked");
+    let blocked_temp = vida_test_support::temp_fixture_dir();
+    let blocked_root = blocked_temp.path().to_path_buf();
     fs::create_dir_all(blocked_root.join("docs/process")).expect("process dir should be created");
     fs::write(blocked_root.join("docs/process/a.md"), "# a\n").expect("process markdown");
 
@@ -159,7 +160,8 @@ fn check_json_renders_blocked_and_pass_envelopes() {
         .expect("issues should be an array");
     assert!(issues.contains(&serde_json::Value::String("missing_footer".to_string())));
 
-    let pass_root = unique_docflow_root("pass");
+    let pass_temp = vida_test_support::temp_fixture_dir();
+    let pass_root = pass_temp.path().to_path_buf();
     fs::create_dir_all(&pass_root).expect("pass root should be created");
     let pass_output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
         .args([
@@ -187,9 +189,6 @@ fn check_json_renders_blocked_and_pass_envelopes() {
             .expect("rows should be an array")
             .is_empty()
     );
-
-    fs::remove_dir_all(blocked_root).expect("blocked root should be removed");
-    fs::remove_dir_all(pass_root).expect("pass root should be removed");
 }
 
 fn write_task_doc(root: &std::path::Path, task_id: &str) {
