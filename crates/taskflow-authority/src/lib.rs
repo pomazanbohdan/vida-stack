@@ -4,6 +4,7 @@ pub mod errors;
 pub mod exception_takeover;
 pub mod final_snapshot;
 pub mod projection_cache;
+pub mod run_graph_evidence;
 pub mod run_graph_transition;
 pub mod stale_guard;
 pub mod task_transition;
@@ -21,18 +22,20 @@ mod tests {
             crate::stale_guard::MODULE,
             crate::exception_takeover::MODULE,
             crate::projection_cache::MODULE,
+            crate::run_graph_evidence::MODULE,
             crate::run_graph_transition::MODULE,
             crate::final_snapshot::MODULE,
             crate::continuation_binding::MODULE,
             crate::task_transition::MODULE,
         ];
 
-        assert_eq!(modules.len(), 9);
+        assert_eq!(modules.len(), 10);
         assert!(modules.contains(&"authority_chain"));
         assert!(modules.contains(&"terminal_closure"));
         assert!(modules.contains(&"stale_guard"));
         assert!(modules.contains(&"exception_takeover"));
         assert!(modules.contains(&"projection_cache"));
+        assert!(modules.contains(&"run_graph_evidence"));
         assert!(modules.contains(&"run_graph_transition"));
         assert!(modules.contains(&"final_snapshot"));
         assert!(modules.contains(&"continuation_binding"));

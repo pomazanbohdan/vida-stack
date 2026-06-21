@@ -8,6 +8,11 @@ use crate::taskflow_run_graph::{
     is_dispatch_resume_handoff_complete,
 };
 use crate::RuntimeConsumptionLaneSelection;
+use taskflow_authority::run_graph_evidence::{
+    blocked_source_lane_from_packet_evidence, downstream_handoff_ready_from_completion_evidence,
+    normalize_run_graph_node, rework_route_from_completion_evidence, RunGraphBlockedSourceLane,
+    RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence, RunGraphReworkEvidence,
+};
 use taskflow_authority::run_graph_transition::{
     admit_run_graph_transition, RunGraphAuthorityInput,
 };
@@ -167,9 +172,10 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.handoff_state = "none".to_string();
             status.resume_target = "none".to_string();
             status.context_state = "sealed".to_string();
-        } else if let Some(rework_route) = downstream_rework_route_from_completion_result(&receipt)
+        } else if let Some(rework_route) =
+            rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
         {
-            let completed_target = receipt.dispatch_target.trim().replace('-', "_");
+            let completed_target = normalize_run_graph_node(&receipt.dispatch_target);
             status.active_node = receipt.dispatch_target.clone();
             status.next_node = Some(rework_route.allowed_next_node.clone());
             status.lifecycle_stage = format!("{completed_target}_rework_required");
@@ -186,7 +192,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         } else if let Some(blocked_source) =
             blocked_source_lane_from_downstream_dispatch_packet(&receipt)
         {
-            let blocked_target = blocked_source.dispatch_target.replace('-', "_");
+            let blocked_target = normalize_run_graph_node(&blocked_source.dispatch_target);
             status.active_node = blocked_source.dispatch_target;
             status.next_node = None;
             status.lifecycle_stage = format!("{blocked_target}_blocked");
@@ -197,7 +203,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.resume_target = format!("dispatch.{blocked_target}");
             status.context_state = "sealed".to_string();
         } else {
-            let blocked_target = receipt.dispatch_target.trim().replace('-', "_");
+            let blocked_target = normalize_run_graph_node(&receipt.dispatch_target);
             status.active_node = receipt.dispatch_target.clone();
             status.next_node = None;
             status.lifecycle_stage = format!("{blocked_target}_blocked");
@@ -239,18 +245,12 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
     }
     if run_graph_authority_transition_kind(&status, &receipt)
         == Some(CoreRunGraphTransitionKind::DownstreamReadyHandoff)
-        && receipt.dispatch_status == "executed"
-        && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
-        && receipt.downstream_dispatch_ready
-        && receipt.downstream_dispatch_blockers.is_empty()
-        && receipt
-            .downstream_dispatch_target
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+        && downstream_handoff_ready_from_completion_evidence(&run_graph_completion_evidence(
+            &receipt,
+        ))
     {
         let completed_target = receipt.dispatch_target.trim();
-        let lifecycle_target = completed_target.replace('-', "_");
+        let lifecycle_target = normalize_run_graph_node(completed_target);
         let downstream_node = receipt
             .downstream_dispatch_target
             .as_deref()
@@ -297,7 +297,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            let next_node = next_target.replace('-', "_");
+            let next_node = normalize_run_graph_node(next_target);
             if status.next_node.is_none() {
                 status.next_node = Some(next_node.clone());
             }
@@ -345,28 +345,50 @@ fn run_graph_authority_transition_kind(
     Some(decision.decision.kind)
 }
 
-struct BlockedSourceLane {
-    dispatch_target: String,
-    blocker_code: Option<String>,
+fn run_graph_completion_evidence(
+    receipt: &RunGraphDispatchReceiptStored,
+) -> RunGraphCompletionEvidence {
+    RunGraphCompletionEvidence {
+        dispatch_target: receipt.dispatch_target.clone(),
+        dispatch_status: receipt.dispatch_status.clone(),
+        blocker_code: receipt.blocker_code.clone(),
+        rework: downstream_rework_evidence_from_completion_result(receipt),
+        source_lane: downstream_packet_evidence_from_receipt(receipt),
+        downstream_dispatch_ready: receipt.downstream_dispatch_ready,
+        downstream_dispatch_target: receipt.downstream_dispatch_target.clone(),
+        downstream_dispatch_blockers: receipt.downstream_dispatch_blockers.clone(),
+    }
 }
 
-fn downstream_rework_route_from_completion_result(
+fn downstream_rework_evidence_from_completion_result(
     receipt: &RunGraphDispatchReceiptStored,
-) -> Option<crate::runtime_dispatch_result_evidence::DispatchReworkRoute> {
-    crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
+) -> Option<RunGraphReworkEvidence> {
+    let route = crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
         receipt.downstream_dispatch_result_path.as_deref(),
         receipt.dispatch_result_path.as_deref(),
         receipt.dispatch_packet_path.as_deref(),
         &receipt.dispatch_target,
-    )
+    )?;
+    Some(RunGraphReworkEvidence {
+        allowed_next_node: route.allowed_next_node,
+        blocker_code: route.blocker_code,
+    })
 }
 
 fn blocked_source_lane_from_downstream_dispatch_packet(
     receipt: &RunGraphDispatchReceiptStored,
-) -> Option<BlockedSourceLane> {
-    if receipt.dispatch_status != "bridge_request_pending" && receipt.dispatch_status != "blocked" {
-        return None;
-    }
+) -> Option<RunGraphBlockedSourceLane> {
+    let packet = downstream_packet_evidence_from_receipt(receipt)?;
+    blocked_source_lane_from_packet_evidence(
+        &receipt.dispatch_target,
+        &receipt.dispatch_status,
+        packet,
+    )
+}
+
+fn downstream_packet_evidence_from_receipt(
+    receipt: &RunGraphDispatchReceiptStored,
+) -> Option<RunGraphDownstreamPacketEvidence> {
     let packet_path = receipt.dispatch_packet_path.as_deref()?.trim();
     if packet_path.is_empty() {
         return None;
@@ -397,17 +419,25 @@ fn blocked_source_lane_from_downstream_dispatch_packet(
         .get("downstream_dispatch_ready")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let downstream_blocked = packet
+    let downstream_dispatch_blockers = packet
         .get("downstream_dispatch_blockers")
         .and_then(serde_json::Value::as_array)
-        .is_some_and(|blockers| !blockers.is_empty());
-    let source_terminal = source_dispatch_status == "executed" && source_blocker_code.is_none();
-    if source_terminal && downstream_ready && !downstream_blocked {
-        return None;
-    }
-    Some(BlockedSourceLane {
-        dispatch_target: source_dispatch_target.to_string(),
-        blocker_code: source_blocker_code,
+        .map(|blockers| {
+            blockers
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(RunGraphDownstreamPacketEvidence {
+        source_dispatch_target: source_dispatch_target.to_string(),
+        source_dispatch_status: source_dispatch_status.to_string(),
+        source_blocker_code,
+        downstream_dispatch_ready: downstream_ready,
+        downstream_dispatch_blockers,
     })
 }
 
