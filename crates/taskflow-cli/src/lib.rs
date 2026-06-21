@@ -2,7 +2,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const AFTER_HELP: &str = "Standalone TaskFlow wrapper.\n\nExamples:\n  taskflow help\n  taskflow help parallelism\n  taskflow validate-routing --json\n  taskflow consume agent-system\n  taskflow scheduler dispatch\n\nAgent startup:\n  1. Read AGENTS.md and AGENTS.sidecar.md.\n  2. Run `vida orchestrator-init` for root lanes or `vida agent-init` for worker lanes.\n  3. Add `--json` only when machine-readable blockers, receipts, or next_actions are required.\n\nBehavior:\n  This binary safely delegates to `vida taskflow ...` without a shell.\n  If `VIDA_STATE_DIR` is unset, it resolves the current project root and binds\n  `<project-root>/.vida/data/state` before delegation.\n  Unknown or unsupported subcommands are not reinterpreted locally; they are\n  passed through to the launcher-owned TaskFlow surface as-is.\n\nEnvironment:\n  VIDA_TASKFLOW_VIDA_BIN  Override the VIDA executable used for delegation.";
+const AFTER_HELP: &str = "Standalone TaskFlow wrapper.\n\nExamples:\n  taskflow help\n  taskflow help parallelism\n  taskflow validate-routing --json\n  taskflow consume agent-system --json\n  taskflow scheduler dispatch --json\n\nAgent startup:\n  1. Read AGENTS.md and AGENTS.sidecar.md.\n  2. Run `vida orchestrator-init --json` for root lanes or `vida agent-init --json` for worker lanes.\n  3. Use JSON output for blockers, receipts, and next_actions.\n\nBehavior:\n  This binary safely delegates to `vida taskflow ...` without a shell.\n  If `VIDA_STATE_DIR` is unset, it resolves the current project root and binds\n  `<project-root>/.vida/data/state` before delegation.\n  Unknown or unsupported subcommands are not reinterpreted locally; they are\n  passed through to the launcher-owned TaskFlow surface as-is.\n\nEnvironment:\n  VIDA_TASKFLOW_VIDA_BIN  Override the VIDA executable used for delegation.";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -97,17 +97,17 @@ fn delegate_taskflow(args: &[String]) -> ExitCode {
 }
 
 fn resolve_vida_binary() -> PathBuf {
-    if let Some(path) = std::env::var_os("VIDA_TASKFLOW_VIDA_BIN")
-        && !path.is_empty()
-    {
-        return PathBuf::from(path);
+    if let Some(path) = std::env::var_os("VIDA_TASKFLOW_VIDA_BIN") {
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
     }
-    if let Ok(current_exe) = std::env::current_exe()
-        && let Some(parent) = current_exe.parent()
-    {
-        let candidate = parent.join(exe_name("vida"));
-        if candidate.exists() {
-            return candidate;
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let candidate = parent.join(exe_name("vida"));
+            if candidate.exists() {
+                return candidate;
+            }
         }
     }
     PathBuf::from(exe_name("vida"))

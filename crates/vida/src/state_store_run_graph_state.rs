@@ -351,63 +351,6 @@ pub struct RunGraphProjectionCheckpointRecord {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
-pub struct RunGraphLaneCompletionCommitRecord {
-    pub record_id: String,
-    pub run_id: String,
-    pub idempotency_key: String,
-    pub receipt_id: String,
-    pub dispatch_target: String,
-    pub completed_target: String,
-    pub source_result_hash: String,
-    pub source_receipt_hash: String,
-    pub pre_status_fingerprint: String,
-    pub pre_receipt_fingerprint: String,
-    pub result_path: Option<String>,
-    pub dispatch_result_path: Option<String>,
-    pub phase: String,
-    pub status: String,
-    pub recorded_at: String,
-    pub updated_at: String,
-}
-
-impl RunGraphLaneCompletionCommitRecord {
-    pub(crate) fn validate(&self) -> Result<(), StateStoreError> {
-        for (field, value) in [
-            ("record_id", self.record_id.as_str()),
-            ("run_id", self.run_id.as_str()),
-            ("idempotency_key", self.idempotency_key.as_str()),
-            ("receipt_id", self.receipt_id.as_str()),
-            ("dispatch_target", self.dispatch_target.as_str()),
-            ("completed_target", self.completed_target.as_str()),
-            ("source_result_hash", self.source_result_hash.as_str()),
-            ("source_receipt_hash", self.source_receipt_hash.as_str()),
-            (
-                "pre_status_fingerprint",
-                self.pre_status_fingerprint.as_str(),
-            ),
-            (
-                "pre_receipt_fingerprint",
-                self.pre_receipt_fingerprint.as_str(),
-            ),
-            ("phase", self.phase.as_str()),
-            ("status", self.status.as_str()),
-            ("recorded_at", self.recorded_at.as_str()),
-            ("updated_at", self.updated_at.as_str()),
-        ] {
-            if value.trim().is_empty() {
-                return Err(StateStoreError::InvalidTaskRecord {
-                    reason: format!(
-                        "lane completion commit record for `{}` has empty field `{field}`",
-                        self.run_id
-                    ),
-                });
-            }
-        }
-        Ok(())
-    }
-}
-
 impl RunGraphProjectionCheckpointRecord {
     pub(crate) fn from_status(status: &RunGraphStatus, updated_at: String) -> Self {
         Self {

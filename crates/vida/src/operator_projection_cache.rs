@@ -324,12 +324,6 @@ pub(crate) fn read_runtime_continuation_binding_overlay(
     read_runtime_continuation_binding_overlay_after(state_dir, None)
 }
 
-pub(crate) fn read_runtime_continuation_binding_overlay_for_live_status(
-    state_dir: &Path,
-) -> Option<serde_json::Value> {
-    read_runtime_continuation_binding_overlay_with_policy(state_dir, None, false)
-}
-
 pub(crate) fn read_runtime_continuation_binding_overlay_newer_than_projection(
     state_dir: &Path,
     projection_name: &str,
@@ -345,14 +339,6 @@ fn read_runtime_continuation_binding_overlay_after(
     state_dir: &Path,
     minimum_modified: Option<SystemTime>,
 ) -> Option<serde_json::Value> {
-    read_runtime_continuation_binding_overlay_with_policy(state_dir, minimum_modified, true)
-}
-
-fn read_runtime_continuation_binding_overlay_with_policy(
-    state_dir: &Path,
-    minimum_modified: Option<SystemTime>,
-    require_cache_freshness_markers: bool,
-) -> Option<serde_json::Value> {
     let path = projection_path(
         state_dir,
         RUNTIME_CONTINUATION_BINDING_OVERLAY_PROJECTION_NAME,
@@ -361,18 +347,16 @@ fn read_runtime_continuation_binding_overlay_with_policy(
         return None;
     }
     let overlay_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
-    if require_cache_freshness_markers {
-        if latest_state_mutation_marker(state_dir)
-            .ok()
-            .is_some_and(|modified| overlay_modified <= modified)
-        {
-            return None;
-        }
-        if current_operator_dependency_mutation_marker(state_dir)
-            .is_some_and(|modified| overlay_modified <= modified)
-        {
-            return None;
-        }
+    if latest_state_mutation_marker(state_dir)
+        .ok()
+        .is_some_and(|modified| overlay_modified <= modified)
+    {
+        return None;
+    }
+    if current_operator_dependency_mutation_marker(state_dir)
+        .is_some_and(|modified| overlay_modified <= modified)
+    {
+        return None;
     }
     if minimum_modified.is_some_and(|modified| overlay_modified <= modified) {
         return None;
@@ -388,12 +372,11 @@ fn read_runtime_continuation_binding_overlay_with_policy(
     {
         return None;
     }
-    if require_cache_freshness_markers
-        && payload
-            .get("task_snapshot_marker")
-            .cloned()
-            .unwrap_or_default()
-            != task_snapshot_marker_value(state_dir)
+    if payload
+        .get("task_snapshot_marker")
+        .cloned()
+        .unwrap_or_default()
+        != task_snapshot_marker_value(state_dir)
     {
         return None;
     }

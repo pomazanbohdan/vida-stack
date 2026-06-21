@@ -1,4 +1,4 @@
-#![allow(dead_code, clippy::suspicious_open_options, clippy::too_many_arguments)]
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::time::Duration;

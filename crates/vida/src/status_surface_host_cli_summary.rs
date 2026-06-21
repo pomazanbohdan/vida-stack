@@ -1,3 +1,5 @@
+use serde_yaml;
+
 use crate::status_surface_host_cli_system::default_host_cli_materialization_mode;
 
 pub(crate) fn host_cli_system_entry_summary(

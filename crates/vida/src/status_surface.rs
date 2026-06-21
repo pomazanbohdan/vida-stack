@@ -14,7 +14,7 @@ use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
 const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 const STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
-const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 4 * 1024 * 1024;
+const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Default)]
 pub(crate) struct StatusDispatchPacketRefs {
@@ -326,8 +326,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
         {
             if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
-                let cached =
-                    refresh_cached_status_projection_for_operator(&state_dir, &cached).await;
+                let cached = refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
+                    .await
+                    .unwrap_or(cached);
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
@@ -341,7 +342,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             {
                 if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
                     let cached =
-                        refresh_cached_status_projection_for_operator(&state_dir, &cached).await;
+                        refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
+                            .await
+                            .unwrap_or(cached);
                     println!(
                         "{}",
                         render_cached_status_projection_for_operator(summary_only, &cached)
@@ -358,8 +361,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
             if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
-                let cached =
-                    refresh_cached_status_projection_for_operator(&state_dir, &cached).await;
+                let cached = refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
+                    .await
+                    .unwrap_or(cached);
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
@@ -376,7 +380,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
             if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
-                let cached = refresh_cached_status_projection_for_operator(&state_dir, &cached).await;
+                let cached = refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
+                    .await
+                    .unwrap_or(cached);
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
@@ -700,16 +706,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let no_active_taskflow_work = task_store.open_count == 0
                     && task_store.in_progress_count == 0
                     && task_store.ready_count == 0;
-                let explicit_continuation_binding =
-                    match latest_explicit_continuation_binding_for_status(&store).await {
-                        Ok(binding) => binding,
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to read latest explicit continuation binding: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    };
+                let explicit_continuation_binding = match store
+                    .latest_explicit_run_graph_continuation_binding_for_current_session()
+                    .await
+                {
+                    Ok(binding) => binding,
+                    Err(error) => {
+                        eprintln!("Failed to read latest explicit continuation binding: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
                 let all_tasks = match store.list_tasks(None, true).await {
                     Ok(tasks) => tasks,
                     Err(error) => {
@@ -722,7 +728,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         Some(status) => {
                             match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
                                 Ok(verdict) => (
-                                    verdict.task_closed_stale_run(),
+                                    verdict.stale_for_active_projection(),
                                     verdict.task_missing(),
                                 ),
                                 Err(error) => {
@@ -737,7 +743,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     match latest_global_run_graph_status.as_ref() {
                         Some(status) => {
                             match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
-                                Ok(verdict) => verdict.task_closed_stale_run(),
+                                Ok(verdict) => verdict.stale_for_active_projection(),
                                 Err(error) => {
                                     eprintln!("Failed to read global run graph task authority: {error}");
                                     return ExitCode::from(1);
@@ -1040,25 +1046,19 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_dispatch_receipt.as_ref(),
                         &taskflow_active_candidates,
                     );
-                let terminal_retired_runtime_run =
-                    crate::runtime_dispatch_receipt_helpers::recovery_summary_is_terminal_retired_runtime_run(
-                        latest_run_graph_recovery.as_ref(),
-                    );
                 let latest_run_graph_task_stale_for_write_guard =
                     taskflow_authority::stale_guard::latest_run_graph_task_stale_for_write_guard(
                         latest_run_graph_task_missing,
                         latest_run_graph_task_closed,
-                        terminal_retired_runtime_run,
                         exception_takeover_matches_active_taskflow_work,
                         latest_run_graph_task_orthogonal_to_taskflow,
                     );
                 let has_taskflow_active_candidates = !taskflow_active_candidates.is_empty();
-                let continuation_binding = add_taskflow_active_work_truth_for_status(
-                    &store,
-                    continuation_binding,
-                    taskflow_active_candidates,
-                )
-                .await;
+                let continuation_binding =
+                    crate::continuation_binding_summary::add_taskflow_active_work_truth(
+                        continuation_binding,
+                        taskflow_active_candidates,
+                    );
                 let continuation_binding = if closed_task_active_run_projection_mismatch {
                     crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
                         continuation_binding,
@@ -1177,12 +1177,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     ]);
                 if as_json || selected_output {
                     let operator_session_projection =
-                        match build_operator_session_projection_for_status(
-                            &store,
-                            &continuation_binding,
-                        )
-                        .await
-                        {
+                        match build_operator_session_projection_for_status(&store).await {
                             Ok(value) => value,
                             Err(error) => {
                                 eprintln!("Failed to build operator session projection: {error}");
@@ -1235,7 +1230,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             latest_run_graph_dispatch_receipt_signal_ambiguous,
                             latest_run_graph_dispatch_receipt_summary_inconsistent,
                             latest_run_graph_dispatch_receipt_checkpoint_leakage,
-                            closed_task_active_run_projection_mismatch,
+                            closed_task_active_run_projection_mismatch:
+                                closed_task_active_run_projection_mismatch,
                             continuation_binding_ambiguous,
                             incomplete_release_admission_operator_evidence,
                             activation_truth: activation_truth.as_ref(),
@@ -1371,19 +1367,14 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 }
 
                 let operator_session_projection =
-                    match build_operator_session_projection_for_status(
-                        &store,
-                        &continuation_binding,
-                    )
-                    .await
-                    {
+                    match build_operator_session_projection_for_status(&store).await {
                         Ok(value) => value,
                         Err(error) => {
                             eprintln!("Failed to build operator session projection: {error}");
                             return ExitCode::from(1);
                         }
                     };
-                emit_status_text_report(StatusTextReportInputs {
+                return emit_status_text_report(StatusTextReportInputs {
                     render,
                     backend_summary: &backend_summary,
                     state_dir: store.root(),
@@ -1414,7 +1405,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     latest_run_graph_dispatch_receipt: latest_run_graph_dispatch_receipt.as_ref(),
                     latest_run_graph_mixed_posture,
                     latest_run_graph_activation_vs_execution_evidence,
-                })
+                });
             }
             Err(error) => {
                 eprintln!("Failed to read storage metadata: {error}");
@@ -1548,83 +1539,10 @@ fn exception_takeover_metadata_matches_taskflow_active_work(
                 .any(|parent_id| parent_id == receipt_run_id))
 }
 
-async fn latest_explicit_continuation_binding_for_status(
-    store: &StateStore,
-) -> Result<Option<state_store::RunGraphContinuationBinding>, state_store::StateStoreError> {
-    if let Some(binding) = latest_runtime_continuation_overlay_binding(store).await? {
-        return Ok(Some(binding));
-    }
-    match store
-        .latest_explicit_run_graph_continuation_binding_for_current_session()
-        .await?
-    {
-        Some(binding) => Ok(Some(binding)),
-        None => store.latest_explicit_run_graph_continuation_binding().await,
-    }
-}
-
-async fn latest_runtime_continuation_overlay_binding(
-    store: &StateStore,
-) -> Result<Option<state_store::RunGraphContinuationBinding>, state_store::StateStoreError> {
-    let overlay =
-        match crate::operator_projection_cache::read_runtime_continuation_binding_overlay_for_live_status(
-            store.root(),
-        ) {
-            Some(overlay) => overlay,
-            None => return Ok(None),
-        };
-    let mut binding: state_store::RunGraphContinuationBinding =
-        match serde_json::from_value(overlay.get("binding").cloned().unwrap_or_default()) {
-            Ok(binding) => binding,
-            Err(_) => return Ok(None),
-        };
-    if binding.validate().is_err() {
-        return Ok(None);
-    }
-    if binding.binding_source == "explicit_continuation_bind_task" {
-        let Some(task_id) = binding
-            .active_bounded_unit
-            .get("task_id")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-        else {
-            return Ok(None);
-        };
-        match store.show_task(&task_id).await {
-            Ok(task) if matches!(task.status.as_str(), "closed" | "completed") => {
-                return Ok(None);
-            }
-            Ok(task) => {
-                if let Some(active_bounded_unit) = binding.active_bounded_unit.as_object_mut() {
-                    active_bounded_unit.insert(
-                        "task_status".to_string(),
-                        serde_json::Value::String(task.status),
-                    );
-                    active_bounded_unit.insert(
-                        "issue_type".to_string(),
-                        serde_json::Value::String(task.issue_type),
-                    );
-                }
-            }
-            Err(state_store::StateStoreError::MissingTask { .. }) => return Ok(None),
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(Some(binding))
-}
-
 async fn build_operator_session_projection_for_status(
     store: &StateStore,
-    continuation_binding: &serde_json::Value,
 ) -> Result<serde_json::Value, state_store::StateStoreError> {
-    match crate::operator_session_projection::build_operator_session_projection_with_continuation(
-        store,
-        Some(continuation_binding),
-    )
-    .await
-    {
+    match crate::operator_session_projection::build_operator_session_projection(store).await {
         Ok(value) => Ok(value),
         Err(error)
             if crate::operator_session_projection::is_optional_task_worktree_assignment_missing_error(
@@ -1637,39 +1555,6 @@ async fn build_operator_session_projection_for_status(
             ))
         }
         Err(error) => Err(error),
-    }
-}
-
-async fn add_taskflow_active_work_truth_for_status(
-    store: &StateStore,
-    continuation_binding: serde_json::Value,
-    taskflow_active_candidates: Vec<serde_json::Value>,
-) -> serde_json::Value {
-    match crate::orchestrator_session_surface::build_runtime_owner_evidence(store.root(), false)
-        .ok()
-        .and_then(|evidence| {
-            evidence["current_session"]["session_id"]
-                .as_str()
-                .map(str::to_string)
-        }) {
-        Some(current_session_id) => match store.active_orchestrator_claims().await {
-            Ok(active_claims) => {
-                crate::continuation_binding_summary::add_taskflow_active_work_truth_with_session_claims(
-                    continuation_binding,
-                    taskflow_active_candidates,
-                    &active_claims,
-                    &current_session_id,
-                )
-            }
-            Err(_) => crate::continuation_binding_summary::add_taskflow_active_work_truth(
-                continuation_binding,
-                taskflow_active_candidates,
-            ),
-        },
-        None => crate::continuation_binding_summary::add_taskflow_active_work_truth(
-            continuation_binding,
-            taskflow_active_candidates,
-        ),
     }
 }
 
@@ -1963,28 +1848,6 @@ fn is_activation_pending_repair_next_action(text: &str) -> bool {
     .any(|marker| text.contains(marker))
 }
 
-async fn refresh_cached_status_projection_for_operator(
-    state_dir: &std::path::Path,
-    cached: &str,
-) -> String {
-    let refreshed = refresh_cached_status_projection_runtime_fields(state_dir, cached)
-        .await
-        .unwrap_or_else(|| cached.to_string());
-    refresh_cached_status_projection_continuation_overlay(state_dir, &refreshed)
-        .unwrap_or(refreshed)
-}
-
-fn refresh_cached_status_projection_continuation_overlay(
-    state_dir: &std::path::Path,
-    cached: &str,
-) -> Option<String> {
-    let overlay =
-        crate::operator_projection_cache::read_runtime_continuation_binding_overlay(state_dir)?;
-    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
-        state_dir, cached, &overlay,
-    )
-}
-
 async fn refresh_cached_status_projection_runtime_fields(
     state_dir: &std::path::Path,
     cached: &str,
@@ -2098,11 +1961,13 @@ async fn refresh_cached_status_projection_runtime_fields(
     let no_active_taskflow_work = task_store.open_count == 0
         && task_store.in_progress_count == 0
         && task_store.ready_count == 0;
-    let explicit_continuation_binding =
-        match latest_explicit_continuation_binding_for_status(&store).await {
-            Ok(binding) => binding,
-            Err(_) => return None,
-        };
+    let explicit_continuation_binding = match store
+        .latest_explicit_run_graph_continuation_binding_for_current_session()
+        .await
+    {
+        Ok(binding) => binding,
+        Err(_) => return None,
+    };
     let all_tasks = store.list_tasks(None, true).await.ok()?;
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph_status.as_ref() {
@@ -2197,16 +2062,13 @@ async fn refresh_cached_status_projection_runtime_fields(
         taskflow_authority::stale_guard::latest_run_graph_task_stale_for_write_guard(
             latest_run_graph_task_missing,
             latest_run_graph_task_closed,
-            terminal_retired_runtime_run,
             exception_takeover_matches_active_taskflow_work,
             latest_run_graph_task_orthogonal_to_taskflow,
         );
-    let continuation_binding = add_taskflow_active_work_truth_for_status(
-        &store,
+    let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
         continuation_binding,
         taskflow_active_candidates,
-    )
-    .await;
+    );
     let global_closed_run_is_current = latest_global_run_graph_task_closed
         && latest_global_run_graph_status
             .as_ref()
@@ -2415,7 +2277,8 @@ async fn refresh_cached_status_projection_runtime_fields(
         "latest_run_graph_delegation_gate".to_string(),
         latest_run_graph_status
             .as_ref()
-            .and_then(|status| serde_json::to_value(status.delegation_gate()).ok())
+            .map(|status| serde_json::to_value(status.delegation_gate()).ok())
+            .flatten()
             .unwrap_or(serde_json::Value::Null),
     );
     object.insert(
@@ -2465,17 +2328,6 @@ fn cached_status_projection_admissible(
     serde_json::from_str::<serde_json::Value>(cached)
         .ok()
         .is_some_and(|payload| {
-            if summary_only {
-                return payload
-                    .get("surface")
-                    .and_then(serde_json::Value::as_str)
-                    .is_none_or(|surface| surface == "vida status")
-                    && payload
-                        .get("status")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some()
-                    && cached_status_projection_has_required_shape(summary_only, &payload);
-            }
             let Some((current_session_id, current_worktree_environment_id)) =
                 current_projection_session_values(state_dir)
             else {
@@ -2638,10 +2490,6 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn test_temp_base_dir() -> std::path::PathBuf {
-        crate::temp_state::temp_state_base_dir().unwrap_or_else(|_| std::env::temp_dir())
     }
 
     fn unique_status_packet_test_root(name: &str) -> std::path::PathBuf {
@@ -2837,21 +2685,21 @@ mod tests {
             !super::latest_run_graph_task_orthogonal_to_taskflow_active_work(
                 Some("active-task"),
                 Some("active-task"),
-                std::slice::from_ref(&active_candidate)
+                &[active_candidate.clone()]
             )
         );
         assert!(
             super::latest_run_graph_task_orthogonal_to_taskflow_active_work(
                 Some("stale-run"),
                 Some("active-task"),
-                std::slice::from_ref(&active_candidate)
+                &[active_candidate.clone()]
             )
         );
         assert!(
             super::latest_run_graph_task_orthogonal_to_taskflow_active_work(
                 Some("active-task"),
                 Some("stale-run"),
-                std::slice::from_ref(&active_candidate)
+                &[active_candidate.clone()]
             )
         );
         assert!(
@@ -2892,7 +2740,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-exception-scope-{}-{nanos}",
             std::process::id()
         ));
@@ -3010,7 +2858,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-active-exception-write-guard-{}-{nanos}",
             std::process::id()
         ));
@@ -3197,7 +3045,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-stale-write-guard-overlay-{}-{nanos}",
             std::process::id()
         ));
@@ -3323,7 +3171,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-fresh-cache-admissibility-{}-{nanos}",
             std::process::id()
         ));
@@ -3362,7 +3210,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-cache-session-scope-{}-{nanos}",
             std::process::id()
         ));
@@ -3405,7 +3253,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-cache-worktree-scope-{}-{nanos}",
             std::process::id()
         ));
@@ -3454,7 +3302,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-live-overlay-{}-{nanos}",
             std::process::id()
         ));
@@ -3583,92 +3431,6 @@ mod tests {
         restore_vida_session_id(saved_session_id);
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn status_live_overlay_binding_accepts_explicit_ready_task() {
-        let nanos = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
-            "vida-status-explicit-overlay-binding-{}-{nanos}",
-            std::process::id()
-        ));
-        let store = state_store::StateStore::open(root.clone())
-            .await
-            .expect("open state store");
-        store
-            .create_task(state_store::CreateTaskRequest {
-                task_id: "task-explicit-parent",
-                title: "Explicit parent",
-                display_id: None,
-                description: "test parent",
-                issue_type: "epic",
-                status: "open",
-                priority: 1,
-                parent_id: None,
-                labels: &[],
-                execution_semantics: state_store::TaskExecutionSemantics::default(),
-                planner_metadata: state_store::TaskPlannerMetadata::default(),
-                created_by: "test",
-                source_repo: ".",
-            })
-            .await
-            .expect("create parent task");
-        store
-            .create_task(state_store::CreateTaskRequest {
-                task_id: "task-explicit-ready",
-                title: "Explicit ready task",
-                display_id: None,
-                description: "test task",
-                issue_type: "task",
-                status: "ready",
-                priority: 1,
-                parent_id: Some("task-explicit-parent"),
-                labels: &[],
-                execution_semantics: state_store::TaskExecutionSemantics::default(),
-                planner_metadata: state_store::TaskPlannerMetadata::default(),
-                created_by: "test",
-                source_repo: ".",
-            })
-            .await
-            .expect("create ready task");
-        crate::operator_projection_cache::write_runtime_continuation_binding_overlay(
-            &root,
-            &state_store::RunGraphContinuationBinding {
-                run_id: "task-explicit-ready".to_string(),
-                task_id: "task-explicit-ready".to_string(),
-                status: "bound".to_string(),
-                active_bounded_unit: serde_json::json!({
-                    "kind": "task_graph_task",
-                    "task_id": "task-explicit-ready",
-                    "run_id": "task-explicit-ready",
-                    "task_status": "ready",
-                    "issue_type": "task"
-                }),
-                binding_source: "explicit_continuation_bind_task".to_string(),
-                why_this_unit: "explicit ready task selected".to_string(),
-                primary_path: "normal_delivery_path".to_string(),
-                sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
-                request_text: None,
-                recorded_at: "2026-05-21T00:00:00Z".to_string(),
-            },
-        );
-
-        let binding = super::latest_runtime_continuation_overlay_binding(&store)
-            .await
-            .expect("overlay read should not fail")
-            .expect("explicit overlay binding should be accepted");
-
-        assert_eq!(binding.binding_source, "explicit_continuation_bind_task");
-        assert_eq!(
-            binding.active_bounded_unit["task_id"],
-            "task-explicit-ready"
-        );
-        assert_eq!(binding.active_bounded_unit["task_status"], "ready");
-
-        let _ = fs::remove_dir_all(root);
-    }
-
     #[test]
     fn status_cached_projection_refresh_removes_stale_activation_pending_blocker() {
         let activation_truth = crate::project_activator_surface::ProjectActivationStatusTruth {
@@ -3750,7 +3512,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-foreign-overlay-{}-{nanos}",
             std::process::id()
         ));
@@ -4093,7 +3855,7 @@ host_environment:
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-root-session-guard-legacy-{}-{}",
             std::process::id(),
             nanos
@@ -4111,7 +3873,7 @@ host_environment:
                                 "status": "blocked_by_default",
                                 "root_session_role": "orchestrator",
                                 "local_write_requires_exception_path": true,
-                                "required_exception_evidence": "Run `vida taskflow recovery latest` and `vida taskflow consume continue` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+                                "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
                                 "pre_write_checkpoint_required": true
                             }
                         }
@@ -4151,7 +3913,7 @@ host_environment:
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-status-root-session-guard-activation-view-{}-{}",
             std::process::id(),
             nanos
@@ -4170,7 +3932,7 @@ host_environment:
                                 "root_session_role": "orchestrator",
                                 "local_write_requires_exception_path": true,
                                 "root_local_write_allowed": false,
-                                "required_exception_evidence": "Run `vida taskflow recovery latest` and `vida taskflow consume continue` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+                                "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
                                 "pre_write_checkpoint_required": true
                             }
                         }
@@ -4312,16 +4074,16 @@ host_environment:
         let summary_json = serde_json::json!({
             "status": "blocked",
             "blocker_codes": ["missing_protocol_binding_receipt"],
-            "next_actions": [" Run `vida taskflow protocol-binding sync` "],
+            "next_actions": [" Run `vida taskflow protocol-binding sync --json` "],
             "shared_fields": {
                 "status": "blocked",
                 "blocker_codes": ["missing_protocol_binding_receipt"],
-                "next_actions": ["run `vida taskflow protocol-binding sync`"]
+                "next_actions": ["run `vida taskflow protocol-binding sync --json`"]
             },
             "operator_contracts": {
                 "status": "blocked",
                 "blocker_codes": ["missing_protocol_binding_receipt"],
-                "next_actions": ["RUN `VIDA TASKFLOW PROTOCOL-BINDING SYNC`"]
+                "next_actions": ["RUN `VIDA TASKFLOW PROTOCOL-BINDING SYNC --JSON`"]
             }
         });
         assert_eq!(
@@ -4360,11 +4122,11 @@ host_environment:
         let summary_json = serde_json::json!({
             "status": "blocked",
             "blocker_codes": ["missing_protocol_binding_receipt"],
-            "next_actions": ["Run `vida taskflow protocol-binding sync`"],
+            "next_actions": ["Run `vida taskflow protocol-binding sync --json`"],
             "shared_fields": {
                 "status": "blocked",
                 "blocker_codes": ["missing_protocol_binding_receipt"],
-                "next_actions": ["Run `vida taskflow protocol-binding sync`"]
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
             },
             "operator_contracts": {
                 "status": "pass",
@@ -4410,16 +4172,16 @@ host_environment:
         let summary_json = serde_json::json!({
             "status": "blocked",
             "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
-            "next_actions": ["Run `vida taskflow protocol-binding sync`"],
+            "next_actions": ["Run `vida taskflow protocol-binding sync --json`"],
             "shared_fields": {
                 "status": "blocked",
                 "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
-                "next_actions": ["Run `vida taskflow protocol-binding sync`"]
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
             },
             "operator_contracts": {
                 "status": "blocked",
                 "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
-                "next_actions": ["Run `vida taskflow protocol-binding sync`"]
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
             }
         });
         assert_eq!(
@@ -4465,12 +4227,12 @@ host_environment:
             "shared_fields": {
                 "status": "blocked",
                 "blocker_codes": ["missing_protocol_binding_receipt"],
-                "next_actions": ["Run `vida taskflow protocol-binding sync`"]
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
             },
             "operator_contracts": {
                 "status": "blocked",
                 "blocker_codes": ["missing_protocol_binding_receipt"],
-                "next_actions": ["Run `vida taskflow protocol-binding sync`"]
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
             }
         });
 

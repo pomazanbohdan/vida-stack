@@ -7,7 +7,6 @@ pub struct HostBridgeProvenanceInput {
     pub request: HostBridgeRequest,
     pub expected_run_id: Option<String>,
     pub expected_task_id: Option<String>,
-    pub expected_dispatch_generation_id: Option<String>,
     pub expected_dispatch_target: Option<String>,
 }
 
@@ -51,13 +50,6 @@ pub fn validate_host_bridge_request_provenance(
         blockers.push("task_id_mismatch".to_string());
     }
     if input
-        .expected_dispatch_generation_id
-        .as_deref()
-        .is_some_and(|expected| request.dispatch_generation_id.as_deref() != Some(expected))
-    {
-        blockers.push("dispatch_generation_id_mismatch".to_string());
-    }
-    if input
         .expected_dispatch_target
         .as_deref()
         .is_some_and(|expected| expected != request.dispatch_target)
@@ -80,10 +72,7 @@ pub fn host_bridge_provenance_public_blocker_code(blocker_code: &str) -> &str {
         "request_status_not_admissible" => {
             taskflow_contracts::BlockerCode::HostBridgeRequestNotPending.as_str()
         }
-        "run_id_mismatch"
-        | "task_id_mismatch"
-        | "dispatch_generation_id_mismatch"
-        | "dispatch_target_mismatch" => {
+        "run_id_mismatch" | "task_id_mismatch" | "dispatch_target_mismatch" => {
             taskflow_contracts::BlockerCode::HostBridgeRequestIdentityMismatch.as_str()
         }
         code => code,
@@ -121,7 +110,6 @@ mod tests {
             request,
             expected_run_id: Some("run-1".to_string()),
             expected_task_id: Some("task-1".to_string()),
-            expected_dispatch_generation_id: None,
             expected_dispatch_target: Some("developer".to_string()),
         });
 
@@ -141,10 +129,6 @@ mod tests {
         );
         assert_eq!(
             host_bridge_provenance_public_blocker_code("dispatch_target_mismatch"),
-            "host_bridge_request_identity_mismatch"
-        );
-        assert_eq!(
-            host_bridge_provenance_public_blocker_code("dispatch_generation_id_mismatch"),
             "host_bridge_request_identity_mismatch"
         );
     }

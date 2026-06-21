@@ -3,19 +3,17 @@ use std::{ffi::OsString, process::ExitCode};
 use super::{
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
-    orchestrator_session_surface, pack_surface, print_root_help, project_activator_surface,
-    proof_surface, protocol_surface, quality_surface, release_surface, run_taskflow_proxy,
-    runtime_web_surface, service_client_cli, session_surface, status_surface, task_surface,
-    AgentArgs, AgentCommand, Cli, CoderCommand, Command, ReleaseCommand, SessionArgs,
-    SessionCommand, StateArgs, StateCommand, StateResetArgs, TaskArgs, TaskCommand,
+    orchestrator_session_surface, print_root_help, project_activator_surface, proof_surface,
+    protocol_surface, quality_surface, release_surface, run_taskflow_proxy, runtime_web_surface,
+    service_client_cli, session_surface, status_surface, task_surface, AgentArgs, AgentCommand,
+    Cli, CoderCommand, Command, ReleaseCommand, SessionArgs, SessionCommand, StateArgs,
+    StateCommand, StateResetArgs, TaskArgs, TaskCommand,
 };
 use crate::root_state_binding::{
     bind_runtime_state_dir_for_project_bound_command,
     bind_runtime_state_dir_override_for_project_bound_command,
     normalize_runtime_state_dir_env_for_parse, preserve_runtime_state_dir_env_for_parse_only,
-    preserve_runtime_state_dir_env_for_project_bound_command, raw_state_access_mode,
-    raw_state_access_surface_is_agent_state_dir_bound, state_access_mode_for_surface,
-    RuntimeStateDirGuard, StateAccessMode,
+    preserve_runtime_state_dir_env_for_project_bound_command, RuntimeStateDirGuard,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -45,7 +43,6 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::OrchestratorInit(args)) => init_surfaces::run_orchestrator_init(args).await,
         Some(Command::AgentInit(args)) => init_surfaces::run_agent_init(args).await,
         Some(Command::Agent(args)) => agent_dispatch_surface::run_agent(args).await,
-        Some(Command::Pack(args)) => pack_surface::run_pack(args).await,
         Some(Command::Coder(args)) => match args.command {
             CoderCommand::Capabilities(args) => vida::run_coder_capabilities(args.json),
             CoderCommand::ProviderCheck(args) => {
@@ -120,10 +117,6 @@ async fn run_state(args: StateArgs) -> ExitCode {
 }
 
 async fn run_state_reset(command: StateResetArgs) -> ExitCode {
-    let requested_state_dir = command
-        .state_dir
-        .as_ref()
-        .map(|path| path.display().to_string());
     let state_dir = command
         .state_dir
         .unwrap_or_else(crate::state_store::default_state_dir);
@@ -137,21 +130,7 @@ async fn run_state_reset(command: StateResetArgs) -> ExitCode {
     match result {
         Ok(summary) => {
             if command.json {
-                let extra_fields = serde_json::to_value(&summary).unwrap_or_else(|_| {
-                    serde_json::json!({
-                        "state_dir": summary.state_dir.display().to_string(),
-                        "archive_created": summary.archive_created,
-                        "archive_path": summary.archive_path.as_ref().map(|path| path.display().to_string()),
-                        "reinitialized": summary.reinitialized,
-                        "task_count": summary.task_count,
-                        "state_spine_manifest_present": summary.state_spine_manifest_present,
-                    })
-                });
-                let payload = crate::task_cli_render::build_pass_operator_surface_payload(
-                    "vida state reset",
-                    extra_fields,
-                );
-                match serde_json::to_string_pretty(&payload) {
+                match serde_json::to_string_pretty(&summary) {
                     Ok(rendered) => println!("{rendered}"),
                     Err(error) => {
                         eprintln!("failed to render state reset summary as JSON: {error}");
@@ -176,31 +155,14 @@ async fn run_state_reset(command: StateResetArgs) -> ExitCode {
         }
         Err(error) => {
             if command.json {
-                let blocker_codes = vec!["state_reset_failed".to_string()];
-                let next_actions = vec![
-                    "retry with `vida state reset --archive --reinit` after the state root is no longer in use"
-                        .to_string(),
-                ];
-                let artifact_refs = serde_json::json!({
-                    "surface": "vida state reset",
-                    "state_dir": requested_state_dir,
-                });
-                let verdict = crate::release1_operator_output::finalize_release1_operator_surface_verdict_with_status(
-                    crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
-                    blocker_codes,
-                    next_actions,
-                    artifact_refs,
-                )
-                .expect("state reset operator contract should be valid");
                 let payload = serde_json::json!({
                     "surface": "vida state reset",
-                    "status": verdict.status,
-                    "blocker_codes": verdict.blocker_codes,
-                    "next_actions": verdict.next_actions,
-                    "artifact_refs": verdict.artifact_refs,
-                    "shared_fields": verdict.shared_fields,
-                    "operator_contracts": verdict.operator_contracts,
+                    "status": "blocked",
+                    "blocker_codes": ["state_reset_failed"],
                     "error": error.to_string(),
+                    "next_actions": [
+                        "retry with `vida state reset --archive --reinit` after the state root is no longer in use"
+                    ],
                 });
                 println!(
                     "{}",
@@ -222,7 +184,6 @@ fn command_label(command: &Option<Command>) -> String {
         Some(Command::OrchestratorInit(_)) => "vida orchestrator-init".to_string(),
         Some(Command::AgentInit(_)) => "vida agent-init".to_string(),
         Some(Command::Agent(_)) => "vida agent".to_string(),
-        Some(Command::Pack(_)) => "vida pack".to_string(),
         Some(Command::Coder(_)) => "vida coder".to_string(),
         Some(Command::Protocol(_)) => "vida protocol".to_string(),
         Some(Command::ProjectActivator(_)) => "vida project-activator".to_string(),
@@ -383,55 +344,6 @@ fn state_command_needs_project_root(args: &StateArgs) -> bool {
     state_command_explicit_state_dir(args).is_none()
 }
 
-fn command_state_access_mode(command: &Option<Command>) -> StateAccessMode {
-    match command {
-        Some(Command::Task(_)) => state_access_mode_for_surface(Some("task"), None),
-        Some(Command::State(_)) => state_access_mode_for_surface(Some("state"), None),
-        Some(Command::Taskflow(_)) => state_access_mode_for_surface(Some("taskflow"), None),
-        Some(Command::Consume(_)) => state_access_mode_for_surface(Some("consume"), None),
-        Some(Command::Lane(_)) => state_access_mode_for_surface(Some("lane"), None),
-        Some(Command::Approval(_)) => state_access_mode_for_surface(Some("approval"), None),
-        Some(Command::Route(_)) => state_access_mode_for_surface(Some("route"), None),
-        Some(Command::Recovery(_)) => state_access_mode_for_surface(Some("recovery"), None),
-        Some(Command::Agent(args)) => match &args.command {
-            AgentCommand::DispatchNext(_) => {
-                state_access_mode_for_surface(Some("agent"), Some("dispatch-next"))
-            }
-            AgentCommand::Select(_) => state_access_mode_for_surface(Some("agent"), Some("select")),
-            AgentCommand::HostBridge(_) => {
-                state_access_mode_for_surface(Some("agent"), Some("host-bridge"))
-            }
-            AgentCommand::Status(_) => state_access_mode_for_surface(Some("agent"), Some("status")),
-        },
-        Some(Command::OrchestratorInit(_)) => {
-            state_access_mode_for_surface(Some("orchestrator-init"), None)
-        }
-        Some(Command::ProjectActivator(_)) => {
-            state_access_mode_for_surface(Some("project-activator"), None)
-        }
-        Some(Command::Memory(_)) => state_access_mode_for_surface(Some("memory"), None),
-        Some(Command::Status(_)) => state_access_mode_for_surface(Some("status"), None),
-        Some(Command::Doctor(_)) => state_access_mode_for_surface(Some("doctor"), None),
-        Some(Command::Diagnostics(_)) => state_access_mode_for_surface(Some("diagnostics"), None),
-        Some(Command::OrchestratorSession(_)) => {
-            state_access_mode_for_surface(Some("orchestrator-session"), None)
-        }
-        Some(Command::Session(_)) => state_access_mode_for_surface(Some("session"), None),
-        Some(Command::AgentInit(_)) => state_access_mode_for_surface(Some("agent-init"), None),
-        Some(Command::AgentFeedback(_)) => {
-            state_access_mode_for_surface(Some("agent-feedback"), None)
-        }
-        Some(Command::Runtime(_)) => state_access_mode_for_surface(Some("runtime"), None),
-        Some(Command::Proof(_)) => state_access_mode_for_surface(Some("proof"), None),
-        Some(Command::Service(_)) => state_access_mode_for_surface(Some("service"), None),
-        Some(Command::Project(_)) => state_access_mode_for_surface(Some("project"), None),
-        Some(Command::Wizard(_)) => state_access_mode_for_surface(Some("wizard"), None),
-        Some(Command::Job(_)) => state_access_mode_for_surface(Some("job"), None),
-        Some(Command::Receipt(_)) => state_access_mode_for_surface(Some("receipt"), None),
-        _ => StateAccessMode::HelpOnly,
-    }
-}
-
 fn proxy_args_request_help_or_version(args: &[String]) -> bool {
     args.iter()
         .any(|arg| matches!(arg.as_str(), "help" | "--help" | "-h" | "--version" | "-V"))
@@ -565,36 +477,148 @@ fn command_explicit_state_dir(command: &Option<Command>) -> Option<&std::path::P
 }
 
 fn command_preserves_explicit_env_state_dir(command: &Option<Command>) -> bool {
-    command_state_access_mode(command).preserves_env_as_project_state()
+    matches!(
+        command,
+        Some(Command::Status(_) | Command::Taskflow(_))
+            | Some(Command::State(_))
+            | Some(Command::Consume(_) | Command::Recovery(_) | Command::Route(_))
+            | Some(Command::Lane(_) | Command::Approval(_))
+            | Some(Command::OrchestratorInit(_))
+            | Some(Command::ProjectActivator(_) | Command::Memory(_))
+            | Some(Command::Doctor(_) | Command::Diagnostics(_))
+            | Some(Command::OrchestratorSession(_))
+            | Some(Command::Session(_))
+            | Some(Command::Agent(AgentArgs {
+                command: AgentCommand::DispatchNext(_)
+                    | AgentCommand::Select(_)
+                    | AgentCommand::HostBridge(_)
+                    | AgentCommand::Status(_)
+            }))
+    )
 }
 
 fn command_preserves_parse_only_env_state_dir(command: &Option<Command>) -> bool {
-    command_state_access_mode(command).preserves_env_for_parse_only()
+    matches!(command, Some(Command::AgentInit(_)))
 }
 
 fn raw_args_need_project_root_state_dir(args: &[OsString]) -> bool {
-    if raw_args_have_explicit_state_dir(args) {
+    let Some(command) = args
+        .iter()
+        .skip(1)
+        .find_map(|arg| arg.to_str())
+        .filter(|arg| !arg.starts_with('-'))
+    else {
+        return false;
+    };
+    if raw_args_request_help_or_version(args) || raw_args_have_explicit_state_dir(args) {
         return false;
     }
-    raw_state_access_mode(args).needs_project_root_state_dir()
+    matches!(
+        command,
+        "orchestrator-init"
+            | "agent-init"
+            | "agent"
+            | "project-activator"
+            | "agent-feedback"
+            | "task"
+            | "memory"
+            | "status"
+            | "state"
+            | "runtime"
+            | "doctor"
+            | "diagnostics"
+            | "proof"
+            | "service"
+            | "project"
+            | "wizard"
+            | "job"
+            | "receipt"
+            | "orchestrator-session"
+            | "consume"
+            | "lane"
+            | "approval"
+            | "recovery"
+            | "route"
+            | "taskflow"
+    )
 }
 
 fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
-    if raw_args_have_explicit_state_dir(args) {
+    if raw_args_request_help_or_version(args) || raw_args_have_explicit_state_dir(args) {
         return false;
     }
-    raw_state_access_mode(args).preserves_env_as_project_state()
+    let mut positional = args
+        .iter()
+        .skip(1)
+        .filter_map(|arg| arg.to_str())
+        .filter(|arg| !arg.starts_with('-'));
+    match positional.next() {
+        Some("agent") => matches!(
+            positional.next(),
+            Some("dispatch-next" | "select" | "status" | "host-bridge")
+        ),
+        Some(
+            "orchestrator-init"
+            | "task"
+            | "taskflow"
+            | "project-activator"
+            | "memory"
+            | "status"
+            | "state"
+            | "doctor"
+            | "diagnostics"
+            | "orchestrator-session"
+            | "lane"
+            | "approval",
+        ) => true,
+        Some("consume" | "recovery" | "route") => true,
+        _ => false,
+    }
 }
 
 fn raw_args_are_env_parse_only_state_surface(args: &[OsString]) -> bool {
-    if raw_args_have_explicit_state_dir(args) {
+    if raw_args_request_help_or_version(args) || raw_args_have_explicit_state_dir(args) {
         return false;
     }
-    raw_state_access_mode(args).preserves_env_for_parse_only()
+    let Some(command) = args
+        .iter()
+        .skip(1)
+        .find_map(|arg| arg.to_str())
+        .filter(|arg| !arg.starts_with('-'))
+    else {
+        return false;
+    };
+    matches!(command, "agent-init")
 }
 
 fn raw_args_are_agent_state_dir_bound_surface(args: &[OsString]) -> bool {
-    raw_state_access_surface_is_agent_state_dir_bound(args)
+    if raw_args_request_help_or_version(args) {
+        return false;
+    }
+    let mut positional = args
+        .iter()
+        .skip(1)
+        .filter_map(|arg| arg.to_str())
+        .filter(|arg| !arg.starts_with('-'));
+    matches!(
+        (positional.next(), positional.next()),
+        (
+            Some("agent"),
+            Some("dispatch-next" | "select" | "status" | "host-bridge")
+        )
+    )
+}
+
+fn raw_args_request_help_or_version(args: &[OsString]) -> bool {
+    args.iter()
+        .skip(1)
+        .filter_map(|arg| arg.to_str())
+        .any(|arg| {
+            matches!(
+                arg,
+                "help" | "--help" | "-h" | "--version" | "-V" | "--HELP" | "-H"
+            )
+        })
 }
 
 fn raw_args_have_explicit_state_dir(args: &[OsString]) -> bool {
@@ -617,22 +641,12 @@ fn raw_args_explicit_state_dir(args: &[OsString]) -> Option<std::path::PathBuf> 
     None
 }
 
-fn run_unknown(args: &[String]) -> ExitCode {
-    let command = args.first().map(String::as_str).unwrap_or("unknown");
-    eprintln!(
-        "Unknown command family `{command}`. Use `vida --help` to inspect the frozen root surface."
-    );
-    ExitCode::from(2)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        command_needs_project_root_state_dir, command_state_access_mode,
-        normalize_runtime_state_dir_env_for_parse, prepare_runtime_state_dir,
-        prepare_runtime_state_dir_for_parse, Cli,
+        command_needs_project_root_state_dir, normalize_runtime_state_dir_env_for_parse,
+        prepare_runtime_state_dir, prepare_runtime_state_dir_for_parse, Cli,
     };
-    use crate::root_state_binding::{raw_state_access_mode, StateAccessMode};
     use crate::temp_state::TempStateHarness;
     use crate::Command;
     use clap::Parser;
@@ -676,91 +690,6 @@ mod tests {
         fs::write(root.join("AGENTS.md"), "# bootstrap\n").expect("AGENTS.md should exist");
         fs::write(root.join("vida.config.yaml"), "project:\n  id: demo\n")
             .expect("config should exist");
-    }
-
-    #[test]
-    fn state_access_mode_registry_covers_raw_surface_matrix() {
-        let scenarios: &[(&[&str], StateAccessMode)] = &[
-            (&["vida", "task", "show", "T-1"], StateAccessMode::Mutation),
-            (
-                &["vida", "taskflow", "run-graph", "status", "run-1"],
-                StateAccessMode::ProxyRuntime,
-            ),
-            (
-                &["vida", "consume", "bundle"],
-                StateAccessMode::ProxyRuntime,
-            ),
-            (
-                &["vida", "lane", "show", "run-1"],
-                StateAccessMode::ProxyRuntime,
-            ),
-            (
-                &["vida", "approval", "status"],
-                StateAccessMode::ProxyRuntime,
-            ),
-            (&["vida", "route", "explain"], StateAccessMode::ProxyRuntime),
-            (
-                &["vida", "recovery", "latest"],
-                StateAccessMode::ProxyRuntime,
-            ),
-            (
-                &["vida", "agent-init", "--role", "tester"],
-                StateAccessMode::ParseOnly,
-            ),
-            (
-                &["vida", "session", "triage"],
-                StateAccessMode::AuthoritativeRead,
-            ),
-            (
-                &["vida", "diagnostics", "post-commit"],
-                StateAccessMode::AuthoritativeRead,
-            ),
-            (&["vida", "--help"], StateAccessMode::HelpOnly),
-        ];
-
-        for (args, expected) in scenarios {
-            let raw_args = args
-                .iter()
-                .map(std::ffi::OsString::from)
-                .collect::<Vec<_>>();
-            assert_eq!(
-                raw_state_access_mode(&raw_args),
-                *expected,
-                "{args:?} should map to {expected:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn state_access_mode_registry_covers_parsed_surface_matrix() {
-        let scenarios: &[(&[&str], StateAccessMode)] = &[
-            (
-                &["vida", "task", "show", "T-1", "--json"],
-                StateAccessMode::Mutation,
-            ),
-            (
-                &["vida", "taskflow", "run-graph", "status", "run-1", "--json"],
-                StateAccessMode::ProxyRuntime,
-            ),
-            (
-                &["vida", "agent-init", "--role", "tester", "--json"],
-                StateAccessMode::ParseOnly,
-            ),
-            (
-                &["vida", "diagnostics", "post-commit", "--json"],
-                StateAccessMode::AuthoritativeRead,
-            ),
-        ];
-
-        for (args, expected) in scenarios {
-            let cli = Cli::try_parse_from(*args)
-                .unwrap_or_else(|error| panic!("{args:?} should parse: {error}"));
-            assert_eq!(
-                command_state_access_mode(&cli.command),
-                *expected,
-                "{args:?} should map to {expected:?}"
-            );
-        }
     }
 
     #[test]
@@ -1580,4 +1509,12 @@ mod tests {
             .is_none());
         assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
     }
+}
+
+fn run_unknown(args: &[String]) -> ExitCode {
+    let command = args.first().map(String::as_str).unwrap_or("unknown");
+    eprintln!(
+        "Unknown command family `{command}`. Use `vida --help` to inspect the frozen root surface."
+    );
+    ExitCode::from(2)
 }

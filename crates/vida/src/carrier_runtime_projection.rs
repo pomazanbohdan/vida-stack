@@ -24,13 +24,13 @@ fn selected_runtime_root(
         .iter()
         .filter(|(_, entry)| crate::project_activator_surface::host_cli_system_enabled(entry))
         .collect::<Vec<_>>();
-    enabled_entries.sort_by_key(|(left, _)| *left);
+    enabled_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
     if let Some((system, entry)) = enabled_entries.first() {
         return crate::project_activator_surface::host_cli_system_runtime_root(entry, system, root);
     }
 
     let mut entries = host_cli_system_registry.iter().collect::<Vec<_>>();
-    entries.sort_by_key(|(left, _)| *left);
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
     if let Some((system, entry)) = entries.first() {
         return crate::project_activator_surface::host_cli_system_runtime_root(entry, system, root);
     }

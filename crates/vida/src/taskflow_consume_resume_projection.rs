@@ -110,7 +110,7 @@ mod tests {
         let payload = build_operator_projection_payload(
             "vida taskflow consume continue",
             vec!["dispatch_packet_contract_invalid".to_string()],
-            vec!["vida taskflow packet repair --run-id run-1".to_string()],
+            vec!["vida taskflow packet repair --run-id run-1 --json".to_string()],
             serde_json::json!({
                 "runtime_consumption_latest_snapshot_path": "snapshot.json",
                 "latest_run_graph_dispatch_receipt_id": "run-1"
@@ -149,7 +149,7 @@ mod tests {
             "packet.json",
             "snapshot.json",
             Some("blocked projection"),
-            Some("vida taskflow consume continue"),
+            Some("vida taskflow consume continue --json"),
         );
 
         assert!(output.starts_with("vida taskflow consume continue"));

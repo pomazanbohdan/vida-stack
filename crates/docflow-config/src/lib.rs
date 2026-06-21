@@ -181,13 +181,13 @@ pub fn resolve_profile_roots(
 }
 
 pub fn resolve_scan_ignored_globs(policy_path: &Path) -> Result<Vec<String>, DocflowConfigError> {
-    load_policy_profile(policy_path, "active-canon")
+    Ok(load_policy_profile(policy_path, "active-canon")
         .map(|profile| profile.scan_ignored_globs)
         .or_else(|_| {
             let text = std::fs::read_to_string(policy_path)
                 .map_err(|err| DocflowConfigError::PolicyParse(err.to_string()))?;
             Ok(parse_policy_profiles(&text)?.scan_ignored_globs)
-        })
+        })?)
 }
 
 #[cfg(test)]

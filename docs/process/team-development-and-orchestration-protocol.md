@@ -66,15 +66,6 @@ Multiple orchestrator sessions:
 3. parallel orchestrators are lawful only when task/run identity, owned paths, and exclusive conflict domains do not overlap,
 4. foreign blocked sessions remain visible to the team but are not inherited as the current session's active bounded unit.
 
-Team/worktree parallel operator workflow:
-
-1. declare each parallel-safe task with `--execution-mode parallel_safe`, the same `--order-bucket`, a compatible `--parallel-group`, a distinct `--conflict-domain`, and one or more explicit `--owned-path` values,
-2. confirm the graph view from the intended project root with `vida taskflow graph-summary --json`; tasks from another worktree or `VIDA_STATE_DIR` must not appear in that projection,
-3. preview dispatch with `vida taskflow scheduler dispatch --scope <epic-id> --current-task-id <task-id> --limit <n> --dry-run --json` before using `--execute`,
-4. treat `selected_task_ids` as the only admissible parallel batch for that preview; `rejected_candidates[*].reasons` is authoritative for fail-closed overlap decisions,
-5. overlapping `owned_paths`, reused task/run identity, or conflicting domains must remain rejected even when `max_parallel_agents` and `--limit` would otherwise allow another lane,
-6. before write-producing execution, re-check `vida orchestrator-init` or `vida lane show <run-id> --json` so current-session claims and foreign blocked sessions are visible in the same operator path.
-
 The configured development chain is:
 
 1. `analyst`: a middle-cost system analyst lane that researches the bounded task, existing code/contracts, architectural context, acceptance targets, owned paths, and duplication risks before implementation.

@@ -59,13 +59,13 @@ If any of those fields are unavailable, record them as missing evidence rather t
 
 For runtime continuation defects, inspect surfaces in this order unless the active task provides a narrower proof target:
 
-1. `vida status`
-2. `vida orchestrator-init`
-3. `vida task next-lawful`
-4. `vida task show <task-id>` when the active task id is known and the recovery question only needs task metadata, owned paths, or proof target
-5. `vida taskflow run-graph status <run-id>`
-6. `vida taskflow recovery status <run-id>`
-7. `vida lane show <run-id>` when lane receipt/evidence state, exception-takeover state, or lane mutation readiness is specifically needed
+1. `vida status --json`
+2. `vida orchestrator-init --json`
+3. `vida task next-lawful --json`
+4. `vida task show <task-id> --json` when the active task id is known and the recovery question only needs task metadata, owned paths, or proof target
+5. `vida taskflow run-graph status <run-id> --json`
+6. `vida taskflow recovery status <run-id> --json`
+7. `vida lane show <run-id> --json` when lane receipt/evidence state, exception-takeover state, or lane mutation readiness is specifically needed
 8. dispatch result/receipt artifacts referenced by the surfaces
 9. TaskFlow task record and dependencies
 10. DocFlow proof/check surfaces
@@ -73,7 +73,7 @@ For runtime continuation defects, inspect surfaces in this order unless the acti
 
 Derived cache, rendered projection, lane preview, advisory text, and operator summaries are evidence surfaces only. They do not override the authoritative state-store, receipt, proof, or explicit runtime law.
 
-When a session/environment self-diagnostic discovers a new reusable Error Search optimization, update this protocol in the same bounded batch. Current examples include preferring `vida task show <task-id>` over heavier lane/run-graph projections for timeout recovery metadata, and requiring log-backed execution for long proof gates that can exceed host-tool stdout retention.
+When a session/environment self-diagnostic discovers a new reusable Error Search optimization, update this protocol in the same bounded batch. Current examples include preferring `vida task show <task-id> --json` over heavier lane/run-graph projections for timeout recovery metadata, and requiring log-backed execution for long proof gates that can exceed host-tool stdout retention.
 
 ## Multi-Defect Batch Rule
 

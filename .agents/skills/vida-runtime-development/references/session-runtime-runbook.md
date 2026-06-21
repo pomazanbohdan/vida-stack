@@ -5,8 +5,8 @@ Use this reference when a VIDA runtime session touches TaskFlow, DocFlow, GitHub
 ## Session Checklist
 
 1. Confirm active runtime:
-   - `vida orchestrator-init`
-   - `vida task validate-graph`
+   - `vida orchestrator-init --json`
+   - `vida task validate-graph --json`
 2. If no active bounded unit exists, bind the current user request to the current epic before writing.
 3. Before writes, create a DB-backed `todo` with owner, active form, stop criterion, and fallback.
 4. Keep TaskFlow mutations sequential.

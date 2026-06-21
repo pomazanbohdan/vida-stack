@@ -6,15 +6,17 @@ pub(crate) fn json_u64(value: Option<&serde_json::Value>) -> Option<u64> {
     })
 }
 
-pub(crate) fn carrier_runtime_section(compiled_bundle: &serde_json::Value) -> &serde_json::Value {
+pub(crate) fn carrier_runtime_section<'a>(
+    compiled_bundle: &'a serde_json::Value,
+) -> &'a serde_json::Value {
     compiled_bundle
         .get("carrier_runtime")
         .unwrap_or(&serde_json::Value::Null)
 }
 
-pub(crate) fn runtime_assignment_from_execution_plan(
-    execution_plan: &serde_json::Value,
-) -> &serde_json::Value {
+pub(crate) fn runtime_assignment_from_execution_plan<'a>(
+    execution_plan: &'a serde_json::Value,
+) -> &'a serde_json::Value {
     execution_plan
         .get("runtime_assignment")
         .or_else(|| execution_plan.get("carrier_runtime_assignment"))

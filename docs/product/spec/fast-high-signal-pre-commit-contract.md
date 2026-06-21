@@ -31,9 +31,9 @@ hooks. Default pre-commit must therefore stay fast and predictable.
    `.vida/`, `target/`, `vendor/`, `tmp/`, `tasks_tmp/`, and
    `*.changelog.jsonl`.
 5. Add one local default hook, `vida-script-check`, which runs
-   `scripts/vida-dev-gate.ps1 -Mode script-check`.
+   `scripts/vida-dev-gate.ps1 -Mode script-check -Json`.
 6. Add `vida-rust-quick` only as a manual hook. It runs
-   `scripts/vida-dev-gate.ps1 -Mode quick` but is not part of default
+   `scripts/vida-dev-gate.ps1 -Mode quick -Json` but is not part of default
    commit flow.
 7. Do not use `doublify/pre-commit-rust` as a default hook source. Its release
    line is old, and direct local project proof commands are clearer.
@@ -75,7 +75,7 @@ hooks. Default pre-commit must therefore stay fast and predictable.
 
 1. `pre-commit validate-config`, when `pre-commit` is installed.
 2. YAML parse of `.pre-commit-config.yaml` when `pre-commit` is unavailable.
-3. `pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check`.
+3. `pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json`.
 4. `vida docflow check --root . docs/product/spec/fast-high-signal-pre-commit-contract.md`.
 
 ## Operator Commands

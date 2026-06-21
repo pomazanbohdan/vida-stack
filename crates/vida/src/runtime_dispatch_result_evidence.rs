@@ -1,5 +1,3 @@
-use std::path::Path;
-
 pub(crate) fn normalized_dispatch_result_activation_evidence(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     body: &serde_json::Value,
@@ -114,33 +112,6 @@ pub(crate) struct DispatchReworkRoute {
     pub(crate) rework_target: String,
     pub(crate) allowed_next_node: String,
     pub(crate) blocker_code: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DispatchSuccessRoute {
-    pub(crate) allowed_next_node: String,
-    pub(crate) result_path: String,
-}
-
-pub(crate) fn dispatch_success_route_from_receipt_fields(
-    state_root: Option<&Path>,
-    run_id: &str,
-    downstream_dispatch_result_path: Option<&str>,
-    dispatch_result_path: Option<&str>,
-    dispatch_packet_path: Option<&str>,
-) -> Option<DispatchSuccessRoute> {
-    for result_path in dispatch_result_path_candidates_from_receipt_fields_and_state_root(
-        state_root,
-        run_id,
-        downstream_dispatch_result_path,
-        dispatch_result_path,
-        dispatch_packet_path,
-    ) {
-        if let Some(route) = dispatch_success_route_from_result_path(&result_path) {
-            return Some(route);
-        }
-    }
-    None
 }
 
 pub(crate) fn dispatch_rework_route_from_receipt_fields(
@@ -322,95 +293,6 @@ pub(crate) fn dispatch_rework_route_from_result_path(
     dispatch_rework_route_from_result(&result)
 }
 
-pub(crate) fn dispatch_success_route_from_result_path(
-    result_path: &str,
-) -> Option<DispatchSuccessRoute> {
-    let normalized_path =
-        crate::runtime_dispatch_state::normalize_persisted_runtime_path(result_path);
-    let raw = std::fs::read_to_string(&normalized_path).ok()?;
-    let result: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let allowed_next_node = dispatch_success_route_from_result(&result)?;
-    Some(DispatchSuccessRoute {
-        allowed_next_node,
-        result_path: normalized_path.display().to_string(),
-    })
-}
-
-pub(crate) fn dispatch_success_route_from_result(result: &serde_json::Value) -> Option<String> {
-    if dispatch_result_has_rework_verdict(result) || !dispatch_result_has_success_verdict(result) {
-        return None;
-    }
-    if result_blocker_code(result).is_some() || !result_blocker_codes(result).is_empty() {
-        return None;
-    }
-    let explicit_allowed_next_node = result
-        .get("allowed_next_node")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .filter(|value| !matches!(*value, "none" | "null"))
-        .map(str::to_string);
-    let allowed_next_node = if explicit_allowed_next_node
-        .as_deref()
-        .is_some_and(|value| value == "next")
-        && persisted_lane_completion_is_terminal_closure(result)
-    {
-        Some("terminal_closure".to_string())
-    } else {
-        explicit_allowed_next_node
-    }
-    .or_else(|| {
-        persisted_lane_completion_is_terminal_closure(result)
-            .then(|| "terminal_closure".to_string())
-    })
-    .or_else(|| {
-        persisted_lane_completion_can_default_to_abstract_next(result).then(|| "next".to_string())
-    })?;
-    Some(allowed_next_node.replace('-', "_"))
-}
-
-fn persisted_lane_completion_is_terminal_closure(result: &serde_json::Value) -> bool {
-    result
-        .get("artifact_kind")
-        .and_then(serde_json::Value::as_str)
-        == Some("runtime_lane_completion_result")
-        && [
-            "completed_target",
-            "dispatch_target",
-            "source_dispatch_target",
-        ]
-        .into_iter()
-        .any(|field| {
-            result
-                .get(field)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .is_some_and(|value| {
-                    matches!(value.replace('-', "_").as_str(), "closure" | "closure_lane")
-                })
-        })
-}
-
-fn persisted_lane_completion_can_default_to_abstract_next(result: &serde_json::Value) -> bool {
-    result
-        .get("artifact_kind")
-        .and_then(serde_json::Value::as_str)
-        == Some("runtime_lane_completion_result")
-        && [
-            "completed_target",
-            "dispatch_target",
-            "source_dispatch_target",
-        ]
-        .into_iter()
-        .any(|field| {
-            result
-                .get(field)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty() && value != "none" && value != "null")
-        })
-}
-
 pub(crate) fn dispatch_rework_route_from_result(
     result: &serde_json::Value,
 ) -> Option<DispatchReworkRoute> {
@@ -446,60 +328,11 @@ fn dispatch_result_has_rework_verdict(result: &serde_json::Value) -> bool {
         })
 }
 
-fn dispatch_result_has_success_verdict(result: &serde_json::Value) -> bool {
-    matches!(
-        crate::json_string(result.get("status")).as_deref(),
-        Some("pass")
-    ) || matches!(
-        crate::json_string(result.get("execution_state")).as_deref(),
-        Some("executed")
-    ) || dispatch_result_field_is_success_verdict(result.get("decision"))
-        || dispatch_result_field_is_success_verdict(result.get("verdict"))
-        || dispatch_result_field_is_success_verdict(result.get("completion_verdict"))
-        || result.get("execution_evidence").is_some_and(|evidence| {
-            dispatch_result_field_is_success_verdict(evidence.get("decision"))
-                || dispatch_result_field_is_success_verdict(evidence.get("verdict"))
-                || dispatch_result_field_is_success_verdict(evidence.get("completion_verdict"))
-                || matches!(
-                    crate::json_string(evidence.get("execution_state")).as_deref(),
-                    Some("executed")
-                )
-        })
-}
-
 fn dispatch_result_field_is_rework_verdict(value: Option<&serde_json::Value>) -> bool {
     value
         .and_then(serde_json::Value::as_str)
         .map(|text| text.trim().to_ascii_lowercase())
         .is_some_and(|text| matches!(text.as_str(), "rework_required" | "blocked" | "blocker"))
-}
-
-fn dispatch_result_field_is_success_verdict(value: Option<&serde_json::Value>) -> bool {
-    value
-        .and_then(serde_json::Value::as_str)
-        .map(|text| text.trim().to_ascii_lowercase())
-        .is_some_and(|text| {
-            matches!(
-                text.as_str(),
-                "pass" | "implemented" | "complete" | "completed"
-            )
-        })
-}
-
-fn result_blocker_codes(result: &serde_json::Value) -> Vec<String> {
-    result
-        .get("blocker_codes")
-        .and_then(serde_json::Value::as_array)
-        .map(|codes| {
-            codes
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
 }
 
 fn result_blocker_code(result: &serde_json::Value) -> Option<String> {

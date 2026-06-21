@@ -245,10 +245,9 @@ fn dev_team_sequence_from_explicit_flow(
         .as_array()
         .into_iter()
         .flatten()
-        .flat_map(|role| {
-            ["role_id", "canonical_role_id"]
-                .into_iter()
-                .filter_map(move |field| role[field].as_str().map(|id| (id.to_string(), role)))
+        .filter_map(|role| {
+            let role_id = role["role_id"].as_str()?;
+            Some((role_id.to_string(), role))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     flow["ordered_steps"]
@@ -257,23 +256,21 @@ fn dev_team_sequence_from_explicit_flow(
         .flatten()
         .filter_map(|step| {
             let role_id = step["role_id"].as_str()?;
-            let role = roles.get(role_id).copied();
+            let role = roles.get(role_id)?;
             let runtime_role = step["runtime_role"]
                 .as_str()
-                .or_else(|| role.and_then(|role| role["runtime_role"].as_str()))
+                .or_else(|| role["runtime_role"].as_str())
                 .filter(|value| !value.trim().is_empty())
                 .map(str::to_string)?;
             let task_class = step["task_class"]
                 .as_str()
                 .or_else(|| {
-                    role.and_then(|role| {
-                        role["task_classes"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(serde_json::Value::as_str)
-                            .find(|value| !value.trim().is_empty())
-                    })
+                    role["task_classes"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_json::Value::as_str)
+                        .find(|value| !value.trim().is_empty())
                 })
                 .map(str::to_string)?;
             Some(DevTeamSequenceStep {
@@ -317,14 +314,12 @@ fn selected_dev_team_step_for_task(
                 return Some(step.clone());
             }
         }
-        if !task.labels.is_empty() {
-            let task_value = serde_json::to_value(task).unwrap_or(serde_json::Value::Null);
-            let inferred_task_class = crate::infer_task_class_from_task_payload(&task_value);
-            if let Some(step) = sequence.iter().find(|step| {
-                step.requires_task && step.task_class.trim() == inferred_task_class.as_str()
-            }) {
-                return Some(step.clone());
-            }
+        let task_value = serde_json::to_value(task).unwrap_or(serde_json::Value::Null);
+        let inferred_task_class = crate::infer_task_class_from_task_payload(&task_value);
+        if let Some(step) = sequence.iter().find(|step| {
+            step.requires_task && step.task_class.trim() == inferred_task_class.as_str()
+        }) {
+            return Some(step.clone());
         }
     }
     sequence.iter().find(|step| step.requires_task).cloned()
@@ -339,10 +334,9 @@ fn dev_team_sequence_from_readiness_with_default(
         .as_array()
         .into_iter()
         .flatten()
-        .flat_map(|role| {
-            ["role_id", "canonical_role_id"]
-                .into_iter()
-                .filter_map(move |field| role[field].as_str().map(|id| (id.to_string(), role)))
+        .filter_map(|role| {
+            let role_id = role["role_id"].as_str()?;
+            Some((role_id.to_string(), role))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     let selected_flow = match (work_item_type, default_on_miss) {
@@ -362,23 +356,21 @@ fn dev_team_sequence_from_readiness_with_default(
             .iter()
             .filter_map(|step| {
                 let role_id = step["role_id"].as_str()?;
-                let role = roles.get(role_id).copied();
+                let role = roles.get(role_id)?;
                 let runtime_role = step["runtime_role"]
                     .as_str()
-                    .or_else(|| role.and_then(|role| role["runtime_role"].as_str()))
+                    .or_else(|| role["runtime_role"].as_str())
                     .filter(|value| !value.trim().is_empty())
                     .map(str::to_string)?;
                 let task_class = step["task_class"]
                     .as_str()
                     .or_else(|| {
-                        role.and_then(|role| {
-                            role["task_classes"]
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .filter_map(serde_json::Value::as_str)
-                                .find(|value| !value.trim().is_empty())
-                        })
+                        role["task_classes"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(serde_json::Value::as_str)
+                            .find(|value| !value.trim().is_empty())
                     })
                     .map(str::to_string)?;
                 Some(DevTeamSequenceStep {
@@ -508,10 +500,10 @@ fn dev_team_sequence_from_carrier_runtime(
 
 fn policy_field_from_step_or_role(
     step: &serde_json::Value,
-    role: Option<&serde_json::Value>,
+    role: &serde_json::Value,
     key: &str,
 ) -> Option<String> {
-    json_string_field(step, key).or_else(|| role.and_then(|role| json_string_field(role, key)))
+    json_string_field(step, key).or_else(|| json_string_field(role, key))
 }
 
 fn json_string_field(value: &serde_json::Value, key: &str) -> Option<String> {

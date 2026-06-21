@@ -62,7 +62,7 @@ Host CLI rule:
 ## Compact Re-entry Rule
 
 1. After any host-side compact, context drop, or continuity uncertainty, re-read `AGENTS.md` and `AGENTS.sidecar.md` before continuing.
-2. Re-run the bounded runtime init surface for the active lane (`vida orchestrator-init` for the root lane, `vida agent-init` for a worker lane) before selecting the next step.
+2. Re-run the bounded runtime init surface for the active lane (`vida orchestrator-init --json` for the root lane, `vida agent-init --json` for a worker lane) before selecting the next step.
 3. After re-entry, restate three runtime fields before any new write-producing move:
    - `active_bounded_unit`
    - `why_this_unit`

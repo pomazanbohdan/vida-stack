@@ -116,7 +116,7 @@ EOF
   fi
   if install_bin_selected vida; then
     cat <<EOF
-  vida taskflow status
+  vida taskflow status --json
 
 Examples:
   vida --help
@@ -135,7 +135,7 @@ EOF
   fi
   if install_bin_selected vida; then
     cat <<EOF
-  vida taskflow task list
+  vida taskflow task list --json
   vida docflow overview --format toon
 EOF
   fi
@@ -175,7 +175,7 @@ Next steps:
   rg --files vida/config/instructions | head
 
 Project usage examples:
-  vida taskflow task list
+  vida taskflow task list --json
   vida docflow help
 EOF
 }

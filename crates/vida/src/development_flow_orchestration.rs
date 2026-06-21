@@ -75,7 +75,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
         "required": true,
         "status": "pending",
         "bootstrap_command": format!(
-            "vida taskflow bootstrap-spec {}",
+            "vida taskflow bootstrap-spec {} --json",
             quoted_request,
         ),
         "feature_slug": feature_slug,
@@ -219,17 +219,78 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
     })
 }
 
-#[derive(Debug, Clone)]
-struct ExecutionPreparationPolicyDecision {
-    required: bool,
-    diagnostics: serde_json::Value,
-}
-
-fn execution_preparation_task_class(
+fn request_requires_execution_preparation(
     compiled_bundle: &serde_json::Value,
     selection: &crate::RuntimeConsumptionLaneSelection,
-) -> String {
-    crate::json_string(
+) -> bool {
+    let selected_flow = compiled_bundle["default_flow_set"]
+        .as_str()
+        .and_then(|flow_id| compiled_bundle["all_project_flow_catalog"].get(flow_id));
+    if let Some(policy) = selected_flow.and_then(|flow| flow.get("execution_preparation_policy")) {
+        let mode = policy["mode"].as_str().unwrap_or_default();
+        let gated_task_classes = policy["task_classes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        let task_class = crate::runtime_assignment_from_execution_plan(&selection.execution_plan)
+            ["task_class"]
+            .as_str()
+            .unwrap_or("implementation");
+        let validation_gate = if crate::json_bool(policy.get("honor_validation_gate"), false) {
+            crate::json_bool(
+                compiled_bundle["autonomous_execution"]
+                    .get("validation_report_required_before_implementation"),
+                false,
+            )
+        } else {
+            false
+        };
+        match mode {
+            "always" => return true,
+            "never" => return false,
+            "required_for_task_classes" => {
+                return gated_task_classes.contains(&task_class);
+            }
+            "required_for_code_shaped_work" => {
+                if gated_task_classes.contains(&task_class) {
+                    return validation_gate || task_class == "implementation";
+                }
+                return false;
+            }
+            _ => {}
+        }
+    }
+    let normalized_request = selection.request.to_lowercase();
+    let architecture_signals = crate::contains_keywords(
+        &normalized_request,
+        &[
+            "architecture".to_string(),
+            "architect".to_string(),
+            "cross-cutting".to_string(),
+            "cross cutting".to_string(),
+            "migration".to_string(),
+            "refactor".to_string(),
+            "topology".to_string(),
+            "boundary".to_string(),
+            "cross-scope".to_string(),
+            "cross scope".to_string(),
+        ],
+    );
+    let write_signals = crate::contains_keywords(
+        &normalized_request,
+        &[
+            "implement".to_string(),
+            "implementation".to_string(),
+            "write code".to_string(),
+            "write the code".to_string(),
+            "patch".to_string(),
+            "refactor".to_string(),
+            "build".to_string(),
+        ],
+    );
+    let task_class = crate::json_string(
         compiled_bundle["role_selection"]
             .get("selected_task_class")
             .or_else(|| {
@@ -237,95 +298,14 @@ fn execution_preparation_task_class(
                     .get("task_class")
             }),
     )
-    .unwrap_or_else(|| "implementation".to_string())
-}
-
-fn request_execution_preparation_policy_decision(
-    compiled_bundle: &serde_json::Value,
-    selection: &crate::RuntimeConsumptionLaneSelection,
-) -> ExecutionPreparationPolicyDecision {
-    let flow_id = compiled_bundle["default_flow_set"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let selected_flow = compiled_bundle["all_project_flow_catalog"].get(&flow_id);
-    let Some(policy) = selected_flow.and_then(|flow| flow.get("execution_preparation_policy"))
-    else {
-        return ExecutionPreparationPolicyDecision {
-            required: false,
-            diagnostics: serde_json::json!({
-                "source": "flow_execution_preparation_policy",
-                "flow_id": flow_id,
-                "policy_present": false,
-                "required": false,
-                "fallback_used": true,
-                "fallback_reason": "missing_execution_preparation_policy_no_silent_lane_expansion",
-            }),
-        };
-    };
-
-    let mode = policy["mode"].as_str().unwrap_or_default();
-    let gated_task_classes = crate::csv_json_string_list(policy.get("task_classes"));
-    let task_class = execution_preparation_task_class(compiled_bundle, selection);
-    let normalized_request = selection.request.to_lowercase();
-    let architecture_signals = crate::csv_json_string_list(policy.get("architecture_signals"));
-    let write_signals = crate::csv_json_string_list(policy.get("write_signals"));
-    let matched_architecture_signals =
-        crate::contains_keywords(&normalized_request, &architecture_signals);
-    let matched_write_signals = crate::contains_keywords(&normalized_request, &write_signals);
-    let validation_gate = if crate::json_bool(policy.get("honor_validation_gate"), false) {
-        crate::json_bool(
-            compiled_bundle["autonomous_execution"]
-                .get("validation_report_required_before_implementation"),
-            false,
-        )
-    } else {
-        false
-    };
-    let task_class_gated = gated_task_classes
-        .iter()
-        .any(|gated_task_class| gated_task_class == &task_class);
-    let required = match mode {
-        "always" => true,
-        "never" => false,
-        "required_for_task_classes" => task_class_gated,
-        "required_for_code_shaped_work" => {
-            task_class_gated
-                && (validation_gate
-                    || !matched_architecture_signals.is_empty()
-                    || !matched_write_signals.is_empty())
-        }
-        _ => false,
-    };
-    let fallback_reason = if matches!(
-        mode,
-        "always" | "never" | "required_for_task_classes" | "required_for_code_shaped_work"
-    ) {
-        serde_json::Value::Null
-    } else {
-        serde_json::Value::String("unsupported_execution_preparation_policy_mode".to_string())
-    };
-
-    ExecutionPreparationPolicyDecision {
-        required,
-        diagnostics: serde_json::json!({
-            "source": "flow_execution_preparation_policy",
-            "flow_id": flow_id,
-            "policy_present": true,
-            "mode": mode,
-            "task_class": task_class,
-            "task_classes": gated_task_classes,
-            "honor_validation_gate": crate::json_bool(policy.get("honor_validation_gate"), false),
-            "validation_gate": validation_gate,
-            "architecture_signals": architecture_signals,
-            "write_signals": write_signals,
-            "matched_architecture_signals": matched_architecture_signals,
-            "matched_write_signals": matched_write_signals,
-            "required": required,
-            "fallback_used": !fallback_reason.is_null(),
-            "fallback_reason": fallback_reason,
-        }),
-    }
+    .unwrap_or_default();
+    let validation_gate = crate::json_bool(
+        compiled_bundle["autonomous_execution"]
+            .get("validation_report_required_before_implementation"),
+        false,
+    );
+    task_class == "implementation"
+        && (validation_gate || !architecture_signals.is_empty() || !write_signals.is_empty())
 }
 
 fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
@@ -667,9 +647,8 @@ fn build_resolved_development_dispatch_contract(
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let execution_preparation_policy =
-        request_execution_preparation_policy_decision(compiled_bundle, selection);
-    let requires_execution_preparation = execution_preparation_policy.required;
+    let requires_execution_preparation =
+        request_requires_execution_preparation(compiled_bundle, selection);
     let resolved_lanes = resolved_development_flow_templates(compiled_bundle, selection)
         .into_iter()
         .filter(|lane| {
@@ -742,7 +721,6 @@ fn build_resolved_development_dispatch_contract(
     serde_json::json!({
         "selected_flow_set": flow_id,
         "execution_preparation_required": requires_execution_preparation,
-        "execution_preparation_policy": execution_preparation_policy.diagnostics,
         "root_session_must_remain_orchestrator": true,
         "packet_family_required": [
             "delivery_task_packet",
@@ -1085,7 +1063,7 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
             "design_runtime": "vida docflow",
             "design_template": crate::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
             "intake_runtime": if requires_design_gate {
-                serde_json::Value::String("vida taskflow consume final <request>".to_string())
+                serde_json::Value::String("vida taskflow consume final <request> --json".to_string())
             } else {
                 serde_json::Value::Null
             },
@@ -1411,122 +1389,6 @@ mod tests {
                 .expect("fallback fields should be reported")
                 .contains(&json!("packet_template_kind")),
             "missing configured policy fields must be reported explicitly"
-        );
-    }
-
-    #[test]
-    fn execution_preparation_policy_uses_configured_signal_lists() {
-        let bundle = json!({
-            "default_flow_set": "configured",
-            "all_project_flow_catalog": {
-                "configured": {
-                    "flow_class": "development",
-                    "execution_preparation_policy": {
-                        "mode": "required_for_code_shaped_work",
-                        "task_classes": "implementation",
-                        "honor_validation_gate": false,
-                        "architecture_signals": "custom-architecture-signal",
-                        "write_signals": "custom-write-signal"
-                    }
-                }
-            },
-            "autonomous_execution": {
-                "validation_report_required_before_implementation": false
-            }
-        });
-        let selection = RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "configured".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "please route custom-architecture-signal before implementation".to_string(),
-            selected_role: "worker".to_string(),
-            conversational_mode: None,
-            single_task_only: true,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "test".to_string(),
-            matched_terms: vec![],
-            compiled_bundle: bundle.clone(),
-            execution_plan: json!({
-                "runtime_assignment": {
-                    "task_class": "implementation"
-                }
-            }),
-            reason: "test".to_string(),
-        };
-
-        let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
-
-        assert_eq!(contract["execution_preparation_required"], true);
-        assert_eq!(
-            contract["execution_preparation_policy"]["matched_architecture_signals"],
-            json!(["custom-architecture-signal"])
-        );
-        assert_eq!(
-            contract["execution_preparation_policy"]["matched_write_signals"],
-            json!([])
-        );
-        assert_eq!(
-            contract["lane_sequence"],
-            json!([
-                "execution_preparation",
-                "implementer",
-                "coach",
-                "verification"
-            ])
-        );
-    }
-
-    #[test]
-    fn missing_execution_preparation_policy_does_not_silently_expand_lane_chain() {
-        let bundle = json!({
-            "default_flow_set": "configured_without_policy",
-            "all_project_flow_catalog": {
-                "configured_without_policy": {
-                    "flow_class": "development"
-                }
-            },
-            "autonomous_execution": {
-                "validation_report_required_before_implementation": true
-            }
-        });
-        let selection = RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "configured".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "architecture refactor implementation patch".to_string(),
-            selected_role: "worker".to_string(),
-            conversational_mode: None,
-            single_task_only: true,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "test".to_string(),
-            matched_terms: vec![],
-            compiled_bundle: bundle.clone(),
-            execution_plan: json!({
-                "runtime_assignment": {
-                    "task_class": "implementation"
-                }
-            }),
-            reason: "test".to_string(),
-        };
-
-        let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
-
-        assert_eq!(contract["execution_preparation_required"], false);
-        assert_eq!(
-            contract["execution_preparation_policy"]["policy_present"],
-            false
-        );
-        assert_eq!(
-            contract["execution_preparation_policy"]["fallback_reason"],
-            "missing_execution_preparation_policy_no_silent_lane_expansion"
-        );
-        assert_eq!(
-            contract["lane_sequence"],
-            json!(["implementer", "coach", "verification"])
         );
     }
 

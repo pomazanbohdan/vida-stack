@@ -255,35 +255,6 @@ pub(crate) fn print_compact_command_families(render: RenderMode, surface: &str) 
     }
 }
 
-pub(crate) fn print_root_help() {
-    println!("VIDA Binary Foundation");
-    println!();
-    println!("Usage:");
-    println!("  vida <command>");
-    println!("  vida taskflow <args...>");
-    println!("  vida docflow <args...>");
-    println!();
-    println!("Root commands:");
-    for family in operator_command_map("vida --help")["families"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        for entry in family["entries"].as_array().into_iter().flatten() {
-            let command = entry["command"].as_str().unwrap_or("unknown");
-            let summary = entry["summary"].as_str().unwrap_or("");
-            println!("  {command:<18} {summary}");
-        }
-    }
-    println!();
-    println!("Notes:");
-    println!("  - root commands stay fail-closed");
-    println!("  - runtime-family help paths are `vida taskflow help` and `vida docflow help`");
-    println!(
-        "  - TaskFlow remains execution authority; DocFlow remains documentation/readiness surface"
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::{format_surface_line, format_surface_ok_line};
@@ -338,4 +309,33 @@ mod tests {
         assert_eq!(rendered.matches('\x1b').count(), 4);
         assert!(!rendered.contains('\x07'));
     }
+}
+
+pub(crate) fn print_root_help() {
+    println!("VIDA Binary Foundation");
+    println!();
+    println!("Usage:");
+    println!("  vida <command>");
+    println!("  vida taskflow <args...>");
+    println!("  vida docflow <args...>");
+    println!();
+    println!("Root commands:");
+    for family in operator_command_map("vida --help")["families"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        for entry in family["entries"].as_array().into_iter().flatten() {
+            let command = entry["command"].as_str().unwrap_or("unknown");
+            let summary = entry["summary"].as_str().unwrap_or("");
+            println!("  {command:<18} {summary}");
+        }
+    }
+    println!();
+    println!("Notes:");
+    println!("  - root commands stay fail-closed");
+    println!("  - runtime-family help paths are `vida taskflow help` and `vida docflow help`");
+    println!(
+        "  - TaskFlow remains execution authority; DocFlow remains documentation/readiness surface"
+    );
 }

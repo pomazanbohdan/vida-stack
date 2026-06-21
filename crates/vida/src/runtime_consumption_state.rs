@@ -317,7 +317,7 @@ pub(crate) const RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE: &str =
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER: &str =
     "run_graph_latest_dispatch_receipt_summary_inconsistent";
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION:
-    &str = "Run `vida status` to refresh the latest run-graph dispatch receipt summary, then inspect `vida taskflow recovery latest`; rerun consume-final only after latest status and dispatch receipt share the same concrete run_id.";
+    &str = "Run `vida status --json` to refresh the latest run-graph dispatch receipt summary, then inspect `vida taskflow recovery latest --json`; rerun consume-final only after latest status and dispatch receipt share the same concrete run_id.";
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER: &str =
     "run_graph_latest_dispatch_receipt_checkpoint_leakage";
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str = "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
@@ -1015,7 +1015,6 @@ mod tests {
         release_admission_operator_evidence_complete_for_run,
         release_admission_operator_evidence_incomplete,
         runtime_consumption_final_dispatch_receipt_blocker_code,
-        runtime_consumption_final_dispatch_receipt_blocker_code_for_run,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
         runtime_consumption_snapshot_has_release_admission_evidence,
         runtime_consumption_snapshot_path_string, runtime_reflex_loop_record,
@@ -1173,9 +1172,9 @@ mod tests {
             .expect("latest lookup should succeed")
             .expect("latest record should exist");
         assert_eq!(latest.stage, RuntimeReflexLoopStage::Critique);
-        assert!(latest.diagnostic_only);
-        assert!(!latest.grants_write_authority);
-        assert!(latest.not_closure_proof);
+        assert_eq!(latest.diagnostic_only, true);
+        assert_eq!(latest.grants_write_authority, false);
+        assert_eq!(latest.not_closure_proof, true);
 
         let summary = runtime_reflex_loop_summary(&root, "runtime-reflex-loop-state-model")
             .expect("summary lookup should succeed");
@@ -2085,13 +2084,10 @@ mod tests {
             "direct_consumption_ready": true,
         });
 
-        let blocker_code = runtime_consumption_final_dispatch_receipt_blocker_code_for_run(
-            &store,
-            &payload,
-            "run-final",
-        )
-        .expect("blocker evaluation should succeed")
-        .expect("missing receipt summary should fail closed");
+        let blocker_code =
+            runtime_consumption_final_dispatch_receipt_blocker_code(&store, &payload)
+                .expect("blocker evaluation should succeed")
+                .expect("missing receipt summary should fail closed");
         assert_eq!(
             blocker_code,
             crate::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER

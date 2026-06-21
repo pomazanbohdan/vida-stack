@@ -33,7 +33,7 @@ If a required skill is not visible in the active session catalog, continue from 
 For every runtime development session:
 
 1. read `AGENTS.md` and `AGENTS.sidecar.md`,
-2. run `vida orchestrator-init`,
+2. run `vida orchestrator-init --json`,
 3. record `active_bounded_unit`, `why_this_unit`, and `sequential_vs_parallel_posture`,
 4. load the relevant skill body before packet shaping or writes,
 5. create a DB-backed `todo` before any write-producing mutation,
@@ -262,7 +262,7 @@ Use:
 
 ```powershell
 gh issue list --repo pomazanbohdan/vida-stack --state open --limit 200 --json number,title,state,url,labels,updatedAt,createdAt
-vida task validate-graph
+vida task validate-graph --json
 ```
 
 ## Operator-Efficiency Loop
@@ -291,7 +291,7 @@ Before reporting a runtime environment/docs/skill update as complete:
 
 1. run skill validation for changed skills,
 2. run DocFlow check for changed docs,
-3. run `vida task validate-graph`,
+3. run `vida task validate-graph --json`,
 4. run `git status --short`,
 5. close the bounded TODO only after the above pass.
 

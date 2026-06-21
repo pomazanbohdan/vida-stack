@@ -1571,10 +1571,11 @@ mod tests {
             .push(parent_child_dependency("child", "parent"));
         let touched_task_ids = BTreeSet::from(["parent".to_string(), "child".to_string()]);
 
-        let before = vec![existing_orphan.clone()];
-        let after = vec![existing_orphan, parent, child];
-        let issues =
-            StateStore::validate_task_graph_rows_for_mutation(&before, &after, &touched_task_ids);
+        let issues = StateStore::validate_task_graph_rows_for_mutation(
+            &[existing_orphan.clone()],
+            &[existing_orphan, parent, child],
+            &touched_task_ids,
+        );
 
         assert!(
             issues.is_empty(),

@@ -37,6 +37,7 @@ pub enum DocflowCoreError {
     GitStatusTimedOut,
 }
 
+#[must_use]
 pub fn validate_artifact_path(path: &ArtifactPath) -> Result<(), DocflowCoreError> {
     if path.0.trim().is_empty() {
         Err(DocflowCoreError::EmptyArtifactPath)

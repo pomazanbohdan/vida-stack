@@ -8,15 +8,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
-. (Join-Path $PSScriptRoot "vida-windows-env.ps1")
-Initialize-VidaWindowsEnvironment -NormalizeBuildTemp
-$PwshPath = Resolve-VidaPowerShellPath -Required
 
 function Show-Help {
     @"
 Usage:
-  .\scripts\vida-dev-gate.cmd -Mode script-check
-  or: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-release-package.ps1 [-Version vX.Y.Z] [-Json] [-KeepArtifacts]
+  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-release-package.ps1 [-Version vX.Y.Z] [-Json] [-KeepArtifacts]
 
 Creates an isolated Windows release-bin fixture, runs scripts/build-release.ps1
 with -SkipBuild -Windows -ReleaseBinDir, and validates the generated manifest
@@ -90,7 +86,7 @@ if ($Help) {
     exit 0
 }
 
-$workRoot = Join-Path $env:TEMP ("vida-release-package-check-{0}" -f ([System.Guid]::NewGuid().ToString("N")))
+$workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("vida-release-package-check-{0}" -f ([System.Guid]::NewGuid().ToString("N")))
 $releaseBinDir = Join-Path $workRoot "release-bin"
 $distDir = Join-Path $workRoot "dist"
 $resolvedVersion = Get-ReleaseVersion
@@ -106,7 +102,7 @@ try {
     New-FixtureBinary -Directory $releaseBinDir -Name "vida-coder.exe" -VersionLine "vida-coder $expectedVersion (built fixture)"
 
     $buildScript = Join-Path $RootDir "scripts/build-release.ps1"
-    $receiptText = & $PwshPath -NoLogo -NoProfile -ExecutionPolicy Bypass -File $buildScript -SkipBuild -Windows -ReleaseBinDir $releaseBinDir -DistDir $distDir -Version $resolvedVersion -Json
+    $receiptText = & pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File $buildScript -SkipBuild -Windows -ReleaseBinDir $releaseBinDir -DistDir $distDir -Version $resolvedVersion -Json
     if ($LASTEXITCODE -ne 0) {
         Fail "Native release package smoke failed."
     }

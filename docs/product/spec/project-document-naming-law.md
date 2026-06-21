@@ -9,11 +9,9 @@ Purpose: define the canonical naming law for project-owned documentation under `
 This law governs:
 
 1. `docs/product/spec/**`
-2. `docs/product/control/**`
-3. `docs/product/wiki/**`
-4. `docs/process/**`
-5. `docs/product/research/**`
-6. `docs/project-memory/**`
+2. `docs/process/**`
+3. `docs/product/research/**`
+4. `docs/project-memory/**`
 
 This law does not govern:
 
@@ -51,11 +49,9 @@ Directory selection must express document ownership before filename style.
 Rules:
 
 1. `docs/product/spec/**` owns stable product law, models, plans, and contracts,
-2. `docs/product/control/**` owns DB-backed product control-plane projections and accepted decision records,
-3. `docs/product/wiki/**` owns generated internal and public project wiki projections,
-4. `docs/process/**` owns project process/runbook/operator surfaces,
-5. `docs/product/research/**` owns research staging and comparative studies,
-6. `docs/project-memory/**` owns project-memory records and snapshots.
+2. `docs/process/**` owns project process/runbook/operator surfaces,
+3. `docs/product/research/**` owns research staging and comparative studies,
+4. `docs/project-memory/**` owns project-memory records and snapshots.
 
 If the directory owner is wrong, renaming the file alone does not make the document naming-green.
 
@@ -101,48 +97,6 @@ Allowed terminal roles:
 4. `report`
 5. `conditions`
 6. `index`
-
-### `docs/product/control/**`
-
-Allowed terminal roles:
-
-1. `index`
-2. `record`
-3. `decision-record`
-4. `projection`
-5. `template`
-6. `register`
-
-Typed object subdirectories are allowed when they represent DB-backed control-plane object families, including:
-
-1. `origins`
-2. `requirements`
-3. `features`
-4. `use-cases`
-5. `changes`
-6. `decisions`
-7. `risks`
-8. `baselines`
-9. `gaps`
-10. `approvals`
-
-### `docs/product/wiki/**`
-
-Allowed terminal roles:
-
-1. `index`
-2. `overview`
-3. `guide`
-4. `reference`
-5. `explanation`
-6. `tutorial`
-7. `release-notes`
-8. `projection`
-
-Generated wiki subdirectories are:
-
-1. `internal`
-2. `public`
 
 ### `docs/product/research/**`
 
@@ -231,5 +185,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/project-document-naming-law.md
 created_at: '2026-03-12T09:00:00+02:00'
-updated_at: 2026-06-18T00:00:00+03:00
+updated_at: '2026-06-12T00:00:00+03:00'
 changelog_ref: project-document-naming-law.changelog.jsonl

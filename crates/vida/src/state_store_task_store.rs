@@ -623,7 +623,7 @@ impl StateStore {
         }
 
         let raw = fs::read_to_string(&snapshot_path)?;
-        if meta.byte_len != raw.len() as u64 {
+        if meta.byte_len != raw.as_bytes().len() as u64 {
             return Err(Self::invalid_task_snapshot_reason(
                 "task snapshot metadata byte_len does not match snapshot body",
             ));
@@ -688,7 +688,7 @@ impl StateStore {
     fn tasks_from_jsonl_snapshot_body(raw: &str) -> Result<Vec<TaskRecord>, StateStoreError> {
         let mut rows = Vec::new();
 
-        for (index, record) in Deserializer::from_str(raw)
+        for (index, record) in Deserializer::from_str(&raw)
             .into_iter::<TaskJsonlRecord>()
             .enumerate()
         {
@@ -2103,8 +2103,6 @@ impl StateStore {
 
         let mut blocked = rows
             .iter()
-            .filter(|&task| taskflow_core::task_status_is_open_like(&task.status))
-            .filter(|&task| !work_item_is_program_container(&task.issue_type))
             .cloned()
             .filter(|task| taskflow_core::task_status_is_open_like(&task.status))
             .filter(|task| !work_item_is_program_container(&task.issue_type))
@@ -3397,24 +3395,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        crate::temp_state::temp_state_base_dir()
-            .unwrap_or_else(|_| std::env::temp_dir())
-            .join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
-    }
-
-    struct TestProxyStateDirOverrideGuard;
-
-    impl TestProxyStateDirOverrideGuard {
-        fn install(path: PathBuf) -> Self {
-            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(path));
-            Self
-        }
-    }
-
-    impl Drop for TestProxyStateDirOverrideGuard {
-        fn drop(&mut self) {
-            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
-        }
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
     }
 
     struct TestProxyStateDirOverrideGuard;

@@ -24,8 +24,8 @@ It does not redefine runtime law. It explains how an operator should activate an
 ## Canonical Checks
 
 1. Inspect compact project/runtime readiness:
-   - `vida status --summary`
-2. Inspect external CLI preflight details when carrier readiness matters. These are explicit machine-readable probes:
+   - `vida status --summary --json`
+2. Inspect external CLI preflight details when carrier readiness matters:
    - `vida status --json | jq '.host_agents.external_cli_preflight'`
 3. Inspect the active carrier registry and profile truth:
    - `vida taskflow consume agent-system --json | jq '.snapshot.carriers'`
@@ -72,7 +72,7 @@ Interpret `host_agents.external_cli_preflight` as follows:
    - preferred path: operator runs `opencode auth login -p <provider>` directly outside sandbox
 4. If local state drifts:
    - inspect `~/.local/state/opencode/model.json`
-   - re-run `vida status`
+   - re-run `vida status --json`
 
 ### kilo
 
@@ -99,10 +99,10 @@ Interpret `host_agents.external_cli_preflight` as follows:
 4. Setup/readiness checks:
    - `pi --version`
    - `vida-pi-agent --help`
-   - `vida status --summary`
+   - `vida status --summary --json`
    - `vida status --json | jq '.host_agents.external_cli_preflight'`
 5. `vida-pi-agent` is packaged beside `vida`, `taskflow`, and `docflow`; release/install exposes it as a direct binary on the installed runtime `bin` path.
-6. Read/spec/review Pi profiles must not write. Implementation/write profiles that require `guard_required_owned_paths` are admissible only when an explicit machine-readable `vida status --json` probe reports `write_scope_guard.pre_write_enforcement=true` and `write_scope_guard.status=active` for the selected Pi profile.
+6. Read/spec/review Pi profiles must not write. Implementation/write profiles that require `guard_required_owned_paths` are admissible only when `vida status --json` reports `write_scope_guard.pre_write_enforcement=true` and `write_scope_guard.status=active` for the selected Pi profile.
 7. In guarded-write mode, `vida-pi-agent` explicitly loads a VIDA-owned Pi extension into the one-shot Pi process. The extension receives canonical guard data through `VIDA_PI_AGENT_SCOPE_GUARD_MODE`, `VIDA_PI_AGENT_PROJECT_ROOT`, and `VIDA_PI_AGENT_OWNED_PATHS_JSON`, blocks `write`/`edit` paths outside dispatch owned paths before execution, blocks `bash`/user bash to prevent shell write bypass, and blocks unknown mutating tools. The adapter still performs post-execution touched-path validation as defense-in-depth.
 
 ### vida-coder
@@ -111,7 +111,7 @@ Interpret `host_agents.external_cli_preflight` as follows:
 2. Model/profile truth is owned by `vida.config.yaml -> agent_system.subagents.vida_coder.model_profiles`; ambient provider configuration is readiness evidence only and must not override VIDA selection.
 3. Setup/readiness checks:
    - `vida-coder provider-check --json`
-   - `vida status --summary`
+   - `vida status --summary --json`
    - `vida taskflow consume agent-system --json | jq '.snapshot.carriers.vida_coder'`
 4. Auth and model readiness must be reference-based. Do not write secrets, raw API keys, tokens, or provider credentials into prompts, receipts, task notes, CLI arguments, or release manifests.
 5. `vida-coder --service dispatch --json` remains fail-closed until the service scheduler and guarded runtime-tool pipeline are executable for live delegated packets.
@@ -119,18 +119,18 @@ Interpret `host_agents.external_cli_preflight` as follows:
 
 ## Canonical Repair Procedure
 
-1. Check whether sandbox is active with an explicit machine-readable probe:
+1. Check whether sandbox is active:
    - `vida status --json | jq '.host_agents.external_cli_preflight.sandbox_active'`
 2. If interactive auth or model repair is needed and sandbox is active:
    - stop and rerun outside sandbox
-3. Re-check carrier readiness with an explicit machine-readable probe:
+3. Re-check carrier readiness:
    - `vida status --json | jq '.host_agents.external_cli_preflight.carrier_readiness'`
 4. Repair auth or model posture only for the failing carrier. For Pi, verify both adapter and provider layers: `vida-pi-agent --help` for the adapter and `pi --version` plus live/provider auth outside sandbox for Pi itself.
 5. Re-run the current bounded adapter/runtime proof. For Pi adapter changes, prefer the package-scoped nextest contract proof:
    - `cargo nextest run --locked -p vida-pi-agent --profile default`
    - `cargo build -p vida-pi-agent --bins --locked` only when a local binary is needed for manual operator inspection
    - optional live provider probes must be explicit, credential-aware operator actions and must not be hidden in a hardcoded smoke script
-6. Re-check with an explicit machine-readable probe:
+6. Re-check:
    - `vida status --json | jq '.host_agents.external_cli_preflight'`
 
 ## Smoke Validation
@@ -138,7 +138,7 @@ Interpret `host_agents.external_cli_preflight` as follows:
 Use the repeatable bounded proof surfaces:
 
 1. `cargo nextest run --locked -p vida-pi-agent --profile default`
-2. explicit machine-readable preflight probe: `vida status --json | jq '.host_agents.external_cli_preflight'`
+2. `vida status --json | jq '.host_agents.external_cli_preflight'`
 3. `vida taskflow consume agent-system --json | jq '.snapshot.carriers'`
 
 Carrier proof must stay config/runtime-derived. Do not add hardcoded one-shot prompt scripts for a fixed list of host CLIs; they drift from `vida.config.yaml`, carrier registries, and provider readiness policy.

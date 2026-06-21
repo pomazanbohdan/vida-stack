@@ -380,10 +380,10 @@ fn extract_agent_end_text(value: &Value) -> Result<String, String> {
         .ok_or_else(|| "Pi agent_end event did not include messages".to_string())?;
 
     for message in messages.iter().rev() {
-        if let Some(text) = message_text(message)
-            && !text.trim().is_empty()
-        {
-            return Ok(text);
+        if let Some(text) = message_text(message) {
+            if !text.trim().is_empty() {
+                return Ok(text);
+            }
         }
     }
     Err("Pi agent_end messages did not include final text".to_string())
@@ -715,7 +715,7 @@ impl ScopeGuardConfig {
         for raw_path in &raw_owned_paths {
             match canonicalize_scope_relative_path(&project_root, raw_path) {
                 Ok(canonical) => owned_paths.push(OwnedScopePath {
-                    raw: normalize_slashes(raw_path),
+                    raw: normalize_slashes(&raw_path),
                     canonical,
                 }),
                 Err(message) => {
@@ -747,12 +747,7 @@ impl ScopeGuardConfig {
         if self.mode == ScopeGuardMode::GuardedWrite && self.owned_paths.is_empty() {
             let message = "Pi guarded write mode requires at least one owned path; refusing to launch validation-only adapter without bounded write scope".to_string();
             return Err(ScopeGuardFailure {
-                report: self.report(
-                    "missing_owned_paths",
-                    false,
-                    &[],
-                    std::slice::from_ref(&message),
-                ),
+                report: self.report("missing_owned_paths", false, &[], &[message.clone()]),
                 message,
             });
         }

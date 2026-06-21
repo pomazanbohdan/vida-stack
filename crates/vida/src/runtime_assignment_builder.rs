@@ -689,7 +689,7 @@ fn profile_task_classes(role: &serde_json::Value, profile: &serde_json::Value) -
     }
 }
 
-fn non_empty_string_field(value: &serde_json::Value) -> Option<&str> {
+fn non_empty_string_field<'a>(value: &'a serde_json::Value) -> Option<&'a str> {
     value
         .as_str()
         .map(str::trim)
@@ -1652,7 +1652,7 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             "selection_rule": selection_rule,
             "next_actions": [
                 "Add or enable a carrier under `vida.config.yaml -> host_environment.systems.<system>.carriers` that declares both the requested runtime_role and task_class.",
-                "Run `vida project-activator --repair --host-cli-system <system>` to refresh selected host materialization, then retry the runtime assignment preview."
+                "Run `vida project-activator --repair --host-cli-system <system> --json` to refresh selected host materialization, then retry the runtime assignment preview."
             ],
             "model_selection_enabled": true,
             "candidate_scope": candidate_scope,
@@ -1834,47 +1834,41 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             || (budget_policy == "strict" && allow_over_budget_escalation));
     if selection_strategy == "quality_first" || selection_strategy == "risk_aware" {
         candidates.sort_by(|left, right| {
-            if prefer_in_budget_first {
-                {
+            prefer_in_budget_first
+                .then(|| {
                     left.over_budget(max_budget_units)
                         .cmp(&right.over_budget(max_budget_units))
-                }
-            } else {
-                std::cmp::Ordering::Equal
-            }
-            .then_with(|| right.quality_rank.cmp(&left.quality_rank))
-            .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
-            .then_with(|| left.rate.cmp(&right.rate))
-            .then_with(|| right.effective_score.cmp(&left.effective_score))
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.quality_rank.cmp(&left.quality_rank))
+                .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
+                .then_with(|| left.rate.cmp(&right.rate))
+                .then_with(|| right.effective_score.cmp(&left.effective_score))
         });
     } else if selection_strategy == "free_first_with_quality_floor" {
         candidates.sort_by(|left, right| {
-            if prefer_in_budget_first {
-                {
+            prefer_in_budget_first
+                .then(|| {
                     left.over_budget(max_budget_units)
                         .cmp(&right.over_budget(max_budget_units))
-                }
-            } else {
-                std::cmp::Ordering::Equal
-            }
-            .then_with(|| (left.rate != 0).cmp(&(right.rate != 0)))
-            .then_with(|| left.rate.cmp(&right.rate))
-            .then_with(|| right.effective_score.cmp(&left.effective_score))
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| (left.rate != 0).cmp(&(right.rate != 0)))
+                .then_with(|| left.rate.cmp(&right.rate))
+                .then_with(|| right.effective_score.cmp(&left.effective_score))
         });
     } else {
         candidates.sort_by(|left, right| {
-            if prefer_in_budget_first {
-                {
+            prefer_in_budget_first
+                .then(|| {
                     left.over_budget(max_budget_units)
                         .cmp(&right.over_budget(max_budget_units))
-                }
-            } else {
-                std::cmp::Ordering::Equal
-            }
-            .then_with(|| left.rate.cmp(&right.rate))
-            .then_with(|| right.quality_rank.cmp(&left.quality_rank))
-            .then_with(|| right.effective_score.cmp(&left.effective_score))
-            .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.rate.cmp(&right.rate))
+                .then_with(|| right.quality_rank.cmp(&left.quality_rank))
+                .then_with(|| right.effective_score.cmp(&left.effective_score))
+                .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
         });
     }
 
@@ -3051,7 +3045,7 @@ mod tests {
 
         assert_eq!(assignment["enabled"], false);
         assert_eq!(assignment["reason"], "selected_model_ref_missing");
-        assert!(assignment["selected_carrier_id"].is_null());
+        assert_eq!(assignment["selected_carrier_id"].is_null(), true);
         assert_eq!(
             assignment["rejected_candidates"]
                 .as_array()
@@ -3102,7 +3096,7 @@ mod tests {
 
         assert_eq!(assignment["enabled"], false);
         assert_eq!(assignment["reason"], "selected_model_profile_id_missing");
-        assert!(assignment["selected_carrier_id"].is_null());
+        assert_eq!(assignment["selected_carrier_id"].is_null(), true);
         assert_eq!(
             assignment["rejected_candidates"]
                 .as_array()

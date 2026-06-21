@@ -1,5 +1,3 @@
-#![allow(clippy::result_large_err)]
-
 use crate::vida_client::{
     pass_response, problem_response, unsupported_operation_response, VidaClient,
 };

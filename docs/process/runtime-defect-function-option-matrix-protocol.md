@@ -56,7 +56,7 @@ A runtime quality task using this protocol is not closure-ready until:
 - command suggestions prefer default commands and reserve `--json` for machine
   workflows;
 - follow-up rows are represented by TaskFlow tasks;
-- `vida task validate-graph` passes.
+- `vida task validate-graph --json` passes.
 
 -----
 artifact_path: process/runtime-defect-function-option-matrix-protocol

@@ -17,7 +17,6 @@ pub(crate) struct ReleaseInstallReceipt {
     pub blocker_codes: Vec<String>,
     pub next_actions: Vec<String>,
     pub build: ReleaseBuildReceipt,
-    pub worktree: ReleaseWorktreeReceipt,
     pub asset_update: ReleaseAssetUpdateReceipt,
     pub install_layout: Option<ReleaseInstallLayout>,
     pub source_binary_path: String,
@@ -40,15 +39,6 @@ pub(crate) struct ReleaseBuildReceipt {
 pub(crate) struct ReleaseAssetUpdateReceipt {
     pub status: String,
     pub refreshed_paths: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(crate) struct ReleaseWorktreeReceipt {
-    pub status: String,
-    pub required: bool,
-    pub command: Option<Vec<String>>,
-    pub exit_code: Option<i32>,
-    pub dirty_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -120,29 +110,6 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         .unwrap_or_else(default_source_binary_path);
     let source_binary_path = source_binary.display().to_string();
     let install_layout = release_install_layout(args.install_root.as_deref());
-    let worktree = release_clean_worktree_receipt(args.require_clean_worktree);
-    if worktree.status == "blocked" {
-        return blocked_receipt(
-            requested_target,
-            source_binary_path,
-            ReleaseBuildReceipt {
-                status: if args.skip_build {
-                    "skipped".to_string()
-                } else {
-                    "not_started".to_string()
-                },
-                skipped: args.skip_build,
-                command: None,
-                exit_code: None,
-            },
-            worktree,
-            BlockedRelease {
-                blocker_code: "dirty_worktree_release_proof_required",
-                next_action: "Commit or stash all worktree changes, then rerun `vida release install --require-clean-worktree` from the clean commit you intend to publish.".to_string(),
-                io_error: None,
-            },
-        );
-    }
 
     let target_paths = match install_target_paths(&requested_target, args.install_root.as_deref()) {
         Ok(paths) => paths,
@@ -160,7 +127,6 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                     command: None,
                     exit_code: None,
                 },
-                worktree.clone(),
                 receipt,
             );
         }
@@ -172,11 +138,11 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
             requested_target,
             source_binary_path,
             build,
-            worktree.clone(),
             BlockedRelease {
                 blocker_code: "release_build_failed",
-                next_action: "Fix release build failures, then rerun `vida release install`."
-                    .to_string(),
+                next_action:
+                    "Fix release build failures, then rerun `vida release install --json`."
+                        .to_string(),
                 io_error: None,
             },
         );
@@ -187,7 +153,6 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
             requested_target,
             source_binary_path,
             build,
-            worktree.clone(),
             BlockedRelease {
                 blocker_code: "missing_source_binary",
                 next_action:
@@ -205,12 +170,10 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                 requested_target,
                 source_binary_path,
                 build,
-                worktree.clone(),
                 BlockedRelease {
                     blocker_code: "missing_source_binary",
-                    next_action:
-                        "Ensure the source binary is readable, then rerun `vida release install`."
-                            .to_string(),
+                    next_action: "Ensure the source binary is readable, then rerun `vida release install --json`."
+                        .to_string(),
                     io_error: Some(io_error),
                 },
             );
@@ -222,13 +185,7 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         if let Err(blocked) =
             install_release_binary_target(&source_binary, &path, target, &mut installed_targets)
         {
-            return blocked_receipt(
-                requested_target,
-                source_binary_path,
-                build,
-                worktree.clone(),
-                blocked,
-            );
+            return blocked_receipt(requested_target, source_binary_path, build, blocked);
         }
     }
 
@@ -239,13 +196,7 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         ) {
             Ok(paths) => paths,
             Err(blocked) => {
-                return blocked_receipt(
-                    requested_target,
-                    source_binary_path,
-                    build,
-                    worktree.clone(),
-                    blocked,
-                );
+                return blocked_receipt(requested_target, source_binary_path, build, blocked);
             }
         };
         let pi_agent_source = default_pi_agent_source_binary_path();
@@ -254,7 +205,6 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                 requested_target,
                 source_binary_path,
                 build,
-                worktree.clone(),
                 BlockedRelease {
                     blocker_code: "missing_source_binary",
                     next_action: "Run `cargo build -p vida-pi-agent --release`, or rerun without `--skip-build`."
@@ -270,13 +220,7 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                 target,
                 &mut installed_targets,
             ) {
-                return blocked_receipt(
-                    requested_target,
-                    source_binary_path,
-                    build,
-                    worktree.clone(),
-                    blocked,
-                );
+                return blocked_receipt(requested_target, source_binary_path, build, blocked);
             }
         }
     }
@@ -292,11 +236,10 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                     requested_target,
                     source_binary_path,
                     build,
-                    worktree.clone(),
                     BlockedRelease {
                         blocker_code: "release_asset_materialization_failed",
                         next_action:
-                            "Resolve the current install layout and rerun `vida release install`."
+                            "Resolve the current install layout and rerun `vida release install --json`."
                                 .to_string(),
                         io_error: None,
                     },
@@ -310,7 +253,6 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                     requested_target,
                     source_binary_path,
                     build,
-                    worktree.clone(),
                     BlockedRelease {
                         blocker_code: "release_asset_materialization_failed",
                         next_action: io_error.next_action_hint.clone(),
@@ -336,7 +278,6 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                 .to_string(),
         ],
         asset_update,
-        worktree,
         build,
         install_layout,
         source_binary_path,
@@ -434,70 +375,6 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
     }
 }
 
-fn release_clean_worktree_receipt(required: bool) -> ReleaseWorktreeReceipt {
-    let command = vec![
-        "git".to_string(),
-        "status".to_string(),
-        "--short".to_string(),
-    ];
-    if !required {
-        return ReleaseWorktreeReceipt {
-            status: "skipped".to_string(),
-            required,
-            command: Some(command),
-            exit_code: None,
-            dirty_paths: Vec::new(),
-        };
-    }
-    match Command::new("git")
-        .args(["status", "--short"])
-        .current_dir(trusted_workspace_root())
-        .output()
-    {
-        Ok(output) => release_worktree_receipt_from_status_output(
-            required,
-            Some(command),
-            output.status.code(),
-            &output.stdout,
-        ),
-        Err(_) => ReleaseWorktreeReceipt {
-            status: "blocked".to_string(),
-            required,
-            command: Some(command),
-            exit_code: None,
-            dirty_paths: Vec::new(),
-        },
-    }
-}
-
-fn release_worktree_receipt_from_status_output(
-    required: bool,
-    command: Option<Vec<String>>,
-    exit_code: Option<i32>,
-    stdout: &[u8],
-) -> ReleaseWorktreeReceipt {
-    let dirty_paths = String::from_utf8_lossy(stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    let status = if required && (exit_code != Some(0) || !dirty_paths.is_empty()) {
-        "blocked"
-    } else if required {
-        "pass"
-    } else {
-        "skipped"
-    };
-    ReleaseWorktreeReceipt {
-        status: status.to_string(),
-        required,
-        command,
-        exit_code,
-        dirty_paths,
-    }
-}
-
 #[derive(Debug)]
 struct BlockedRelease {
     blocker_code: &'static str,
@@ -509,7 +386,6 @@ fn blocked_receipt(
     requested_target: String,
     source_binary_path: String,
     build: ReleaseBuildReceipt,
-    worktree: ReleaseWorktreeReceipt,
     blocked: BlockedRelease,
 ) -> ReleaseInstallReceipt {
     let error_kind = blocked
@@ -521,7 +397,6 @@ fn blocked_receipt(
         blocker_codes: vec![blocked.blocker_code.to_string()],
         next_actions: vec![blocked.next_action],
         build,
-        worktree,
         asset_update: ReleaseAssetUpdateReceipt {
             status: "not_started".to_string(),
             refreshed_paths: Vec::new(),
@@ -801,7 +676,7 @@ fn user_home_dir() -> Option<PathBuf> {
         .or_else(|| {
             let drive = non_empty_env_var("HOMEDRIVE")?;
             let path = non_empty_env_var("HOMEPATH")?;
-            let mut combined = drive;
+            let mut combined = std::ffi::OsString::from(drive);
             combined.push(path);
             Some(combined)
         })
@@ -1067,7 +942,7 @@ fn synthetic_io_error_detail(
 fn next_action_for_io_error(error: &io::Error) -> &'static str {
     let message = error.to_string().to_ascii_lowercase();
     if is_text_file_busy_error(error) {
-        "The destination binary is in use (`text file is busy`). Stop the running process and rerun `vida release install`."
+        "The destination binary is in use (`text file is busy`). Stop the running process and rerun `vida release install --json`."
     } else if error.kind() == io::ErrorKind::PermissionDenied {
         "Check install target permissions, choose a writable `--install-root`, or rerun with an explicitly approved install path."
     } else if error.raw_os_error() == Some(30) || message.contains("read-only file system") {
@@ -1127,7 +1002,6 @@ mod tests {
         assert!(help.contains("path"));
         assert!(help.contains("--source-binary"));
         assert!(help.contains("--install-root"));
-        assert!(help.contains("--require-clean-worktree"));
     }
 
     #[test]
@@ -1229,14 +1103,11 @@ mod tests {
             skip_build: true,
             source_binary: Some(source.clone()),
             install_root: Some(harness.path().join("install-root")),
-            require_clean_worktree: false,
             json: true,
         });
 
         assert_eq!(receipt.status, "pass");
         assert_eq!(receipt.build.status, "skipped");
-        assert_eq!(receipt.worktree.status, "skipped");
-        assert!(!receipt.worktree.required);
         assert_eq!(receipt.io_error, None);
         assert_eq!(receipt.asset_update.status, "refreshed");
         assert!(receipt
@@ -1295,7 +1166,6 @@ mod tests {
             skip_build: true,
             source_binary: Some(source),
             install_root: Some(install_root.clone()),
-            require_clean_worktree: false,
             json: true,
         });
 
@@ -1336,48 +1206,6 @@ mod tests {
     }
 
     #[test]
-    fn release_worktree_receipt_passes_required_clean_status() {
-        let receipt = release_worktree_receipt_from_status_output(
-            true,
-            Some(vec![
-                "git".to_string(),
-                "status".to_string(),
-                "--short".to_string(),
-            ]),
-            Some(0),
-            b"",
-        );
-
-        assert_eq!(receipt.status, "pass");
-        assert!(receipt.required);
-        assert_eq!(receipt.dirty_paths, Vec::<String>::new());
-    }
-
-    #[test]
-    fn release_worktree_receipt_blocks_required_dirty_status() {
-        let receipt = release_worktree_receipt_from_status_output(
-            true,
-            Some(vec![
-                "git".to_string(),
-                "status".to_string(),
-                "--short".to_string(),
-            ]),
-            Some(0),
-            b" M crates/vida/src/release_surface.rs\n?? tmp-release-note\n",
-        );
-
-        assert_eq!(receipt.status, "blocked");
-        assert!(receipt.required);
-        assert_eq!(
-            receipt.dirty_paths,
-            vec![
-                "M crates/vida/src/release_surface.rs".to_string(),
-                "?? tmp-release-note".to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn release_install_skip_build_blocks_missing_source_binary() {
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let receipt = release_install_receipt(&ReleaseInstallArgs {
@@ -1385,7 +1213,6 @@ mod tests {
             skip_build: true,
             source_binary: Some(harness.path().join("missing-vida")),
             install_root: Some(harness.path().join("install-root")),
-            require_clean_worktree: false,
             json: true,
         });
 
@@ -1406,7 +1233,6 @@ mod tests {
             skip_build: true,
             source_binary: Some(source),
             install_root: Some(harness.path().join("install-root")),
-            require_clean_worktree: false,
             json: true,
         });
 
@@ -1453,7 +1279,6 @@ mod tests {
             skip_build: true,
             source_binary: Some(source),
             install_root: Some(install_root_file.clone()),
-            require_clean_worktree: false,
             json: true,
         });
 
@@ -1537,7 +1362,8 @@ mod tests {
 
         assert!(is_text_file_busy_error(&text_file_busy_error));
         assert!(is_text_file_busy_error(&io::Error::from_raw_os_error(26)));
-        assert!(is_text_file_busy_error(&io::Error::other(
+        assert!(is_text_file_busy_error(&io::Error::new(
+            io::ErrorKind::Other,
             "text file is busy"
         )));
         assert!(!is_text_file_busy_error(&io::Error::new(
@@ -1545,7 +1371,10 @@ mod tests {
             "permission denied"
         )));
 
-        assert!(is_text_file_busy_error(&io::Error::other("Text file busy")));
+        assert!(is_text_file_busy_error(&io::Error::new(
+            io::ErrorKind::Other,
+            "Text file busy"
+        )));
         assert_eq!(
             release_install_error_blocker_code("text_file_busy"),
             "install_target_text_file_busy"
@@ -1573,7 +1402,7 @@ mod tests {
     #[test]
     fn release_install_read_only_sandbox_maps_to_blocker_and_error_kind() {
         let destination = Path::new("/tmp");
-        let sandbox_error = io::Error::other("read-only file system");
+        let sandbox_error = io::Error::new(io::ErrorKind::Other, "read-only file system");
         let detail = io_error_detail("copy", Some(destination), None, &sandbox_error);
 
         assert_eq!(
@@ -1605,13 +1434,6 @@ mod tests {
                 skipped: true,
                 command: None,
                 exit_code: Some(0),
-            },
-            ReleaseWorktreeReceipt {
-                status: "skipped".to_string(),
-                required: false,
-                command: None,
-                exit_code: None,
-                dirty_paths: Vec::new(),
             },
             BlockedRelease {
                 blocker_code: release_install_error_blocker_code(&detail.error_kind),

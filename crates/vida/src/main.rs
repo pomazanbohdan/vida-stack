@@ -1,21 +1,4 @@
-#![allow(
-    dead_code,
-    unused_imports,
-    clippy::if_same_then_else,
-    clippy::large_enum_variant,
-    clippy::result_large_err,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
-#![cfg_attr(
-    test,
-    allow(
-        clippy::assertions_on_constants,
-        clippy::await_holding_lock,
-        clippy::field_reassign_with_default,
-        clippy::unnecessary_unwrap
-    )
-)]
+#![allow(dead_code, unused_imports)]
 
 mod activation_status;
 mod agent_dispatch_surface;
@@ -23,7 +6,6 @@ mod agent_extension_bundle_validation;
 mod agent_extension_catalog_projection;
 mod agent_extension_registry_projection;
 mod agent_feedback_surface;
-mod agent_pack_contract;
 mod approval_surface;
 mod bootstrap_value_utils;
 mod carrier_runtime_catalog;
@@ -62,7 +44,6 @@ mod model_profile_contract;
 mod operator_projection_cache;
 mod operator_session_projection;
 mod orchestrator_session_surface;
-mod pack_surface;
 mod project_activator_activation_summary;
 mod project_activator_agent_extensions_summary;
 mod project_activator_host_cli_summary;
@@ -173,7 +154,6 @@ mod semantic_routing_features;
 mod service_client_cli;
 mod session_surface;
 mod shell_runtime_helpers;
-mod state_access;
 mod state_store;
 mod status_surface;
 mod status_surface_external_cli;

@@ -2243,9 +2243,105 @@ fn exception_takeover_metadata_filename(run_id: &str) -> Result<String, String> 
         .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
     {
         return Err(format!(
-            "lane_completion_revision_conflict: lane `{run_id}` changed while completion was being prepared; status_changed={}; receipt_changed={}; retry with a fresh lane receipt",
-            current.status_fingerprint != expected.status_fingerprint,
-            true,
+            "Run id `{run_id}` contains unsupported characters for exception takeover metadata filename."
+        ));
+    }
+    Ok(format!("{run_id}.json"))
+}
+
+fn exception_takeover_metadata_path(state_root: &Path, run_id: &str) -> Result<PathBuf, String> {
+    let file_name = exception_takeover_metadata_filename(run_id)?;
+    Ok(exception_takeover_metadata_dir(state_root).join(file_name))
+}
+
+fn read_exception_takeover_metadata(
+    state_root: &Path,
+    run_id: &str,
+) -> Result<Option<ExceptionTakeoverMetadata>, String> {
+    let path = exception_takeover_metadata_path(state_root, run_id)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "Failed to read persisted exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let metadata: ExceptionTakeoverMetadata = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "Failed to decode persisted exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    metadata.validate()?;
+    Ok(Some(metadata))
+}
+
+fn write_exception_takeover_metadata(
+    state_root: &Path,
+    run_id: &str,
+    metadata: &ExceptionTakeoverMetadata,
+) -> Result<String, String> {
+    metadata.validate()?;
+    let dir = exception_takeover_metadata_dir(state_root);
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        format!(
+            "Failed to create exception takeover metadata directory `{}`: {error}",
+            dir.display()
+        )
+    })?;
+    let path = exception_takeover_metadata_path(state_root, run_id)?;
+    let encoded = serde_json::to_string_pretty(metadata).map_err(|error| {
+        format!(
+            "Failed to encode exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    std::fs::write(&path, encoded).map_err(|error| {
+        format!(
+            "Failed to persist exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    Ok(path.display().to_string())
+}
+
+fn lane_mutation_status_guard(
+    run_id: &str,
+    status: Option<&crate::state_store::RunGraphStatus>,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<(), String> {
+    let Some(status) = status else {
+        return Err(format!(
+            "Lane `{run_id}` has no authoritative run-graph status, so the lane surface cannot prove this run is still active for mutation."
+        ));
+    };
+    if receipt.lane_status == crate::LaneStatus::LaneSuperseded.as_str() {
+        return Err(format!(
+            "Lane `{run_id}` is already superseded; record a new active lane instead of mutating superseded evidence."
+        ));
+    }
+    let terminal_completed_without_next_unit = status.lifecycle_stage == "closure_complete"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none();
+    let recovery_terminal = recovery.is_some_and(|recovery| {
+        recovery.resume_status == "completed" && recovery.lifecycle_stage == "closure_complete"
+    });
+    if status.status == "completed" || terminal_completed_without_next_unit || recovery_terminal {
+        let next_action =
+            crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(
+                Some(run_id),
+            );
+        return Err(format!(
+            "Lane `{run_id}` is no longer active for mutation because run-graph status is terminal (`{}` / `{}`). Inspect `{}` for the persisted lane envelope and continuation evidence. {next_action}",
+            status.status, status.lifecycle_stage,
+            operator_output::command_text::human_command(&format!("vida lane show {run_id} --json")),
         ));
     }
     Ok(())
@@ -3897,7 +3993,288 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .latest_run_graph_dispatch_receipt_summary_for_current_session()
                 .await
             {
-                eprintln!("Failed to persist lane completion commit record: {error}");
+                Ok(summary) => summary,
+                Err(error) => {
+                    eprintln!("Failed to read latest lane receipt summary: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                return emit_missing_lane_receipt_envelope(*as_json, None, "vida lane show");
+            };
+            let status = match store.run_graph_status(&summary.run_id).await {
+                Ok(status) => Some(status),
+                Err(_) => None,
+            };
+            let retired_closed_task_status =
+                retired_closed_task_status_for_show(&store, status.as_ref()).await;
+            let closed_task_retired = retired_closed_task_status.is_some();
+            let status = retired_closed_task_status.or(status);
+            let recovery = status.as_ref().map(|status| {
+                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
+            });
+            let owned_write_scope_hint =
+                task_owned_write_scope_for_status(&store, status.as_ref()).await;
+            let summary = if closed_task_retired {
+                retired_closed_task_summary_for_show(summary)
+            } else {
+                summary
+            };
+            let exception_path_metadata_path = if closed_task_retired {
+                None
+            } else {
+                match exception_takeover_metadata_path(store.root(), &summary.run_id) {
+                    Ok(path) => path.exists().then(|| path.display().to_string()),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            };
+            let exception_path_metadata = if closed_task_retired {
+                None
+            } else {
+                match read_exception_takeover_metadata(store.root(), &summary.run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            };
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
+            let envelope = build_lane_envelope_with_owned_scope(
+                summary,
+                status,
+                exception_path_metadata_path,
+                exception_path_metadata,
+                operator_session_projection,
+                truth.blocked,
+                truth.blocker_codes,
+                truth.next_actions,
+                &owned_write_scope_hint,
+            );
+            return emit_lane_envelope_with_projection_cache(
+                &state_dir, "latest", &envelope, *as_json,
+            );
+        }
+        LaneCommand::ShowRun { run_id, as_json } => {
+            if *as_json {
+                if let Some(cached) =
+                    read_cached_lane_show_projection(&state_dir, &lane_show_projection_name(run_id))
+                {
+                    return emit_cached_lane_show_projection(cached);
+                }
+            }
+            let store = match StateStore::open_existing_read_only_with_timeout(
+                state_dir.clone(),
+                LANE_SURFACE_LOCK_TIMEOUT,
+            )
+            .await
+            {
+                Ok(store) => store,
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let operator_session_projection =
+                match crate::operator_session_projection::build_operator_session_projection(&store)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!("Failed to build operator session projection: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let Some(receipt) = (match store
+                .run_graph_dispatch_receipt_for_status(run_id, None)
+                .await
+            {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                return emit_missing_lane_receipt_envelope(
+                    *as_json,
+                    Some(run_id),
+                    "vida lane show",
+                );
+            };
+            let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+            let needs_status_projection = summary.lane_status
+                != crate::LaneStatus::LaneCompleted.as_str()
+                || summary.dispatch_status != "executed"
+                || summary.blocker_code.is_some()
+                || summary
+                    .downstream_dispatch_blockers
+                    .iter()
+                    .any(|value| !value.trim().is_empty());
+            let status = if needs_status_projection {
+                store.run_graph_status(run_id).await.ok()
+            } else {
+                None
+            };
+            let retired_closed_task_status =
+                retired_closed_task_status_for_show(&store, status.as_ref()).await;
+            let closed_task_retired = retired_closed_task_status.is_some();
+            let status = retired_closed_task_status.or(status);
+            let recovery = status.as_ref().map(|status| {
+                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
+            });
+            let owned_write_scope_hint =
+                task_owned_write_scope_for_status(&store, status.as_ref()).await;
+            let summary = if closed_task_retired {
+                retired_closed_task_summary_for_show(summary)
+            } else {
+                summary
+            };
+            let exception_path_metadata_path = if closed_task_retired {
+                None
+            } else {
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path.exists().then(|| path.display().to_string()),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            };
+            let exception_path_metadata = if closed_task_retired {
+                None
+            } else {
+                match read_exception_takeover_metadata(store.root(), run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            };
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
+            let envelope = build_lane_envelope_with_owned_scope(
+                summary,
+                status,
+                exception_path_metadata_path,
+                exception_path_metadata,
+                operator_session_projection,
+                truth.blocked,
+                truth.blocker_codes,
+                truth.next_actions,
+                &owned_write_scope_hint,
+            );
+            return emit_lane_envelope_with_projection_cache(
+                &state_dir, run_id, &envelope, *as_json,
+            );
+        }
+        LaneCommand::TakeoverReady { run_id, as_json } => {
+            let store = match StateStore::open_existing_read_only_with_timeout(
+                state_dir.clone(),
+                LANE_SURFACE_LOCK_TIMEOUT,
+            )
+            .await
+            {
+                Ok(store) => store,
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let operator_session_projection =
+                match crate::operator_session_projection::build_operator_session_projection(&store)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!("Failed to build operator session projection: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let Some(receipt) = (match store
+                .run_graph_dispatch_receipt_for_status(run_id, None)
+                .await
+            {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                return emit_missing_lane_receipt_envelope(
+                    *as_json,
+                    Some(run_id),
+                    "vida lane takeover-ready",
+                );
+            };
+            let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+            let status = store.run_graph_status(run_id).await.ok();
+            let recovery = status.as_ref().map(|status| {
+                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
+            });
+            let owned_write_scope_hint =
+                task_owned_write_scope_for_status(&store, status.as_ref()).await;
+            let exception_path_metadata_path =
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
+            let lane_envelope = build_lane_envelope_with_owned_scope(
+                summary,
+                status,
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
+                operator_session_projection,
+                truth.blocked,
+                truth.blocker_codes,
+                truth.next_actions,
+                &owned_write_scope_hint,
+            );
+            let takeover_envelope = build_lane_takeover_ready_envelope(lane_envelope);
+            return emit_lane_takeover_ready_envelope(&takeover_envelope, *as_json);
+        }
+        _ => {}
+    }
+
+    let store = match StateStore::open_existing(state_dir.clone()).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let operator_session_projection =
+        match crate::operator_session_projection::build_operator_session_projection(&store).await {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Failed to build operator session projection: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -4430,28 +4807,335 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             packet["downstream_lane_status"] = serde_json::json!(downstream_dispatch_status);
             packet["downstream_dispatch_active_target"] =
                 serde_json::json!(receipt.downstream_dispatch_active_target.clone());
-            let revision_guard_snapshot =
-                match capture_lane_completion_snapshot(&store, run_id).await {
-                    Ok(snapshot) => snapshot,
+            if let Err(error) = write_lane_packet(&validated_packet_path, &packet) {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
+                eprintln!("Failed to persist lane completion evidence: {error}");
+                return ExitCode::from(1);
+            }
+            if receipt.dispatch_status == "executed" {
+                if let Some(current_status) = status.as_ref() {
+                    let executed_status = crate::runtime_dispatch_state::apply_first_handoff_execution_to_run_graph_status(
+                        current_status,
+                        &receipt,
+                    );
+                    if let Err(error) = store.record_run_graph_status(&executed_status).await {
+                        eprintln!(
+                            "Failed to persist run-graph status after lane completion: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                    if let Err(error) =
+                        crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                            &store,
+                            &executed_status,
+                            "lane_complete",
+                        )
+                        .await
+                    {
+                        eprintln!(
+                            "Failed to synchronize continuation binding after lane completion: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            status = store.run_graph_status(run_id).await.ok();
+            recovery = store.run_graph_recovery_summary(run_id).await.ok();
+
+            let updated_summary =
+                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &updated_summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
+            let exception_path_metadata_path =
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
                     Err(error) => {
                         eprintln!("{error}");
                         return ExitCode::from(1);
                     }
                 };
-            if let Err(error) =
-                ensure_lane_completion_revision_unchanged(&store, run_id, &revision_guard_snapshot)
+            let envelope = build_lane_envelope(
+                updated_summary,
+                status,
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
+                operator_session_projection.clone(),
+                truth.blocked,
+                truth.blocker_codes,
+                truth.next_actions,
+            );
+            emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
+        }
+        LaneCommand::Retire {
+            run_id,
+            receipt_id,
+            reason: _reason,
+            as_json,
+        } => {
+            let Some(status) = (match store.run_graph_status(run_id).await {
+                Ok(status) => Some(status),
+                Err(error) => {
+                    eprintln!("Failed to read run-graph status `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                eprintln!("Missing run-graph status for `{run_id}`.");
+                return ExitCode::from(2);
+            };
+            let mut receipt = match store.run_graph_dispatch_receipt(run_id).await {
+                Ok(Some(receipt)) => receipt,
+                Ok(None) => {
+                    let verdict = match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
+                        &store,
+                        &status,
+                    )
                     .await
+                    {
+                        Ok(verdict) => verdict,
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to verify TaskFlow authority before retiring lane `{run_id}` without receipt: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    };
+                    if !verdict.task_missing() {
+                        return emit_missing_lane_receipt_envelope(
+                            as_json,
+                            Some(run_id),
+                            "vida lane retire",
+                        );
+                    }
+                    match synthetic_missing_task_stale_run_receipt(store.root(), run_id, &status) {
+                        Ok(receipt) => receipt,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            if receipt.lane_status == crate::LaneStatus::LaneExceptionRecorded.as_str()
+                && !receipt
+                    .supersedes_receipt_id
+                    .as_deref()
+                    .is_some_and(|receipt_id| !receipt_id.trim().is_empty())
+            {
+                eprintln!(
+                    "Lane `{run_id}` has recorded exception evidence but no active exception takeover supersession; refusing retire."
+                );
+                return ExitCode::from(2);
+            }
+            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            if let Err(error) =
+                lane_mutation_status_guard(run_id, Some(&status), recovery.as_ref(), &receipt)
             {
                 eprintln!("{error}");
                 return ExitCode::from(2);
             }
-            if let Err(error) = write_lane_packet(&validated_packet_path, &packet) {
-                eprintln!("{error}");
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            match store.show_task(&status.task_id).await {
+                Ok(task) if task.status == "closed" => {}
+                Ok(task) => {
+                    eprintln!(
+                        "Lane `{run_id}` can only be retired after task `{}` is closed; current task status is `{}`.",
+                        status.task_id, task.status
+                    );
+                    return ExitCode::from(2);
+                }
+                Err(error) => {
+                    let missing_task_stale_blocked_run = matches!(
+                        error,
+                        crate::state_store::StateStoreError::MissingTask { .. }
+                    )
+                        && missing_task_stale_blocked_run_can_retire(&status, &receipt);
+                    if !missing_task_stale_blocked_run {
+                        let metadata_task_id = if receipt.lane_status
+                            == crate::LaneStatus::LaneExceptionTakeover.as_str()
+                        {
+                            exception_path_metadata
+                                .as_ref()
+                                .map(|metadata| metadata.active_bounded_unit.trim())
+                                .filter(|task_id| !task_id.is_empty())
+                        } else {
+                            None
+                        };
+                        match metadata_task_id {
+                            Some(task_id) => match store.show_task(task_id).await {
+                                Ok(task) if task.status == "closed" => {}
+                                Ok(task) => {
+                                    eprintln!(
+                                        "Lane `{run_id}` can only be retired after exception bounded unit `{}` is closed; current task status is `{}`.",
+                                        task.id, task.status
+                                    );
+                                    return ExitCode::from(2);
+                                }
+                                Err(metadata_error) => {
+                                    let missing_exception_task = matches!(
+                                        metadata_error,
+                                        crate::state_store::StateStoreError::MissingTask { .. }
+                                    );
+                                    let stale_blocked_exception_takeover =
+                                        receipt.dispatch_status == "blocked";
+                                    if !missing_exception_task || !stale_blocked_exception_takeover
+                                    {
+                                        eprintln!(
+                                            "Failed to verify exception bounded unit `{task_id}` before retiring lane `{run_id}` after run task `{}` lookup failed: {metadata_error}",
+                                            status.task_id
+                                        );
+                                        return ExitCode::from(2);
+                                    }
+                                }
+                            },
+                            None => {
+                                eprintln!(
+                                    "Failed to verify closed task `{}` before retiring lane `{run_id}`: {error}",
+                                    status.task_id
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                }
+            }
+            let Some(packet_path) = receipt
+                .downstream_dispatch_packet_path
+                .clone()
+                .or_else(|| receipt.dispatch_packet_path.clone())
+            else {
+                eprintln!("Lane `{run_id}` has no packet evidence for stale-run retirement.");
+                return ExitCode::from(2);
+            };
+            let validated_packet_path =
+                match validate_lane_packet_path(store.root(), run_id, &packet_path, true) {
+                    Ok(path) => path.display().to_string(),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
+                };
+            let completion_result_path =
+                match crate::runtime_dispatch_state::write_runtime_lane_completion_result(
+                    store.root(),
+                    run_id,
+                    "closure",
+                    receipt_id,
+                    &validated_packet_path,
+                ) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let retired_status = retired_closed_task_run_graph_status(status);
+            if let Err(error) = store.record_run_graph_status(&retired_status).await {
+                eprintln!("Failed to persist retired run-graph status `{run_id}`: {error}");
                 return ExitCode::from(1);
             }
+            if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                &store,
+                &retired_status,
+                "lane_retire_closed_task_stale_run",
+            )
+            .await
+            {
+                eprintln!("Failed to clear retired run continuation binding `{run_id}`: {error}");
+                return ExitCode::from(1);
+            }
+            receipt.dispatch_status = "executed".to_string();
+            receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+            receipt.blocker_code = None;
+            receipt.exception_path_receipt_id = None;
+            receipt.supersedes_receipt_id = None;
+            receipt.downstream_dispatch_target = None;
+            receipt.downstream_dispatch_command = None;
+            receipt.downstream_dispatch_packet_path = None;
+            receipt.downstream_dispatch_ready = false;
+            receipt.downstream_dispatch_blockers.clear();
+            receipt.downstream_dispatch_status = Some("retired_closed_task_run".to_string());
+            receipt.downstream_dispatch_result_path = Some(completion_result_path.clone());
+            receipt.downstream_dispatch_active_target = Some("closure".to_string());
+            receipt.downstream_dispatch_last_target = Some("closure".to_string());
+            receipt.dispatch_result_path = Some(completion_result_path);
+            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
+                eprintln!("Failed to persist retired lane receipt `{run_id}`: {error}");
+                return ExitCode::from(1);
+            }
+
+            let updated_summary =
+                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            let truth = derive_lane_show_truth_with_exception_metadata(
+                &updated_summary,
+                recovery.as_ref(),
+                exception_path_metadata.as_ref(),
+            );
+            let exception_path_metadata_path =
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let envelope = build_lane_envelope(
+                updated_summary,
+                Some(retired_status),
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
+                operator_session_projection.clone(),
+                truth.blocked,
+                truth.blocker_codes,
+                truth.next_actions,
+            );
+            emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
+        }
+        LaneCommand::ExceptionTakeover {
+            run_id,
+            receipt_id,
+            metadata,
+            activate,
+            as_json,
+        } => {
+            let Some(mut receipt) = (match store.run_graph_dispatch_receipt(run_id).await {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                return emit_missing_lane_receipt_envelope(
+                    as_json,
+                    Some(run_id),
+                    "vida lane exception-takeover",
+                );
+            };
+            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            let status = store.run_graph_status(run_id).await.ok();
             if let Err(error) =
-                ensure_lane_completion_revision_unchanged(&store, run_id, &revision_guard_snapshot)
-                    .await
+                lane_mutation_status_guard(run_id, status.as_ref(), recovery.as_ref(), &receipt)
             {
                 eprintln!("{error}");
                 return ExitCode::from(2);

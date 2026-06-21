@@ -10,7 +10,6 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
     let skills_registry = registry_projection.skills_registry;
     let profiles_registry = registry_projection.profiles_registry;
     let flows_registry = registry_projection.flows_registry;
-    let packs_registry = registry_projection.packs_registry;
     let dispatch_aliases_registry = registry_projection.dispatch_aliases_registry;
     let enabled_project_roles = registry_projection.enabled_project_roles;
     let enabled_project_skills = registry_projection.enabled_project_skills;
@@ -85,9 +84,6 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
         "project_skills": project_skills,
         "project_profiles": project_profiles,
         "project_flows": project_flows,
-        "project_packs": serde_json::to_value(
-            crate::yaml_lookup(&packs_registry, &["packs"]).cloned().unwrap_or(serde_yaml::Value::Sequence(Vec::new()))
-        ).unwrap_or_else(|_| serde_json::json!([])),
         "project_role_catalog": project_role_map,
         "project_profile_catalog": project_profile_map,
         "project_flow_catalog": project_flow_map,

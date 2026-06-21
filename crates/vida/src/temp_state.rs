@@ -30,9 +30,25 @@ impl Drop for TempStateHarness {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::TempStateHarness;
+
+    #[test]
+    fn temp_state_harness_creates_and_cleans_directory() {
+        let path = {
+            let harness = TempStateHarness::new().expect("temp state harness should initialize");
+            let path = harness.path().to_path_buf();
+            assert!(path.exists());
+            path
+        };
+
+        assert!(!path.exists());
+    }
+}
+
 fn reserve_temp_root() -> io::Result<PathBuf> {
-    let base = temp_state_base_dir()?;
-    fs::create_dir_all(&base)?;
+    let base = env::temp_dir();
 
     for attempt in 0..TEMP_DIR_ATTEMPTS {
         let candidate = base.join(unique_temp_dir_name(attempt));
@@ -49,37 +65,6 @@ fn reserve_temp_root() -> io::Result<PathBuf> {
     ))
 }
 
-pub(crate) fn temp_state_base_dir() -> io::Result<PathBuf> {
-    let configured_temp = env::temp_dir();
-    if !path_is_inside_repo(&configured_temp) {
-        return Ok(configured_temp);
-    }
-
-    if let Some(fallback) = user_temp_fallback_dir().filter(|path| !path_is_inside_repo(path)) {
-        return Ok(fallback);
-    }
-
-    Ok(configured_temp)
-}
-
-fn user_temp_fallback_dir() -> Option<PathBuf> {
-    env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|path| path.join("Temp"))
-        .or_else(|| {
-            env::var_os("USERPROFILE")
-                .map(PathBuf::from)
-                .map(|path| path.join("AppData").join("Local").join("Temp"))
-        })
-}
-
-fn path_is_inside_repo(path: &Path) -> bool {
-    let repo_root = crate::state_store::repo_root();
-    let normalized_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let normalized_repo = repo_root.canonicalize().unwrap_or(repo_root);
-    normalized_path.starts_with(normalized_repo)
-}
-
 fn unique_temp_dir_name(attempt: u32) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -92,21 +77,4 @@ fn unique_temp_dir_name(attempt: u32) -> String {
         nanos,
         attempt
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::TempStateHarness;
-
-    #[test]
-    fn temp_state_harness_creates_and_cleans_directory() {
-        let path = {
-            let harness = TempStateHarness::new().expect("temp state harness should initialize");
-            let path = harness.path().to_path_buf();
-            assert!(path.exists());
-            path
-        };
-
-        assert!(!path.exists());
-    }
 }

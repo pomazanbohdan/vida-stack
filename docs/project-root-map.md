@@ -22,37 +22,31 @@ This map does not cover extracted secondary bundles by default.
    - local product/spec entrypoint without duplicated catalog listings
 4. `docs/product/spec/current-spec-catalog.md`
    - detailed active product/spec artifact catalog
-5. `docs/product/research/index.md`
-   - promoted product research entrypoint for research inputs that may inform active product law
-6. `docs/product/control/index.md`
-   - product control lane for DB-backed controlled object projections and accepted decision records
-7. `docs/product/wiki/index.md`
-   - generated project wiki projection lane for internal and public views
-8. `docs/process/index.md`
+5. `docs/process/index.md`
    - project process lane
-9. `docs/project-memory/index.md`
+6. `docs/project-memory/index.md`
    - project-memory lane
-10. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
+7. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
    - documentation/product alignment matrix
-11. `docs/product/spec/canonical-runtime-layer-matrix.md`
+8. `docs/product/spec/canonical-runtime-layer-matrix.md`
    - runtime capability layering matrix for the active project canon
-12. `docs/product/spec/repository-two-project-surface-model.md`
+9. `docs/product/spec/repository-two-project-surface-model.md`
    - active-project vs extracted-bundle boundary law
-13. `docs/process/documentation-tooling-map.md`
+10. `docs/process/documentation-tooling-map.md`
    - project-owned documentation tooling map
-14. `docs/process/agent-extensions/index.md`
+11. `docs/process/agent-extensions/index.md`
    - project-owned agent role/skill/profile/flow extension map
-15. `docs/process/github-issues-triage-guide.md`
+12. `docs/process/github-issues-triage-guide.md`
    - project-owned GitHub Issues triage, label taxonomy, and diagnostic publication guide
-16. `docs/process/command-timing-and-gate-optimization-protocol.md`
+13. `docs/process/command-timing-and-gate-optimization-protocol.md`
     - project-owned timing, slow-gate, script optimization, and operator-friction diagnostic protocol
-17. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
+14. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
     - project-owned VIDA runtime application of generic `Error Search / Bug Reasoning`
-18. `docs/product/spec/multi-agent-stage-ensemble-contract.md`
+15. `docs/product/spec/multi-agent-stage-ensemble-contract.md`
       - product/runtime capability contract for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
-19. `docs/process/vida-runtime-development-environment.md`
+16. `docs/process/vida-runtime-development-environment.md`
      - compact project-owned runbook for runtime development environment alignment, project-local skills, GitHub issue processing, and operator-efficiency follow-up
-20. `docs/process/runtime-defect-function-option-matrix-protocol.md`
+17. `docs/process/runtime-defect-function-option-matrix-protocol.md`
      - project-owned runtime defect matrix schema for command surfaces, CLI options, owning functions, output contracts, fixtures, and proof tests
 
 ## Activation Triggers
@@ -74,38 +68,32 @@ Do not use this map as the default route for extracted bundles unless the task e
    - then to `docs/product/spec/current-spec-map.md`
 2. Product/spec detailed catalog lookup questions:
    - continue to `docs/product/spec/current-spec-catalog.md`
-3. Product research lookup questions:
-   - continue to `docs/product/research/index.md`
-4. Product control projection or accepted decision-record questions:
-   - continue to `docs/product/control/index.md`
-5. Product wiki projection questions:
-   - continue to `docs/product/wiki/index.md`
-6. Documentation alignment / documentation-state questions:
+3. Documentation alignment / documentation-state questions:
    - continue to `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-7. Runtime layering / runtime architecture / runtime readiness questions:
+4. Runtime layering / runtime architecture / runtime readiness questions:
    - continue to `docs/product/spec/canonical-runtime-layer-matrix.md`
-8. Process/runbook questions for the active project:
+5. Process/runbook questions for the active project:
    - continue to `docs/process/index.md`
-9. Project-memory questions:
+6. Project-memory questions:
    - continue to `docs/project-memory/index.md`
-10. Extracted secondary bundle questions:
+7. Extracted secondary bundle questions:
    - do not continue through active project docs by default
    - enter the named bundle directly under `projects/<name>/**`
-11. Documentation tooling / operator-command questions:
+8. Documentation tooling / operator-command questions:
    - continue to `docs/process/documentation-tooling-map.md`
-12. Project agent-system extension questions:
+9. Project agent-system extension questions:
    - continue to `docs/process/agent-extensions/index.md`
-13. GitHub Issues triage / label / issue workflow questions:
+10. GitHub Issues triage / label / issue workflow questions:
    - continue to `docs/process/github-issues-triage-guide.md`
-14. Command timing / slow gate / script optimization questions:
+11. Command timing / slow gate / script optimization questions:
     - continue to `docs/process/command-timing-and-gate-optimization-protocol.md`
-15. Runtime defects / multi-defect pools / TaskFlow, DocFlow, run-graph, lane, dispatch, receipt, ownership, routing, or CI failure clusters:
+12. Runtime defects / multi-defect pools / TaskFlow, DocFlow, run-graph, lane, dispatch, receipt, ownership, routing, or CI failure clusters:
     - continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-16. Multi-agent stage ensemble / independent attempt / consolidation questions:
+13. Multi-agent stage ensemble / independent attempt / consolidation questions:
      - continue to `docs/product/spec/multi-agent-stage-ensemble-contract.md`
-17. Runtime development environment / skill activation / GitHub issue processing / operator-efficiency follow-up:
+14. Runtime development environment / skill activation / GitHub issue processing / operator-efficiency follow-up:
      - continue to `docs/process/vida-runtime-development-environment.md`
-18. Runtime defect function/option matrix or command-surface proof matrix questions:
+15. Runtime defect function/option matrix or command-surface proof matrix questions:
      - continue to `docs/process/runtime-defect-function-option-matrix-protocol.md`
 
 ## Boundary Rule
@@ -118,10 +106,10 @@ Do not use this map as the default route for extracted bundles unless the task e
 artifact_path: project/root-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-06-18'
+artifact_revision: '2026-06-13'
 schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: 2026-06-18T00:00:00+03:00
+updated_at: 2026-06-13T00:00:00+03:00
 changelog_ref: project-root-map.changelog.jsonl

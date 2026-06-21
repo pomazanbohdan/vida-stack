@@ -274,10 +274,16 @@ fn consume_final_design_first_delegated_lanes(execution_plan: &serde_json::Value
         .filter_map(serde_json::Value::as_str)
         .collect::<Vec<_>>();
     let mut lanes = Vec::new();
-    if active_cycle.contains(&"delegate_specification_or_research_lane") {
+    if active_cycle
+        .iter()
+        .any(|step| *step == "delegate_specification_or_research_lane")
+    {
         lanes.push("specification");
     }
-    if active_cycle.contains(&"delegate_implementer_lane") {
+    if active_cycle
+        .iter()
+        .any(|step| *step == "delegate_implementer_lane")
+    {
         lanes.push("implementer");
     }
     lanes.join(", ")

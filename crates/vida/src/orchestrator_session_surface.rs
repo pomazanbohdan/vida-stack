@@ -239,7 +239,7 @@ fn current_session_record(state_dir: &Path) -> serde_json::Value {
         "state_dir": state_dir.display().to_string(),
         "worktree_environment_id": sanitized_env("VIDA_WORKTREE_ID")
             .or_else(|| sanitized_env("GIT_DIR"))
-            .unwrap_or_else(canonicalized_current_dir),
+            .unwrap_or_else(|| canonicalized_current_dir()),
         "started_at_epoch_seconds": now,
         "last_heartbeat_epoch_seconds": now,
         "owner_annotation": "current_session",

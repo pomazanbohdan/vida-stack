@@ -183,7 +183,7 @@ cargo nextest run --locked --workspace --profile ci
 cargo build --locked -p vida --release
 install -D -m 755 target/release/vida ~/.local/share/vida-stack/current/bin/vida
 export PATH="$HOME/.local/share/vida-stack/current/bin:$PATH"
-vida status
+vida status --json
 ```
 
 Windows PowerShell:
@@ -194,57 +194,57 @@ winget install BurntSushi.ripgrep.MSVC
 rg --version
 
 # Fast package-scoped proof through the repo gate.
-.\scripts\vida-dev-gate.cmd -Mode quick
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
 
 # Smoke the debug runtime before using it for stateful runtime validation.
-.\scripts\vida-dev-gate.cmd -Mode runtime-smoke
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode runtime-smoke -Json
 
 # Build and install the operator-facing launcher only for installed-runtime or release gates.
-vida release install
-vida status
+vida release install --json
+vida status --json
 ```
 
 For timed Windows proof loops, prefer the repo script:
 
 ```powershell
 # Script/docs-only proof without Cargo.
-.\scripts\vida-dev-gate.cmd -Mode script-check
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json
 
 # Fast debug source proof: fmt plus cargo check.
-.\scripts\vida-dev-gate.cmd -Mode quick
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
 
 # Focused regression proof through nextest.
-.\scripts\vida-dev-gate.cmd -Mode focused-nextest -TestFilter close_feedback_inference
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode focused-nextest -TestFilter close_feedback_inference -Json
 
 # Full vida package proof through nextest.
-.\scripts\vida-dev-gate.cmd -Mode package-nextest
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode package-nextest -Json
 
 # Local workspace test gate mirroring CI's nextest profile.
-powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode workspace-nextest
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode workspace-nextest -Json
 
 # Rust doc tests.
-powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode doc-test
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode doc-test -Json
 
 # Debug build of runtime entrypoints.
-powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode build-debug
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode build-debug -Json
 
 # Cheap policy probe for a checkout or linked worktree before running Cargo.
-powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode target-dir-policy
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode target-dir-policy -Json
 
 # Debug runtime smoke: build debug vida and run status from the effective Cargo target dir.
-powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode runtime-smoke
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode runtime-smoke -Json
 
 # Windows-native release archive packaging without installing the operator-facing launcher.
-powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -SkipBuild -Windows -ReleaseBinDir .\.vida\cargo-target\release
+powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -SkipBuild -Windows -ReleaseBinDir .\.vida\cargo-target\release -Json
 
 # Timed gate wrapper for the same Windows-native skip-build package path.
-powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -SkipBuild -Windows -ReleaseBinDir .\.vida\cargo-target\release
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -SkipBuild -Windows -ReleaseBinDir .\.vida\cargo-target\release -Json
 
 # Focused no-install package smoke with isolated fixture binaries and manifest validation.
-powershell -ExecutionPolicy Bypass -File scripts/check-release-package.ps1
+powershell -ExecutionPolicy Bypass -File scripts/check-release-package.ps1 -Json
 
 # Installed runtime proof only when the bounded target requires the operator-facing launcher.
-powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-install
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-install -Json
 ```
 
 `scripts/vida-dev-gate.ps1` keeps Cargo output visible and deterministic by setting `CARGO_TARGET_DIR` when the caller has not already set it. Normal checkouts use `.vida\cargo-target`; linked worktrees under `.vida\worktrees\...` share the owner checkout's `.vida\cargo-target` so each worktree does not cold-build its own `target` tree. If the caller provides `CARGO_TARGET_DIR`, the script respects it and reports that policy in JSON timing records.
@@ -270,13 +270,14 @@ Fresh-state smoke after installing `vida.exe`:
 ```powershell
 $state = Join-Path $env:TEMP "vida-fresh-state-proof-$PID"
 vida boot --state-dir $state
-vida status --state-dir $state --summary
+vida status --state-dir $state --summary --json
 ```
 
 ### Project activation survey
 
 ```bash
 vida project-activator
+vida project-activator --json
 ```
 
 This surfaces the bounded project-activation view for the current directory:
@@ -409,15 +410,15 @@ vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run
 
 vida task dep add-bulk --edge-file edges.txt --dry-run
 
-vida taskflow task import-jsonl .vida/imports/tasks.seed.jsonl
+vida taskflow task import-jsonl .vida/imports/tasks.seed.jsonl --json
 
-vida taskflow consume final "Runtime closure proof path"
+vida taskflow consume final "Runtime closure proof path" --json
 
-vida taskflow consume continue
+vida taskflow consume continue --json
 
-vida taskflow consume advance --max-rounds 4
+vida taskflow consume advance --max-rounds 4 --json
 
-vida taskflow protocol-binding sync
+vida taskflow protocol-binding sync --json
 ```
 
 ---

@@ -72,8 +72,8 @@ mod tests {
     #[test]
     fn action_entries_keep_default_human_commands_without_json_bias() {
         let actions = serde_json::json!([
-            "vida lane retire run-1",
-            "vida taskflow consume continue",
+            "vida lane retire run-1 --json",
+            "vida taskflow consume continue --json",
             "vida task show task-1 --json-output"
         ]);
 
@@ -95,9 +95,9 @@ mod tests {
             "source_dispatch_packet_path": ".vida/packets/run-1.json",
             "snapshot_path": null,
             "blocker_codes": ["stale_missing_task_run_graph"],
-            "next_actions": ["vida lane retire run-1"],
+            "next_actions": ["vida lane retire run-1 --json"],
             "projection_truth": {
-                "next_lawful_operator_action": "vida taskflow consume continue"
+                "next_lawful_operator_action": "vida taskflow consume continue --json"
             },
             "artifact_refs": {
                 "run_id": "run-1"

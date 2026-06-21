@@ -139,12 +139,22 @@ pub fn validate_attempt_artifact_changed_files_scope(
 
 #[must_use]
 pub fn normalize_attempt_artifact_repo_path(path: &str) -> Option<String> {
-    crate::path_policy::normalize_repo_relative_path(path).ok()
+    let normalized = path.trim().replace('\\', "/");
+    let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
+    Some(normalized.to_string())
 }
 
 #[must_use]
 pub fn attempt_artifact_path_is_owned(changed_file: &str, owned_path: &str) -> bool {
-    crate::path_policy::repo_relative_path_is_owned(changed_file, owned_path)
+    changed_file == owned_path || changed_file.starts_with(&format!("{owned_path}/"))
 }
 
 pub fn merge_repeated_values(target: &mut Vec<String>, values: &[String]) {

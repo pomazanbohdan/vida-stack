@@ -44,7 +44,7 @@ fn taskflow_protocol_binding_seeds() -> &'static [TaskflowProtocolBindingSeed] {
             activation_class: "triggered_domain",
             runtime_owner: "vida::taskflow::protocol_binding::taskflow_surface",
             enforcement_type: "execution-discipline",
-            proof_surface: "vida taskflow consume bundle check",
+            proof_surface: "vida taskflow consume bundle check --json",
         },
         TaskflowProtocolBindingSeed {
             protocol_id: "runtime-instructions/runtime.task-state-telemetry-protocol",
@@ -52,7 +52,7 @@ fn taskflow_protocol_binding_seeds() -> &'static [TaskflowProtocolBindingSeed] {
             activation_class: "triggered_domain",
             runtime_owner: "vida::state_store::task_state_telemetry",
             enforcement_type: "state-telemetry",
-            proof_surface: "vida status",
+            proof_surface: "vida status --json",
         },
         TaskflowProtocolBindingSeed {
             protocol_id: "runtime-instructions/work.execution-health-check-protocol",
@@ -60,7 +60,7 @@ fn taskflow_protocol_binding_seeds() -> &'static [TaskflowProtocolBindingSeed] {
             activation_class: "triggered_domain",
             runtime_owner: "vida::doctor::execution_health",
             enforcement_type: "health-gate",
-            proof_surface: "vida taskflow doctor",
+            proof_surface: "vida taskflow doctor --json",
         },
         TaskflowProtocolBindingSeed {
             protocol_id: "runtime-instructions/work.task-state-reconciliation-protocol",
@@ -68,7 +68,7 @@ fn taskflow_protocol_binding_seeds() -> &'static [TaskflowProtocolBindingSeed] {
             activation_class: "closure_reflection",
             runtime_owner: "vida::state_store::task_reconciliation",
             enforcement_type: "state-reconciliation",
-            proof_surface: "vida status",
+            proof_surface: "vida status --json",
         },
     ]
 }
@@ -130,13 +130,14 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
 ) -> ProtocolBindingCompiledPayloadImportEvidence {
     let mut blockers = Vec::new();
 
-    let activation_snapshot = super::read_or_sync_launcher_activation_snapshot(store)
-        .await
-        .ok();
-    let effective_bundle_receipt = store
-        .latest_effective_bundle_receipt_summary()
-        .await
-        .unwrap_or_default();
+    let activation_snapshot = match super::read_or_sync_launcher_activation_snapshot(store).await {
+        Ok(snapshot) => Some(snapshot),
+        Err(_) => None,
+    };
+    let effective_bundle_receipt = match store.latest_effective_bundle_receipt_summary().await {
+        Ok(receipt) => receipt,
+        Err(_) => None,
+    };
 
     let (source, source_config_path, source_config_digest, captured_at, compiled_payload_summary) =
         if let Some(snapshot) = activation_snapshot.as_ref() {

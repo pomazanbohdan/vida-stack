@@ -11,7 +11,7 @@ Status: canonical
 ## Current Context
 - Existing system overview
   - Project canon already says normal write-producing work is delegation-first and root-session local writing requires an explicit exception path.
-  - Runtime dispatch already materializes worker lanes through `vida agent-init --dispatch-packet ...`.
+  - Runtime dispatch already materializes worker lanes through `vida agent-init --dispatch-packet ... --json`.
   - Host CLI runtimes such as Codex/Qwen/Kilo/OpenCode are modeled as carrier systems and execution backends under `vida.config.yaml`.
 - Key components and relationships
   - `AGENTS.md` and `AGENTS.sidecar.md` bootstrap the session and point into project process law.

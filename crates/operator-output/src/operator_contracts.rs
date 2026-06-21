@@ -63,7 +63,6 @@ fn inferred_gate_status(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn render_vida_gate_result_with_status(
     gate_id: &str,
     explicit_status: &str,
@@ -615,7 +614,7 @@ pub fn canonical_release1_operator_contract_status(value: &Value) -> Option<&'st
 }
 
 fn canonical_release1_blocker_candidates(value: &Value) -> Option<Vec<String>> {
-    canonical_blocker_candidates(value, canonical_default_blocker_codes)
+    canonical_blocker_candidates(value, |entries| canonical_default_blocker_codes(entries))
 }
 
 pub fn canonical_release1_blocker_code_entries(value: &Value) -> Option<Vec<String>> {
@@ -742,7 +741,7 @@ pub fn shared_operator_output_contract_parity_error(summary_json: &Value) -> Opt
     operator_output_contract_parity_error(
         &RELEASE1_OPERATOR_CONTRACT_SPEC,
         summary_json,
-        canonical_default_blocker_codes,
+        |entries| canonical_default_blocker_codes(entries),
     )
 }
 
@@ -1299,7 +1298,7 @@ mod tests {
     fn generic_blocker_normalization_falls_back_to_unsupported_code() {
         let normalized = normalize_blocker_codes(
             &["unknown_code".to_string()],
-            canonical_default_blocker_codes,
+            |entries| canonical_default_blocker_codes(entries),
             Some("unsupported_blocker_code".to_string()),
         );
         assert_eq!(normalized, vec!["unsupported_blocker_code".to_string()]);

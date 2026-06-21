@@ -137,6 +137,7 @@ pub(crate) fn build_project_activator_activation_summary(
             input.host_cli_suggested_system
         ));
     }
+    one_shot_example_parts.push("--json".to_string());
     let one_shot_example = one_shot_example_parts.join(" ");
 
     let mut next_steps = Vec::new();
@@ -147,7 +148,7 @@ pub(crate) fn build_project_activator_activation_summary(
     }
     if input.config_has_placeholders {
         next_steps.push(
-            "run `vida project-activator --repair` or the bounded one-shot activation command to record project identity, language policy, docs roots, and host CLI setup before normal work"
+            "run `vida project-activator --repair --json` or the bounded one-shot activation command to record project identity, language policy, docs roots, and host CLI setup before normal work"
                 .to_string(),
         );
     }
@@ -171,13 +172,13 @@ pub(crate) fn build_project_activator_activation_summary(
     }
     if input.sidecar_has_placeholders {
         next_steps.push(
-            "replace placeholder project instruction/docs pointers in `AGENTS.sidecar.md`, or run `vida project-activator --repair` when safe defaults are acceptable"
+            "replace placeholder project instruction/docs pointers in `AGENTS.sidecar.md`, or run `vida project-activator --repair --json` when safe defaults are acceptable"
                 .to_string(),
         );
     }
     if input.docs_missing {
         next_steps.push(
-            "materialize the minimum project-doc roots with `vida project-activator --repair` or record an explicit activation override"
+            "materialize the minimum project-doc roots with `vida project-activator --repair --json` or record an explicit activation override"
                 .to_string(),
         );
     }

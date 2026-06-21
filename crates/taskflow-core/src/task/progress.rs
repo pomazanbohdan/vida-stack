@@ -174,7 +174,6 @@ fn descendant_ids_from_rows(
     descendant_ids
 }
 
-#[allow(clippy::too_many_arguments)]
 fn direct_child_progress_summary(
     root_task: TaskProgressRow,
     direct_child_count: usize,
@@ -238,7 +237,6 @@ fn direct_child_progress_summary(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn descendant_progress_summary(
     root_task: TaskProgressRow,
     direct_child_count: usize,
@@ -377,7 +375,6 @@ fn descendant_progress_summary(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn non_container_progress_state(
     root_task: &TaskProgressRow,
     descendant_count: usize,

@@ -65,7 +65,9 @@ fn command_is_resolvable(command: &str) -> bool {
     })
 }
 
-fn external_cli_command_probe(backend_entry: &serde_yaml::Value) -> Option<(&'static str, &str)> {
+fn external_cli_command_probe<'a>(
+    backend_entry: &'a serde_yaml::Value,
+) -> Option<(&'static str, &'a str)> {
     crate::yaml_lookup(backend_entry, &["dispatch", "command"])
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)
@@ -916,7 +918,8 @@ fn pi_style_external_cli_carrier_readiness(
                         }),
                         serde_json::json!({"status":"not_checked"}),
                         vec![
-                            "Repair Pi model catalog access, then rerun `vida status`.".to_string()
+                            "Repair Pi model catalog access, then rerun `vida status --json`."
+                                .to_string(),
                         ],
                     );
                 }
@@ -1073,7 +1076,7 @@ fn external_cli_carrier_readiness(
                 },
                 "next_actions": [
                     format!("Install or expose `{command}` on PATH, or reroute this external CLI backend before dispatch."),
-                    "Rerun `vida status` after restoring the external CLI command."
+                    "Rerun `vida status --json` after restoring the external CLI command."
                 ],
             });
         }
@@ -1125,7 +1128,7 @@ fn external_cli_carrier_readiness(
             "default_model_profile": profile_projection["default_model_profile"].clone(),
             "selected_model_profile": profile_projection["default_model_profile"].clone(),
             "model_profiles": profile_projection["model_profiles"].clone(),
-            "next_actions": ["Complete carrier authentication outside sandbox, then rerun `vida status`."],
+            "next_actions": ["Complete carrier authentication outside sandbox, then rerun `vida status --json`."],
         });
     }
 
@@ -1296,7 +1299,7 @@ fn external_cli_carrier_readiness(
         ));
         let next_actions = if provider_failure_next_actions.is_empty() {
             vec![
-                "Repair the provider credential or provider-specific auth path, then rerun `vida status`."
+                "Repair the provider credential or provider-specific auth path, then rerun `vida status --json`."
                     .to_string(),
             ]
         } else {
@@ -1815,7 +1818,7 @@ fn external_cli_preflight_summary_with_probe(
             "blocker_code": tool_contract["blocker_code"].clone(),
             "next_actions": [
                 "Fix the selected host CLI system entry or runtime root in `vida.config.yaml`.",
-                "Rerun `vida status` after restoring the canonical tool contract fields.",
+                "Rerun `vida status --json` after restoring the canonical tool contract fields.",
             ]
         });
     }
@@ -1846,7 +1849,7 @@ fn external_cli_preflight_summary_with_probe(
             "next_actions": [
                 "Allow network access for this session or rerun outside sandbox before using external CLI agents.",
                 "If sandbox must stay enabled, switch host and routing to an internal backend in `vida.config.yaml`.",
-                "Rerun `vida status` and then retry the external CLI command."
+                "Rerun `vida status --json` and then retry the external CLI command."
             ]
         });
     }
@@ -1899,7 +1902,7 @@ fn external_cli_preflight_summary_with_probe(
             "blocker_code": first_blocker,
             "next_actions": [
                 "Repair carrier auth or model state for at least one enabled external CLI backend.",
-                "Rerun `vida status` after the bounded carrier fix."
+                "Rerun `vida status --json` after the bounded carrier fix."
             ]
         });
     }

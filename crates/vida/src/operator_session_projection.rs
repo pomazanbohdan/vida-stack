@@ -1,13 +1,6 @@
 pub(crate) async fn build_operator_session_projection(
     store: &crate::state_store::StateStore,
 ) -> Result<serde_json::Value, crate::state_store::StateStoreError> {
-    build_operator_session_projection_with_continuation(store, None).await
-}
-
-pub(crate) async fn build_operator_session_projection_with_continuation(
-    store: &crate::state_store::StateStore,
-    continuation_binding: Option<&serde_json::Value>,
-) -> Result<serde_json::Value, crate::state_store::StateStoreError> {
     let owner_evidence =
         crate::orchestrator_session_surface::build_runtime_owner_evidence(store.root(), false)
             .map_err(
@@ -17,14 +10,11 @@ pub(crate) async fn build_operator_session_projection_with_continuation(
             )?;
     let tasks = store.list_tasks(None, true).await?;
     let active_claims = store.active_orchestrator_claims().await?;
-    let selected_task_scope = continuation_binding
-        .and_then(|binding| projection_focus_from_continuation_binding(binding, &tasks));
-    build_operator_session_projection_from_rows_and_claims_with_focus(
+    build_operator_session_projection_from_rows_and_claims(
         store,
         &owner_evidence,
         &tasks,
         &active_claims,
-        selected_task_scope.as_ref(),
     )
     .await
 }
@@ -34,23 +24,6 @@ pub(crate) async fn build_operator_session_projection_from_rows_and_claims(
     owner_evidence: &serde_json::Value,
     tasks: &[crate::state_store::TaskRecord],
     active_claims: &[crate::state_store::OrchestratorClaim],
-) -> Result<serde_json::Value, crate::state_store::StateStoreError> {
-    build_operator_session_projection_from_rows_and_claims_with_focus(
-        store,
-        owner_evidence,
-        tasks,
-        active_claims,
-        None,
-    )
-    .await
-}
-
-async fn build_operator_session_projection_from_rows_and_claims_with_focus(
-    store: &crate::state_store::StateStore,
-    owner_evidence: &serde_json::Value,
-    tasks: &[crate::state_store::TaskRecord],
-    active_claims: &[crate::state_store::OrchestratorClaim],
-    selected_task_scope: Option<&OperatorSessionTaskScope>,
 ) -> Result<serde_json::Value, crate::state_store::StateStoreError> {
     let current_session = owner_evidence["current_session"].clone();
     let current_session_id = current_session["session_id"].as_str().unwrap_or_default();
@@ -152,25 +125,6 @@ async fn build_operator_session_projection_from_rows_and_claims_with_focus(
         .filter(|claim| is_active_task_claim(claim))
         .cloned()
         .collect::<Vec<_>>();
-    let selected_task_scope_json = selected_task_scope.map(|scope| {
-        serde_json::json!({
-            "task_id": scope.task_id.clone(),
-            "run_id": scope.run_id.clone(),
-            "conflict_domain": scope.conflict_domain.clone(),
-            "owned_paths": scope.owned_paths.clone(),
-        })
-    });
-    let active_task_rows = tasks
-        .iter()
-        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
-        .collect::<Vec<_>>();
-    let current_conflict_scopes =
-        current_session_conflict_scopes(current_session_id, &active_task_rows, active_claims);
-    let conflict_scopes = if let Some(selected_task_scope) = selected_task_scope {
-        vec![selected_task_scope.clone()]
-    } else {
-        current_conflict_scopes
-    };
     let project_foreign_runs = project_foreign_claims
         .iter()
         .filter(|claim| {
@@ -195,10 +149,7 @@ async fn build_operator_session_projection_from_rows_and_claims_with_focus(
         .collect::<Vec<_>>();
     let project_foreign_blockers = project_foreign_claims
         .iter()
-        .filter(|claim| {
-            (claim.status == "blocked" || !claim.blocker_codes.is_empty())
-                && claim_blocks_selected_or_current_scope(claim, &conflict_scopes)
-        })
+        .filter(|claim| claim.status == "blocked" || !claim.blocker_codes.is_empty())
         .map(|claim| {
             serde_json::json!({
                 "claim_id": claim.claim_id,
@@ -212,8 +163,11 @@ async fn build_operator_session_projection_from_rows_and_claims_with_focus(
     let claim_conflicts = project_foreign_claims
         .iter()
         .filter(|claim| {
-            claim_has_control_plane_conflict_signal(claim)
-                && claim_blocks_selected_or_current_scope(claim, &conflict_scopes)
+            claim.lease_mode == "exclusive"
+                || claim.status == "blocked"
+                || !claim.blocker_codes.is_empty()
+                || claim.conflict_domain.is_some()
+                || !claim.owned_paths.is_empty()
         })
         .map(|claim| {
             serde_json::json!({
@@ -251,7 +205,6 @@ async fn build_operator_session_projection_from_rows_and_claims_with_focus(
         "inactive_task_claims": inactive_task_claims,
         "global_blockers": global_blockers,
         "claim_conflicts": claim_conflicts,
-        "selected_task_scope": selected_task_scope_json,
         "runtime_owner_evidence": {
             "mutation_gate": owner_evidence["mutation_gate"].clone(),
             "live_other_sessions": owner_evidence["live_other_sessions"].clone(),
@@ -259,143 +212,6 @@ async fn build_operator_session_projection_from_rows_and_claims_with_focus(
             "legacy_ownerless_rows": owner_evidence["legacy_ownerless_rows"].clone(),
         }
     }))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct OperatorSessionTaskScope {
-    task_id: Option<String>,
-    run_id: Option<String>,
-    conflict_domain: Option<String>,
-    owned_paths: Vec<String>,
-}
-
-fn projection_focus_from_continuation_binding(
-    continuation_binding: &serde_json::Value,
-    tasks: &[crate::state_store::TaskRecord],
-) -> Option<OperatorSessionTaskScope> {
-    if continuation_binding
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        != Some("bound")
-    {
-        return None;
-    }
-    let active_bounded_unit = continuation_binding.get("active_bounded_unit")?;
-    let task_id = active_bounded_unit
-        .get("task_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let task = tasks.iter().find(|task| task.id == task_id);
-    let run_id = active_bounded_unit
-        .get("run_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    Some(OperatorSessionTaskScope {
-        task_id: Some(task_id.to_string()),
-        run_id,
-        conflict_domain: task
-            .and_then(|task| task.execution_semantics.conflict_domain.clone())
-            .or_else(|| Some(format!("task:{task_id}"))),
-        owned_paths: task
-            .map(|task| task.planner_metadata.owned_paths.clone())
-            .unwrap_or_default(),
-    })
-}
-
-fn current_session_conflict_scopes(
-    current_session_id: &str,
-    active_tasks: &[&crate::state_store::TaskRecord],
-    active_claims: &[crate::state_store::OrchestratorClaim],
-) -> Vec<OperatorSessionTaskScope> {
-    active_tasks
-        .iter()
-        .filter_map(|task| {
-            let existing_claim = active_claims
-                .iter()
-                .find(|claim| claim.task_id.as_deref() == Some(task.id.as_str()));
-            if existing_claim
-                .is_some_and(|claim| claim.orchestrator_session_id != current_session_id)
-            {
-                return None;
-            }
-            Some(OperatorSessionTaskScope {
-                task_id: Some(task.id.clone()),
-                run_id: existing_claim.and_then(|claim| claim.run_id.clone()),
-                conflict_domain: task
-                    .execution_semantics
-                    .conflict_domain
-                    .clone()
-                    .or_else(|| Some(format!("task:{}", task.id))),
-                owned_paths: task.planner_metadata.owned_paths.clone(),
-            })
-        })
-        .collect()
-}
-
-fn claim_has_control_plane_conflict_signal(claim: &crate::state_store::OrchestratorClaim) -> bool {
-    claim.lease_mode != crate::state_store::LeaseMode::Observe.as_str()
-        || claim.status == "blocked"
-        || !claim.blocker_codes.is_empty()
-}
-
-fn claim_blocks_selected_or_current_scope(
-    claim: &crate::state_store::OrchestratorClaim,
-    scopes: &[OperatorSessionTaskScope],
-) -> bool {
-    if scopes.is_empty() {
-        return claim.task_id.is_none()
-            && claim.run_id.is_none()
-            && claim
-                .conflict_domain
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .is_none()
-            && claim.owned_paths.is_empty()
-            && claim.read_only_paths.is_empty();
-    }
-    scopes
-        .iter()
-        .any(|scope| claim_overlaps_task_scope(claim, scope))
-}
-
-fn claim_overlaps_task_scope(
-    claim: &crate::state_store::OrchestratorClaim,
-    scope: &OperatorSessionTaskScope,
-) -> bool {
-    if scope
-        .task_id
-        .as_deref()
-        .is_some_and(|task_id| claim.task_id.as_deref() == Some(task_id))
-    {
-        return true;
-    }
-    if scope
-        .run_id
-        .as_deref()
-        .is_some_and(|run_id| claim.run_id.as_deref() == Some(run_id))
-    {
-        return true;
-    }
-    if scope
-        .conflict_domain
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|domain| claim.conflict_domain.as_deref() == Some(domain))
-    {
-        return true;
-    }
-    scope.owned_paths.iter().any(|scope_path| {
-        claim
-            .owned_paths
-            .iter()
-            .chain(claim.read_only_paths.iter())
-            .any(|claim_path| crate::state_store::claim_paths_intersect(scope_path, claim_path))
-    })
 }
 
 pub(crate) fn is_optional_task_worktree_assignment_missing_error(
@@ -445,7 +261,7 @@ pub(crate) fn degraded_operator_session_projection(
         "active_task_claim_blockers": [{
             "blocker_code": "optional_task_worktree_assignment_projection_unavailable",
             "error": reason,
-            "next_action": "Run `vida doctor` and migration/preflight diagnostics; status remains available with degraded worktree-assignment projection evidence.",
+            "next_action": "Run `vida doctor --json` and migration/preflight diagnostics; status remains available with degraded worktree-assignment projection evidence.",
         }],
         "inactive_task_claims": [],
         "global_blockers": ["optional_task_worktree_assignment_projection_unavailable"],
@@ -495,7 +311,7 @@ async fn ensure_current_session_claims_for_active_task_rows(
                     "orchestrator_session_id": existing.orchestrator_session_id,
                     "blocker_code": "active_task_claimed_by_foreign_session",
                     "next_action": format!(
-                        "Run `vida orchestrator-session transfer {} --to-current` to continue task `{}` from the current session when the handoff is intentional.",
+                        "Run `vida orchestrator-session transfer {} --to-current --json` to continue task `{}` from the current session when the handoff is intentional.",
                         existing.orchestrator_session_id,
                         task.id
                     ),
@@ -565,85 +381,6 @@ fn sanitize_projection_claim_id(value: &str) -> String {
         })
         .collect::<String>();
     sanitized.trim_matches('-').chars().take(96).collect()
-}
-
-pub(crate) fn projection_plain_summary(projection: &serde_json::Value) -> String {
-    format!(
-        "current_session={} foreign_runs={} foreign_blockers={} global_blockers={} claim_conflicts={}",
-        projection["current_session"]["session_id"]
-            .as_str()
-            .unwrap_or("unknown"),
-        projection["project_foreign_runs"].as_array().map_or(0, Vec::len),
-        projection["project_foreign_blockers"].as_array().map_or(0, Vec::len),
-        projection["global_blockers"].as_array().map_or(0, Vec::len),
-        projection["claim_conflicts"].as_array().map_or(0, Vec::len),
-    )
-}
-
-pub(crate) fn projection_operator_blocker_codes(projection: &serde_json::Value) -> Vec<String> {
-    let mut blocker_codes = projection["global_blockers"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-        .collect::<Vec<_>>();
-
-    if json_array_len(&projection["claim_conflicts"]) > 0
-        || json_array_len(&projection["project_foreign_blockers"]) > 0
-    {
-        blocker_codes.push(
-            crate::contract_profile_adapter::blocker_code_str(
-                crate::contract_profile_adapter::BlockerCode::ConflictDomainCollision,
-            )
-            .to_string(),
-        );
-    }
-
-    crate::contract_profile_adapter::canonical_blocker_code_list(
-        blocker_codes.iter().map(String::as_str),
-    )
-}
-
-pub(crate) fn projection_operator_next_actions(blocker_codes: &[String]) -> Vec<String> {
-    let mut next_actions = Vec::new();
-    if blocker_codes.iter().any(|code| {
-        code == crate::contract_profile_adapter::blocker_code_str(
-            crate::contract_profile_adapter::BlockerCode::LiveOtherOrchestratorOwner,
-        )
-    }) {
-        next_actions.push(
-            "Inspect `operator_session_projection.runtime_owner_evidence.live_other_sessions` and reclaim or transfer stale/foreign orchestrator ownership before reporting a clean operator pass."
-                .to_string(),
-        );
-    }
-    if blocker_codes.iter().any(|code| {
-        code == crate::contract_profile_adapter::blocker_code_str(
-            crate::contract_profile_adapter::BlockerCode::ConflictDomainCollision,
-        )
-    }) {
-        next_actions.push(
-            "Inspect `operator_session_projection.claim_conflicts` and resolve or supersede the competing orchestrator claim before continuing the blocked task."
-                .to_string(),
-        );
-    }
-    next_actions
-}
-
-pub(crate) fn projection_operator_artifact_refs(
-    projection: &serde_json::Value,
-) -> serde_json::Value {
-    serde_json::json!({
-        "operator_session_projection_schema_version": projection["schema_version"],
-        "current_session_id": projection["current_session"]["session_id"],
-        "project_foreign_run_count": json_array_len(&projection["project_foreign_runs"]),
-        "project_foreign_blocker_count": json_array_len(&projection["project_foreign_blockers"]),
-        "global_blocker_count": json_array_len(&projection["global_blockers"]),
-        "claim_conflict_count": json_array_len(&projection["claim_conflicts"]),
-    })
-}
-
-fn json_array_len(value: &serde_json::Value) -> usize {
-    value.as_array().map_or(0, Vec::len)
 }
 
 #[cfg(test)]
@@ -926,199 +663,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn projection_keeps_unrelated_foreign_active_claims_informational() {
-        let root = temp_state_dir("foreign-unrelated-active-claim");
-        let store = crate::state_store::StateStore::open(root.clone())
-            .await
-            .expect("open store");
-        let mut selected = task_record("selected-active", "in_progress");
-        selected.execution_semantics.conflict_domain = Some("task:selected-active".to_string());
-        selected.planner_metadata.owned_paths =
-            vec!["crates/vida/src/operator_session_projection.rs".to_string()];
-        let mut foreign = task_record("foreign-active", "in_progress");
-        foreign.execution_semantics.conflict_domain = Some("task:foreign-active".to_string());
-        foreign.planner_metadata.owned_paths = vec!["docs/runtime/foreign.md".to_string()];
-        store
-            .persist_task_record(selected)
-            .await
-            .expect("persist selected task");
-        store
-            .persist_task_record(foreign)
-            .await
-            .expect("persist foreign task");
-        store
-            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
-                claim_id: "foreign-unrelated-active-claim".to_string(),
-                state_root_id: root.display().to_string(),
-                worktree_environment_id: "worktree".to_string(),
-                orchestrator_session_id: "foreign-session".to_string(),
-                process_id: Some(std::process::id()),
-                task_id: Some("foreign-active".to_string()),
-                run_id: None,
-                lane_id: None,
-                claim_kind: "active_task_session_claim".to_string(),
-                conflict_domain: Some("task:foreign-active".to_string()),
-                owned_paths: vec!["docs/runtime/foreign.md".to_string()],
-                read_only_paths: Vec::new(),
-                lease_mode: crate::state_store::LeaseMode::Exclusive,
-                lease_seconds: 3600,
-            })
-            .await
-            .expect("foreign claim");
-
-        let projection = build_operator_session_projection(&store)
-            .await
-            .expect("projection");
-
-        assert!(projection["claim_conflicts"]
-            .as_array()
-            .expect("claim conflicts")
-            .is_empty());
-        assert!(projection["project_foreign_blockers"]
-            .as_array()
-            .expect("foreign blockers")
-            .is_empty());
-        assert!(projection["active_task_claim_blockers"]
-            .as_array()
-            .expect("active task claim blockers")
-            .iter()
-            .any(|blocker| blocker["task_id"] == "foreign-active"));
-        assert!(!projection_operator_blocker_codes(&projection)
-            .iter()
-            .any(|code| code == "conflict_domain_collision"));
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[tokio::test]
-    async fn projection_blocks_foreign_claims_overlapping_current_scope() {
-        let root = temp_state_dir("foreign-overlapping-active-claim");
-        let store = crate::state_store::StateStore::open(root.clone())
-            .await
-            .expect("open store");
-        let mut selected = task_record("selected-active", "in_progress");
-        selected.execution_semantics.conflict_domain = Some("task:selected-active".to_string());
-        selected.planner_metadata.owned_paths = vec!["crates/vida/src".to_string()];
-        let mut foreign = task_record("foreign-active", "in_progress");
-        foreign.execution_semantics.conflict_domain = Some("task:foreign-active".to_string());
-        foreign.planner_metadata.owned_paths =
-            vec!["crates/vida/src/operator_session_projection.rs".to_string()];
-        store
-            .persist_task_record(selected)
-            .await
-            .expect("persist selected task");
-        store
-            .persist_task_record(foreign)
-            .await
-            .expect("persist foreign task");
-        store
-            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
-                claim_id: "foreign-overlapping-active-claim".to_string(),
-                state_root_id: root.display().to_string(),
-                worktree_environment_id: "worktree".to_string(),
-                orchestrator_session_id: "foreign-session".to_string(),
-                process_id: Some(std::process::id()),
-                task_id: Some("foreign-active".to_string()),
-                run_id: None,
-                lane_id: None,
-                claim_kind: "active_task_session_claim".to_string(),
-                conflict_domain: Some("task:foreign-active".to_string()),
-                owned_paths: vec!["crates/vida/src/operator_session_projection.rs".to_string()],
-                read_only_paths: Vec::new(),
-                lease_mode: crate::state_store::LeaseMode::Exclusive,
-                lease_seconds: 3600,
-            })
-            .await
-            .expect("foreign claim");
-
-        let projection = build_operator_session_projection(&store)
-            .await
-            .expect("projection");
-
-        assert!(projection["claim_conflicts"]
-            .as_array()
-            .expect("claim conflicts")
-            .iter()
-            .any(|claim| claim["claim_id"] == "foreign-overlapping-active-claim"));
-        assert!(projection_operator_blocker_codes(&projection)
-            .iter()
-            .any(|code| code == "conflict_domain_collision"));
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[tokio::test]
-    async fn projection_scopes_foreign_claims_to_explicit_continuation_task() {
-        let root = temp_state_dir("explicit-continuation-scope");
-        let store = crate::state_store::StateStore::open(root.clone())
-            .await
-            .expect("open store");
-        let mut selected = task_record("selected-ready", "ready");
-        selected.execution_semantics.conflict_domain = Some("task:selected-ready".to_string());
-        selected.planner_metadata.owned_paths =
-            vec!["crates/vida/src/operator_session_projection.rs".to_string()];
-        let mut foreign = task_record("foreign-active", "in_progress");
-        foreign.execution_semantics.conflict_domain = Some("task:foreign-active".to_string());
-        foreign.planner_metadata.owned_paths = vec!["docs/runtime/foreign.md".to_string()];
-        store
-            .persist_task_record(selected)
-            .await
-            .expect("persist selected task");
-        store
-            .persist_task_record(foreign)
-            .await
-            .expect("persist foreign task");
-        store
-            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
-                claim_id: "foreign-explicit-unrelated-claim".to_string(),
-                state_root_id: root.display().to_string(),
-                worktree_environment_id: "worktree".to_string(),
-                orchestrator_session_id: "foreign-session".to_string(),
-                process_id: Some(std::process::id()),
-                task_id: Some("foreign-active".to_string()),
-                run_id: None,
-                lane_id: None,
-                claim_kind: "active_task_session_claim".to_string(),
-                conflict_domain: Some("task:foreign-active".to_string()),
-                owned_paths: vec!["docs/runtime/foreign.md".to_string()],
-                read_only_paths: Vec::new(),
-                lease_mode: crate::state_store::LeaseMode::Exclusive,
-                lease_seconds: 3600,
-            })
-            .await
-            .expect("foreign claim");
-        let continuation_binding = serde_json::json!({
-            "status": "bound",
-            "active_bounded_unit": {
-                "kind": "task_graph_task",
-                "task_id": "selected-ready",
-                "task_status": "ready"
-            }
-        });
-
-        let projection = build_operator_session_projection_with_continuation(
-            &store,
-            Some(&continuation_binding),
-        )
-        .await
-        .expect("projection");
-
-        assert_eq!(
-            projection["selected_task_scope"]["task_id"],
-            "selected-ready"
-        );
-        assert!(projection["claim_conflicts"]
-            .as_array()
-            .expect("claim conflicts")
-            .is_empty());
-        assert!(!projection_operator_blocker_codes(&projection)
-            .iter()
-            .any(|code| code == "conflict_domain_collision"));
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[tokio::test]
     async fn projection_omits_claim_conflicts_owned_by_stale_sessions() {
         let root = temp_state_dir("stale-owner-claim");
         let store = crate::state_store::StateStore::open(root.clone())
@@ -1238,4 +782,83 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(root);
     }
+}
+
+pub(crate) fn projection_plain_summary(projection: &serde_json::Value) -> String {
+    format!(
+        "current_session={} foreign_runs={} foreign_blockers={} global_blockers={} claim_conflicts={}",
+        projection["current_session"]["session_id"]
+            .as_str()
+            .unwrap_or("unknown"),
+        projection["project_foreign_runs"].as_array().map_or(0, Vec::len),
+        projection["project_foreign_blockers"].as_array().map_or(0, Vec::len),
+        projection["global_blockers"].as_array().map_or(0, Vec::len),
+        projection["claim_conflicts"].as_array().map_or(0, Vec::len),
+    )
+}
+
+pub(crate) fn projection_operator_blocker_codes(projection: &serde_json::Value) -> Vec<String> {
+    let mut blocker_codes = projection["global_blockers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+
+    if json_array_len(&projection["claim_conflicts"]) > 0
+        || json_array_len(&projection["project_foreign_blockers"]) > 0
+    {
+        blocker_codes.push(
+            crate::contract_profile_adapter::blocker_code_str(
+                crate::contract_profile_adapter::BlockerCode::ConflictDomainCollision,
+            )
+            .to_string(),
+        );
+    }
+
+    crate::contract_profile_adapter::canonical_blocker_code_list(
+        blocker_codes.iter().map(String::as_str),
+    )
+}
+
+pub(crate) fn projection_operator_next_actions(blocker_codes: &[String]) -> Vec<String> {
+    let mut next_actions = Vec::new();
+    if blocker_codes.iter().any(|code| {
+        code == crate::contract_profile_adapter::blocker_code_str(
+            crate::contract_profile_adapter::BlockerCode::LiveOtherOrchestratorOwner,
+        )
+    }) {
+        next_actions.push(
+            "Inspect `operator_session_projection.runtime_owner_evidence.live_other_sessions` and reclaim or transfer stale/foreign orchestrator ownership before reporting a clean operator pass."
+                .to_string(),
+        );
+    }
+    if blocker_codes.iter().any(|code| {
+        code == crate::contract_profile_adapter::blocker_code_str(
+            crate::contract_profile_adapter::BlockerCode::ConflictDomainCollision,
+        )
+    }) {
+        next_actions.push(
+            "Inspect `operator_session_projection.claim_conflicts` and resolve or supersede the competing orchestrator claim before continuing the blocked task."
+                .to_string(),
+        );
+    }
+    next_actions
+}
+
+pub(crate) fn projection_operator_artifact_refs(
+    projection: &serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operator_session_projection_schema_version": projection["schema_version"],
+        "current_session_id": projection["current_session"]["session_id"],
+        "project_foreign_run_count": json_array_len(&projection["project_foreign_runs"]),
+        "project_foreign_blocker_count": json_array_len(&projection["project_foreign_blockers"]),
+        "global_blocker_count": json_array_len(&projection["global_blockers"]),
+        "claim_conflict_count": json_array_len(&projection["claim_conflicts"]),
+    })
+}
+
+fn json_array_len(value: &serde_json::Value) -> usize {
+    value.as_array().map_or(0, Vec::len)
 }

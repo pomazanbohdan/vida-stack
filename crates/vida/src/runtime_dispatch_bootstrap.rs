@@ -208,14 +208,6 @@ mod tests {
     use super::build_runtime_consumption_run_graph_bootstrap;
     use crate::{RuntimeConsumptionLaneSelection, StateStore};
 
-    fn write_minimal_project_root_markers(path: &std::path::Path) {
-        std::fs::create_dir_all(path.join(".vida/config")).expect("create config marker");
-        std::fs::create_dir_all(path.join(".vida/db")).expect("create db marker");
-        std::fs::create_dir_all(path.join(".vida/project")).expect("create project marker");
-        std::fs::write(path.join("AGENTS.md"), "# Test\n").expect("write agents marker");
-        std::fs::write(path.join("vida.config.yaml"), "version: 1\n").expect("write config marker");
-    }
-
     #[tokio::test]
     async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails(
     ) {
@@ -228,14 +220,11 @@ mod tests {
             std::process::id(),
             nanos
         ));
-        let ambiguous_parent = std::env::temp_dir().join(format!(
+        let cwd = std::env::temp_dir().join(format!(
             "vida-runtime-consumption-seed-fail-closed-cwd-{}-{}",
             std::process::id(),
             nanos
         ));
-        let cwd = ambiguous_parent.join("child");
-        write_minimal_project_root_markers(&ambiguous_parent);
-        write_minimal_project_root_markers(&cwd);
         std::fs::create_dir_all(&cwd).expect("create isolated cwd");
         let _cwd = crate::test_cli_support::guard_current_dir(&cwd);
         let store = StateStore::open(root.clone()).await.expect("open store");
@@ -265,18 +254,16 @@ mod tests {
             .as_str()
             .is_some_and(|value| value.contains("seed_failed")));
 
-        let run_id = bootstrap["run_id"]
-            .as_str()
-            .expect("blocked bootstrap should expose run id");
         let latest_status = store
-            .run_graph_status(run_id)
+            .latest_run_graph_status()
             .await
-            .expect("fallback run graph status should exist");
+            .expect("load latest run graph status")
+            .expect("latest run graph status should exist");
         assert_eq!(latest_status.status, "blocked");
         assert!(!latest_status.recovery_ready);
         assert_eq!(latest_status.context_state, "open");
 
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&ambiguous_parent);
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }

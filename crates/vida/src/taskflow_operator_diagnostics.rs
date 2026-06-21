@@ -255,7 +255,7 @@ fn consume_resume_next_actions(
                 }
                 (Some(run_id), None) => {
                     let inspect_command = operator_output::command_text::human_command(&format!(
-                        "vida taskflow run-graph status {}",
+                        "vida taskflow run-graph status {} --json",
                         crate::shell_quote(run_id)
                     ));
                     format!(

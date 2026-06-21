@@ -294,7 +294,7 @@ Will implement / choose:
   - legacy fields stay accepted until the profile contract is fully propagated through status and dispatch
   - route-based backend selection remains the planner boundary for this slice
 - Operator or user restart / restart-notice requirements
-  - rerun `vida project-activator --host-cli-system codex` after profile-aware materialization changes when `.codex` output must be refreshed
+  - rerun `vida project-activator --host-cli-system codex --json` after profile-aware materialization changes when `.codex` output must be refreshed
 
 ## Future Considerations
 - Follow-up ideas

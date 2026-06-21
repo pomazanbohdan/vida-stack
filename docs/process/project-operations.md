@@ -18,14 +18,14 @@ Default feature-delivery flow:
 8. Let runtime map the current packet role into the cheapest capable carrier tier with a healthy local score from `.vida/state/worker-strategy.json`.
 9. For normal write-producing work, treat project agent-first execution as the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional executor details and not the canonical project control surface.
 10. Keep the root session in orchestration posture unless an explicit exception path is recorded.
-11. Before any local write decision, re-check `vida status`, `vida taskflow recovery latest`, and `vida taskflow consume continue`; if the root-session write guard is still active, continue through packet shaping or `vida agent-init` dispatch instead of local coding.
+11. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; if the root-session write guard is still active, continue through packet shaping or `vida agent-init` dispatch instead of local coding.
 12. Host-local shell/edit capability is not a lane-change receipt and does not authorize root-session coding.
 13. Finding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session coding; wait, reroute, or record the exception path first.
 14. Continuation, pause-boundary, and generic-ready-item behavior is owned by `project-orchestrator-session-start-protocol.md` and the decision table in `project-orchestrator-reusable-prompt.md`; continue only when the active bounded unit is explicit from user wording or runtime evidence.
-15. If `vida status` or `vida orchestrator-init` cannot state bounded-unit and route fields when runtime is usable, fail closed to ambiguity instead of continuing implementation.
-16. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path>` over inline shell quoting for complex text.
+15. If `vida status --json` or `vida orchestrator-init --json` cannot state bounded-unit and route fields when runtime is usable, fail closed to ambiguity instead of continuing implementation.
+16. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
 17. Prefer the launcher-owned intake/runtime progression surfaces over manual reconstruction:
-   - `vida taskflow consume final "<request>"` to materialize the routed intake, dispatch receipt, and first lawful packet
+   - `vida taskflow consume final "<request>" --json` to materialize the routed intake, dispatch receipt, and first lawful packet
    - `vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]` to resume one persisted chain entry; legacy runtime packets may be normalized to the canonical packet-minimum path scope before fail-closed validation
    - `vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]` to let the bounded scheduler progress ready steps automatically
 22. Treat the default `.vida/data/state/` root as long-lived local operator state, not as disposable scratch output.

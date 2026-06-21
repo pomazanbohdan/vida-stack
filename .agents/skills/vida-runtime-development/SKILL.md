@@ -10,7 +10,7 @@ Use this skill to keep VIDA runtime work evidence-first, TaskFlow-backed, and lo
 ## Start Sequence
 
 1. Read `AGENTS.md` and `AGENTS.sidecar.md` after any compact or re-entry.
-2. Run `vida orchestrator-init` before selecting work.
+2. Run `vida orchestrator-init --json` before selecting work.
 3. State:
    - `active_bounded_unit`
    - `why_this_unit`
@@ -24,11 +24,11 @@ Use this skill to keep VIDA runtime work evidence-first, TaskFlow-backed, and lo
 
 Prefer the smallest authoritative surface that answers the question:
 
-1. `vida task show <task-id>` for known task metadata.
-2. `vida task tree <task-id>` for parent/child closure shape.
-3. `vida task validate-graph` after TaskFlow mutations.
-4. `vida status` and `vida doctor` for projection parity.
-5. `vida orchestrator-init` for active bounded-unit and continuation binding.
+1. `vida task show <task-id> --json` for known task metadata.
+2. `vida task tree <task-id> --json` for parent/child closure shape.
+3. `vida task validate-graph --json` after TaskFlow mutations.
+4. `vida status --json` and `vida doctor --json` for projection parity.
+5. `vida orchestrator-init --json` for active bounded-unit and continuation binding.
 6. Run-graph, lane, recovery, and dispatch surfaces only when the defect needs that evidence.
 
 Do not treat derived summaries, stale cache, lane preview, or advisory text as stronger than authoritative TaskFlow state, receipt-backed evidence, and current runtime status.
@@ -93,9 +93,9 @@ For complex runtime defects, use an adaptive agent research ring instead of a fi
 
 Minimal proof for this skill's work:
 
-1. `vida task validate-graph`
+1. `vida task validate-graph --json`
 2. Focused DocFlow check when docs changed.
-3. Relevant runtime parity command, such as `vida status` plus `vida doctor`.
+3. Relevant runtime parity command, such as `vida status --json` plus `vida doctor --json`.
 4. `git status --short` before reporting closure.
 5. Any GitHub issue or PR state from live `gh` or connector evidence when GitHub surfaces changed.
 

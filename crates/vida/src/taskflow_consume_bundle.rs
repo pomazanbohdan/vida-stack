@@ -491,7 +491,7 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
         .any(|code| code == "missing_protocol_binding_receipt")
     {
         next_actions.push(
-            "Run `vida taskflow protocol-binding sync` to materialize the missing receipt."
+            "Run `vida taskflow protocol-binding sync --json` to materialize the missing receipt."
                 .to_string(),
         );
     }
@@ -500,7 +500,7 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
         .any(|code| code.starts_with("missing_retrieval_trust_evidence_field:"))
     {
         next_actions.push(
-            "Run `vida taskflow protocol-binding sync` to materialize protocol-bound retrieval-trust source/citation/freshness/ACL evidence; rerun `vida taskflow consume bundle check` only to verify the blocker set changed."
+            "Run `vida taskflow protocol-binding sync --json` to materialize protocol-bound retrieval-trust source/citation/freshness/ACL evidence; rerun `vida taskflow consume bundle check --json` only to verify the blocker set changed."
                 .to_string(),
         );
     }
@@ -509,7 +509,7 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
         .any(|code| code.starts_with("invalid_cache_key_input:"))
     {
         next_actions.push(
-            "Refresh the startup bundle projection with `vida orchestrator-init`, then rerun `vida taskflow consume bundle check`."
+            "Refresh the startup bundle projection with `vida orchestrator-init --json`, then rerun `vida taskflow consume bundle check --json`."
                 .to_string(),
         );
     }
@@ -518,7 +518,7 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
         .any(|code| code == "protocol_binding_not_runtime_ready")
     {
         next_actions.push(
-            "Run `vida taskflow protocol-binding check` and clear runtime-readiness blockers."
+            "Run `vida taskflow protocol-binding check --json` and clear runtime-readiness blockers."
                 .to_string(),
         );
     }
@@ -527,7 +527,7 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
         .any(|code| code == "missing_launcher_activation_snapshot")
     {
         next_actions.push(
-            "Run `vida boot` (or `vida taskflow protocol-binding sync`) to materialize launcher activation snapshot in the authoritative state store."
+            "Run `vida boot` (or `vida taskflow protocol-binding sync --json`) to materialize launcher activation snapshot in the authoritative state store."
                 .to_string(),
         );
     }
@@ -884,35 +884,14 @@ pub(crate) fn build_dev_team_readiness(
 
     let enabled = crate::yaml_bool(crate::yaml_lookup(dev_team, &["enabled"]), true);
     let contract_doc = crate::yaml_string(crate::yaml_lookup(dev_team, &["contract_doc"]));
-    let mut source_paths = dev_team_source_paths(config_path, contract_doc.as_deref());
+    let source_paths = dev_team_source_paths(config_path, contract_doc.as_deref());
     let carrier_catalog = carrier_catalog_by_id(activation_bundle);
     let pricing_catalog = &activation_bundle["agent_system"]["pricing"];
 
     let mut blockers = Vec::new();
     let configured_hook_templates = configured_lifecycle_hook_templates(&overlay);
-    let config_root = std::path::Path::new(config_path)
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
     let roles = dev_team_roles(dev_team, &carrier_catalog, pricing_catalog, &mut blockers);
-    let pack_registry =
-        crate::agent_pack_contract::load_pack_registry_from_overlay(config_root, &overlay);
-    let mut flows = dev_team_flows(dev_team, &roles, &configured_hook_templates, &mut blockers);
-    let registry_flows = dev_team_flows_from_agent_extension_registry(
-        config_root,
-        &overlay,
-        &pack_registry,
-        &roles,
-        &configured_hook_templates,
-        &flows,
-        &mut blockers,
-    );
-    flows.extend(registry_flows);
-    if let Some(pack_source_path) = pack_registry.source_path.as_ref() {
-        source_paths.push(pack_source_path.clone());
-    }
-    blockers.extend(pack_registry.blocker_codes.clone());
-    blockers.extend(pack_flow_reference_blockers(&pack_registry, &flows));
+    let flows = dev_team_flows(dev_team, &roles, &configured_hook_templates, &mut blockers);
     let orchestrator_command_contract = serde_json::to_value(
         crate::yaml_lookup(dev_team, &["orchestrator_command_contract"])
             .cloned()
@@ -952,7 +931,6 @@ pub(crate) fn build_dev_team_readiness(
         "roles": roles,
         "sequence": sequence,
         "flows": flows,
-        "packs": pack_registry.packs,
         "blockers": blockers,
         "source_paths": source_paths,
     })
@@ -1042,17 +1020,9 @@ fn dev_team_roles(
             pricing_catalog,
             blockers,
         );
-        let canonical_role_id = crate::agent_pack_contract::canonical_dev_team_role_id(role_id);
-        let role_alias_source = crate::agent_pack_contract::canonical_role_alias_source(role_id);
-        let canonical_handoff_next_role = handoff_next_role
-            .as_deref()
-            .map(crate::agent_pack_contract::canonical_dev_team_role_id);
 
         roles.push(serde_json::json!({
-            "role_id": canonical_role_id.clone(),
-            "configured_role_id": role_id,
-            "canonical_role_id": canonical_role_id,
-            "role_alias_source": role_alias_source,
+            "role_id": role_id,
             "runtime_role": runtime_role,
             "task_classes": task_classes,
             "packet_template_kind": crate::yaml_string(
@@ -1084,7 +1054,7 @@ fn dev_team_roles(
                 ),
             },
             "handoff": {
-                "next_role": canonical_handoff_next_role,
+                "next_role": handoff_next_role,
                 "required_outputs": required_outputs,
                 "fail_closed_on_missing_handoff": crate::yaml_bool(
                     crate::yaml_lookup(role_entry, &["handoff", "fail_closed_on_missing_handoff"]),
@@ -1479,7 +1449,10 @@ fn dev_team_flows(
     blockers: &mut Vec<String>,
 ) -> Vec<serde_json::Value> {
     let mut flows = Vec::new();
-    let known_roles = dev_team_known_role_ids(roles);
+    let known_roles = roles
+        .iter()
+        .filter_map(|row| row["role_id"].as_str())
+        .collect::<HashSet<_>>();
     let default_flow_id = crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow_id"]))
         .or_else(|| crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow"])));
     let Some(flow_map) =
@@ -1523,15 +1496,42 @@ fn dev_team_flows(
             configured_hook_templates,
             blockers,
         );
-        flows.push(compile_dev_team_flow_entry(
+        let ordered_steps = dev_team_flow_ordered_steps(
             flow_id,
             flow_entry,
-            default_flow_id.as_deref(),
-            flow_hook_templates,
             &known_roles,
             configured_hook_templates,
             blockers,
-        ));
+        );
+        let steps = ordered_steps
+            .iter()
+            .filter_map(|step| step["role_id"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        if steps.is_empty() {
+            blockers.push(format!("missing_flow_steps:{flow_id}"));
+        }
+        flows.push(serde_json::json!({
+            "flow_id": flow_id,
+            "enabled": crate::yaml_bool(crate::yaml_lookup(flow_entry, &["enabled"]), true),
+            "default": default_flow_id.as_deref() == Some(flow_id)
+                || crate::yaml_bool(crate::yaml_lookup(flow_entry, &["default"]), false),
+            "description": crate::yaml_string(crate::yaml_lookup(flow_entry, &["description"])),
+            "flow_class": crate::yaml_string(crate::yaml_lookup(flow_entry, &["flow_class"]))
+                .unwrap_or_else(|| "development".to_string()),
+            "work_item_bindings": crate::yaml_string_list(crate::yaml_lookup(flow_entry, &["work_item_bindings"])),
+            "sequential": crate::yaml_bool(crate::yaml_lookup(flow_entry, &["sequential"]), false),
+            "allow_parallel_handoffs": crate::yaml_bool(
+                crate::yaml_lookup(flow_entry, &["allow_parallel_handoffs"]),
+                false,
+            ),
+            "lifecycle_hook_templates": flow_hook_templates,
+            "proof_gates": yaml_field_json(flow_entry, "proof_gates"),
+            "resume_transitions": yaml_field_json(flow_entry, "resume_transitions"),
+            "rework_transitions": yaml_field_json(flow_entry, "rework_transitions"),
+            "adapter_projection": yaml_field_json(flow_entry, "adapter_projection"),
+            "steps": steps,
+            "ordered_steps": ordered_steps,
+        }));
     }
 
     flows.sort_by(|left, right| {
@@ -1541,177 +1541,6 @@ fn dev_team_flows(
             .cmp(right["flow_id"].as_str().unwrap_or_default())
     });
     flows
-}
-
-fn dev_team_flows_from_agent_extension_registry(
-    config_root: &std::path::Path,
-    overlay: &serde_yaml::Value,
-    pack_registry: &crate::agent_pack_contract::PackRegistryProjection,
-    roles: &[serde_json::Value],
-    configured_hook_templates: &HashSet<String>,
-    existing_flows: &[serde_json::Value],
-    blockers: &mut Vec<String>,
-) -> Vec<serde_json::Value> {
-    let referenced_flow_ids = pack_registry
-        .packs
-        .iter()
-        .filter(|pack| pack["enabled"].as_bool().unwrap_or(true))
-        .filter_map(crate::agent_pack_contract::pack_flow_id)
-        .map(str::to_string)
-        .collect::<HashSet<_>>();
-    if referenced_flow_ids.is_empty() {
-        return Vec::new();
-    }
-    let existing_flow_ids = existing_flows
-        .iter()
-        .filter_map(|flow| flow["flow_id"].as_str())
-        .map(str::to_string)
-        .collect::<HashSet<_>>();
-    let Some(configured_path) = crate::yaml_string(crate::yaml_lookup(
-        overlay,
-        &["agent_extensions", "registries", "flows"],
-    )) else {
-        blockers.push(
-            taskflow_contracts::BlockerCode::PackFlowRegistryMissing
-                .as_str()
-                .to_string(),
-        );
-        return Vec::new();
-    };
-    let source_path =
-        crate::project_activator_surface::resolve_overlay_path(config_root, &configured_path);
-    let registry = match crate::project_activator_surface::read_yaml_file_checked(&source_path) {
-        Ok(value) => value,
-        Err(error) => {
-            blockers.push(format!("pack_flow_registry_unreadable:{error}"));
-            return Vec::new();
-        }
-    };
-    let Some(flow_rows) =
-        crate::yaml_lookup(&registry, &["flow_sets"]).and_then(serde_yaml::Value::as_sequence)
-    else {
-        blockers.push(
-            taskflow_contracts::BlockerCode::PackFlowRegistryMissingFlowSets
-                .as_str()
-                .to_string(),
-        );
-        return Vec::new();
-    };
-    let known_roles = dev_team_known_role_ids(roles);
-    let mut flows = Vec::new();
-    for flow_entry in flow_rows {
-        let Some(flow_id) = crate::yaml_string(crate::yaml_lookup(flow_entry, &["flow_id"]))
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        if !referenced_flow_ids.contains(&flow_id) || existing_flow_ids.contains(&flow_id) {
-            continue;
-        }
-        let flow_hook_templates = crate::yaml_string_list(crate::yaml_lookup(
-            flow_entry,
-            &["lifecycle_hook_templates"],
-        ));
-        validate_lifecycle_hook_refs(
-            &format!("flow_registry:{flow_id}"),
-            &flow_hook_templates,
-            configured_hook_templates,
-            blockers,
-        );
-        flows.push(compile_dev_team_flow_entry(
-            &flow_id,
-            flow_entry,
-            None,
-            flow_hook_templates,
-            &known_roles,
-            configured_hook_templates,
-            blockers,
-        ));
-    }
-    flows.sort_by(|left, right| {
-        left["flow_id"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["flow_id"].as_str().unwrap_or_default())
-    });
-    flows
-}
-
-fn pack_flow_reference_blockers(
-    pack_registry: &crate::agent_pack_contract::PackRegistryProjection,
-    flows: &[serde_json::Value],
-) -> Vec<String> {
-    let flow_ids = flows
-        .iter()
-        .filter_map(|flow| flow["flow_id"].as_str())
-        .collect::<HashSet<_>>();
-    pack_registry
-        .packs
-        .iter()
-        .filter(|pack| pack["enabled"].as_bool().unwrap_or(true))
-        .filter_map(|pack| {
-            let pack_id = pack["pack_id"].as_str().unwrap_or_default();
-            let flow_id = crate::agent_pack_contract::pack_flow_id(pack)?;
-            (!flow_ids.contains(flow_id)).then(|| format!("unknown_pack_flow:{pack_id}:{flow_id}"))
-        })
-        .collect()
-}
-
-fn dev_team_known_role_ids(roles: &[serde_json::Value]) -> HashSet<String> {
-    roles
-        .iter()
-        .flat_map(|row| [row["role_id"].as_str(), row["canonical_role_id"].as_str()])
-        .flatten()
-        .map(str::to_string)
-        .collect()
-}
-
-fn compile_dev_team_flow_entry(
-    flow_id: &str,
-    flow_entry: &serde_yaml::Value,
-    default_flow_id: Option<&str>,
-    flow_hook_templates: Vec<String>,
-    known_roles: &HashSet<String>,
-    configured_hook_templates: &HashSet<String>,
-    blockers: &mut Vec<String>,
-) -> serde_json::Value {
-    let ordered_steps = dev_team_flow_ordered_steps(
-        flow_id,
-        flow_entry,
-        known_roles,
-        configured_hook_templates,
-        blockers,
-    );
-    let steps = ordered_steps
-        .iter()
-        .filter_map(|step| step["role_id"].as_str().map(str::to_string))
-        .collect::<Vec<_>>();
-    if steps.is_empty() {
-        blockers.push(format!("missing_flow_steps:{flow_id}"));
-    }
-    serde_json::json!({
-        "flow_id": flow_id,
-        "enabled": crate::yaml_bool(crate::yaml_lookup(flow_entry, &["enabled"]), true),
-        "default": default_flow_id == Some(flow_id)
-            || crate::yaml_bool(crate::yaml_lookup(flow_entry, &["default"]), false),
-        "description": crate::yaml_string(crate::yaml_lookup(flow_entry, &["description"])),
-        "flow_class": crate::yaml_string(crate::yaml_lookup(flow_entry, &["flow_class"]))
-            .unwrap_or_else(|| "development".to_string()),
-        "work_item_bindings": crate::yaml_string_list(crate::yaml_lookup(flow_entry, &["work_item_bindings"])),
-        "sequential": crate::yaml_bool(crate::yaml_lookup(flow_entry, &["sequential"]), false),
-        "allow_parallel_handoffs": crate::yaml_bool(
-            crate::yaml_lookup(flow_entry, &["allow_parallel_handoffs"]),
-            false,
-        ),
-        "lifecycle_hook_templates": flow_hook_templates,
-        "proof_gates": yaml_field_json(flow_entry, "proof_gates"),
-        "resume_transitions": yaml_field_json(flow_entry, "resume_transitions"),
-        "rework_transitions": yaml_field_json(flow_entry, "rework_transitions"),
-        "adapter_projection": yaml_field_json(flow_entry, "adapter_projection"),
-        "steps": steps,
-        "ordered_steps": ordered_steps,
-    })
 }
 
 fn dev_team_work_item_flow_bindings(
@@ -1774,7 +1603,7 @@ fn yaml_field_json(value: &serde_yaml::Value, key: &str) -> serde_json::Value {
 fn dev_team_flow_ordered_steps(
     flow_id: &str,
     flow_entry: &serde_yaml::Value,
-    known_roles: &HashSet<String>,
+    known_roles: &HashSet<&str>,
     configured_hook_templates: &HashSet<String>,
     blockers: &mut Vec<String>,
 ) -> Vec<serde_json::Value> {
@@ -1790,28 +1619,18 @@ fn dev_team_flow_ordered_steps(
         .enumerate()
         .filter_map(|(index, step)| match step {
             serde_yaml::Value::String(role_id) => {
-                let configured_role_id = role_id.trim();
-                if configured_role_id.is_empty() {
+                let role_id = role_id.trim();
+                if role_id.is_empty() {
                     blockers.push(format!("missing_flow_step_role:{flow_id}:{index}"));
                     return None;
                 }
-                let canonical_role_id =
-                    crate::agent_pack_contract::canonical_dev_team_role_id(configured_role_id);
-                if !known_roles.contains(configured_role_id)
-                    && !known_roles.contains(canonical_role_id.as_str())
-                    && !crate::agent_pack_contract::known_pack_role(&canonical_role_id)
-                {
-                    blockers.push(format!(
-                        "unknown_flow_step:{flow_id}:{configured_role_id}"
-                    ));
+                if !known_roles.contains(role_id) {
+                    blockers.push(format!("unknown_flow_step:{flow_id}:{role_id}"));
                 }
                 Some(serde_json::json!({
                     "step_id": format!("{flow_id}-{index}"),
                     "order": index,
-                    "role_id": canonical_role_id.clone(),
-                    "configured_role_id": configured_role_id,
-                    "canonical_role_id": crate::agent_pack_contract::canonical_dev_team_role_id(configured_role_id),
-                    "role_alias_source": crate::agent_pack_contract::canonical_role_alias_source(configured_role_id),
+                    "role_id": role_id,
                     "requires_user_approval": false,
                 }))
             }
@@ -1835,27 +1654,11 @@ fn dev_team_flow_ordered_steps(
                         "carrier_constraints",
                         "model_profile_constraints",
                         "proof_gates",
-                        "proof_target",
-                        "proof_target_template",
-                        "receive_mode",
-                        "worktree_policy",
                         "resume_transitions",
                         "rework_transitions",
                         "adapter_projection",
                         "approval_policy",
                         "requires_user_approval",
-                        "quality_profile",
-                        "batch_policy",
-                        "owned_paths",
-                        "conflict_domain",
-                        "order_bucket",
-                        "parallel_group",
-                        "owns",
-                        "does_not_own",
-                        "allowed_mutations",
-                        "required_outputs",
-                        "handoff_target",
-                        "forbidden_actions",
                     ],
                     blockers,
                 );
@@ -1867,12 +1670,7 @@ fn dev_team_flow_ordered_steps(
                     blockers.push(format!("missing_flow_step_role:{flow_id}:{index}"));
                     return None;
                 }
-                let canonical_role_id =
-                    crate::agent_pack_contract::canonical_dev_team_role_id(&role_id);
-                if !known_roles.contains(role_id.as_str())
-                    && !known_roles.contains(canonical_role_id.as_str())
-                    && !crate::agent_pack_contract::known_pack_role(&canonical_role_id)
-                {
+                if !known_roles.contains(role_id.as_str()) {
                     blockers.push(format!("unknown_flow_step:{flow_id}:{role_id}"));
                 }
                 let lifecycle_hook_templates = crate::yaml_string_list(crate::yaml_lookup(
@@ -1888,61 +1686,13 @@ fn dev_team_flow_ordered_steps(
                 let requires_user_approval =
                     crate::yaml_bool(crate::yaml_lookup(step, &["requires_user_approval"]), false);
                 validate_approval_policy(flow_id, index, step, requires_user_approval, blockers);
-                let receive_mode = crate::agent_pack_contract::canonical_receive_mode(
-                    crate::yaml_string(crate::yaml_lookup(step, &["receive_mode"]))
-                        .as_deref()
-                        .unwrap_or("task"),
-                );
-                if !crate::agent_pack_contract::supported_receive_mode(&receive_mode) {
-                    blockers.push(format!(
-                        "unsupported_flow_step_receive_mode:{flow_id}:{index}:{receive_mode}"
-                    ));
-                }
-                let task_class = crate::yaml_string(crate::yaml_lookup(step, &["task_class"]))
-                    .or_else(|| {
-                        crate::agent_pack_contract::default_task_class_for_canonical_role(
-                            &canonical_role_id,
-                        )
-                        .map(str::to_string)
-                    });
-                let runtime_role = crate::yaml_string(crate::yaml_lookup(step, &["runtime_role"]))
-                    .or_else(|| {
-                        crate::agent_pack_contract::default_runtime_role_for_canonical_role(
-                            &canonical_role_id,
-                        )
-                        .map(str::to_string)
-                    });
-                let worktree_policy =
-                    crate::yaml_string(crate::yaml_lookup(step, &["worktree_policy"]))
-                        .map(|value| value.trim().to_ascii_lowercase())
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or_else(|| {
-                            crate::agent_pack_contract::default_worktree_policy_for_step(
-                                &canonical_role_id,
-                                task_class.as_deref().unwrap_or_default(),
-                                &receive_mode,
-                            )
-                            .to_string()
-                        });
-                if !matches!(
-                    worktree_policy.as_str(),
-                    "current" | "isolated_per_task" | "isolated_per_lane"
-                ) {
-                    blockers.push(format!(
-                        "unsupported_flow_step_worktree_policy:{flow_id}:{index}:{worktree_policy}"
-                    ));
-                }
-                let role_contract = crate::agent_pack_contract::role_contract_from_yaml(step);
                 Some(serde_json::json!({
                     "step_id": crate::yaml_string(crate::yaml_lookup(step, &["step_id"]))
                         .unwrap_or_else(|| format!("{flow_id}-{index}")),
                     "order": index,
-                    "role_id": canonical_role_id.clone(),
-                    "configured_role_id": role_id.clone(),
-                    "canonical_role_id": crate::agent_pack_contract::canonical_dev_team_role_id(&role_id),
-                    "role_alias_source": crate::agent_pack_contract::canonical_role_alias_source(&role_id),
-                    "runtime_role": runtime_role,
-                    "task_class": task_class,
+                    "role_id": role_id,
+                    "runtime_role": crate::yaml_string(crate::yaml_lookup(step, &["runtime_role"])),
+                    "task_class": crate::yaml_string(crate::yaml_lookup(step, &["task_class"])),
                     "packet_template_kind": crate::yaml_string(
                         crate::yaml_lookup(step, &["packet_template_kind"])
                     ),
@@ -1961,21 +1711,10 @@ fn dev_team_flow_ordered_steps(
                     "carrier_constraints": yaml_field_json(step, "carrier_constraints"),
                     "model_profile_constraints": yaml_field_json(step, "model_profile_constraints"),
                     "proof_gates": yaml_field_json(step, "proof_gates"),
-                    "proof_target": crate::yaml_string(crate::yaml_lookup(step, &["proof_target"]))
-                        .or_else(|| crate::yaml_string(crate::yaml_lookup(step, &["proof_target_template"]))),
-                    "receive_mode": receive_mode,
-                    "worktree_policy": worktree_policy,
                     "resume_transitions": yaml_field_json(step, "resume_transitions"),
                     "rework_transitions": yaml_field_json(step, "rework_transitions"),
                     "adapter_projection": yaml_field_json(step, "adapter_projection"),
                     "approval_policy": yaml_field_json(step, "approval_policy"),
-                    "quality_profile": yaml_field_json(step, "quality_profile"),
-                    "batch_policy": yaml_field_json(step, "batch_policy"),
-                    "owned_paths": yaml_field_json(step, "owned_paths"),
-                    "conflict_domain": yaml_field_json(step, "conflict_domain"),
-                    "order_bucket": yaml_field_json(step, "order_bucket"),
-                    "parallel_group": yaml_field_json(step, "parallel_group"),
-                    "role_contract": role_contract,
                     "requires_user_approval": requires_user_approval,
                 }))
             }
@@ -2037,137 +1776,6 @@ mod tests {
         DoctorLauncherSummary, RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence,
         TaskflowConsumeBundlePayload,
     };
-
-    fn repo_root() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(std::path::Path::parent)
-            .expect("crate manifest should live under crates/vida")
-            .to_path_buf()
-    }
-
-    fn read_repo_yaml(path: &str) -> serde_yaml::Value {
-        let full_path = repo_root().join(path);
-        let contents = std::fs::read_to_string(&full_path)
-            .unwrap_or_else(|error| panic!("failed to read {}: {error}", full_path.display()));
-        serde_yaml::from_str(&contents)
-            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", full_path.display()))
-    }
-
-    fn yaml_mapping_keys(value: &serde_yaml::Value) -> Vec<String> {
-        let mut keys = value
-            .as_mapping()
-            .expect("value should be a mapping")
-            .keys()
-            .map(|key| {
-                key.as_str()
-                    .expect("mapping keys should be strings")
-                    .to_string()
-            })
-            .collect::<Vec<_>>();
-        keys.sort();
-        keys
-    }
-
-    fn yaml_path_value(value: &serde_yaml::Value, path: &[&str]) -> serde_yaml::Value {
-        let mut cursor = value;
-        for key in path {
-            let Some(next) = cursor
-                .as_mapping()
-                .and_then(|mapping| mapping.get(serde_yaml::Value::String((*key).to_string())))
-            else {
-                return serde_yaml::Value::Null;
-            };
-            cursor = next;
-        }
-        cursor.clone()
-    }
-
-    fn assert_yaml_contract_path_eq(
-        live: &serde_yaml::Value,
-        template: &serde_yaml::Value,
-        path: &[&str],
-    ) {
-        assert_eq!(
-            yaml_path_value(live, path),
-            yaml_path_value(template, path),
-            "dev-team template drift at {}",
-            path.join(".")
-        );
-    }
-
-    #[test]
-    fn dev_team_template_matches_live_config_runtime_contract_fields() {
-        let live = read_repo_yaml("vida.config.yaml");
-        let template = read_repo_yaml("docs/framework/templates/vida.config.yaml.template");
-
-        for path in [
-            &["dev_team", "default_flow_id"][..],
-            &["dev_team", "orchestrator_command_contract"][..],
-            &["dev_team", "work_item_flow_bindings"][..],
-            &["dev_team", "validation"][..],
-        ] {
-            assert_yaml_contract_path_eq(&live, &template, path);
-        }
-
-        let live_roles = yaml_path_value(&live, &["dev_team", "roles"]);
-        let template_roles = yaml_path_value(&template, &["dev_team", "roles"]);
-        let role_ids = yaml_mapping_keys(&live_roles);
-        assert_eq!(
-            role_ids,
-            yaml_mapping_keys(&template_roles),
-            "dev-team role ids must stay aligned between live config and template"
-        );
-        for role_id in &role_ids {
-            for field in [
-                "runtime_role",
-                "task_classes",
-                "packet_template_kind",
-                "closure_class",
-                "stage",
-                "completion_blocker",
-                "inclusion_rule",
-                "default_carrier",
-                "cost_policy",
-                "handoff",
-            ] {
-                assert_yaml_contract_path_eq(
-                    &live,
-                    &template,
-                    &["dev_team", "roles", role_id, field],
-                );
-            }
-        }
-
-        let live_flows = yaml_path_value(&live, &["dev_team", "flows"]);
-        let template_flows = yaml_path_value(&template, &["dev_team", "flows"]);
-        let flow_ids = yaml_mapping_keys(&live_flows);
-        assert_eq!(
-            flow_ids,
-            yaml_mapping_keys(&template_flows),
-            "dev-team flow ids must stay aligned between live config and template"
-        );
-        for flow_id in &flow_ids {
-            for field in [
-                "enabled",
-                "flow_class",
-                "work_item_bindings",
-                "sequential",
-                "allow_parallel_handoffs",
-                "fail_closed_on_missing_step_contract",
-                "lifecycle_hook_templates",
-                "adapter_projection",
-                "team_contract",
-                "steps",
-            ] {
-                assert_yaml_contract_path_eq(
-                    &live,
-                    &template,
-                    &["dev_team", "flows", flow_id, field],
-                );
-            }
-        }
-    }
 
     fn minimal_payload_for_operator_contract_status_checks() -> TaskflowConsumeBundlePayload {
         TaskflowConsumeBundlePayload {
@@ -2443,9 +2051,11 @@ dev_team:
         assert_eq!(readiness["status"], "ready");
         assert_eq!(readiness["blockers"], serde_json::json!([]));
         assert_eq!(readiness["configured"], true);
-        assert_eq!(readiness["sequence"], serde_json::json!(["coder", "coach"]));
-        assert_eq!(readiness["roles"][1]["role_id"], "coder");
-        assert_eq!(readiness["roles"][1]["configured_role_id"], "developer");
+        assert_eq!(
+            readiness["sequence"],
+            serde_json::json!(["developer", "coach"])
+        );
+        assert_eq!(readiness["roles"][1]["role_id"], "developer");
         assert_eq!(
             readiness["roles"][1]["selected_carrier"]["carrier_id"],
             "junior"
@@ -2456,7 +2066,7 @@ dev_team:
         );
         assert_eq!(
             readiness["flows"][0]["ordered_steps"][0]["role_id"],
-            "coder"
+            "developer"
         );
         assert_eq!(
             readiness["flows"][0]["ordered_steps"][0]["requires_user_approval"],
@@ -2534,7 +2144,7 @@ dev_team:
           completion_blocker: pending_specification_evidence
           inclusion_rule: when_design_gate
           command_template:
-            command: vida agent-init --role business_analyst {{task_id}}
+            command: vida agent-init --role business_analyst {{task_id}} --json
           lifecycle_hook_templates: [command_timing_summary]
           carrier_constraints:
             allowed_carriers: [middle]
@@ -2604,7 +2214,7 @@ dev_team:
         );
         assert_eq!(
             readiness["sequence"],
-            serde_json::json!(["specifier", "coder"])
+            serde_json::json!(["analyst", "developer"])
         );
         let flow = readiness["flows"]
             .as_array()
@@ -2655,14 +2265,13 @@ dev_team:
             flow["ordered_steps"][0]["adapter_projection"]["adapter_kind"],
             "codex_host_tools"
         );
-        assert_eq!(flow["ordered_steps"][1]["role_id"], "coder");
+        assert_eq!(flow["ordered_steps"][1]["role_id"], "developer");
         let developer_role = readiness["roles"]
             .as_array()
             .expect("roles should project")
             .iter()
-            .find(|role| role["role_id"] == "coder")
+            .find(|role| role["role_id"] == "developer")
             .expect("developer role should project");
-        assert_eq!(developer_role["configured_role_id"], "developer");
         assert_eq!(
             developer_role["packet_template_kind"],
             "delivery_task_packet"
@@ -2700,12 +2309,14 @@ dev_team:
                 .unwrap_or_else(|| {
                     panic!("expected dev_team flow {flow_id} in framework template")
                 });
-            assert!(
+            assert_eq!(
                 crate::yaml_bool(crate::yaml_lookup(flow, &["sequential"]), false),
+                true,
                 "{flow_id} must keep per-task lane order sequential"
             );
-            assert!(
+            assert_eq!(
                 crate::yaml_bool(crate::yaml_lookup(flow, &["allow_parallel_handoffs"]), false),
+                true,
                 "{flow_id} must permit cross-task parallel handoffs when execution semantics admit disjoint work"
             );
         }
@@ -3730,17 +3341,12 @@ dev_team:
         ]);
         assert!(actions
             .iter()
-            .any(|action| action.contains("vida taskflow protocol-binding sync")));
-        assert!(!actions
-            .iter()
             .any(|action| action.contains("vida taskflow protocol-binding sync --json")));
-        assert!(actions
-            .iter()
-            .any(|action| action
-                .contains("rerun `vida taskflow consume bundle check` only to verify")));
+        assert!(actions.iter().any(|action| action
+            .contains("rerun `vida taskflow consume bundle check --json` only to verify")));
         assert!(
             !actions.iter().any(|action| action.contains(
-                "then `vida taskflow consume bundle check` to materialize"
+                "then `vida taskflow consume bundle check --json` to materialize"
             )),
             "bundle check must not recommend itself as the command that materializes missing retrieval trust evidence"
         );
@@ -3763,7 +3369,7 @@ dev_team:
     #[test]
     fn bundle_check_operator_contracts_consistency_rejects_noncanonical_status_drift() {
         let blocker_codes = vec!["missing_protocol_binding_receipt".to_string()];
-        let next_actions = vec!["Run `vida taskflow protocol-binding sync`".to_string()];
+        let next_actions = vec!["Run `vida taskflow protocol-binding sync --json`".to_string()];
         assert_eq!(
             bundle_check_operator_contracts_consistency_error(
                 "pass!",
@@ -3780,7 +3386,7 @@ dev_team:
     #[test]
     fn bundle_check_operator_contracts_consistency_rejects_noncanonical_mirrored_string_entries() {
         let blocker_codes = vec!["missing_protocol_binding_receipt".to_string()];
-        let next_actions = vec![" Run `vida taskflow protocol-binding sync` ".to_string()];
+        let next_actions = vec![" Run `vida taskflow protocol-binding sync --json` ".to_string()];
         assert_eq!(
             bundle_check_operator_contracts_consistency_error(
                 "blocked",

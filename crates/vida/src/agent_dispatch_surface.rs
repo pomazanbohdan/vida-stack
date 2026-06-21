@@ -4,9 +4,9 @@ use std::{
 };
 
 use crate::dev_team_sequence_contract::{
-    configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_flow_id,
-    dev_team_sequence_for_task, dev_team_sequence_for_work_item, selected_dev_team_flow_for_task,
-    task_flow_lookup_keys, DevTeamSequenceStep,
+    configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
+    dev_team_sequence_for_work_item, selected_dev_team_flow_for_task, task_flow_lookup_keys,
+    DevTeamSequenceStep,
 };
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
 use crate::{
@@ -18,7 +18,6 @@ use runtime_path_policy::{
     existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
     ArtifactPathKind, PathPolicyError, StateRoot,
 };
-use taskflow_host_bridge::completion::host_bridge_completion_command_verdict_fields;
 use taskflow_host_bridge::{
     build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
     host_bridge_artifact_file, host_bridge_artifact_has_retryable_completion_blocker,
@@ -345,25 +344,23 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     request: &serde_json::Value,
 ) -> Vec<String> {
     let mut blockers = Vec::new();
-    if std::fs::canonicalize(state_root).is_err() {
+    if std::fs::canonicalize(&state_root).is_err() {
         blockers.push(blocker_code_value(
             taskflow_contracts::BlockerCode::HostBridgeStateRootMissing,
         ));
         return blockers;
     };
-    let canonical_request_path = match canonical_state_artifact_path(
-        state_root,
-        &request_path.display().to_string(),
-        true,
-    ) {
-        Ok(path) => path,
-        Err(_) => {
-            blockers.push(blocker_code_value(
-                taskflow_contracts::BlockerCode::HostBridgeRequestUntrustedPath,
-            ));
-            return blockers;
-        }
-    };
+    let canonical_request_path =
+        match canonical_state_artifact_path(&state_root, &request_path.display().to_string(), true)
+        {
+            Ok(path) => path,
+            Err(_) => {
+                blockers.push(blocker_code_value(
+                    taskflow_contracts::BlockerCode::HostBridgeRequestUntrustedPath,
+                ));
+                return blockers;
+            }
+        };
     let declared_request_path = match host_bridge_request_string(request, "request_path") {
         Some(path) => path,
         None => {
@@ -373,7 +370,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             return blockers;
         }
     };
-    match canonical_state_artifact_path(state_root, declared_request_path, true) {
+    match canonical_state_artifact_path(&state_root, declared_request_path, true) {
         Ok(path) if path == canonical_request_path => {}
         _ => blockers.push(blocker_code_value(
             taskflow_contracts::BlockerCode::HostBridgeRequestPathMismatch,
@@ -382,7 +379,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     let packet_path = host_bridge_request_string(request, "packet_path");
     let canonical_packet_path =
         packet_path.and_then(
-            |path| match canonical_state_artifact_path(state_root, path, true) {
+            |path| match canonical_state_artifact_path(&state_root, path, true) {
                 Ok(path) => Some(path),
                 Err(_) => {
                     blockers.push(blocker_code_value(
@@ -403,7 +400,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         ),
     ] {
         if let Some(path) = host_bridge_request_string(request, field) {
-            if canonical_state_artifact_path(state_root, path, false).is_err() {
+            if canonical_state_artifact_path(&state_root, path, false).is_err() {
                 blockers.push(blocker_code_value(code));
             }
         }
@@ -416,7 +413,6 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             request: typed_request,
             expected_run_id: Some(run_id.to_string()),
             expected_task_id: None,
-            expected_dispatch_generation_id: None,
             expected_dispatch_target: host_bridge_request_string(request, "dispatch_target")
                 .map(ToOwned::to_owned),
         });
@@ -534,7 +530,7 @@ async fn append_host_bridge_dispatch_receipt_blockers(
             .as_ref()
             .map(|path| path.display().to_string())
             != receipt.dispatch_packet_path.as_ref().and_then(|path| {
-                canonical_state_artifact_path(state_root, path, true)
+                canonical_state_artifact_path(&state_root, path, true)
                     .ok()
                     .map(|path| path.display().to_string())
             })
@@ -634,49 +630,6 @@ fn retryable_host_bridge_completion_request_for_state_root(
     false
 }
 
-fn host_bridge_completion_result_artifact_for_command(
-    state_root: Option<&Path>,
-    request: &serde_json::Value,
-) -> Option<serde_json::Value> {
-    let raw_path = host_bridge_request_string(request, "result_path")?;
-    let path = if let Some(state_root) = state_root {
-        canonical_state_artifact_path(state_root, raw_path, true).ok()?
-    } else {
-        PathBuf::from(raw_path)
-    };
-    read_canonical_host_bridge_json_artifact(&path, "host bridge result").ok()
-}
-
-fn host_bridge_packet_authorized_next_target(
-    state_root: Option<&Path>,
-    request: &serde_json::Value,
-) -> Option<String> {
-    let raw_path = host_bridge_request_string(request, "packet_path")?;
-    let path = if let Some(state_root) = state_root {
-        canonical_state_artifact_path(state_root, raw_path, true).ok()?
-    } else {
-        PathBuf::from(raw_path)
-    };
-    let packet = read_canonical_host_bridge_json_artifact(&path, "host bridge packet").ok()?;
-    let request_target = host_bridge_request_string(request, "dispatch_target")?;
-    let request_target = request_target.trim();
-    let active_target = packet
-        .get("downstream_dispatch_active_target")
-        .or_else(|| packet.get("dispatch_target"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    if active_target != request_target {
-        return None;
-    }
-    packet
-        .get("downstream_dispatch_target")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 fn retryable_host_bridge_completion_request(
     request_path: &Path,
     request: &serde_json::Value,
@@ -702,47 +655,19 @@ fn host_bridge_adapter_payload(
     let effective_request = taskflow_host_bridge::effective_host_bridge_request(request);
     let typed_request = HostBridgeRequest::from_value(effective_request.clone()).ok();
     let completion_command = if let Some(request) = typed_request.as_ref() {
-        let result_artifact =
-            host_bridge_completion_result_artifact_for_command(state_root, &effective_request);
-        let packet_next_target =
-            host_bridge_packet_authorized_next_target(state_root, &effective_request);
-        let verdict_fields = host_bridge_completion_command_verdict_fields(
-            result_artifact.as_ref(),
-            request.dispatch_target.as_str(),
-            packet_next_target.as_deref(),
-        );
-        let blocker_codes_arg = serde_json::to_string(&verdict_fields.blocker_codes)
-            .unwrap_or_else(|_| "[]".to_string());
-        let blocker_codes_arg = if verdict_fields.blocker_codes.is_empty() {
-            "[]".to_string()
-        } else {
-            crate::shell_quote(&blocker_codes_arg)
-        };
         let receipt_id = {
             let run_id = request.run_id.as_str();
             let dispatch_target = request.dispatch_target.as_str();
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
-        let mut command = format!(
-            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --decision {} --verdict {} --allowed-next-node {} --blocker-codes {}",
+        format!(
+            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-summary {}",
             crate::shell_quote(&request.run_id),
             crate::shell_quote(&receipt_id),
             crate::shell_quote(&request_path.display().to_string()),
             crate::shell_quote("<host-agent-id>"),
-            crate::shell_quote(&verdict_fields.decision),
-            crate::shell_quote(&verdict_fields.verdict),
-            crate::shell_quote(&verdict_fields.allowed_next_node),
-            blocker_codes_arg,
-        );
-        if let Some(rework_target) = verdict_fields.rework_target.as_deref() {
-            command.push_str(" --rework-target ");
-            command.push_str(&crate::shell_quote(rework_target));
-        }
-        command.push_str(" --host-bridge-summary ");
-        command.push_str(&crate::shell_quote(
-            "parent host adapter completed receipt-backed execution",
-        ));
-        command
+            crate::shell_quote("parent host adapter completed receipt-backed execution")
+        )
     } else {
         "repair host bridge request run_id before completion".to_string()
     };
@@ -812,13 +737,6 @@ fn host_bridge_completion_lane_args(
     payload: &serde_json::Value,
     host_agent_id: &str,
     summary: Option<&str>,
-    decision: Option<&str>,
-    verdict: Option<&str>,
-    allowed_next_node: Option<&str>,
-    blocker_codes_json: Option<&str>,
-    blocker_codes: &[String],
-    rework_target: Option<&str>,
-    result_file: Option<&Path>,
     receipt_id_override: Option<&str>,
     state_dir: Option<&Path>,
     result_file: Option<&Path>,
@@ -852,6 +770,8 @@ fn host_bridge_completion_lane_args(
         request_path.display().to_string(),
         "--host-agent-id".to_string(),
         host_agent_id.to_string(),
+        "--host-bridge-summary".to_string(),
+        summary.to_string(),
     ];
     if let Some(result_file) = result_file {
         args.push("--host-bridge-result-file".to_string());
@@ -1307,8 +1227,7 @@ fn build_parallelization_planner(
     ];
     let active_triggers = triggers
         .into_iter()
-        .filter(|&(_trigger, active)| active)
-        .map(|(trigger, _active)| trigger.to_string())
+        .filter_map(|(trigger, active)| active.then(|| trigger.to_string()))
         .collect::<Vec<_>>();
     let packet_proposals = projection
         .ready
@@ -1359,12 +1278,7 @@ fn build_carrier_selection_api_descriptor(
         .into_iter()
         .flatten()
         .filter_map(|role| {
-            let configured_role_id = role["role_id"].as_str()?.trim();
-            let api_id = role["canonical_role_id"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(configured_role_id);
+            let api_id = role["role_id"].as_str()?.trim();
             let runtime_role = role["runtime_role"].as_str()?.trim();
             let task_class = role["task_classes"]
                 .as_array()
@@ -1378,9 +1292,6 @@ fn build_carrier_selection_api_descriptor(
             }
             Some(serde_json::json!({
                 "api_id": api_id,
-                "configured_role_id": configured_role_id,
-                "canonical_role_id": api_id,
-                "role_alias_source": role["role_alias_source"].as_str(),
                 "runtime_role": runtime_role,
                 "task_class": task_class,
                 "selection_surface": "vida agent select",
@@ -1502,8 +1413,6 @@ fn lifecycle_hook_event_stream(
 fn build_dev_team_flow_projection(
     activation_bundle: &serde_json::Value,
     selected_flow_id: Option<&str>,
-    selected_pack: Option<&serde_json::Value>,
-    selected_flow_reason: &str,
     sequence: &[DevTeamSequenceStep],
     selected_lanes: &[AgentDispatchLanePreview],
     blocker_codes: &[String],
@@ -1516,9 +1425,6 @@ fn build_dev_team_flow_projection(
             .flatten()
             .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
     });
-    let current_flow_step = selected_flow
-        .and_then(|flow| flow["ordered_steps"].as_array())
-        .and_then(|steps| steps.first());
     let current_lane = selected_lanes.first();
     let current_step = current_lane
         .map(|lane| {
@@ -1526,21 +1432,6 @@ fn build_dev_team_flow_projection(
                 "role_label": lane.role_label,
                 "runtime_role": lane.runtime_role,
                 "task_class": lane.task_class,
-                "receive_mode": current_flow_step
-                    .and_then(|step| step["receive_mode"].as_str()),
-                "worktree_policy": current_flow_step
-                    .and_then(|step| step["worktree_policy"].as_str()),
-                "proof_target": current_flow_step
-                    .and_then(|step| step["proof_target"].as_str()),
-                "quality_profile": current_flow_step
-                    .map(|step| step["quality_profile"].clone())
-                    .unwrap_or(serde_json::Value::Null),
-                "batch_policy": current_flow_step
-                    .map(|step| step["batch_policy"].clone())
-                    .unwrap_or(serde_json::Value::Null),
-                "role_contract": current_flow_step
-                    .map(|step| step["role_contract"].clone())
-                    .unwrap_or(serde_json::Value::Null),
                 "task_id": lane.task_id,
                 "dispatch_command": lane.dispatch_command,
                 "dispatch_command_kind": lane.dispatch_command_kind,
@@ -1562,21 +1453,6 @@ fn build_dev_team_flow_projection(
                     "role_label": step.role_label,
                     "runtime_role": step.runtime_role,
                     "task_class": step.task_class,
-                    "receive_mode": current_flow_step
-                        .and_then(|step| step["receive_mode"].as_str()),
-                    "worktree_policy": current_flow_step
-                        .and_then(|step| step["worktree_policy"].as_str()),
-                    "proof_target": current_flow_step
-                        .and_then(|step| step["proof_target"].as_str()),
-                    "quality_profile": current_flow_step
-                        .map(|step| step["quality_profile"].clone())
-                        .unwrap_or(serde_json::Value::Null),
-                    "batch_policy": current_flow_step
-                        .map(|step| step["batch_policy"].clone())
-                        .unwrap_or(serde_json::Value::Null),
-                    "role_contract": current_flow_step
-                        .map(|step| step["role_contract"].clone())
-                        .unwrap_or(serde_json::Value::Null),
                     "task_id": null,
                     "dispatch_command": null,
                     "dispatch_command_kind": null,
@@ -1621,14 +1497,6 @@ fn build_dev_team_flow_projection(
             release1_blocked_status()
         },
         "flow_id": selected_flow.and_then(|flow| flow["flow_id"].as_str()),
-        "pack_id": selected_pack.and_then(|pack| pack["pack_id"].as_str()),
-        "pack_aliases": selected_pack
-            .map(|pack| pack["aliases"].clone())
-            .unwrap_or(serde_json::Value::Null),
-        "pack_flow_id": selected_pack
-            .and_then(crate::agent_pack_contract::pack_flow_id),
-        "pack_source": selected_pack.and_then(|pack| pack["source_path"].as_str()),
-        "selection_reason": selected_flow_reason,
         "flow_class": selected_flow.and_then(|flow| flow["flow_class"].as_str()),
         "work_item_bindings": selected_flow
             .map(|flow| flow["work_item_bindings"].clone())
@@ -1648,33 +1516,6 @@ fn build_dev_team_flow_projection(
                 "role_label": step.role_label,
                 "runtime_role": step.runtime_role,
                 "task_class": step.task_class,
-                "receive_mode": selected_flow
-                    .and_then(|flow| flow["ordered_steps"].as_array())
-                    .and_then(|steps| steps.get(index))
-                    .and_then(|step| step["receive_mode"].as_str()),
-                "worktree_policy": selected_flow
-                    .and_then(|flow| flow["ordered_steps"].as_array())
-                    .and_then(|steps| steps.get(index))
-                    .and_then(|step| step["worktree_policy"].as_str()),
-                "proof_target": selected_flow
-                    .and_then(|flow| flow["ordered_steps"].as_array())
-                    .and_then(|steps| steps.get(index))
-                    .and_then(|step| step["proof_target"].as_str()),
-                "quality_profile": selected_flow
-                    .and_then(|flow| flow["ordered_steps"].as_array())
-                    .and_then(|steps| steps.get(index))
-                    .map(|step| step["quality_profile"].clone())
-                    .unwrap_or(serde_json::Value::Null),
-                "batch_policy": selected_flow
-                    .and_then(|flow| flow["ordered_steps"].as_array())
-                    .and_then(|steps| steps.get(index))
-                    .map(|step| step["batch_policy"].clone())
-                    .unwrap_or(serde_json::Value::Null),
-                "role_contract": selected_flow
-                    .and_then(|flow| flow["ordered_steps"].as_array())
-                    .and_then(|steps| steps.get(index))
-                    .map(|step| step["role_contract"].clone())
-                    .unwrap_or(serde_json::Value::Null),
                 "requires_user_approval": step.requires_user_approval,
                 "approval_policy": step.approval_policy,
                 "lifecycle_hook_templates": step.lifecycle_hook_templates,
@@ -2045,54 +1886,6 @@ fn materialization_owned_paths_for_lane_task(
     }
 }
 
-const DISPATCH_PACKET_CONTRACT_INVALID: &str = "dispatch_packet_contract_invalid";
-const DOWNSTREAM_PACKET_MATERIALIZATION_REQUIRES_OWNED_SCOPE: &str =
-    "downstream_packet_materialization_requires_owned_scope";
-
-fn preflight_error_blocker_codes(error: &serde_json::Value) -> Vec<String> {
-    error["blocker_codes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|code| !code.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn push_unique_blocker_codes(target: &mut Vec<String>, codes: impl IntoIterator<Item = String>) {
-    for code in codes {
-        if !target.iter().any(|existing| existing == &code) {
-            target.push(code);
-        }
-    }
-}
-
-fn collect_preflight_next_actions(errors: &[serde_json::Value]) -> Vec<String> {
-    let mut actions = Vec::new();
-    for action in errors
-        .iter()
-        .flat_map(|error| error["next_actions"].as_array().into_iter().flatten())
-        .filter_map(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|action| !action.is_empty())
-    {
-        if !actions.iter().any(|existing| existing == action) {
-            actions.push(action.to_string());
-        }
-    }
-    actions
-}
-
-fn preflight_errors_include_owned_scope_gate(errors: &[serde_json::Value]) -> bool {
-    errors.iter().any(|error| {
-        preflight_error_blocker_codes(error)
-            .iter()
-            .any(|code| code == DOWNSTREAM_PACKET_MATERIALIZATION_REQUIRES_OWNED_SCOPE)
-    })
-}
-
 async fn preflight_agent_dispatch_next_packet_materialization(
     selected_lanes: &[AgentDispatchLanePreview],
     state_dir: &std::path::Path,
@@ -2104,8 +1897,8 @@ async fn preflight_agent_dispatch_next_packet_materialization(
                 serde_json::json!({
                     "task_id": lane.task_id,
                     "role_label": lane.role_label,
-                    "blocker_code": DISPATCH_PACKET_CONTRACT_INVALID,
-                    "blocker_codes": [DISPATCH_PACKET_CONTRACT_INVALID],
+                    "blocker_code": "dispatch_packet_contract_invalid",
+                    "blocker_codes": ["dispatch_packet_contract_invalid"],
                     "missing_fields": ["task_metadata_store"],
                     "next_actions": [
                         "Repair the TaskFlow state store binding before materializing dispatch packets."
@@ -2125,7 +1918,6 @@ async fn preflight_agent_dispatch_next_packet_materialization(
     for lane in selected_lanes {
         let task = store.show_task(&lane.task_id).await.ok();
         let mut missing_fields = Vec::new();
-        let mut missing_owned_scope = false;
         if lane.runtime_role.trim().is_empty() {
             missing_fields.push("runtime_role");
         }
@@ -2142,18 +1934,15 @@ async fn preflight_agent_dispatch_next_packet_materialization(
                 .map(|task| materialization_owned_paths_for_lane_task(task, lane))
                 .unwrap_or_default();
             if owned_paths.is_empty() {
-                missing_owned_scope = true;
+                missing_fields.push("owned_paths");
             }
         }
         if !missing_fields.is_empty() {
-            if missing_owned_scope {
-                missing_fields.push("owned_paths");
-            }
             errors.push(serde_json::json!({
                 "task_id": lane.task_id,
                 "role_label": lane.role_label,
-                "blocker_code": DISPATCH_PACKET_CONTRACT_INVALID,
-                "blocker_codes": [DISPATCH_PACKET_CONTRACT_INVALID],
+                "blocker_code": "dispatch_packet_contract_invalid",
+                "blocker_codes": ["dispatch_packet_contract_invalid"],
                 "missing_fields": missing_fields,
                 "next_actions": [
                     "Add the missing TaskFlow planner_metadata.owned_paths or reshape the selected dev-team lane before materializing dispatch packets."
@@ -2164,27 +1953,6 @@ async fn preflight_agent_dispatch_next_packet_materialization(
                         lane.task_class.as_str()
                     ),
                     missing_fields.join(", ")
-                ),
-            }));
-        } else if missing_owned_scope {
-            errors.push(serde_json::json!({
-                "task_id": lane.task_id,
-                "role_label": lane.role_label,
-                "runtime_role": lane.runtime_role,
-                "task_class": lane.task_class,
-                "blocker_code": DOWNSTREAM_PACKET_MATERIALIZATION_REQUIRES_OWNED_SCOPE,
-                "blocker_codes": [DOWNSTREAM_PACKET_MATERIALIZATION_REQUIRES_OWNED_SCOPE],
-                "missing_fields": ["owned_write_scope", "planner_metadata.owned_paths"],
-                "gate": "planning_scope_materialization",
-                "next_actions": [
-                    "Run or reshape the planning/analyst lane so it records owned_write_scope or TaskFlow planner_metadata.owned_paths before materializing downstream write packets."
-                ],
-                "error": format!(
-                    "Downstream dispatch packet `{}` for task `{}` cannot be materialized until planning provides owned_write_scope or planner_metadata.owned_paths.",
-                    crate::development_flow_orchestration::packet_template_kind_for_dev_team_task_class(
-                        lane.task_class.as_str()
-                    ),
-                    lane.task_id
                 ),
             }));
         }
@@ -2208,7 +1976,6 @@ fn build_agent_dispatch_next_preview(
             lanes_requested,
             configured_max_parallel_agents,
             explicit_state_dir,
-            None,
         )
     } else {
         build_agent_dispatch_next_preview_standard(
@@ -2496,7 +2263,6 @@ fn build_agent_dispatch_next_preview_dev_team(
     lanes_requested: usize,
     configured_max_parallel_agents: usize,
     explicit_state_dir: Option<&std::path::Path>,
-    pack_id: Option<&str>,
 ) -> AgentDispatchNextPreview {
     let mut blocker_codes = Vec::new();
     let mut next_actions = Vec::new();
@@ -2553,40 +2319,7 @@ fn build_agent_dispatch_next_preview_dev_team(
             .map(str::to_string)
         })
         .collect::<std::collections::BTreeSet<_>>();
-    let explicit_pack_id = pack_id.map(str::trim).filter(|value| !value.is_empty());
-    let explicit_pack = explicit_pack_id.and_then(|pack_id| {
-        crate::agent_pack_contract::pack_by_id(&activation_bundle["dev_team_readiness"], pack_id)
-    });
-    if let Some(pack_id) = explicit_pack_id {
-        match explicit_pack {
-            Some(pack) => {
-                let pack_blockers = crate::agent_pack_contract::pack_validation_blockers(pack);
-                if !pack_blockers.is_empty() {
-                    blocker_codes.extend(pack_blockers);
-                    next_actions.push(format!(
-                        "Fix `{}` and rerun `{}` before materializing pack dispatch packets.",
-                        human_command(&format!("vida pack validate {pack_id}")),
-                        human_command(&format!(
-                            "vida agent dispatch-next --dev-team --pack {pack_id}"
-                        )),
-                    ));
-                }
-            }
-            None => {
-                blocker_codes.push(format!("unknown_pack:{pack_id}"));
-                next_actions.push(format!(
-                    "Run `{}` and choose a configured pack id before dispatch.",
-                    human_command("vida pack list")
-                ));
-            }
-        }
-    }
-    let explicit_pack_flow_id = explicit_pack.and_then(crate::agent_pack_contract::pack_flow_id);
-    let sequence = if let Some(pack_flow_id) = explicit_pack_flow_id {
-        dev_team_sequence_for_flow_id(&activation_bundle["dev_team_readiness"], pack_flow_id)
-    } else if explicit_pack_id.is_some() {
-        Vec::new()
-    } else if ready_flow_ids.len() == 1 {
+    let sequence = if ready_flow_ids.len() == 1 {
         selected_ready_candidates
             .iter()
             .find(|candidate| candidate.ready_now)
@@ -2595,30 +2328,10 @@ fn build_agent_dispatch_next_preview_dev_team(
     } else {
         dev_team_sequence(activation_bundle)
     };
-    let (selected_flow_id, selected_flow_reason) = if let Some(pack_flow_id) = explicit_pack_flow_id
-    {
-        (Some(pack_flow_id), "explicit_pack_flow_id")
-    } else if explicit_pack_id.is_some() {
-        (None, "explicit_pack_id_blocked")
-    } else if ready_flow_ids.len() == 1 {
-        (
-            ready_flow_ids.iter().next().map(String::as_str),
-            if scoped_current_task_dev_team {
-                "current_task_flow_binding"
-            } else {
-                "single_ready_flow_class"
-            },
-        )
-    } else if ready_flow_ids.len() > 1 {
-        (
-            activation_bundle["dev_team_readiness"]["default_flow_id"].as_str(),
-            "ambiguous_ready_flow_classes_default_projection",
-        )
+    let selected_flow_id = if ready_flow_ids.len() == 1 {
+        ready_flow_ids.iter().next().map(String::as_str)
     } else {
-        (
-            activation_bundle["dev_team_readiness"]["default_flow_id"].as_str(),
-            "default_flow_id",
-        )
+        activation_bundle["dev_team_readiness"]["default_flow_id"].as_str()
     };
 
     if lanes_requested == 0 {
@@ -2632,10 +2345,7 @@ fn build_agent_dispatch_next_preview_dev_team(
                 .to_string(),
         );
     }
-    if explicit_pack_id.is_none()
-        && projection.current_task_id.is_none()
-        && ready_flow_ids.len() > 1
-    {
+    if projection.current_task_id.is_none() && ready_flow_ids.len() > 1 {
         blocker_codes.push("ambiguous_work_item_flow_selection".to_string());
         next_actions.push(
             "Ready task candidates map to multiple configured dev_team flows; narrow the task scope or dispatch one flow class at a time."
@@ -2648,8 +2358,8 @@ fn build_agent_dispatch_next_preview_dev_team(
     let preview_step_limit = effective_max_parallel_agents;
     let steps_to_preview = sequence
         .iter()
-        .take(preview_step_limit)
         .cloned()
+        .take(preview_step_limit)
         .collect::<Vec<_>>();
     if projection.ready.is_empty() {
         blocker_codes.push("no_ready_task_candidates".to_string());
@@ -2666,8 +2376,6 @@ fn build_agent_dispatch_next_preview_dev_team(
         let flow_projection = build_dev_team_flow_projection(
             activation_bundle,
             selected_flow_id,
-            explicit_pack,
-            selected_flow_reason,
             &sequence,
             &selected_lanes,
             &blocker_codes,
@@ -2866,8 +2574,6 @@ fn build_agent_dispatch_next_preview_dev_team(
     let flow_projection = build_dev_team_flow_projection(
         activation_bundle,
         selected_flow_id,
-        explicit_pack,
-        selected_flow_reason,
         &sequence,
         &selected_lanes,
         &blocker_codes,
@@ -3193,16 +2899,14 @@ fn apply_continuation_dispatch_gate_to_preview(
     preview.status = release1_blocked_status().to_string();
     preview.selected_lanes.clear();
     preview.lanes_selected = 0;
-    let mut gate_blocker_codes = gate.blocker_codes.clone();
-    if gate_blocker_codes.is_empty() && gate.admissibility_gate == "latest_run_graph_status_blocked"
-    {
-        if let Some(blocker) = crate::release1_contracts::blocker_code_value(
-            crate::release1_contracts::BlockerCode::LatestRunGraphStatusBlocked,
-        ) {
-            gate_blocker_codes.push(blocker);
+    if let Some(blocker) = crate::release1_contracts::blocker_code_value(
+        crate::release1_contracts::BlockerCode::LatestRunGraphStatusBlocked,
+    ) {
+        if !preview.blocker_codes.iter().any(|value| value == &blocker) {
+            preview.blocker_codes.push(blocker);
         }
     }
-    for blocker in &gate_blocker_codes {
+    for blocker in &gate.blocker_codes {
         if !preview.blocker_codes.iter().any(|value| value == blocker) {
             preview.blocker_codes.push(blocker.clone());
         }
@@ -3519,32 +3223,25 @@ async fn materialize_agent_dispatch_next_packets(
             .await;
     if !preflight_errors.is_empty() {
         preview.status = release1_blocked_status().to_string();
-        let owned_scope_gate = preflight_errors_include_owned_scope_gate(&preflight_errors);
-        let mut preflight_blocker_codes = Vec::new();
-        for error in &preflight_errors {
-            push_unique_blocker_codes(
-                &mut preflight_blocker_codes,
-                preflight_error_blocker_codes(error),
-            );
+        if !preview
+            .blocker_codes
+            .iter()
+            .any(|value| value == "dispatch_packet_contract_invalid")
+        {
+            preview
+                .blocker_codes
+                .push("dispatch_packet_contract_invalid".to_string());
         }
-        push_unique_blocker_codes(&mut preview.blocker_codes, preflight_blocker_codes);
         preview.next_actions.clear();
-        preview
-            .next_actions
-            .extend(collect_preflight_next_actions(&preflight_errors));
-        if preview.next_actions.is_empty() {
-            preview.next_actions.push(
-                "Repair the selected dev-team lane before materializing dispatch packets."
-                    .to_string(),
-            );
-        }
-        let blocked_mode = if owned_scope_gate {
-            "blocked_planning_scope"
-        } else {
-            "blocked_packet_contract"
-        };
+        preview.next_actions.push(
+            "Add the missing TaskFlow planner_metadata.owned_paths or reshape the selected dev-team lane before materializing dispatch packets."
+                .to_string(),
+        );
         if let Some(planner) = preview.parallelization_planner.as_object_mut() {
-            planner.insert("mode".to_string(), serde_json::json!(blocked_mode));
+            planner.insert(
+                "mode".to_string(),
+                serde_json::json!("blocked_packet_contract"),
+            );
             planner.insert("materializes_packets".to_string(), serde_json::json!(false));
             planner.insert("packet_artifacts".to_string(), serde_json::json!([]));
         }
@@ -3557,13 +3254,13 @@ async fn materialize_agent_dispatch_next_packets(
                 "receipt_status".to_string(),
                 serde_json::json!({
                     "receipt_backed": false,
-                    "status": blocked_mode,
+                    "status": "blocked_packet_contract",
                 }),
             );
             flow_projection.insert(
                 "proof_state".to_string(),
                 serde_json::json!({
-                    "status": blocked_mode,
+                    "status": "blocked_packet_contract",
                     "diagnostic_only": false,
                 }),
             );
@@ -3580,7 +3277,6 @@ async fn materialize_agent_dispatch_next_packets(
             "status": release1_blocked_status(),
             "requested": true,
             "materializes_packets": false,
-            "reason": blocked_mode,
             "errors": preflight_errors,
             "artifacts": [],
         });
@@ -3729,7 +3425,7 @@ fn agent_dispatch_next_projection_name(
         ""
     };
     format!(
-        "agent-dispatch-next-mode-{}{}-lanes-{}-scope-{}-current-{}-pack-{}-latest",
+        "agent-dispatch-next-mode-{}{}-lanes-{}-scope-{}-current-{}-latest",
         if command.dev_team {
             "dev-team"
         } else {
@@ -3741,7 +3437,6 @@ fn agent_dispatch_next_projection_name(
         safe_agent_dispatch_projection_component(
             command.current_task_id.as_deref().unwrap_or("default")
         ),
-        safe_agent_dispatch_projection_component(command.pack_id.as_deref().unwrap_or("default")),
     )
 }
 
@@ -3791,9 +3486,6 @@ fn emit_agent_dispatch_next_preview(
         );
     } else {
         println!("agent dispatch-next: {}", preview.status);
-        let command_hint = agent_dispatch_next_human_command(command);
-        println!("command: {command_hint}");
-        println!("machine_command: {command_hint} --json");
         println!("lanes selected: {}", preview.lanes_selected);
         if preview.packet_materialization["requested"]
             .as_bool()
@@ -3840,36 +3532,6 @@ fn emit_agent_dispatch_next_preview(
     } else {
         ExitCode::from(1)
     }
-}
-
-fn agent_dispatch_next_human_command(command: &AgentDispatchNextArgs) -> String {
-    let mut args = vec!["vida agent dispatch-next".to_string()];
-    if command.dev_team {
-        args.push("--dev-team".to_string());
-    }
-    if let Some(pack_id) = command.pack_id.as_deref() {
-        args.push("--pack".to_string());
-        args.push(pack_id.to_string());
-    }
-    if command.lanes != 4 {
-        args.push("--lanes".to_string());
-        args.push(command.lanes.to_string());
-    }
-    if let Some(scope) = command.scope.as_deref() {
-        args.push("--scope".to_string());
-        args.push(scope.to_string());
-    }
-    if let Some(current_task_id) = command.current_task_id.as_deref() {
-        args.push("--current-task-id".to_string());
-        args.push(current_task_id.to_string());
-    }
-    if command.preview {
-        args.push("--preview".to_string());
-    }
-    if command.materialize_packets {
-        args.push("--materialize-packets".to_string());
-    }
-    args.join(" ")
 }
 
 pub(crate) async fn run_agent(args: AgentArgs) -> ExitCode {
@@ -4133,11 +3795,7 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
                 .as_ref()
                 .and_then(|receipt| receipt.blocker_code.clone())
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| {
-                    taskflow_contracts::BlockerCode::BlockedDispatch
-                        .as_str()
-                        .to_string()
-                }),
+                .unwrap_or_else(|| "blocked_dispatch".to_string()),
         );
     }
     if current_runtime_task_missing {
@@ -4389,18 +4047,11 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     }
                     return emit_host_bridge_payload(&blocked, command.json);
                 };
-                let mut lane_args = match host_bridge_completion_lane_args(
+                let lane_args = match host_bridge_completion_lane_args(
                     &command.request,
                     &payload,
                     host_agent_id,
                     command.summary.as_deref(),
-                    command.decision.as_deref(),
-                    command.verdict.as_deref(),
-                    command.allowed_next_node.as_deref(),
-                    command.blocker_codes.as_deref(),
-                    &command.blocker_code,
-                    command.rework_target.as_deref(),
-                    command.result_file.as_deref(),
                     command.receipt_id.as_deref(),
                     command.state_dir.as_deref(),
                     command.result_file.as_deref(),
@@ -4438,9 +4089,6 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                         return emit_host_bridge_payload(&blocked, command.json);
                     }
                 };
-                if command.json && !lane_args.iter().any(|arg| arg == "--json") {
-                    lane_args.push("--json".to_string());
-                }
                 return crate::lane_surface::run_lane(crate::ProxyArgs { args: lane_args }).await;
             }
             emit_host_bridge_payload(&payload, command.json)
@@ -4549,10 +4197,6 @@ async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
 }
 
 async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
-    if command.pack_id.is_some() && !command.dev_team {
-        eprintln!("`vida agent dispatch-next --pack <pack-id>` requires --dev-team");
-        return ExitCode::from(2);
-    }
     let state_dir = command
         .state_dir
         .clone()
@@ -4709,20 +4353,13 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 if let Some(object) = activation_bundle.as_object_mut() {
                     object.insert("dev_team_readiness".to_string(), readiness);
                 }
-                let projection_ready_head_task_id = projection
-                    .ready
-                    .first()
-                    .map(|candidate| candidate.task.id.as_str());
-                let continuation_scope_task_id = resolved_current_task_ids
-                    .preview_current_task_id
-                    .or(command.scope.as_deref())
-                    .or(projection.current_task_id.as_deref())
-                    .or(projection_ready_head_task_id);
                 let continuation_gate =
                     match crate::taskflow_proxy::build_taskflow_continuation_dispatch_gate_from_store(
                         &store,
                         &state_dir,
-                        continuation_scope_task_id,
+                        resolved_current_task_ids
+                            .preview_current_task_id
+                            .or(command.scope.as_deref()),
                     )
                     .await
                     {
@@ -4732,55 +4369,14 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
-                let implicit_preview_dispatch =
-                    !command.materialize_packets && command.current_task_id.is_none();
-                let continuation_gate = match continuation_gate {
-                    Some(gate) if !gate.admissible => Some(gate),
-                    other => {
-                        if implicit_preview_dispatch {
-                            if let Some(scope_task_id) = continuation_scope_task_id {
-                                match store.run_graph_status(scope_task_id).await {
-                                    Ok(status) => {
-                                        let normalized = status.status.trim().to_ascii_lowercase();
-                                        if normalized == "blocked"
-                                            || normalized == "lane_blocked"
-                                            || normalized.ends_with("_blocked")
-                                        {
-                                            Some(crate::taskflow_proxy::TaskflowContinuationDispatchGate {
-                                            admissible: false,
-                                            admissibility_gate: "latest_run_graph_status_blocked"
-                                                .to_string(),
-                                            blocker_codes: vec![
-                                                "latest_run_graph_status_blocked".to_string(),
-                                            ],
-                                            next_actions: vec![format!(
-                                                "Inspect blocked run graph `{}` before selecting dev-team dispatch lanes.",
-                                                status.run_id
-                                            )],
-                                            blocked_task_ids: vec![status.task_id],
-                                        })
-                                        } else {
-                                            other
-                                        }
-                                    }
-                                    Err(_) => other,
-                                }
-                            } else {
-                                other
-                            }
-                        } else {
-                            other
-                        }
-                    }
-                };
                 drop(store);
-                let mut preview = build_agent_dispatch_next_preview_dev_team(
+                let mut preview = build_agent_dispatch_next_preview(
                     &activation_bundle,
                     &projection,
                     command.lanes,
                     configured_max_parallel_agents,
                     explicit_state_dir,
-                    command.pack_id.as_deref(),
+                    true,
                 );
                 if let Some(gate) = continuation_gate {
                     apply_continuation_dispatch_gate_to_preview(&mut preview, &gate);
@@ -4901,13 +4497,13 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                     agent_dispatch_next_effective_materialize_packets(&command, &activation_bundle);
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
-                let mut preview = build_agent_dispatch_next_preview_dev_team(
+                let mut preview = build_agent_dispatch_next_preview(
                     &activation_bundle,
                     &projection,
                     command.lanes,
                     configured_max_parallel_agents,
                     explicit_state_dir,
-                    command.pack_id.as_deref(),
+                    true,
                 );
                 preview.source_surfaces.push(
                     "StateStore::read_fresh_tasks_from_jsonl_snapshot(authoritative-open-fallback)"
@@ -4935,15 +4531,14 @@ mod tests {
     use super::{
         agent_dispatch_next_effective_materialize_packets, agent_status_runtime_task_stale_code,
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
-        build_agent_dispatch_next_preview_dev_team, canonical_host_bridge_request_path,
-        configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
-        dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
-        host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
-        host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
+        canonical_host_bridge_request_path, configured_dev_team_first_step_for_task,
+        dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
+        dispatch_target_for_agent_dispatch_lane, host_bridge_adapter_payload,
+        host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
+        host_bridge_normalized_implementation_artifact_path,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, materialize_configured_agent_dispatch_lane,
-        preflight_agent_dispatch_next_packet_materialization,
         read_canonical_host_bridge_json_artifact, read_host_bridge_request,
         resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
         single_in_progress_task_id_from_rows, state_store,
@@ -5038,133 +4633,6 @@ mod tests {
                 "status": "not_required"
             }),
         }
-    }
-
-    fn implementation_dispatch_lane_preview(task_id: &str) -> AgentDispatchLanePreview {
-        let mut lane = coach_dispatch_lane_preview("developer", task_id);
-        lane.runtime_role = "worker".to_string();
-        lane.task_class = crate::runtime_contract_vocab::TASK_CLASS_IMPLEMENTATION.to_string();
-        lane.dispatch_command = format!("vida agent-init --role developer {task_id}");
-        lane.selection_reason = "configured_dev_team_lane:developer".to_string();
-        lane.selection_truth.selected_carrier = "developer-seat".to_string();
-        lane.selection_truth.runtime_role = lane.runtime_role.clone();
-        lane.selection_truth.task_class = lane.task_class.clone();
-        lane
-    }
-
-    #[tokio::test]
-    async fn packet_materialization_preflight_blocks_downstream_lane_until_owned_scope_exists() {
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let task_id = "planning-intake-write-lane";
-        let store = state_store::StateStore::open(harness.path().to_path_buf())
-            .await
-            .expect("open store");
-        store
-            .create_task_with_fixture_parent(CreateTaskRequest {
-                task_id,
-                title: "Planning intake write lane",
-                display_id: None,
-                description: "Planning has not produced an owned write scope yet",
-                issue_type: "task",
-                status: "open",
-                priority: 1,
-                parent_id: None,
-                labels: &[],
-                execution_semantics: TaskExecutionSemantics::default(),
-                planner_metadata: state_store::TaskPlannerMetadata::default(),
-                created_by: "test",
-                source_repo: ".",
-            })
-            .await
-            .expect("create task");
-        store
-            .refresh_task_snapshot()
-            .await
-            .expect("refresh snapshot");
-        store.close().await;
-
-        let lane = implementation_dispatch_lane_preview(task_id);
-        let errors =
-            preflight_agent_dispatch_next_packet_materialization(&[lane], harness.path()).await;
-
-        assert_eq!(errors.len(), 1, "{errors:#?}");
-        assert_eq!(
-            errors[0]["blocker_code"],
-            "downstream_packet_materialization_requires_owned_scope"
-        );
-        assert!(errors[0]["blocker_codes"]
-            .as_array()
-            .expect("blocker codes")
-            .iter()
-            .any(|code| code == "downstream_packet_materialization_requires_owned_scope"));
-        assert!(!errors[0]["blocker_codes"]
-            .as_array()
-            .expect("blocker codes")
-            .iter()
-            .any(|code| code == "dispatch_packet_contract_invalid"));
-        assert_eq!(errors[0]["gate"], "planning_scope_materialization");
-        assert!(errors[0]["missing_fields"]
-            .as_array()
-            .expect("missing fields")
-            .iter()
-            .any(|field| field == "owned_write_scope"));
-        assert!(errors[0]["next_actions"][0]
-            .as_str()
-            .expect("next action")
-            .contains("planning/analyst lane"));
-    }
-
-    #[tokio::test]
-    async fn packet_materialization_preflight_keeps_contract_blocker_for_malformed_lane() {
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let task_id = "malformed-dispatch-lane";
-        let store = state_store::StateStore::open(harness.path().to_path_buf())
-            .await
-            .expect("open store");
-        store
-            .create_task_with_fixture_parent(CreateTaskRequest {
-                task_id,
-                title: "Malformed dispatch lane",
-                display_id: None,
-                description: "Implementation lane with malformed runtime role",
-                issue_type: "task",
-                status: "open",
-                priority: 1,
-                parent_id: None,
-                labels: &[],
-                execution_semantics: TaskExecutionSemantics::default(),
-                planner_metadata: state_store::TaskPlannerMetadata::default(),
-                created_by: "test",
-                source_repo: ".",
-            })
-            .await
-            .expect("create task");
-        store
-            .refresh_task_snapshot()
-            .await
-            .expect("refresh snapshot");
-        store.close().await;
-
-        let mut lane = implementation_dispatch_lane_preview(task_id);
-        lane.runtime_role.clear();
-        let errors =
-            preflight_agent_dispatch_next_packet_materialization(&[lane], harness.path()).await;
-
-        assert_eq!(errors.len(), 1, "{errors:#?}");
-        assert_eq!(
-            errors[0]["blocker_code"],
-            "dispatch_packet_contract_invalid"
-        );
-        assert!(errors[0]["blocker_codes"]
-            .as_array()
-            .expect("blocker codes")
-            .iter()
-            .any(|code| code == "dispatch_packet_contract_invalid"));
-        assert!(!errors[0]["blocker_codes"]
-            .as_array()
-            .expect("blocker codes")
-            .iter()
-            .any(|code| code == "downstream_packet_materialization_requires_owned_scope"));
     }
 
     #[test]
@@ -6226,15 +5694,7 @@ mod tests {
         assert!(payload["host_bridge"]["completion_command"]
             .as_str()
             .expect("completion command")
-            .contains("--decision rework_required --verdict rework_required"));
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .expect("completion command")
-            .contains("--allowed-next-node developer_rework"));
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .expect("completion command")
-            .contains("--rework-target developer"));
+            .contains("--decision pass --verdict implemented"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -6342,13 +5802,6 @@ mod tests {
             &payload,
             "agent-1",
             Some("completed"),
-            Some("pass"),
-            Some("implemented"),
-            Some("coach"),
-            Some("[]"),
-            &["scope_check_passed".to_string()],
-            None,
-            Some(std::path::Path::new("result.json")),
             Some("receipt-1"),
             Some(std::path::Path::new("state-dir")),
             None,
@@ -6372,18 +5825,6 @@ mod tests {
                 "request.json",
                 "--host-agent-id",
                 "agent-1",
-                "--decision",
-                "pass",
-                "--verdict",
-                "implemented",
-                "--allowed-next-node",
-                "coach",
-                "--blocker-codes",
-                "[]",
-                "--blocker-code",
-                "scope_check_passed",
-                "--host-bridge-result-file",
-                "result.json",
                 "--host-bridge-summary",
                 "completed",
                 "--state-dir",
@@ -8636,176 +8077,6 @@ mod tests {
         assert!(!preview
             .blocker_codes
             .contains(&"ambiguous_work_item_flow_selection".to_string()));
-        assert_eq!(
-            preview.flow_projection["selection_reason"],
-            "current_task_flow_binding"
-        );
-    }
-
-    #[test]
-    fn development_flow_binding_projects_configured_pr_processing_team_reason() {
-        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
-        activation_bundle["dev_team_readiness"] = serde_json::json!({
-            "default_flow_id": "task_delivery_verified",
-            "work_item_flow_bindings": {
-                "task": "task_delivery_verified",
-                "pull_request": "pr_processing_team",
-                "pr_repair": "pr_processing_team"
-            },
-            "roles": [
-                {"role_id": "analyst-seat", "runtime_role": "business_analyst", "task_classes": ["specification"]},
-                {"role_id": "developer-seat", "runtime_role": "worker", "task_classes": ["implementation"]},
-                {"role_id": "verifier-seat", "runtime_role": "verifier", "task_classes": ["verification"]}
-            ],
-            "flows": [
-                {
-                    "flow_id": "task_delivery_verified",
-                    "enabled": true,
-                    "default": true,
-                    "work_item_bindings": ["task"],
-                    "ordered_steps": [{"role_id": "developer-seat", "runtime_role": "worker", "task_class": "implementation"}]
-                },
-                {
-                    "flow_id": "pr_processing_team",
-                    "enabled": true,
-                    "flow_class": "development",
-                    "work_item_bindings": ["pull_request", "pr_repair"],
-                    "ordered_steps": [
-                        {"role_id": "analyst-seat", "runtime_role": "business_analyst", "task_class": "specification"},
-                        {"role_id": "developer-seat", "runtime_role": "worker", "task_class": "implementation"},
-                        {"role_id": "verifier-seat", "runtime_role": "verifier", "task_class": "verification"}
-                    ]
-                }
-            ]
-        });
-        let preview = build_agent_dispatch_next_preview(
-            &activation_bundle,
-            &TaskSchedulingProjection {
-                current_task_id: Some("pull-request-processing-queue".to_string()),
-                ready: vec![candidate_with_type(
-                    "pull-request-processing-queue",
-                    "Process pull requests",
-                    true,
-                    true,
-                    "pull_request",
-                )],
-                blocked: Vec::new(),
-                parallel_candidates_after_current: Vec::new(),
-            },
-            1,
-            1,
-            None,
-            true,
-        );
-
-        assert_eq!(preview.status, "pass", "{preview:#?}");
-        assert_eq!(preview.flow_projection["flow_id"], "pr_processing_team");
-        assert_eq!(
-            preview.flow_projection["selection_reason"],
-            "current_task_flow_binding"
-        );
-        assert_eq!(preview.selected_lanes.len(), 1);
-        assert_eq!(
-            preview.selected_lanes[0].task_id,
-            "pull-request-processing-queue"
-        );
-        assert_eq!(preview.selected_lanes[0].role_label, "analyst-seat");
-    }
-
-    #[test]
-    fn explicit_pack_preview_projects_pack_identity_over_task_flow_binding() {
-        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
-        activation_bundle["dev_team_readiness"] = serde_json::json!({
-            "default_flow_id": "task_delivery_verified",
-            "work_item_flow_bindings": {
-                "task": "task_delivery_verified"
-            },
-            "roles": [
-                {"role_id": "coder", "runtime_role": "worker", "task_classes": ["implementation"]},
-                {"role_id": "cleaner", "runtime_role": "worker", "task_classes": ["implementation"]}
-            ],
-            "sequence": ["coder"],
-            "packs": [
-                {
-                    "pack_id": "quick-two-pack",
-                    "aliases": ["quick_two_pack"],
-                    "flow_id": "quick_two_pack_flow",
-                    "enabled": true,
-                    "status": "ready",
-                    "blocker_codes": [],
-                    "ordered_steps": [
-                        {"role_id": "coder", "runtime_role": "worker", "task_class": "implementation", "receive_mode": "task", "worktree_policy": "isolated_per_task"},
-                        {"role_id": "cleaner", "runtime_role": "worker", "task_class": "implementation", "receive_mode": "task", "worktree_policy": "isolated_per_task", "proof_target": "quick-two-pack-proof"}
-                    ]
-                }
-            ],
-            "flows": [
-                {
-                    "flow_id": "task_delivery_verified",
-                    "enabled": true,
-                    "default": true,
-                    "work_item_bindings": ["task"],
-                    "ordered_steps": [{"role_id": "coder", "runtime_role": "worker", "task_class": "implementation"}]
-                },
-                {
-                    "flow_id": "quick_two_pack_flow",
-                    "enabled": true,
-                    "flow_class": "development",
-                    "work_item_bindings": ["feature"],
-                    "ordered_steps": [
-                        {"role_id": "coder", "runtime_role": "worker", "task_class": "implementation", "receive_mode": "task", "worktree_policy": "isolated_per_task"},
-                        {"role_id": "cleaner", "runtime_role": "worker", "task_class": "implementation", "receive_mode": "task", "worktree_policy": "isolated_per_task", "proof_target": "quick-two-pack-proof"}
-                    ],
-                    "proof_gates": {
-                        "terminal_proof_target": "quick-two-pack-proof",
-                        "structured_evidence_required": true
-                    }
-                }
-            ]
-        });
-
-        let preview = build_agent_dispatch_next_preview_dev_team(
-            &activation_bundle,
-            &TaskSchedulingProjection {
-                current_task_id: Some("feature-a".to_string()),
-                ready: vec![candidate_with_type(
-                    "feature-a",
-                    "Feature A",
-                    true,
-                    true,
-                    "task",
-                )],
-                blocked: Vec::new(),
-                parallel_candidates_after_current: Vec::new(),
-            },
-            2,
-            2,
-            None,
-            Some("quick_two_pack"),
-        );
-
-        assert_eq!(preview.status, "pass", "{preview:#?}");
-        assert_eq!(preview.flow_projection["flow_id"], "quick_two_pack_flow");
-        assert_eq!(preview.flow_projection["pack_id"], "quick-two-pack");
-        assert_eq!(
-            preview.flow_projection["pack_flow_id"],
-            "quick_two_pack_flow"
-        );
-        assert_eq!(
-            preview.flow_projection["selection_reason"],
-            "explicit_pack_flow_id"
-        );
-        assert_eq!(preview.selected_lanes.len(), 2);
-        assert_eq!(preview.selected_lanes[0].role_label, "coder");
-        assert_eq!(preview.selected_lanes[1].role_label, "cleaner");
-        assert_eq!(
-            preview.flow_projection["steps"][1]["worktree_policy"],
-            "isolated_per_task"
-        );
-        assert_eq!(
-            preview.flow_projection["steps"][1]["proof_target"],
-            "quick-two-pack-proof"
-        );
     }
 
     #[test]
@@ -9385,8 +8656,6 @@ mod tests {
             state_dir: None,
             json: true,
             dev_team: true,
-            pack_id: None,
-            preview: false,
             materialize_packets: false,
         };
         assert!(
@@ -9732,9 +9001,6 @@ mod tests {
         assert!(preview
             .blocker_codes
             .contains(&"continuation_binding_ambiguous".to_string()));
-        assert!(!preview
-            .blocker_codes
-            .contains(&"latest_run_graph_status_blocked".to_string()));
         assert!(preview
             .next_actions
             .contains(&"bind an explicit next bounded unit".to_string()));
@@ -9884,7 +9150,10 @@ mod tests {
         );
         assert_eq!(
             preview.flow_projection["blocker_codes"],
-            serde_json::json!(["continuation_binding_ambiguous"])
+            serde_json::json!([
+                "latest_run_graph_status_blocked",
+                "continuation_binding_ambiguous"
+            ])
         );
         assert_eq!(
             preview.flow_projection["next_actions"],

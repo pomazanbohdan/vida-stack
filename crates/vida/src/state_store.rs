@@ -86,9 +86,9 @@ pub use state_store_protocol_binding::{ProtocolBindingState, ProtocolBindingSumm
 #[allow(unused_imports)]
 pub(crate) use state_store_run_graph_state::{
     ExecutionPlanStateRow, GovernanceStateRow, ResumabilityCapsuleRow, RoutedRunStateRow,
-    RunGraphDispatchReceiptStored, RunGraphLaneCompletionCommitRecord, RunGraphLatestReceiptRow,
-    RunGraphLatestRow, RunGraphLatestStateRow, RunGraphOwnerEvidenceRecord,
-    RunGraphProjectionCheckpointRecord, RunGraphReplayLineageReceipt,
+    RunGraphDispatchReceiptStored, RunGraphLatestReceiptRow, RunGraphLatestRow,
+    RunGraphLatestStateRow, RunGraphOwnerEvidenceRecord, RunGraphProjectionCheckpointRecord,
+    RunGraphReplayLineageReceipt,
 };
 #[allow(unused_imports)]
 pub use state_store_run_graph_state::{
@@ -191,7 +191,6 @@ DEFINE TABLE launcher_activation_snapshot SCHEMALESS;
 DEFINE TABLE run_graph_approval_delegation_receipt SCHEMALESS;
 DEFINE TABLE run_graph_continuation_binding SCHEMALESS;
 DEFINE TABLE run_graph_dispatch_context SCHEMALESS;
-DEFINE TABLE run_graph_lane_completion_commit_record SCHEMALESS;
 DEFINE TABLE run_graph_owner_evidence SCHEMALESS;
 DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
 DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
@@ -605,7 +604,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-state-reset-archive-reinit-{}-{nanos}",
             std::process::id()
         ));
@@ -635,7 +634,7 @@ mod tests {
 
     #[tokio::test]
     async fn state_reset_requires_archive_guard() {
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-state-reset-requires-archive-{}-{}",
             std::process::id(),
             unix_timestamp_nanos()
@@ -687,7 +686,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        test_temp_base_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
     }
 
     fn write_minimal_project_markers(project_root: &Path) {
@@ -777,7 +776,7 @@ hierarchy: framework,contracts
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let root =
-            test_temp_base_dir().join(format!("vida-task-import-{}-{}", std::process::id(), nanos));
+            std::env::temp_dir().join(format!("vida-task-import-{}-{}", std::process::id(), nanos));
         let source = root.join("issues.jsonl");
         fs::create_dir_all(&root).expect("create temp dir");
         fs::write(&source, sample_tasks_jsonl()).expect("write sample jsonl");
@@ -1090,7 +1089,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-task-dependency-tree-{}-{}",
             std::process::id(),
             nanos
@@ -1153,7 +1152,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-task-progress-summary-{}-{}",
             std::process::id(),
             nanos
@@ -1236,7 +1235,7 @@ hierarchy: framework,contracts
             .contains("vida task close vida-root"));
         assert_eq!(
             summary.canonical_commands,
-            vec!["vida task close vida-root --reason \"all descendants closed\""]
+            vec!["vida task close vida-root --reason \"all descendants closed\" --json"]
         );
 
         let leaf_summary = store
@@ -1323,7 +1322,7 @@ hierarchy: framework,contracts
             .await
             .expect("progress summary");
         let expected_command =
-            "vida task close 'vida-root; touch /tmp/pwned #' --reason \"all descendants closed\"";
+            "vida task close 'vida-root; touch /tmp/pwned #' --reason \"all descendants closed\" --json";
         assert!(summary.closure_candidate);
         assert!(summary.recommended_next_action.contains(expected_command));
         assert_eq!(summary.canonical_commands, vec![expected_command]);
@@ -1337,7 +1336,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-critical-path-{}-{}",
             std::process::id(),
             nanos
@@ -1379,7 +1378,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-close-task-open-child-{}-{}",
             std::process::id(),
             nanos
@@ -1458,7 +1457,7 @@ hierarchy: framework,contracts
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let root =
-            test_temp_base_dir().join(format!("vida-update-task-{}-{}", std::process::id(), nanos));
+            std::env::temp_dir().join(format!("vida-update-task-{}-{}", std::process::id(), nanos));
         let store = StateStore::open(root.clone()).await.expect("open store");
         let labels = vec!["framework".to_string()];
 
@@ -1550,7 +1549,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-append-task-notes-{}-{}",
             std::process::id(),
             nanos
@@ -1600,7 +1599,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-update-task-close-blocked-child-{}-{}",
             std::process::id(),
             nanos
@@ -1688,7 +1687,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-update-task-reparent-{}-{}",
             std::process::id(),
             nanos
@@ -1806,7 +1805,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-reparent-children-{}-{}",
             std::process::id(),
             nanos
@@ -1879,7 +1878,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-defect-batch-rehome-{}-{}",
             std::process::id(),
             nanos
@@ -2002,7 +2001,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-state-store-idempotent-{}-{}",
             std::process::id(),
             nanos
@@ -2121,7 +2120,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-state-spine-idempotent-{}-{}",
             std::process::id(),
             nanos
@@ -2180,7 +2179,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-state-spine-drift-{}-{}",
             std::process::id(),
             nanos
@@ -2227,7 +2226,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-storage-meta-drift-{}-{}",
             std::process::id(),
             nanos
@@ -2271,7 +2270,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-storage-meta-namespace-drift-{}-{}",
             std::process::id(),
             nanos
@@ -2317,7 +2316,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-storage-meta-summary-{}-{}",
             std::process::id(),
             nanos
@@ -2345,7 +2344,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-state-spine-missing-{}-{}",
             std::process::id(),
             nanos
@@ -2389,7 +2388,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-instruction-runtime-state-{}-{}",
             std::process::id(),
             nanos
@@ -2416,7 +2415,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-boot-compatibility-missing-runtime-{}-{}",
             std::process::id(),
             nanos
@@ -2461,7 +2460,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-boot-compatibility-storage-drift-{}-{}",
             std::process::id(),
             nanos
@@ -2516,7 +2515,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-boot-compatibility-reopen-{}-{}",
             std::process::id(),
             nanos
@@ -2581,17 +2580,13 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-status-reopen-{}-{}",
             std::process::id(),
             nanos
         ));
 
         let store = StateStore::open(root.clone()).await.expect("open store");
-        store
-            .persist_task_record(run_graph_fixture_task("vida-a"))
-            .await
-            .expect("seed run graph task row");
         let status = RunGraphStatus {
             run_id: "run-vida-a".to_string(),
             task_id: "vida-a".to_string(),
@@ -2840,7 +2835,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-approval-delegation-receipt-{}-{}",
             std::process::id(),
             nanos
@@ -2913,7 +2908,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-governance-fail-closed-{}-{}",
             std::process::id(),
             nanos
@@ -2941,7 +2936,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-governance-linkage-fail-closed-{}-{}",
             std::process::id(),
             nanos
@@ -2970,7 +2965,7 @@ hierarchy: framework,contracts
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-governance-linkage-pass-{}-{}",
             std::process::id(),
             nanos
@@ -3004,7 +2999,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-governance-read-fail-closed-{}-{}",
             std::process::id(),
             nanos
@@ -3046,7 +3041,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-latest-tie-break-{}-{}",
             std::process::id(),
             nanos
@@ -3143,7 +3138,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-latest-checkpoint-drift-{}-{}",
             std::process::id(),
             nanos
@@ -3209,7 +3204,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-summary-inconsistent-{}-{}",
             std::process::id(),
             nanos
@@ -3274,7 +3269,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-partial-summary-row-drift-{}-{}",
             std::process::id(),
             nanos
@@ -3532,7 +3527,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-null-lane-status-{}-{}",
             std::process::id(),
             nanos
@@ -3597,7 +3592,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-shared-contract-flow-{}-{}",
             std::process::id(),
             nanos
@@ -3758,7 +3753,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-contract-write-guard-{}-{}",
             std::process::id(),
             nanos
@@ -3812,7 +3807,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-latest-status-consistency-{}-{}",
             std::process::id(),
             nanos
@@ -3903,7 +3898,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-downstream-lane-drift-{}-{}",
             std::process::id(),
             nanos
@@ -3954,7 +3949,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-whitespace-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4037,7 +4032,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-mixed-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4126,7 +4121,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-empty-string-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4218,7 +4213,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-tab-newline-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4310,7 +4305,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-trailing-empty-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4401,7 +4396,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-duplicate-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4493,7 +4488,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-repeated-canonical-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4586,7 +4581,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-large-repeated-canonical-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4677,7 +4672,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-mixed-case-duplicate-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4766,7 +4761,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-internal-space-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4858,7 +4853,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-unicode-zero-width-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -4948,7 +4943,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-missing-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -5034,7 +5029,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-sorted-downstream-blockers-{}-{}",
             std::process::id(),
             nanos
@@ -5128,7 +5123,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-checkpoint-leak-{}-{}",
             std::process::id(),
             nanos
@@ -5187,7 +5182,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-dispatch-receipt-whitespace-critical-fields-{}-{}",
             std::process::id(),
             nanos
@@ -5299,7 +5294,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-migration-preflight-seeded-{}-{}",
             std::process::id(),
             nanos
@@ -5351,7 +5346,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-migration-preflight-missing-runtime-{}-{}",
             std::process::id(),
             nanos
@@ -5395,7 +5390,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-migration-preflight-state-spine-drift-{}-{}",
             std::process::id(),
             nanos
@@ -5454,7 +5449,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-migration-preflight-reopen-{}-{}",
             std::process::id(),
             nanos
@@ -5538,7 +5533,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-instruction-runtime-preserve-{}-{}",
             std::process::id(),
             nanos
@@ -5584,7 +5579,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-projection-test-{}-{}",
             std::process::id(),
             nanos
@@ -5847,7 +5842,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-projection-binding-test-{}-{}",
             std::process::id(),
             nanos
@@ -5914,7 +5909,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-effective-bundle-test-{}-{}",
             std::process::id(),
             nanos
@@ -5987,7 +5982,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-diamond-graph-test-{}-{}",
             std::process::id(),
             nanos
@@ -6066,7 +6061,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-cycle-graph-test-{}-{}",
             std::process::id(),
             nanos
@@ -6131,7 +6126,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-missing-dependency-test-{}-{}",
             std::process::id(),
             nanos
@@ -6186,7 +6181,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-export-{}-{}",
             std::process::id(),
             nanos
@@ -6304,7 +6299,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-export-invalid-issue-type-{}-{}",
             std::process::id(),
             nanos
@@ -6360,7 +6355,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-file-export-{}-{}",
             std::process::id(),
             nanos
@@ -6428,7 +6423,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-task-reconciliation-final-summary-{}-{}",
             std::process::id(),
             nanos
@@ -6489,7 +6484,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-task-reconciliation-final-rollup-{}-{}",
             std::process::id(),
             nanos
@@ -6548,7 +6543,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-import-{}-{}",
             std::process::id(),
             nanos
@@ -6639,7 +6634,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-import-file-{}-{}",
             std::process::id(),
             nanos
@@ -6714,7 +6709,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-replace-{}-{}",
             std::process::id(),
             nanos
@@ -6838,7 +6833,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-file-import-parent-conflict-{}-{}",
             std::process::id(),
             nanos
@@ -6943,7 +6938,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-import-mixed-rollup-{}-{}",
             std::process::id(),
             nanos
@@ -7062,7 +7057,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-import-replace-rollup-{}-{}",
             std::process::id(),
             nanos
@@ -7210,7 +7205,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-reconciliation-reopen-{}-{}",
             std::process::id(),
             nanos
@@ -7385,7 +7380,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-replace-file-{}-{}",
             std::process::id(),
             nanos
@@ -7531,12 +7526,12 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let source_root = test_temp_base_dir().join(format!(
+        let source_root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-bridge-source-{}-{}",
             std::process::id(),
             nanos
         ));
-        let destination_root = test_temp_base_dir().join(format!(
+        let destination_root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-bridge-destination-{}-{}",
             std::process::id(),
             nanos
@@ -7661,12 +7656,12 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let source_root = test_temp_base_dir().join(format!(
+        let source_root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-file-bridge-source-{}-{}",
             std::process::id(),
             nanos
         ));
-        let destination_root = test_temp_base_dir().join(format!(
+        let destination_root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-file-bridge-destination-{}-{}",
             std::process::id(),
             nanos
@@ -7812,7 +7807,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-taskflow-snapshot-invalid-graph-{}-{}",
             std::process::id(),
             nanos
@@ -7861,7 +7856,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-status-closure-candidate-{}-{}",
             std::process::id(),
             nanos
@@ -7927,12 +7922,12 @@ hierarchy: framework,contracts
             .run_graph_status("run-closure-ready")
             .await
             .expect("reconciled run graph status should load");
-        assert_eq!(reconciled.active_node, "closure");
+        assert_eq!(reconciled.active_node, "dev-pack");
         assert_eq!(reconciled.status, "ready");
-        assert_eq!(reconciled.lifecycle_stage, "closure_active");
-        assert_eq!(reconciled.policy_gate, "not_required");
-        assert_eq!(reconciled.handoff_state, "awaiting_closure");
-        assert_eq!(reconciled.resume_target, "dispatch.closure_lane");
+        assert_eq!(reconciled.lifecycle_stage, "dev_pack_active");
+        assert_eq!(reconciled.policy_gate, "single_task_scope_required");
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "none");
         assert!(reconciled.recovery_ready);
 
         let latest_status = store
@@ -7940,21 +7935,21 @@ hierarchy: framework,contracts
             .await
             .expect("latest reconciled run graph status should load")
             .expect("latest run graph status should exist");
-        assert_eq!(latest_status.active_node, "closure");
+        assert_eq!(latest_status.active_node, "dev-pack");
         assert_eq!(latest_status.status, "ready");
-        assert_eq!(latest_status.lifecycle_stage, "closure_active");
-        assert_eq!(latest_status.policy_gate, "not_required");
-        assert_eq!(latest_status.handoff_state, "awaiting_closure");
-        assert_eq!(latest_status.resume_target, "dispatch.closure_lane");
+        assert_eq!(latest_status.lifecycle_stage, "dev_pack_active");
+        assert_eq!(latest_status.policy_gate, "single_task_scope_required");
+        assert_eq!(latest_status.handoff_state, "none");
+        assert_eq!(latest_status.resume_target, "none");
         assert!(latest_status.recovery_ready);
 
         let recovery = store
             .run_graph_recovery_summary("run-closure-ready")
             .await
             .expect("reconciled recovery summary should load");
-        assert_eq!(recovery.active_node, "closure");
+        assert_eq!(recovery.active_node, "dev-pack");
         assert_eq!(recovery.resume_status, "ready");
-        assert_eq!(recovery.lifecycle_stage, "closure_active");
+        assert_eq!(recovery.lifecycle_stage, "dev_pack_active");
         assert_eq!(
             recovery.delegation_gate.blocker_code.as_deref(),
             Some("open_delegated_cycle")
@@ -7969,9 +7964,9 @@ hierarchy: framework,contracts
             .await
             .expect("latest reconciled recovery summary should load")
             .expect("latest run graph recovery summary should exist");
-        assert_eq!(latest_recovery.active_node, "closure");
+        assert_eq!(latest_recovery.active_node, "dev-pack");
         assert_eq!(latest_recovery.resume_status, "ready");
-        assert_eq!(latest_recovery.lifecycle_stage, "closure_active");
+        assert_eq!(latest_recovery.lifecycle_stage, "dev_pack_active");
         assert_eq!(
             latest_recovery.delegation_gate.blocker_code.as_deref(),
             Some("open_delegated_cycle")
@@ -7990,7 +7985,7 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = test_temp_base_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "vida-run-graph-recovery-blocked-receipt-{}-{}",
             std::process::id(),
             nanos

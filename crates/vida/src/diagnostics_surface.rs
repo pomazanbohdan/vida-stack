@@ -145,7 +145,7 @@ fn missing_task_actionability(
                 run_id,
                 &task_id,
             ),
-            "Inspect `vida orchestrator-session show` and reconcile stale session ownership before binding continuation."
+            "Inspect `vida orchestrator-session show --json` and reconcile stale session ownership before binding continuation."
         ],
         "checked_task_id": task_id,
         "checked_source": source,
@@ -304,86 +304,19 @@ fn check_changed_path(path: &Path) -> Option<serde_json::Value> {
     }
 }
 
-fn taskflow_owned_path_invalid_reason(raw_path: &str) -> Option<&'static str> {
-    taskflow_core::path_policy::normalize_repo_relative_path(raw_path)
-        .err()
-        .map(|error| error.message())
-}
-
-fn taskflow_invariant_issues(tasks: &[crate::state_store::TaskRecord]) -> Vec<serde_json::Value> {
-    let mut issues = crate::state_store::StateStore::validate_task_graph_rows(tasks)
-        .into_iter()
-        .map(|issue| {
-            serde_json::json!({
-                "code": "taskflow_graph_invariant_violation",
-                "invariant": issue.issue_type,
-                "task_id": issue.issue_id,
-                "depends_on_id": issue.depends_on_id,
-                "edge_type": issue.edge_type,
-                "message": issue.detail,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    for task in tasks {
-        let execution_mode = task
-            .execution_semantics
-            .execution_mode
-            .as_deref()
-            .map(str::trim);
-        let non_empty_owned_paths = task
-            .planner_metadata
-            .owned_paths
-            .iter()
-            .filter(|path| !path.trim().is_empty())
-            .count();
-
-        if execution_mode == Some("parallel_safe") && non_empty_owned_paths == 0 {
-            issues.push(serde_json::json!({
-                "code": "taskflow_parallel_safe_missing_owned_paths",
-                "invariant": "parallel_safe_requires_owned_paths",
-                "task_id": task.id,
-                "execution_mode": execution_mode,
-                "message": "parallel_safe tasks must declare at least one planner_metadata.owned_paths entry",
-            }));
-        }
-
-        for owned_path in &task.planner_metadata.owned_paths {
-            if let Some(reason) = taskflow_owned_path_invalid_reason(owned_path) {
-                issues.push(serde_json::json!({
-                    "code": "taskflow_invalid_owned_path",
-                    "invariant": "owned_paths_are_repo_relative_without_dot_segments",
-                    "task_id": task.id,
-                    "owned_path": owned_path,
-                    "message": reason,
-                }));
-            }
-        }
-    }
-
-    issues
-}
-
-fn build_rules_check_diagnostics_with_taskflow(
-    args: &DiagnosticsRulesCheckArgs,
-    taskflow_issues: Vec<serde_json::Value>,
-    taskflow_summary: Option<serde_json::Value>,
-) -> serde_json::Value {
+fn build_rules_check_diagnostics(args: &DiagnosticsRulesCheckArgs) -> serde_json::Value {
     let protocol_ids = trimmed_non_empty_values(&args.protocol_ids);
     let affected_paths = normalized_path_strings(&args.changed_paths);
-    let mut evidence_refs = protocol_ids
+    let evidence_refs = protocol_ids
         .iter()
         .map(|protocol_id| format!("protocol:{protocol_id}"))
         .chain(affected_paths.iter().map(|path| format!("path:{path}")))
         .collect::<Vec<_>>();
-    if args.taskflow_invariants {
-        evidence_refs.push("taskflow:invariants".to_string());
-    }
     let mut blocker_codes = Vec::new();
     let mut issues = Vec::new();
     let mut next_actions = Vec::new();
 
-    if protocol_ids.is_empty() && affected_paths.is_empty() && !args.taskflow_invariants {
+    if protocol_ids.is_empty() && affected_paths.is_empty() {
         blocker_codes.push("missing_gate_evidence".to_string());
         issues.push(serde_json::json!({
             "code": "insufficient_evidence",
@@ -406,34 +339,15 @@ fn build_rules_check_diagnostics_with_taskflow(
             issues.push(issue);
         }
     }
-    for issue in taskflow_issues {
-        let code = issue["code"]
-            .as_str()
-            .unwrap_or("taskflow_invariant_violation")
-            .to_string();
-        blocker_codes.push(code);
-        issues.push(issue);
-    }
     blocker_codes.sort();
     blocker_codes.dedup();
     if !issues.is_empty() && next_actions.is_empty() {
-        if blocker_codes
-            .iter()
-            .any(|code| code.starts_with("taskflow_"))
-        {
-            next_actions.push(
-                "Repair TaskFlow invariant issues before treating the runtime state as pass."
-                    .to_string(),
-            );
-        } else {
-            next_actions.push(
-                "Resolve rules-check issues before treating the bounded change as pass."
-                    .to_string(),
-            );
-        }
+        next_actions.push(
+            "Resolve rules-check issues before treating the bounded change as pass.".to_string(),
+        );
     }
 
-    let mut payload = render_diagnostics_gate_payload(
+    render_diagnostics_gate_payload(
         "vida diagnostics rules-check",
         "diagnostics.rules_check",
         if blocker_codes
@@ -453,82 +367,7 @@ fn build_rules_check_diagnostics_with_taskflow(
         Vec::new(),
         issues,
         next_actions,
-    );
-    if let Some(summary) = taskflow_summary {
-        if let Some(object) = payload.as_object_mut() {
-            object.insert("taskflow_invariants".to_string(), summary);
-        }
-    }
-    payload
-}
-
-fn build_rules_check_diagnostics(args: &DiagnosticsRulesCheckArgs) -> serde_json::Value {
-    build_rules_check_diagnostics_with_taskflow(args, Vec::new(), None)
-}
-
-async fn build_rules_check_diagnostics_with_state(
-    args: &DiagnosticsRulesCheckArgs,
-) -> serde_json::Value {
-    if !args.taskflow_invariants {
-        return build_rules_check_diagnostics(args);
-    }
-
-    let state_dir = args
-        .state_dir
-        .clone()
-        .unwrap_or_else(crate::state_store::default_state_dir);
-    match StateStore::open_existing_read_only_with_timeout(
-        state_dir.clone(),
-        DIAGNOSTICS_LOCK_TIMEOUT,
     )
-    .await
-    {
-        Ok(store) => match store.all_tasks().await {
-            Ok(tasks) => {
-                let taskflow_issues = taskflow_invariant_issues(&tasks);
-                build_rules_check_diagnostics_with_taskflow(
-                    args,
-                    taskflow_issues.clone(),
-                    Some(serde_json::json!({
-                        "status": if taskflow_issues.is_empty() { "pass" } else { "blocked" },
-                        "state_dir": state_dir.display().to_string(),
-                        "task_count": tasks.len(),
-                        "issue_count": taskflow_issues.len(),
-                    })),
-                )
-            }
-            Err(error) => build_rules_check_diagnostics_with_taskflow(
-                args,
-                vec![serde_json::json!({
-                    "code": "taskflow_invariants_state_read_failed",
-                    "invariant": "taskflow_state_readable",
-                    "state_dir": state_dir.display().to_string(),
-                    "message": error.to_string(),
-                })],
-                Some(serde_json::json!({
-                    "status": "blocked",
-                    "state_dir": state_dir.display().to_string(),
-                    "task_count": null,
-                    "issue_count": 1,
-                })),
-            ),
-        },
-        Err(error) => build_rules_check_diagnostics_with_taskflow(
-            args,
-            vec![serde_json::json!({
-                "code": "taskflow_invariants_state_read_failed",
-                "invariant": "taskflow_state_readable",
-                "state_dir": state_dir.display().to_string(),
-                "message": error.to_string(),
-            })],
-            Some(serde_json::json!({
-                "status": "blocked",
-                "state_dir": state_dir.display().to_string(),
-                "task_count": null,
-                "issue_count": 1,
-            })),
-        ),
-    }
 }
 
 fn run_diagnostics_gate(payload: serde_json::Value, json: bool) -> ExitCode {
@@ -852,8 +691,7 @@ pub(crate) async fn run_diagnostics(args: DiagnosticsArgs) -> ExitCode {
             run_diagnostics_gate(build_evidence_check_diagnostics(&args), args.json)
         }
         DiagnosticsCommand::RulesCheck(args) => {
-            let payload = build_rules_check_diagnostics_with_state(&args).await;
-            run_diagnostics_gate(payload, args.json)
+            run_diagnostics_gate(build_rules_check_diagnostics(&args), args.json)
         }
     }
 }
@@ -862,14 +700,10 @@ pub(crate) async fn run_diagnostics(args: DiagnosticsArgs) -> ExitCode {
 mod tests {
     use super::{
         build_evidence_check_diagnostics, build_rules_check_diagnostics,
-        build_rules_check_diagnostics_with_taskflow,
         closed_task_active_run_projection_mismatch_next_action,
         compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability,
         post_commit_closed_task_active_run_projection_mismatch, run_post_commit,
-        taskflow_invariant_issues, POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
-    };
-    use crate::state_store::{
-        TaskDependencyRecord, TaskExecutionSemantics, TaskPlannerMetadata, TaskRecord,
+        POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
     };
     use crate::test_cli_support::guard_current_dir;
     use crate::{
@@ -1048,131 +882,6 @@ mod tests {
                 .unwrap()
                 .len(),
             1
-        );
-    }
-
-    fn task_record(id: &str, execution_mode: Option<&str>, owned_paths: Vec<&str>) -> TaskRecord {
-        TaskRecord {
-            id: id.to_string(),
-            display_id: None,
-            title: id.to_string(),
-            description: String::new(),
-            status: "open".to_string(),
-            priority: 1,
-            issue_type: "runtime_defect".to_string(),
-            created_at: "1".to_string(),
-            created_by: "test".to_string(),
-            updated_at: "1".to_string(),
-            closed_at: None,
-            close_reason: None,
-            source_repo: "test".to_string(),
-            compaction_level: 0,
-            original_size: 0,
-            notes: None,
-            labels: Vec::new(),
-            execution_semantics: TaskExecutionSemantics {
-                execution_mode: execution_mode.map(str::to_string),
-                order_bucket: None,
-                parallel_group: None,
-                conflict_domain: None,
-            },
-            planner_metadata: TaskPlannerMetadata {
-                owned_paths: owned_paths.into_iter().map(str::to_string).collect(),
-                acceptance_targets: Vec::new(),
-                proof_targets: Vec::new(),
-                risk: None,
-                estimate: None,
-                lane_hint: None,
-            },
-            provider_mapping: None,
-            dependencies: Vec::new(),
-        }
-    }
-
-    fn parent_task() -> TaskRecord {
-        let mut task = task_record("parent", None, Vec::new());
-        task.issue_type = "epic".to_string();
-        task
-    }
-
-    fn attach_parent(task: &mut TaskRecord) {
-        task.dependencies.push(TaskDependencyRecord {
-            issue_id: task.id.clone(),
-            depends_on_id: "parent".to_string(),
-            edge_type: "parent-child".to_string(),
-            created_at: "1".to_string(),
-            created_by: "test".to_string(),
-            metadata: "{}".to_string(),
-            thread_id: String::new(),
-        });
-    }
-
-    #[test]
-    fn diagnostics_rules_check_reports_parallel_safe_task_without_owned_paths() {
-        let mut task = task_record("task-1", Some("parallel_safe"), Vec::new());
-        attach_parent(&mut task);
-        let issues = taskflow_invariant_issues(&[parent_task(), task]);
-        let payload = build_rules_check_diagnostics_with_taskflow(
-            &DiagnosticsRulesCheckArgs {
-                taskflow_invariants: true,
-                ..Default::default()
-            },
-            issues,
-            None,
-        );
-
-        assert_eq!(payload["status"], "blocked");
-        assert_eq!(
-            payload["blocker_codes"][0],
-            "taskflow_parallel_safe_missing_owned_paths"
-        );
-        assert_eq!(
-            payload["vida_gate_result"]["issues"][0]["code"],
-            "taskflow_parallel_safe_missing_owned_paths"
-        );
-    }
-
-    #[test]
-    fn diagnostics_rules_check_reports_invalid_owned_path_traversal() {
-        let mut task = task_record("task-1", None, vec!["crates/vida/src/../Cargo.toml"]);
-        attach_parent(&mut task);
-        let issues = taskflow_invariant_issues(&[parent_task(), task]);
-        let payload = build_rules_check_diagnostics_with_taskflow(
-            &DiagnosticsRulesCheckArgs {
-                taskflow_invariants: true,
-                ..Default::default()
-            },
-            issues,
-            None,
-        );
-
-        assert_eq!(payload["status"], "blocked");
-        assert_eq!(payload["blocker_codes"][0], "taskflow_invalid_owned_path");
-        assert_eq!(
-            payload["vida_gate_result"]["issues"][0]["invariant"],
-            "owned_paths_are_repo_relative_without_dot_segments"
-        );
-    }
-
-    #[test]
-    fn diagnostics_rules_check_passes_taskflow_invariants_without_changed_paths() {
-        let mut task = task_record("task-1", Some("parallel_safe"), vec!["crates/vida/src"]);
-        attach_parent(&mut task);
-        let issues = taskflow_invariant_issues(&[parent_task(), task]);
-        let payload = build_rules_check_diagnostics_with_taskflow(
-            &DiagnosticsRulesCheckArgs {
-                taskflow_invariants: true,
-                ..Default::default()
-            },
-            issues,
-            None,
-        );
-
-        assert_eq!(payload["status"], "pass");
-        assert_eq!(payload["vida_gate_result"]["status"], "pass");
-        assert_eq!(
-            payload["vida_gate_result"]["evidence_refs"][0],
-            "taskflow:invariants"
         );
     }
 

@@ -370,14 +370,9 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         }
         _ => false,
     };
-    let taskflow_active_work_is_authoritative =
-        crate::continuation_binding_summary::taskflow_active_work_binding_is_authoritative(
-            &continuation_binding,
-        );
-    let closed_task_active_run_projection_mismatch = (latest_run_graph_task_closed
+    let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
         || global_closed_run_is_current
-        || terminal_closed_run_is_current)
-        && !taskflow_active_work_is_authoritative;
+        || terminal_closed_run_is_current;
     let continuation_binding = if closed_task_active_run_projection_mismatch {
         crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
             continuation_binding,

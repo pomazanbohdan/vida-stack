@@ -1441,7 +1441,16 @@ mod tests {
         assert_eq!(carrier_runtime_assignment, runtime_assignment);
         assert!(plan.get("codex_runtime_assignment").is_none());
         assert!(runtime_assignment.get("internal_named_lane_id").is_none());
-        assert!(plan["development_flow"]["dispatch_contract"]["implementer_activation"].is_null());
+        assert_eq!(
+            plan["development_flow"]["dispatch_contract"]["implementer_activation"]
+                ["activation_agent_type"],
+            "junior"
+        );
+        assert!(
+            plan["development_flow"]["dispatch_contract"]["implementer_activation"]
+                .get("internal_named_lane_id")
+                .is_none()
+        );
     }
 }
 
@@ -1626,7 +1635,7 @@ pub(crate) fn explicit_bounded_code_repair_terms(request: &str) -> Vec<String> {
     }
 
     let mut combined = Vec::new();
-    for term in repair_terms.into_iter().chain(scope_terms) {
+    for term in repair_terms.into_iter().chain(scope_terms.into_iter()) {
         if !combined.contains(&term) {
             combined.push(term);
         }

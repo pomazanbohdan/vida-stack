@@ -92,7 +92,7 @@ pub(crate) fn build_status_json_report(
                 "status": "unknown",
                 "activation_pending": true,
                 "next_steps": [
-                    "run `vida project-activator` from the project root to load canonical activation state"
+                    "run `vida project-activator --json` from the project root to load canonical activation state"
                 ],
             })
         });

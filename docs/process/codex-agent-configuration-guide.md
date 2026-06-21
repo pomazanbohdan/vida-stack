@@ -120,8 +120,8 @@ The 2026-05-01 Codex App environment probe for this repository showed:
 
 Operational conclusion:
 
-1. Use `vida taskflow consume agent-system` to inspect carrier catalog truth.
-2. Use `vida agent-init --role <runtime_role>` to inspect lane activation posture.
+1. Use `vida taskflow consume agent-system --json` to inspect carrier catalog truth.
+2. Use `vida agent-init --role <runtime_role> --json` to inspect lane activation posture.
 3. Use Codex App host subagents as executor carriers only after the VIDA packet/runtime layer has selected the carrier and established lawful execution or exception evidence.
 4. Do not treat a visible Codex App subagent as a substitute for VIDA delegated execution evidence.
 5. Treat `codex exec` as a process-based carrier (`codex_cli_exec`) rather than the internal-host implementation of `internal_subagents`.
@@ -216,19 +216,19 @@ Normalization rule:
 11. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
 12. continuation, pause-boundary, and generic-ready-item behavior is owned by `project-orchestrator-session-start-protocol.md` and the decision table in `project-orchestrator-reusable-prompt.md`.
 13. if closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next explicit lawful continuation item without waiting for more user input.
-14. if `vida status` or `vida orchestrator-init` cannot expose explicit bounded-unit and route fields when runtime is usable, fail closed to an ambiguity report instead of continuing implementation.
-15. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path>` over inline shell quoting for complex text.
+14. if `vida status --json` or `vida orchestrator-init --json` cannot expose explicit bounded-unit and route fields when runtime is usable, fail closed to an ambiguity report instead of continuing implementation.
+15. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
 
 Runtime contract hardening:
 
-1. The explicit JSON output of `vida orchestrator-init` must expose `orchestrator_runtime_contract.sticky_user_execution_intent`, `orchestrator_runtime_contract.allowed_topology`, and `orchestrator_runtime_contract.next_lawful_dispatch_action` so Codex App and operators do not infer lane law from prose.
-2. The explicit JSON output of `vida orchestrator-init` must expose `orchestrator_runtime_contract.execution_evidence_contract`; it is the machine-readable rule that `agent-init` activation views are not execution evidence and cannot complete delegated work.
-3. The explicit JSON output of `vida orchestrator-init` must expose `orchestrator_runtime_contract.write_and_continuation_authority_contract`; it is the machine-readable rule that scoped exception takeover write authority does not select, bind, or continue the next bounded unit.
-4. The explicit JSON output of `vida agent-init` must expose `dispatch_mode`; values ending in `activation_view_only` are not execution evidence and do not complete delegated work.
+1. `vida orchestrator-init --json` must expose `orchestrator_runtime_contract.sticky_user_execution_intent`, `orchestrator_runtime_contract.allowed_topology`, and `orchestrator_runtime_contract.next_lawful_dispatch_action` so Codex App and operators do not infer lane law from prose.
+2. `vida orchestrator-init --json` must expose `orchestrator_runtime_contract.execution_evidence_contract`; it is the machine-readable rule that `agent-init` activation views are not execution evidence and cannot complete delegated work.
+3. `vida orchestrator-init --json` must expose `orchestrator_runtime_contract.write_and_continuation_authority_contract`; it is the machine-readable rule that scoped exception takeover write authority does not select, bind, or continue the next bounded unit.
+4. `vida agent-init --json` must expose `dispatch_mode`; values ending in `activation_view_only` are not execution evidence and do not complete delegated work.
 5. `dispatch_mode` must explicitly report `activation_view_is_execution_evidence=false`, `required_completion_evidence=receipt_backed_execution_evidence`, `root_session_write_authority_granted=false`, and `continuation_authority_granted=false`.
-6. The explicit JSON output of `vida agent dispatch-next` is the preview-first planner surface and must expose `parallelization_planner` plus `carrier_selection_api`.
-7. The explicit JSON output of `vida agent select --runtime-role <role> --task-class <class>` is the first-class carrier/model/reasoning selection API; it resolves from `vida.config.yaml` and registries, not from hardcoded Rust model names.
-8. The explicit JSON output of `vida lane reclaim --completed --host-agents` is the idempotent cleanup surface for completed/stale VIDA-owned lane state. If Codex App still displays UI agent handles, host-app-visible close actions remain external until Codex exposes a stable close API.
+6. `vida agent dispatch-next --json` is the preview-first planner surface and must expose `parallelization_planner` plus `carrier_selection_api`.
+7. `vida agent select --runtime-role <role> --task-class <class> --json` is the first-class carrier/model/reasoning selection API; it resolves from `vida.config.yaml` and registries, not from hardcoded Rust model names.
+8. `vida lane reclaim --completed --host-agents --json` is the idempotent cleanup surface for completed/stale VIDA-owned lane state. If Codex App still displays UI agent handles, host-app-visible close actions remain external until Codex exposes a stable close API.
 9. `root_local_write_allowed=true` is never blanket authority. Status and lane envelopes must also expose `root_local_write_allowed_for_only_these_paths` when exception takeover metadata exists.
 10. `orchestrator-init` must fail closed to degraded lock-contention output if the state store is locked, rather than crashing without a machine-readable next action.
 

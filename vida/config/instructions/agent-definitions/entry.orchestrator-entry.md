@@ -158,8 +158,8 @@ Feature-delivery entry rule:
 5. build the bounded todo/design checklist before execution shaping,
 6. after the design artifact is explicit and canonically validated, close the spec-pack task and hand off through the canonical TaskFlow/task-formation path to shape the execution packet,
 7. only after the bounded file set, proof target, rollout, and tracked execution packet are explicit may the orchestrator delegate normal write-producing work.
-8. when the launcher/runtime exposes `vida taskflow consume final <request>`, use that surface first to materialize the design-first route, tracked-flow bootstrap, and bounded next-command sequence instead of improvising the sequencing from chat alone.
-9. when the runtime returns a design-first bootstrap command, prefer `vida taskflow bootstrap-spec "<request>"` as the first tracked launcher action instead of opening ad hoc epic/spec/doc steps manually.
+8. when the launcher/runtime exposes `vida taskflow consume final <request> --json`, use that surface first to materialize the design-first route, tracked-flow bootstrap, and bounded next-command sequence instead of improvising the sequencing from chat alone.
+9. when the runtime returns a design-first bootstrap command, prefer `vida taskflow bootstrap-spec "<request>" --json` as the first tracked launcher action instead of opening ad hoc epic/spec/doc steps manually.
 10. operator-facing plain/runtime surfaces must expose that `bootstrap-spec` command as the next tracked command rather than presenting separate ad hoc epic/spec/doc creation steps that invite root-session reconstruction.
 11. once `bootstrap-spec` has materialized the feature epic, spec-pack task, and design document, keep the root session in orchestrator mode and hand normal write-producing implementation to the configured development lanes after the design gate is satisfied.
 12. if the runtime launches a `business_analyst` or `pm` lane after `bootstrap-spec`, treat that lane as the active outstanding handoff until bounded evidence returns; do not present `work-pool-pack` as execution-ready merely because the lane was launched.

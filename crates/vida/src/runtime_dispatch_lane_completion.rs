@@ -1,6 +1,4 @@
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
 use time::format_description::well_known::Rfc3339;
 
@@ -21,63 +19,6 @@ fn safe_dispatch_result_run_id(run_id: &str) -> String {
     } else {
         "run".to_string()
     }
-}
-
-fn atomic_write_new_file(path: &Path, contents: &str) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| {
-        format!(
-            "Lane completion result `{}` has no parent directory",
-            path.display()
-        )
-    })?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("Failed to create lane completion result directory: {error}"))?;
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("lane-completion-result.json");
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    let temp_path: PathBuf =
-        parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nanos));
-    let write_result = (|| -> Result<(), String> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .map_err(|error| {
-                format!(
-                    "Failed to create temporary lane completion result `{}`: {error}",
-                    temp_path.display()
-                )
-            })?;
-        file.write_all(contents.as_bytes()).map_err(|error| {
-            format!(
-                "Failed to write temporary lane completion result `{}`: {error}",
-                temp_path.display()
-            )
-        })?;
-        file.sync_all().map_err(|error| {
-            format!(
-                "Failed to sync temporary lane completion result `{}`: {error}",
-                temp_path.display()
-            )
-        })?;
-        drop(file);
-        std::fs::rename(&temp_path, path).map_err(|error| {
-            format!(
-                "Failed to commit lane completion result `{}`: {error}",
-                path.display()
-            )
-        })?;
-        Ok(())
-    })();
-    if write_result.is_err() {
-        let _ = std::fs::remove_file(&temp_path);
-    }
-    write_result
 }
 
 pub(crate) fn write_runtime_lane_completion_result(
@@ -105,103 +46,6 @@ pub(crate) fn runtime_lane_completion_summary_blocker_code(
         completed_target,
         summary,
     )
-}
-
-pub(crate) fn write_runtime_lane_completion_result_with_summary(
-    state_root: &Path,
-    run_id: &str,
-    completed_target: &str,
-    receipt_id: &str,
-    source_dispatch_packet_path: &str,
-    summary: Option<&str>,
-) -> Result<String, String> {
-    let blocker_code = runtime_lane_completion_summary_blocker_code(completed_target, summary);
-    let blocker_codes = blocker_code.iter().cloned().collect::<Vec<_>>();
-    let verdict_fields = taskflow_host_bridge::host_bridge_result_verdict_fields_for_gate(
-        completed_target,
-        &blocker_codes,
-        None,
-    );
-    write_runtime_lane_completion_result_with_verdict_fields(
-        state_root,
-        run_id,
-        completed_target,
-        receipt_id,
-        source_dispatch_packet_path,
-        summary,
-        &verdict_fields,
-    )
-}
-
-pub(crate) fn write_runtime_lane_completion_result_with_verdict_fields(
-    state_root: &Path,
-    run_id: &str,
-    completed_target: &str,
-    receipt_id: &str,
-    source_dispatch_packet_path: &str,
-    summary: Option<&str>,
-    verdict_fields: &taskflow_host_bridge::HostBridgeResultVerdictFields,
-) -> Result<String, String> {
-    let result_dir = state_root
-        .join("runtime-consumption")
-        .join("dispatch-results");
-    std::fs::create_dir_all(&result_dir)
-        .map_err(|error| format!("Failed to create dispatch-results directory: {error}"))?;
-    let safe_run_id = safe_dispatch_result_run_id(run_id);
-    let ts = time::OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("rfc3339 timestamp should render")
-        .replace(':', "-");
-    let result_path = result_dir.join(format!("{safe_run_id}-{ts}.json"));
-    let blocker_codes = verdict_fields.blocker_codes.clone();
-    let blocker_code = blocker_codes.first().cloned();
-    let execution_state = if blocker_codes.is_empty() {
-        "executed"
-    } else {
-        "blocked"
-    };
-    let status = if blocker_codes.is_empty() {
-        "pass"
-    } else {
-        "blocked"
-    };
-    let mut body = serde_json::json!({
-        "artifact_kind": "runtime_lane_completion_result",
-        "status": status,
-        "execution_state": execution_state,
-        "decision": verdict_fields.decision.clone(),
-        "verdict": verdict_fields.verdict.clone(),
-        "blocker_codes": blocker_codes,
-        "rework_target": verdict_fields.rework_target.clone(),
-        "allowed_next_node": verdict_fields.allowed_next_node.clone(),
-        "completion_verdict": verdict_fields.verdict.clone(),
-        "closure_ready": blocker_code.is_none(),
-        "run_id": run_id,
-        "completed_target": completed_target,
-        "completion_receipt_id": receipt_id,
-        "source_dispatch_packet_path": source_dispatch_packet_path,
-        "recorded_at": time::OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .expect("rfc3339 timestamp should render"),
-    });
-    if let Some(summary) = summary.map(str::trim).filter(|value| !value.is_empty()) {
-        body["summary"] = serde_json::json!(summary);
-    }
-    if let Some(blocker_code) = blocker_code {
-        body["blocker_code"] = serde_json::json!(blocker_code);
-        body["blockers"] = body["blocker_codes"].clone();
-        if let Some(summary) = summary.map(str::trim).filter(|value| !value.is_empty()) {
-            body["blocker_details"] = serde_json::json!([{
-                "code": body["blocker_code"].clone(),
-                "message": summary,
-                "completed_target": completed_target
-            }]);
-        }
-    }
-    let encoded = serde_json::to_string_pretty(&body)
-        .map_err(|error| format!("Failed to encode lane completion result: {error}"))?;
-    atomic_write_new_file(&result_path, &encoded)?;
-    Ok(result_path.display().to_string())
 }
 
 #[cfg(test)]
@@ -313,45 +157,9 @@ mod tests {
     }
 
     #[test]
-    fn completion_result_write_leaves_no_temporary_sibling() {
-        let state_root = std::env::temp_dir().join(format!(
-            "vida-lane-completion-atomic-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&state_root);
-
-        let result_path = write_runtime_lane_completion_result_with_summary(
-            &state_root,
-            "run-atomic",
-            "qa_tester",
-            "receipt-1",
-            "packet.json",
-            Some("qa proof passed"),
-        )
-        .expect("completion result should write atomically");
-        let body: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(&result_path).expect("completion result should be readable"),
-        )
-        .expect("completion result should decode");
-        assert_eq!(body["status"], "pass");
-
-        let result_dir = state_root
-            .join("runtime-consumption")
-            .join("dispatch-results");
-        let temp_files = fs::read_dir(&result_dir)
-            .expect("dispatch-results should exist")
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
-            .count();
-        assert_eq!(temp_files, 0);
-
-        let _ = fs::remove_dir_all(&state_root);
-    }
-
-    #[test]
     fn completion_result_uses_quality_gate_transition_matrix() {
         let cases = [
-            ("coach", None, None, None, "tester"),
+            ("coach", None, None, None, "next"),
             (
                 "coach",
                 Some("coach decision=blocked; implementation acceptance gap"),
@@ -359,7 +167,7 @@ mod tests {
                 Some("developer"),
                 "developer_rework",
             ),
-            ("tester", None, None, None, "reviewer"),
+            ("tester", None, None, None, "next"),
             (
                 "tester",
                 Some("tester decision=blocked; focused proof failed"),
@@ -367,7 +175,7 @@ mod tests {
                 Some("developer"),
                 "developer_rework",
             ),
-            ("reviewer", None, None, None, "terminal_closure"),
+            ("reviewer", None, None, None, "next"),
             (
                 "reviewer",
                 Some("reviewer decision=blocked; proof review needs tester rework"),
@@ -375,7 +183,6 @@ mod tests {
                 Some("tester"),
                 "tester",
             ),
-            ("closure", None, None, None, "terminal_closure"),
         ];
 
         for (target, summary, blocker_code, rework_target, allowed_next_node) in cases {
@@ -431,4 +238,80 @@ mod tests {
             let _ = fs::remove_dir_all(&state_root);
         }
     }
+}
+
+pub(crate) fn write_runtime_lane_completion_result_with_summary(
+    state_root: &Path,
+    run_id: &str,
+    completed_target: &str,
+    receipt_id: &str,
+    source_dispatch_packet_path: &str,
+    summary: Option<&str>,
+) -> Result<String, String> {
+    let result_dir = state_root
+        .join("runtime-consumption")
+        .join("dispatch-results");
+    std::fs::create_dir_all(&result_dir)
+        .map_err(|error| format!("Failed to create dispatch-results directory: {error}"))?;
+    let safe_run_id = safe_dispatch_result_run_id(run_id);
+    let ts = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 timestamp should render")
+        .replace(':', "-");
+    let result_path = result_dir.join(format!("{safe_run_id}-{ts}.json"));
+    let blocker_code = runtime_lane_completion_summary_blocker_code(completed_target, summary);
+    let blocker_codes = blocker_code.iter().cloned().collect::<Vec<_>>();
+    let verdict_fields = taskflow_host_bridge::host_bridge_result_verdict_fields_for_gate(
+        completed_target,
+        &blocker_codes,
+        None,
+    );
+    let execution_state = if blocker_code.is_some() {
+        "blocked"
+    } else {
+        "executed"
+    };
+    let status = if blocker_code.is_some() {
+        "blocked"
+    } else {
+        "pass"
+    };
+    let mut body = serde_json::json!({
+        "artifact_kind": "runtime_lane_completion_result",
+        "status": status,
+        "execution_state": execution_state,
+        "decision": verdict_fields.decision,
+        "verdict": verdict_fields.verdict,
+        "blocker_codes": verdict_fields.blocker_codes,
+        "rework_target": verdict_fields.rework_target,
+        "allowed_next_node": verdict_fields.allowed_next_node,
+        "completion_verdict": verdict_fields.verdict,
+        "closure_ready": blocker_code.is_none(),
+        "run_id": run_id,
+        "completed_target": completed_target,
+        "completion_receipt_id": receipt_id,
+        "source_dispatch_packet_path": source_dispatch_packet_path,
+        "recorded_at": time::OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .expect("rfc3339 timestamp should render"),
+    });
+    if let Some(summary) = summary.map(str::trim).filter(|value| !value.is_empty()) {
+        body["summary"] = serde_json::json!(summary);
+    }
+    if let Some(blocker_code) = blocker_code {
+        body["blocker_code"] = serde_json::json!(blocker_code);
+        body["blockers"] = body["blocker_codes"].clone();
+        if let Some(summary) = summary.map(str::trim).filter(|value| !value.is_empty()) {
+            body["blocker_details"] = serde_json::json!([{
+                "code": body["blocker_code"].clone(),
+                "message": summary,
+                "completed_target": completed_target
+            }]);
+        }
+    }
+    let encoded = serde_json::to_string_pretty(&body)
+        .map_err(|error| format!("Failed to encode lane completion result: {error}"))?;
+    std::fs::write(&result_path, encoded)
+        .map_err(|error| format!("Failed to write lane completion result: {error}"))?;
+    Ok(result_path.display().to_string())
 }

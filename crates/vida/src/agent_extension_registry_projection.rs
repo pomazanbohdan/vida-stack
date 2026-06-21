@@ -44,13 +44,6 @@ const REGISTRY_PROJECTION_SPECS: &[RegistryProjectionSpec] = &[
         runtime_projection_path: ".vida/project/agent-extensions/flows.yaml",
     },
     RegistryProjectionSpec {
-        label: "pack",
-        config_key: "packs",
-        registry_key: "packs",
-        id_field: "pack_id",
-        runtime_projection_path: crate::agent_pack_contract::RUNTIME_PACKS_PROJECTION,
-    },
-    RegistryProjectionSpec {
         label: "dispatch alias",
         config_key: "dispatch_aliases",
         registry_key: "dispatch_aliases",
@@ -149,6 +142,7 @@ fn registry_projection_parity(
         return Ok(None);
     }
 
+    let runtime_projection_path = root.join(spec.runtime_projection_path);
     let source_registry = crate::project_activator_surface::read_yaml_file_checked(&source_path)
         .map_err(|error| {
             format!(
@@ -156,6 +150,16 @@ fn registry_projection_parity(
                 spec.label, configured_source_path
             )
         })?;
+    let runtime_registry =
+        crate::project_activator_surface::read_yaml_file_checked(&runtime_projection_path)
+            .map_err(|error| {
+                format!(
+                    "failed to load runtime {} projection `{}`: {error}",
+                    spec.label, spec.runtime_projection_path
+                )
+            })?;
+    let source_aliases = registry_ids(&source_registry, spec.registry_key, spec.id_field);
+    let runtime_aliases = registry_ids(&runtime_registry, spec.registry_key, spec.id_field);
     let source_raw = std::fs::read_to_string(&source_path).map_err(|error| {
         format!(
             "failed to read configured {} source `{}`: {error}",
@@ -163,29 +167,13 @@ fn registry_projection_parity(
             source_path.display()
         )
     })?;
-    let runtime_projection_path = root.join(spec.runtime_projection_path);
-    let runtime_raw = match std::fs::read_to_string(&runtime_projection_path) {
-        Ok(raw) => Some(raw),
-        Err(error) if error.kind() == ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(format!(
-                "failed to read runtime {} projection `{}`: {error}",
-                spec.label,
-                runtime_projection_path.display()
-            ));
-        }
-    };
-    let runtime_registry = match runtime_raw.as_deref() {
-        Some(raw) => serde_yaml::from_str(raw).map_err(|error| {
-            format!(
-                "failed to parse runtime {} projection `{}`: {error}",
-                spec.label, spec.runtime_projection_path
-            )
-        })?,
-        None => serde_yaml::Value::Null,
-    };
-    let source_aliases = registry_ids(&source_registry, spec.registry_key, spec.id_field);
-    let runtime_aliases = registry_ids(&runtime_registry, spec.registry_key, spec.id_field);
+    let runtime_raw = std::fs::read_to_string(&runtime_projection_path).map_err(|error| {
+        format!(
+            "failed to read runtime {} projection `{}`: {error}",
+            spec.label,
+            runtime_projection_path.display()
+        )
+    })?;
     let missing_runtime_aliases = source_aliases
         .difference(&runtime_aliases)
         .cloned()
@@ -194,9 +182,7 @@ fn registry_projection_parity(
         .difference(&source_aliases)
         .cloned()
         .collect::<Vec<_>>();
-    let content_matches = runtime_raw
-        .as_deref()
-        .is_some_and(|runtime_raw| source_raw.trim_end() == runtime_raw.trim_end());
+    let content_matches = source_raw.trim_end() == runtime_raw.trim_end();
     let in_sync =
         content_matches && missing_runtime_aliases.is_empty() && extra_runtime_aliases.is_empty();
 
@@ -378,7 +364,6 @@ pub(crate) struct AgentExtensionRegistryProjection {
     pub(crate) skills_registry: serde_yaml::Value,
     pub(crate) profiles_registry: serde_yaml::Value,
     pub(crate) flows_registry: serde_yaml::Value,
-    pub(crate) packs_registry: serde_yaml::Value,
     pub(crate) dispatch_aliases_registry: serde_yaml::Value,
     pub(crate) enabled_project_roles: Vec<String>,
     pub(crate) enabled_project_skills: Vec<String>,
@@ -456,10 +441,6 @@ pub(crate) fn build_agent_extension_registry_projection(
     let flows_path = crate::yaml_string(crate::yaml_lookup(
         config,
         &["agent_extensions", "registries", "flows"],
-    ));
-    let packs_path = crate::yaml_string(crate::yaml_lookup(
-        config,
-        &["agent_extensions", "registries", "packs"],
     ));
     let dispatch_aliases_path = crate::yaml_string(crate::yaml_lookup(
         config,
@@ -567,16 +548,6 @@ pub(crate) fn build_agent_extension_registry_projection(
         },
         &mut validation_errors,
     );
-    let packs_registry = load_optional_registry_projection(
-        root,
-        packs_path.as_deref(),
-        "packs",
-        "pack_id",
-        "packs",
-        validation.require_registry_files,
-        None,
-        &mut validation_errors,
-    );
     let dispatch_aliases_registry = load_optional_registry_projection(
         root,
         dispatch_aliases_path.as_deref(),
@@ -626,7 +597,6 @@ pub(crate) fn build_agent_extension_registry_projection(
         skills_registry,
         profiles_registry,
         flows_registry,
-        packs_registry,
         dispatch_aliases_registry,
         enabled_project_roles,
         enabled_project_skills,
@@ -682,35 +652,6 @@ mod tests {
 agent_extensions:
   registries:
     dispatch_aliases: docs/process/agent-extensions/dispatch-aliases.yaml
-"#,
-        )
-        .expect("config should parse")
-    }
-
-    fn write_missing_runtime_pack_projection_fixture(root: &std::path::Path) -> serde_yaml::Value {
-        fs::create_dir_all(root.join("docs/process/agent-extensions"))
-            .expect("docs agent extensions dir should exist");
-        fs::write(
-            root.join("docs/process/agent-extensions/packs.yaml"),
-            concat!(
-                "version: 1\n",
-                "packs:\n",
-                "  - pack_id: quick_two_pack\n",
-                "    enabled: true\n",
-                "    terminal_proof_target: quick-two-pack-proof\n",
-                "    ordered_steps:\n",
-                "      - role_id: coder\n",
-                "        task_class: implementation\n",
-                "      - role_id: cleaner\n",
-                "        task_class: implementation\n",
-            ),
-        )
-        .expect("source pack registry should be written");
-        serde_yaml::from_str(
-            r#"
-agent_extensions:
-  registries:
-    packs: docs/process/agent-extensions/packs.yaml
 "#,
         )
         .expect("config should parse")

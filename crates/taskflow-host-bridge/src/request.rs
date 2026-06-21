@@ -38,13 +38,7 @@ pub struct HostBridgeRequest {
     pub request_id: String,
     pub run_id: String,
     pub task_id: String,
-    pub dispatch_generation_id: Option<String>,
-    pub lane_id: Option<String>,
     pub dispatch_target: String,
-    pub runtime_role: Option<String>,
-    pub task_class: Option<String>,
-    pub flow_id: Option<String>,
-    pub flow_revision: Option<String>,
     pub packet_path: PathBuf,
     pub backend_id: String,
     pub carrier_id: String,
@@ -72,13 +66,7 @@ impl HostBridgeRequest {
             run_id: required_string(&raw, "run_id")?,
             task_id: optional_string(&raw, "task_id")
                 .unwrap_or_else(|| required_string(&raw, "run_id").unwrap_or_default()),
-            dispatch_generation_id: optional_string(&raw, "dispatch_generation_id"),
-            lane_id: optional_string(&raw, "lane_id"),
             dispatch_target: required_string(&raw, "dispatch_target")?,
-            runtime_role: optional_string(&raw, "runtime_role"),
-            task_class: optional_string(&raw, "task_class"),
-            flow_id: optional_string(&raw, "flow_id"),
-            flow_revision: optional_string(&raw, "flow_revision"),
             packet_path: optional_path(&raw, "packet_path").unwrap_or_default(),
             backend_id: optional_string(&raw, "backend_id")
                 .unwrap_or_else(|| "internal_subagents".to_string()),
@@ -158,10 +146,10 @@ pub fn host_bridge_path_array(value: &Value, field: &str) -> Vec<PathBuf> {
 
 pub fn host_bridge_request_owned_paths(request: &Value) -> Vec<PathBuf> {
     let mut owned_paths = host_bridge_path_array(request, "owned_paths");
-    if owned_paths.is_empty()
-        && let Some(implementation_isolation) = request.get("implementation_isolation")
-    {
-        owned_paths = host_bridge_path_array(implementation_isolation, "owned_paths");
+    if owned_paths.is_empty() {
+        if let Some(implementation_isolation) = request.get("implementation_isolation") {
+            owned_paths = host_bridge_path_array(implementation_isolation, "owned_paths");
+        }
     }
     owned_paths
 }
@@ -421,11 +409,7 @@ mod tests {
                 "request_id": "req-1",
                 "run_id": "run-1",
                 "task_id": "task-1",
-                "dispatch_generation_id": "run-1::developer::generation-1",
-                "lane_id": "developer",
                 "dispatch_target": "developer",
-                "runtime_role": "developer",
-                "task_class": "implementation",
                 "packet_path": "runtime-consumption/packet.json",
                 "backend_id": "internal_subagents",
                 "carrier_id": "senior",
@@ -454,13 +438,6 @@ mod tests {
             read_host_bridge_request(&HostBridgeRequestPath::new(&root, &request)).unwrap();
 
         assert_eq!(loaded.request_id, "req-1");
-        assert_eq!(
-            loaded.dispatch_generation_id.as_deref(),
-            Some("run-1::developer::generation-1")
-        );
-        assert_eq!(loaded.lane_id.as_deref(), Some("developer"));
-        assert_eq!(loaded.runtime_role.as_deref(), Some("developer"));
-        assert_eq!(loaded.task_class.as_deref(), Some("implementation"));
         assert_eq!(loaded.owned_paths.len(), 1);
         assert_eq!(loaded.invocation_mode, "parent_host_tool_api");
         assert_eq!(

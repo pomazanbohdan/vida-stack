@@ -25,8 +25,10 @@ pub fn task_close_commit_file_strings(
         return canonical_owned_paths(commit_files);
     }
 
-    if stage_owned && let Some(task_owned_paths) = task_owned_paths {
-        return canonical_owned_paths(task_owned_paths);
+    if stage_owned {
+        if let Some(task_owned_paths) = task_owned_paths {
+            return canonical_owned_paths(task_owned_paths);
+        }
     }
     Vec::new()
 }

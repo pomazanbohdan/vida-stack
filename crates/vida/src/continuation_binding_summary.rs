@@ -1030,7 +1030,7 @@ pub(crate) fn add_taskflow_active_work_truth(
     let active_bounded_unit = summary.get("active_bounded_unit").cloned();
     let summary_active_unit_missing = active_bounded_unit
         .as_ref()
-        .is_none_or(serde_json::Value::is_null);
+        .map_or(true, serde_json::Value::is_null);
     let run_graph_task_id = active_bounded_unit
         .as_ref()
         .and_then(|unit| unit.get("task_id"))

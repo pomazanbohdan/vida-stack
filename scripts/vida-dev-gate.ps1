@@ -272,39 +272,6 @@ function Resolve-PrimaryWorktreeStateDir {
     return $null
 }
 
-function Resolve-PrimaryWorktreeStateDir {
-    if (-not [string]::IsNullOrWhiteSpace($env:VIDA_STATE_DIR)) {
-        return $env:VIDA_STATE_DIR
-    }
-
-    try {
-        $commonDirOutput = & $GitPath -C $RootDir rev-parse --path-format=absolute --git-common-dir 2>$null
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commonDirOutput)) {
-            return $null
-        }
-
-        $commonDir = [System.IO.Path]::GetFullPath(($commonDirOutput | Select-Object -First 1).Trim())
-        if ((Split-Path -Leaf $commonDir) -ne ".git") {
-            return $null
-        }
-
-        $primaryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $commonDir))
-        $normalizedRoot = [System.IO.Path]::GetFullPath($RootDir)
-        if ($primaryRoot -eq $normalizedRoot) {
-            return $null
-        }
-
-        $candidateStateDir = Join-Path $primaryRoot ".vida\data\state"
-        if (Test-Path -LiteralPath $candidateStateDir) {
-            return $candidateStateDir
-        }
-    } catch {
-        return $null
-    }
-
-    return $null
-}
-
 $CargoTargetDirState = Resolve-CargoTargetDirPolicy
 $env:CARGO_TARGET_DIR = $CargoTargetDirState.effective_cargo_target_dir
 $DebugVidaPath = Join-Path $CargoTargetDirState.effective_cargo_target_dir "debug\vida.exe"
@@ -709,7 +676,7 @@ try {
         }
         Invoke-Timed "release-package" $releaseCommand.ToArray()
     } elseif ($Mode -eq "release-install") {
-        Invoke-Timed "cargo-build-release-vida" @($CargoPath, "build", "--locked", "-p", "vida", "--release")
+        Invoke-Timed "cargo-build-release-vida" @("cargo", "build", "--locked", "-p", "vida", "--release")
         Invoke-Timed "vida-release-install" @($ReleaseVidaPath, "release", "install", "--skip-build", "--source-binary", $ReleaseVidaPath, "--json")
         $previousVidaStateDir = $env:VIDA_STATE_DIR
         $statusStateDir = Resolve-PrimaryWorktreeStateDir

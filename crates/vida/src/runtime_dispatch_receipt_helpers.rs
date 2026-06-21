@@ -1,28 +1,5 @@
 use std::path::Path;
 
-pub(crate) fn dispatch_generation_id_for_receipt(
-    receipt: &crate::state_store::RunGraphDispatchReceipt,
-) -> String {
-    dispatch_generation_id_for_parts(
-        &receipt.run_id,
-        &receipt.dispatch_target,
-        &receipt.recorded_at,
-    )
-}
-
-pub(crate) fn dispatch_generation_id_for_parts(
-    run_id: &str,
-    dispatch_target: &str,
-    recorded_at: &str,
-) -> String {
-    format!(
-        "{}::{}::{}",
-        run_id.trim(),
-        dispatch_target.trim(),
-        recorded_at.trim()
-    )
-}
-
 pub(crate) fn dispatch_fields_are_materialization_only_blocked_task_ensure(
     dispatch_status: &str,
     dispatch_surface: Option<&str>,
@@ -485,9 +462,7 @@ mod tests {
             dispatch_result_path: Some("result.json".to_string()),
             blocker_code: None,
             downstream_dispatch_target: Some("work-pool-pack".to_string()),
-            downstream_dispatch_command: Some(
-                "vida agent-init --dispatch-packet downstream.json --execute-dispatch".to_string(),
-            ),
+            downstream_dispatch_command: Some("vida task ensure work-pool".to_string()),
             downstream_dispatch_note: Some("continue".to_string()),
             downstream_dispatch_ready: true,
             downstream_dispatch_blockers: Vec::new(),

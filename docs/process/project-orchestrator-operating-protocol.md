@@ -329,8 +329,8 @@ Every task in a long-running refactor epic uses:
 `Close` must:
 
 1. run the focused proof bundle and the declared debug build,
-2. run `vida task validate-graph`,
-3. run `vida task closure-ready <task-id>`,
+2. run `vida task validate-graph --json`,
+3. run `vida task closure-ready <task-id> --json`,
 4. close the TaskFlow item only when closure-ready passes,
 5. commit only scoped task files and push when the active publication pattern
    authorizes it,

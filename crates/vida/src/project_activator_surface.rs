@@ -809,18 +809,19 @@ pub(crate) fn resolved_host_cli_agent_catalog_for_root(
     let catalog_entry = registry.get(&selected_host_cli_system);
     let mut host_cli_agent_catalog =
         project_activator_host_cli_materialization::host_cli_entry_carrier_catalog(catalog_entry);
-    if host_cli_agent_catalog.is_empty()
-        && catalog_entry
+    if host_cli_agent_catalog.is_empty() {
+        if catalog_entry
             .map(|entry| host_cli_system_materialization_mode(entry, &selected_host_cli_system))
             .as_deref()
             == Some(HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE)
-    {
-        host_cli_agent_catalog = project_activator_host_cli_materialization::resolve_host_cli_agent_catalog_for_rendered_root(
+        {
+            host_cli_agent_catalog = project_activator_host_cli_materialization::resolve_host_cli_agent_catalog_for_rendered_root(
                 project_root,
                 overlay,
                 catalog_entry,
                 &selected_host_cli_system,
             );
+        }
     }
     if host_cli_agent_catalog.is_empty() {
         return Err(format!(
@@ -1597,16 +1598,14 @@ fn repair_project_activation_assets(project_root: &Path) -> Result<(), String> {
     let bootstrap_source_root = super::init_surfaces::resolve_init_bootstrap_source_root();
     let (instruction_source_root, framework_memory_source_root) =
         super::init_surfaces::default_init_instruction_bundle_source_roots(&bootstrap_source_root);
-    super::init_surfaces::ensure_runtime_home(project_root)
-        .and_then(|()| {
-            super::init_surfaces::write_runtime_agent_extension_projections(project_root)
-        })
-        .and_then(|()| repair_runtime_agent_extension_projections(project_root))?;
     super::init_surfaces::materialize_framework_instruction_bundles(
         project_root,
         &instruction_source_root,
         &framework_memory_source_root,
     )
+    .and_then(|()| super::init_surfaces::ensure_runtime_home(project_root))
+    .and_then(|()| super::init_surfaces::write_runtime_agent_extension_projections(project_root))
+    .and_then(|()| repair_runtime_agent_extension_projections(project_root))
     .and_then(|()| super::init_surfaces::materialize_project_docs_scaffold(project_root))
 }
 
@@ -1823,16 +1822,17 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             }
         }
     }
-    if args.repair
-        && (!repaired_before_state_bootstrap
+    if args.repair {
+        if !repaired_before_state_bootstrap
             || host_cli_activated.is_some()
-            || activation_answers.is_some())
-    {
-        match repair_project_activation_assets_with_report(&project_root) {
-            Ok(report) => materialization_report.extend(report),
-            Err(error) => {
-                eprintln!("Project activation repair failed closed: {error}");
-                return ExitCode::from(1);
+            || activation_answers.is_some()
+        {
+            match repair_project_activation_assets_with_report(&project_root) {
+                Ok(report) => materialization_report.extend(report),
+                Err(error) => {
+                    eprintln!("Project activation repair failed closed: {error}");
+                    return ExitCode::from(1);
+                }
             }
         }
     }
@@ -1915,9 +1915,9 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         "no_change": args.repair && changed_files.is_empty(),
         "materialization_report": materialization_report.to_json(),
         "next_action": if args.repair {
-            "Rerun `vida project-activator` and `vida orchestrator-init` to confirm ready-enough posture."
+            "Rerun `vida project-activator --json` and `vida orchestrator-init --json` to confirm ready-enough posture."
         } else {
-            "Use `vida project-activator --repair` to materialize safe-default missing project activation pieces."
+            "Use `vida project-activator --repair --json` to materialize safe-default missing project activation pieces."
         }
     });
     if let Some(path) = activation_receipt_path.as_deref() {
@@ -2025,7 +2025,7 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         "one_shot_example",
         view["interview"]["one_shot_example"]
             .as_str()
-            .unwrap_or("vida project-activator"),
+            .unwrap_or("vida project-activator --json"),
     );
     println!("next_steps");
     if let Some(steps) = view["next_steps"].as_array() {
@@ -2479,7 +2479,7 @@ pub(crate) fn merge_project_activation_into_init_view(
     );
     if activation_pending {
         let mut minimum_commands = vec![
-            serde_json::Value::String("vida project-activator".to_string()),
+            serde_json::Value::String("vida project-activator --json".to_string()),
             serde_json::Value::String("vida docflow check --profile active-canon".to_string()),
         ];
         if let Some(example) = project_activation_view["interview"]["one_shot_example"].as_str() {
