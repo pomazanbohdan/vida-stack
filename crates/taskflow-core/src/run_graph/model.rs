@@ -349,6 +349,146 @@ mod tests {
         assert_eq!(decision.resume_target, "dispatch.tester");
     }
 
+    #[test]
+    fn run_graph_transition_matrix_preserves_priority_and_blockers() {
+        struct Case {
+            name: &'static str,
+            receipt: Option<DispatchReceiptSnapshot>,
+            closure: Option<TaskClosureSnapshot>,
+            kind: RunGraphTransitionKind,
+            admitted: bool,
+            next_node: Option<&'static str>,
+            resume_target: &'static str,
+            blocker_codes: &'static [&'static str],
+        }
+
+        let cases = [
+            Case {
+                name: "terminal closure wins over receipt evidence",
+                receipt: Some(exception_takeover_receipt()),
+                closure: Some(TaskClosureSnapshot {
+                    task_id: "task-1".to_string(),
+                    status: "closed".to_string(),
+                    terminally_closed: true,
+                }),
+                kind: RunGraphTransitionKind::TerminalClosure,
+                admitted: true,
+                next_node: None,
+                resume_target: "none",
+                blocker_codes: &[],
+            },
+            Case {
+                name: "exception takeover supersession resumes owner",
+                receipt: Some(exception_takeover_receipt()),
+                closure: None,
+                kind: RunGraphTransitionKind::ExceptionTakeover,
+                admitted: true,
+                next_node: Some("developer"),
+                resume_target: "dispatch.developer",
+                blocker_codes: &[],
+            },
+            Case {
+                name: "completed lane keeps current resume target",
+                receipt: Some(receipt_with_lane_status("lane_completed")),
+                closure: None,
+                kind: RunGraphTransitionKind::CompletedLane,
+                admitted: true,
+                next_node: Some("developer"),
+                resume_target: "dispatch.developer",
+                blocker_codes: &[],
+            },
+            Case {
+                name: "failed lane fails closed",
+                receipt: Some(receipt_with_lane_status("lane_failed")),
+                closure: None,
+                kind: RunGraphTransitionKind::BlockedLane,
+                admitted: false,
+                next_node: Some("developer"),
+                resume_target: "dispatch.developer",
+                blocker_codes: &["lane_blocked"],
+            },
+            Case {
+                name: "downstream ready handoff advances resume target",
+                receipt: Some(downstream_receipt(true, Some("tester"), vec![])),
+                closure: None,
+                kind: RunGraphTransitionKind::DownstreamReadyHandoff,
+                admitted: true,
+                next_node: Some("tester"),
+                resume_target: "dispatch.tester",
+                blocker_codes: &[],
+            },
+            Case {
+                name: "downstream blockers suppress handoff",
+                receipt: Some(downstream_receipt(
+                    true,
+                    Some("tester"),
+                    vec!["missing_receipt".to_string()],
+                )),
+                closure: None,
+                kind: RunGraphTransitionKind::NoTransition,
+                admitted: true,
+                next_node: Some("developer"),
+                resume_target: "dispatch.developer",
+                blocker_codes: &[],
+            },
+        ];
+
+        for case in cases {
+            let decision = decide_run_graph_transition(
+                &status_snapshot(),
+                case.receipt.as_ref(),
+                case.closure.as_ref(),
+            );
+
+            assert_eq!(decision.kind, case.kind, "{}", case.name);
+            assert_eq!(decision.admitted, case.admitted, "{}", case.name);
+            assert_eq!(
+                decision.next_node.as_deref(),
+                case.next_node,
+                "{}",
+                case.name
+            );
+            assert_eq!(decision.resume_target, case.resume_target, "{}", case.name);
+            assert_eq!(decision.blocker_codes, case.blocker_codes, "{}", case.name);
+        }
+    }
+
+    fn receipt_with_lane_status(lane_status: &str) -> DispatchReceiptSnapshot {
+        DispatchReceiptSnapshot {
+            dispatch_target: "developer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: Some(lane_status.to_string()),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_target: None,
+            downstream_dispatch_blockers: Vec::new(),
+        }
+    }
+
+    fn exception_takeover_receipt() -> DispatchReceiptSnapshot {
+        DispatchReceiptSnapshot {
+            lane_status: Some("lane_exception_takeover".to_string()),
+            supersedes_receipt_id: Some("supersede-1".to_string()),
+            exception_path_receipt_id: Some("receipt-1".to_string()),
+            ..receipt_with_lane_status("lane_exception_takeover")
+        }
+    }
+
+    fn downstream_receipt(
+        ready: bool,
+        target: Option<&str>,
+        blockers: Vec<String>,
+    ) -> DispatchReceiptSnapshot {
+        DispatchReceiptSnapshot {
+            lane_status: Some("lane_open".to_string()),
+            downstream_dispatch_ready: ready,
+            downstream_dispatch_target: target.map(str::to_string),
+            downstream_dispatch_blockers: blockers,
+            ..receipt_with_lane_status("lane_open")
+        }
+    }
+
     fn status_snapshot() -> RunGraphStatusSnapshot {
         RunGraphStatusSnapshot {
             run_id: "run-1".to_string(),

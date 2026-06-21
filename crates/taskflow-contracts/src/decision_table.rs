@@ -505,4 +505,71 @@ mod tests {
             "rejected"
         );
     }
+
+    #[test]
+    fn transition_contract_matrix_preserves_outcome_status_and_legacy_edges() {
+        let cases = [
+            (
+                TransitionContractDecision::admitted(
+                    "task.lifecycle",
+                    Some(TaskId::new("task-1")),
+                    vec!["accepted".to_string()],
+                ),
+                TransitionContractOutcome::Admitted,
+                "admitted",
+                false,
+            ),
+            (
+                TransitionContractDecision::rejected(
+                    "task.lifecycle",
+                    Some(TaskId::new("task-1")),
+                    vec![TransitionContractBlocker::known(
+                        TransitionContractBlockerCode::InvalidTransition,
+                    )],
+                ),
+                TransitionContractOutcome::Rejected,
+                "rejected",
+                false,
+            ),
+            (
+                TransitionContractDecision::blocked(
+                    "task.lifecycle",
+                    Some(TaskId::new("task-1")),
+                    vec![TransitionContractBlocker::known(
+                        TransitionContractBlockerCode::MissingRequiredInput,
+                    )],
+                ),
+                TransitionContractOutcome::Blocked,
+                "blocked",
+                true,
+            ),
+        ];
+
+        for (decision, outcome, status, fail_closed) in cases {
+            assert_eq!(decision.schema_version, TRANSITION_CONTRACT_SCHEMA_VERSION);
+            assert_eq!(decision.outcome, outcome);
+            assert_eq!(decision.status.as_str(), status);
+            assert_eq!(decision.is_fail_closed_blocked(), fail_closed);
+        }
+
+        for value in ["legacy_waiting", "legacy:custom", "UPSTREAM_STATUS"] {
+            assert_eq!(
+                TransitionContractStatus::legacy_passthrough(value)
+                    .expect("non-empty exact legacy status is accepted")
+                    .as_str(),
+                value
+            );
+            assert_eq!(
+                TransitionContractBlocker::legacy_passthrough(value)
+                    .expect("non-empty exact legacy blocker is accepted")
+                    .as_str(),
+                value
+            );
+        }
+
+        for value in ["", " trimmed ", "\tindent"] {
+            assert!(TransitionContractStatus::legacy_passthrough(value).is_none());
+            assert!(TransitionContractBlocker::legacy_passthrough(value).is_none());
+        }
+    }
 }

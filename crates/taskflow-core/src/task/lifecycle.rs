@@ -401,4 +401,81 @@ mod tests {
         );
         assert_eq!(TaskLifecycleStatus::Paused.as_str(), "paused");
     }
+
+    #[test]
+    fn task_lifecycle_matrix_preserves_status_and_blocker_contracts() {
+        struct Case {
+            event: TaskLifecycleEvent,
+            requested_status: Option<TaskLifecycleStatus>,
+            active_child_count: usize,
+            admitted: bool,
+            next_status: Option<TaskLifecycleStatus>,
+            blocker_codes: &'static [&'static str],
+        }
+
+        let cases = [
+            Case {
+                event: TaskLifecycleEvent::Create,
+                requested_status: None,
+                active_child_count: 0,
+                admitted: true,
+                next_status: Some(TaskLifecycleStatus::Open),
+                blocker_codes: &[],
+            },
+            Case {
+                event: TaskLifecycleEvent::UpdateStatus,
+                requested_status: Some(TaskLifecycleStatus::InProgress),
+                active_child_count: 0,
+                admitted: true,
+                next_status: Some(TaskLifecycleStatus::InProgress),
+                blocker_codes: &[],
+            },
+            Case {
+                event: TaskLifecycleEvent::UpdateStatus,
+                requested_status: None,
+                active_child_count: 0,
+                admitted: false,
+                next_status: None,
+                blocker_codes: &[TASK_LIFECYCLE_BLOCKER_UNKNOWN_STATUS],
+            },
+            Case {
+                event: TaskLifecycleEvent::Close,
+                requested_status: None,
+                active_child_count: 0,
+                admitted: true,
+                next_status: Some(TaskLifecycleStatus::Closed),
+                blocker_codes: &[],
+            },
+            Case {
+                event: TaskLifecycleEvent::Close,
+                requested_status: None,
+                active_child_count: 2,
+                admitted: false,
+                next_status: None,
+                blocker_codes: &[TASK_LIFECYCLE_BLOCKER_ACTIVE_CHILDREN_REMAIN],
+            },
+        ];
+
+        for case in cases {
+            let mut input = TaskLifecycleInput::new("task-1", case.event);
+            input.requested_status = case.requested_status;
+            input.active_child_count = case.active_child_count;
+
+            let decision = decide_task_lifecycle(input);
+
+            assert_eq!(decision.admitted, case.admitted, "{:?}", case.event);
+            assert_eq!(decision.next_status, case.next_status, "{:?}", case.event);
+            assert_eq!(
+                decision.blocker_codes, case.blocker_codes,
+                "{:?}",
+                case.event
+            );
+            assert_eq!(
+                decision.effects.is_empty(),
+                !case.admitted,
+                "{:?}",
+                case.event
+            );
+        }
+    }
 }
