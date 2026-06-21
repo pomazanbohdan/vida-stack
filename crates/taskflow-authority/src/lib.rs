@@ -1,5 +1,6 @@
 pub mod authority_chain;
 pub mod continuation_binding;
+pub mod continuation_transition;
 pub mod errors;
 pub mod exception_takeover;
 pub mod final_snapshot;
@@ -26,10 +27,11 @@ mod tests {
             crate::run_graph_transition::MODULE,
             crate::final_snapshot::MODULE,
             crate::continuation_binding::MODULE,
+            crate::continuation_transition::MODULE,
             crate::task_transition::MODULE,
         ];
 
-        assert_eq!(modules.len(), 10);
+        assert_eq!(modules.len(), 11);
         assert!(modules.contains(&"authority_chain"));
         assert!(modules.contains(&"terminal_closure"));
         assert!(modules.contains(&"stale_guard"));
@@ -39,6 +41,7 @@ mod tests {
         assert!(modules.contains(&"run_graph_transition"));
         assert!(modules.contains(&"final_snapshot"));
         assert!(modules.contains(&"continuation_binding"));
+        assert!(modules.contains(&"continuation_transition"));
         assert!(modules.contains(&"task_transition"));
     }
 }

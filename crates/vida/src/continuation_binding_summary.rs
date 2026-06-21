@@ -1,3 +1,7 @@
+use taskflow_authority::continuation_transition::{
+    decide_continuation_gate, ContinuationGateInput,
+};
+
 fn explicit_binding_is_admissible_for_status(
     binding: &crate::state_store::RunGraphContinuationBinding,
     status: &crate::state_store::RunGraphStatus,
@@ -453,13 +457,12 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
             active_exception_takeover_evidence_matches_status(status, Some(receipt), None)
                 && !exception_takeover_continuation_resumable(status)
         });
-    let continuation_required_now =
-        delegated_cycle_open && !active_exception_takeover_not_resumable;
-    let pause_boundary_gate = if delegated_cycle_open {
-        "non_blocking_only"
-    } else {
-        "allowed_if_no_further_bound_work_is_evidenced"
-    };
+    let gate_decision = decide_continuation_gate(ContinuationGateInput {
+        delegated_cycle_open,
+        active_exception_takeover_not_resumable,
+    });
+    let continuation_required_now = gate_decision.continuation_required_now;
+    let pause_boundary_gate = gate_decision.pause_boundary_gate;
     let continuation_next_actions = active_run_id
         .filter(|run_id| !run_id.trim().is_empty())
         .map(|run_id| {
@@ -513,13 +516,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
             });
         }
     }
-    let sequential_vs_parallel_posture = if latest_run_graph_recovery
-        .is_some_and(|recovery| recovery.delegation_gate.delegated_cycle_open)
-    {
-        "sequential_only_open_cycle"
-    } else {
-        "sequential_only"
-    };
+    let sequential_vs_parallel_posture = gate_decision.sequential_vs_parallel_posture;
 
     if let Some(status) = latest_run_graph_status {
         if latest_run_graph_task_closed && run_graph_status_is_blocked(&status.status) {
