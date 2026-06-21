@@ -4431,6 +4431,19 @@ mod tests {
         status
     }
 
+    fn mark_terminal_closure_status(status: &mut RunGraphStatus) {
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+    }
+
     fn test_task_record(task_id: &str, status: &str) -> TaskRecord {
         TaskRecord {
             id: task_id.to_string(),
@@ -4474,22 +4487,20 @@ mod tests {
     }
 
     #[test]
-    fn terminal_closure_status_ignores_stale_resume_target_but_requires_no_next_node() {
+    fn terminal_closure_status_requires_sealed_terminal_fields() {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "run-terminal",
             "implementation",
             "implementation",
         );
-        status.status = "completed".to_string();
-        status.lifecycle_stage = "closure_complete".to_string();
-        status.next_node = None;
-        status.resume_target = "none".to_string();
+        mark_terminal_closure_status(&mut status);
 
         assert!(terminal_closure_status(&status));
 
         status.resume_target = "dispatch.verification".to_string();
 
-        assert!(terminal_closure_status(&status));
+        assert!(!terminal_closure_status(&status));
+        status.resume_target = "none".to_string();
 
         status.next_node = Some("verification".to_string());
 
@@ -4919,11 +4930,7 @@ mod tests {
     #[test]
     fn terminal_closure_supersedes_stale_pending_developer_handoff_receipt() {
         let mut status = sample_run_graph_status();
-        status.active_node = "closure".to_string();
-        status.next_node = None;
-        status.status = "completed".to_string();
-        status.lifecycle_stage = "closure_complete".to_string();
-        status.resume_target = "none".to_string();
+        mark_terminal_closure_status(&mut status);
 
         let mut receipt = RunGraphDispatchReceipt {
             run_id: status.run_id.clone(),
@@ -7279,16 +7286,7 @@ mod tests {
             "implementation",
             "implementation",
         );
-        status.active_node = "closure".to_string();
-        status.next_node = None;
-        status.status = "completed".to_string();
-        status.lifecycle_stage = "closure_complete".to_string();
-        status.policy_gate = "validation_report_required".to_string();
-        status.handoff_state = "awaiting_closure".to_string();
-        status.context_state = "open".to_string();
-        status.checkpoint_kind = "execution_cursor".to_string();
-        status.resume_target = "dispatch.closure".to_string();
-        status.recovery_ready = true;
+        mark_terminal_closure_status(&mut status);
         store
             .record_run_graph_status(&status)
             .await
