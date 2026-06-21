@@ -182,12 +182,16 @@ pub fn existing_regular_file_under_root(
     let raw_path = raw_path.as_ref();
     reject_dot_segment(raw_path, kind)?;
     let path = root.resolve_raw(raw_path);
-    let metadata = fs_err::symlink_metadata(&path).map_err(|source| PathPolicyError::Metadata {
-        kind,
-        path: path.clone(),
-        source,
-    })?;
-    if is_symlink(&metadata) {
+    let cap_path = root.cap_relative_path(raw_path, kind)?;
+    let metadata = root
+        .cap_dir()
+        .symlink_metadata(&cap_path)
+        .map_err(|source| PathPolicyError::Metadata {
+            kind,
+            path: path.clone(),
+            source,
+        })?;
+    if metadata.file_type().is_symlink() {
         return Err(PathPolicyError::Symlink { kind, path });
     }
     if !metadata.is_file() {
@@ -216,6 +220,7 @@ pub fn new_output_path_under_root(
     let raw_path = raw_path.as_ref();
     reject_dot_segment(raw_path, kind)?;
     let path = root.resolve_raw(raw_path);
+    let cap_path = root.cap_relative_path(raw_path, kind)?;
     let parent = path
         .parent()
         .ok_or_else(|| PathPolicyError::MissingParent {
@@ -223,11 +228,19 @@ pub fn new_output_path_under_root(
             path: path.clone(),
         })?;
     ensure_parent_safe_to_create(root, parent, kind)?;
-    fs_err::create_dir_all(parent).map_err(|source| PathPolicyError::ParentCreate {
-        kind,
-        path: parent.to_path_buf(),
-        source,
-    })?;
+    let cap_parent = cap_path
+        .parent()
+        .ok_or_else(|| PathPolicyError::MissingParent {
+            kind,
+            path: path.clone(),
+        })?;
+    root.cap_dir()
+        .create_dir_all(cap_parent)
+        .map_err(|source| PathPolicyError::ParentCreate {
+            kind,
+            path: parent.to_path_buf(),
+            source,
+        })?;
     let parent_canonical =
         parent
             .canonicalize()
@@ -237,8 +250,8 @@ pub fn new_output_path_under_root(
                 source,
             })?;
     ensure_under_root(root, &parent_canonical, kind)?;
-    if let Ok(metadata) = fs_err::symlink_metadata(&path) {
-        if is_symlink(&metadata) {
+    if let Ok(metadata) = root.cap_dir().symlink_metadata(&cap_path) {
+        if metadata.file_type().is_symlink() {
             return Err(PathPolicyError::Symlink { kind, path });
         }
         if !replace_existing {
