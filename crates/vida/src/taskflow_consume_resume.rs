@@ -6604,6 +6604,32 @@ fn resumed_selected_backend_for_agent_lane(
         .or_else(|| super::canonical_selected_backend_for_receipt(role_selection, dispatch_receipt))
 }
 
+fn set_retry_execution_plan_backend(
+    execution_plan: &mut serde_json::Value,
+    dispatch_target: &str,
+    selected_backend: &str,
+) {
+    let Some(plan) = execution_plan.as_object_mut() else {
+        return;
+    };
+    let development_flow = plan
+        .entry("development_flow".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(development_flow) = development_flow.as_object_mut() else {
+        return;
+    };
+    let lane = development_flow
+        .entry(dispatch_target.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(lane) = lane.as_object_mut() else {
+        return;
+    };
+    lane.insert(
+        "executor_backend".to_string(),
+        serde_json::json!(selected_backend),
+    );
+}
+
 fn rewrite_retry_dispatch_packet_if_downstream_carrier(
     store: &super::StateStore,
     role_selection: &super::RuntimeConsumptionLaneSelection,
@@ -6671,10 +6697,18 @@ fn rewrite_retry_dispatch_packet_if_downstream_carrier(
         dispatch_receipt.selected_backend = Some(target_backend);
     }
 
-    let taskflow_handoff_plan = super::build_taskflow_handoff_plan(role_selection);
+    let mut retry_role_selection = role_selection.clone();
+    if let Some(target_backend) = target_backend.as_deref() {
+        set_retry_execution_plan_backend(
+            &mut retry_role_selection.execution_plan,
+            &dispatch_receipt.dispatch_target,
+            target_backend,
+        );
+    }
+    let taskflow_handoff_plan = super::build_taskflow_handoff_plan(&retry_role_selection);
     let ctx = super::RuntimeDispatchPacketContext::new(
         store.root(),
-        role_selection,
+        &retry_role_selection,
         dispatch_receipt,
         &taskflow_handoff_plan,
         run_graph_bootstrap,
