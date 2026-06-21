@@ -961,6 +961,9 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
 pub(crate) fn taskflow_active_candidates_from_tasks(
     tasks: &[crate::state_store::TaskRecord],
 ) -> Vec<serde_json::Value> {
+    let priority_sequence = prioritized_epic_sequence();
+    let first_open_priority_epic = first_open_priority_epic(tasks, priority_sequence);
+    let task_ancestors = task_ancestor_ids_by_task(tasks);
     taskflow_leaf_active_tasks(tasks)
         .into_iter()
         .map(|task| {
@@ -972,18 +975,130 @@ pub(crate) fn taskflow_active_candidates_from_tasks(
                 })
                 .map(|dependency| dependency.depends_on_id.as_str())
                 .collect::<Vec<_>>();
+            let ancestor_task_ids = task_ancestors
+                .get(task.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let candidate_priority_epic_id =
+                candidate_priority_epic_id(task.id.as_str(), &ancestor_task_ids, priority_sequence);
+            let first_open_priority_epic_id = first_open_priority_epic
+                .as_ref()
+                .map(|(_, epic_id)| *epic_id);
+            let first_open_priority_epic_rank =
+                first_open_priority_epic.as_ref().map(|(rank, _)| *rank);
+            let candidate_priority_epic_rank = candidate_priority_epic_id.and_then(|epic_id| {
+                priority_sequence
+                    .iter()
+                    .position(|candidate| *candidate == epic_id)
+            });
+            let priority_sequence_violation =
+                match (first_open_priority_epic_rank, candidate_priority_epic_rank) {
+                    (Some(required), Some(candidate)) => candidate > required,
+                    (Some(_), None) => true,
+                    _ => false,
+                };
             serde_json::json!({
                 "task_id": task.id,
                 "parent_task_ids": parent_task_ids,
+                "ancestor_task_ids": ancestor_task_ids,
                 "display_id": task.display_id,
                 "status": task.status,
                 "issue_type": task.issue_type,
                 "title": task.title,
                 "conflict_domain": task.execution_semantics.conflict_domain.clone(),
                 "owned_paths": task.planner_metadata.owned_paths.clone(),
+                "priority_epic_id": candidate_priority_epic_id,
+                "priority_epic_rank": candidate_priority_epic_rank,
+                "required_priority_epic_id": first_open_priority_epic_id,
+                "required_priority_epic_rank": first_open_priority_epic_rank,
+                "priority_sequence_violation": priority_sequence_violation,
             })
         })
         .collect()
+}
+
+fn prioritized_epic_sequence() -> &'static [&'static str] {
+    &[
+        "runtime-library-adoption-epic",
+        "typed-transition-state-store-extraction-epic",
+    ]
+}
+
+fn task_is_open_for_priority(task: &crate::state_store::TaskRecord) -> bool {
+    !crate::state_store::StateStore::task_status_is_closed_like(&task.status)
+}
+
+fn task_parent_ids(task: &crate::state_store::TaskRecord) -> Vec<String> {
+    task.dependencies
+        .iter()
+        .filter(|dependency| dependency.edge_type == "parent-child" && dependency.issue_id == task.id)
+        .map(|dependency| dependency.depends_on_id.clone())
+        .collect()
+}
+
+fn task_ancestor_ids_by_task(
+    tasks: &[crate::state_store::TaskRecord],
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let by_id = tasks
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    tasks
+        .iter()
+        .map(|task| {
+            let mut ancestors = Vec::new();
+            let mut stack = task_parent_ids(task);
+            let mut seen = std::collections::BTreeSet::new();
+            while let Some(parent_id) = stack.pop() {
+                if !seen.insert(parent_id.clone()) {
+                    continue;
+                }
+                ancestors.push(parent_id.clone());
+                if let Some(parent) = by_id.get(parent_id.as_str()) {
+                    stack.extend(task_parent_ids(parent));
+                }
+            }
+            (task.id.clone(), ancestors)
+        })
+        .collect()
+}
+
+fn candidate_priority_epic_id<'a>(
+    task_id: &str,
+    ancestor_task_ids: &[String],
+    priority_sequence: &'a [&'a str],
+) -> Option<&'a str> {
+    priority_sequence.iter().copied().find(|epic_id| {
+        task_id == *epic_id || ancestor_task_ids.iter().any(|ancestor| ancestor == epic_id)
+    })
+}
+
+fn first_open_priority_epic(
+    tasks: &[crate::state_store::TaskRecord],
+    priority_sequence: &[&'static str],
+) -> Option<(usize, &'static str)> {
+    let by_id = tasks
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let ancestors = task_ancestor_ids_by_task(tasks);
+    priority_sequence
+        .iter()
+        .enumerate()
+        .find(|(_, epic_id)| {
+            by_id
+                .get(**epic_id)
+                .is_some_and(|task| task_is_open_for_priority(task))
+                || tasks.iter().any(|task| {
+                    task_is_open_for_priority(task)
+                        && ancestors
+                            .get(task.id.as_str())
+                            .is_some_and(|task_ancestors| {
+                                task_ancestors.iter().any(|ancestor| ancestor == *epic_id)
+                            })
+                })
+        })
+        .map(|(rank, epic_id)| (rank, *epic_id))
 }
 
 pub(crate) fn taskflow_leaf_active_tasks(
@@ -1078,6 +1193,11 @@ pub(crate) fn add_taskflow_active_work_truth(
     }
 
     if summary_active_unit_missing {
+        if let Some(summary) =
+            priority_epic_sequence_summary(summary.clone(), &taskflow_active_candidates)
+        {
+            return summary;
+        }
         if let [candidate] = taskflow_active_candidates.as_slice() {
             if let serde_json::Value::Object(object) = &mut summary {
                 object.insert(
@@ -1245,12 +1365,138 @@ pub(crate) fn add_taskflow_active_work_truth(
     summary
 }
 
+fn priority_epic_sequence_summary(
+    summary: serde_json::Value,
+    taskflow_active_candidates: &[serde_json::Value],
+) -> Option<serde_json::Value> {
+    let required_priority_epic_id = taskflow_active_candidates
+        .iter()
+        .find_map(|candidate| {
+            candidate
+                .get("required_priority_epic_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })?;
+    let priority_candidates = taskflow_active_candidates
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .get("priority_epic_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(required_priority_epic_id.as_str())
+        })
+        .collect::<Vec<_>>();
+    if let [candidate] = priority_candidates.as_slice() {
+        return Some(bind_taskflow_active_candidate(
+            summary,
+            candidate,
+            "taskflow_priority_epic_sequence",
+            &format!(
+                "User-prioritized epic `{required_priority_epic_id}` is the first open priority epic and has exactly one active TaskFlow candidate."
+            ),
+            "sequential_only_priority_epic",
+            "forbidden_while_priority_epic_active",
+            serde_json::json!([
+                format!(
+                    "Continue or close the active TaskFlow candidate under priority epic `{required_priority_epic_id}` before any later epic or runtime residual work."
+                )
+            ]),
+        ));
+    }
+    if priority_candidates.len() > 1 {
+        return Some(priority_epic_ambiguous_summary(
+            summary,
+            taskflow_active_candidates,
+            &required_priority_epic_id,
+            "multiple_taskflow_active_work_candidates_in_priority_epic",
+            format!(
+                "Multiple active TaskFlow candidates exist under priority epic `{required_priority_epic_id}`; explicitly bind one before continuing."
+            ),
+        ));
+    }
+    if taskflow_active_candidates.iter().any(|candidate| {
+        candidate
+            .get("priority_sequence_violation")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }) {
+        return Some(priority_epic_ambiguous_summary(
+            summary,
+            taskflow_active_candidates,
+            &required_priority_epic_id,
+            "active_taskflow_work_outside_required_priority_epic",
+            format!(
+                "Active TaskFlow candidates are outside required priority epic `{required_priority_epic_id}`; bind or start work inside that epic before continuing later epics or runtime residuals."
+            ),
+        ));
+    }
+    None
+}
+
+fn priority_epic_ambiguous_summary(
+    mut summary: serde_json::Value,
+    taskflow_active_candidates: &[serde_json::Value],
+    required_priority_epic_id: &str,
+    ambiguity_reason: &str,
+    next_action: String,
+) -> serde_json::Value {
+    if let serde_json::Value::Object(object) = &mut summary {
+        object.insert(
+            "status".to_string(),
+            serde_json::Value::String("ambiguous".to_string()),
+        );
+        object.insert(
+            "continuation_allowed".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert(
+            "continuation_required_now".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert("active_bounded_unit".to_string(), serde_json::Value::Null);
+        object.insert("why_this_unit".to_string(), serde_json::Value::Null);
+        object.insert(
+            "primary_path".to_string(),
+            serde_json::Value::String("priority_epic_diagnosis_path".to_string()),
+        );
+        object.insert(
+            "sequential_vs_parallel_posture".to_string(),
+            serde_json::Value::String("unknown_until_priority_epic_binding".to_string()),
+        );
+        object.insert(
+            "pause_boundary_gate".to_string(),
+            serde_json::Value::String("forbidden_while_priority_epic_unbound".to_string()),
+        );
+        object.insert(
+            "ambiguity_reason".to_string(),
+            serde_json::Value::String(ambiguity_reason.to_string()),
+        );
+        object.insert(
+            "required_priority_epic_id".to_string(),
+            serde_json::Value::String(required_priority_epic_id.to_string()),
+        );
+        object.insert(
+            "taskflow_active_candidates".to_string(),
+            serde_json::Value::Array(taskflow_active_candidates.to_vec()),
+        );
+        object.insert("next_actions".to_string(), serde_json::json!([next_action]));
+    }
+    summary
+}
+
 pub(crate) fn taskflow_active_work_binding_is_authoritative(summary: &serde_json::Value) -> bool {
     summary.get("status").and_then(serde_json::Value::as_str) == Some("bound")
         && summary
             .get("binding_source")
             .and_then(serde_json::Value::as_str)
-            == Some("taskflow_single_in_progress")
+            .is_some_and(|source| {
+                matches!(
+                    source,
+                    "taskflow_single_in_progress"
+                        | "taskflow_current_session_claim"
+                        | "taskflow_priority_epic_sequence"
+                )
+            })
         && summary
             .get("active_bounded_unit")
             .is_some_and(|unit| unit.is_object())
@@ -1318,6 +1564,9 @@ fn bind_taskflow_active_candidate(
                 "task_status": candidate.get("status").cloned().unwrap_or(serde_json::Value::Null),
                 "issue_type": candidate.get("issue_type").cloned().unwrap_or(serde_json::Value::Null),
                 "title": candidate.get("title").cloned().unwrap_or(serde_json::Value::Null),
+                "priority_epic_id": candidate.get("priority_epic_id").cloned().unwrap_or(serde_json::Value::Null),
+                "priority_epic_rank": candidate.get("priority_epic_rank").cloned().unwrap_or(serde_json::Value::Null),
+                "required_priority_epic_id": candidate.get("required_priority_epic_id").cloned().unwrap_or(serde_json::Value::Null),
             }),
         );
         object.insert(
@@ -2105,6 +2354,107 @@ mod tests {
         assert_eq!(
             summary["ambiguity_reason"],
             "multiple_taskflow_active_work_candidates"
+        );
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_binds_single_candidate_in_first_priority_epic() {
+        let runtime_summary = serde_json::json!({
+            "status": "ambiguous",
+            "continuation_allowed": false,
+            "continuation_required_now": false,
+            "active_bounded_unit": serde_json::Value::Null,
+            "binding_source": serde_json::Value::Null,
+            "why_this_unit": serde_json::Value::Null,
+            "primary_path": "diagnosis_path",
+            "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_while_ambiguous",
+            "ambiguity_reason": "runtime_evidence_ambiguous",
+            "next_actions": []
+        });
+        let library_epic = task_record("runtime-library-adoption-epic", "open");
+        let shared_epic = task_record("typed-transition-state-store-extraction-epic", "open");
+        let library_task = task_with_parent(
+            "runtime-library-adoption-07-validation-builders",
+            "open",
+            "runtime-library-adoption-epic",
+        );
+        let active_library_todo = task_with_parent(
+            "todo-runtime-library-validation-builders-receipt-20260621",
+            "in_progress",
+            "runtime-library-adoption-07-validation-builders",
+        );
+        let active_runtime_residual = task_with_parent(
+            "todo-runtime-defect-receipt-suite-memory-crash-20260621",
+            "in_progress",
+            "runtime-defect-vida-receipt-suite-residual-failures-timeout-20260621",
+        );
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[
+            library_epic,
+            shared_epic,
+            library_task,
+            active_library_todo,
+            active_runtime_residual,
+        ]);
+
+        let summary = add_taskflow_active_work_truth(runtime_summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["binding_source"], "taskflow_priority_epic_sequence");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "todo-runtime-library-validation-builders-receipt-20260621"
+        );
+        assert_eq!(
+            summary["active_bounded_unit"]["priority_epic_id"],
+            "runtime-library-adoption-epic"
+        );
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_blocks_candidates_outside_first_priority_epic() {
+        let runtime_summary = serde_json::json!({
+            "status": "ambiguous",
+            "continuation_allowed": false,
+            "continuation_required_now": false,
+            "active_bounded_unit": serde_json::Value::Null,
+            "binding_source": serde_json::Value::Null,
+            "why_this_unit": serde_json::Value::Null,
+            "primary_path": "diagnosis_path",
+            "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_while_ambiguous",
+            "ambiguity_reason": "runtime_evidence_ambiguous",
+            "next_actions": []
+        });
+        let library_epic = task_record("runtime-library-adoption-epic", "open");
+        let library_task = task_with_parent(
+            "runtime-library-adoption-07-validation-builders",
+            "open",
+            "runtime-library-adoption-epic",
+        );
+        let active_runtime_residual = task_with_parent(
+            "todo-runtime-defect-receipt-suite-memory-crash-20260621",
+            "in_progress",
+            "runtime-defect-vida-receipt-suite-residual-failures-timeout-20260621",
+        );
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[
+            library_epic,
+            library_task,
+            active_runtime_residual,
+        ]);
+
+        let summary = add_taskflow_active_work_truth(runtime_summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(
+            summary["ambiguity_reason"],
+            "active_taskflow_work_outside_required_priority_epic"
+        );
+        assert_eq!(
+            summary["required_priority_epic_id"],
+            "runtime-library-adoption-epic"
         );
         assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
     }
