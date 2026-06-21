@@ -70,12 +70,10 @@ pub(crate) fn dispatch_summary_has_clean_ready_downstream_handoff(
                     .as_deref()
                     .map(str::trim)
                     .is_some_and(|path| !path.is_empty()))
-            && (receipt.downstream_dispatch_target.as_deref() == Some("closure")
-                || receipt
-                    .downstream_dispatch_command
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|command| command.starts_with("vida agent-init")))
+            && downstream_dispatch_command_is_executable(
+                receipt.downstream_dispatch_target.as_deref(),
+                receipt.downstream_dispatch_command.as_deref(),
+            )
     })
 }
 
@@ -103,12 +101,25 @@ pub(crate) fn dispatch_receipt_has_clean_ready_downstream_handoff(
                 .as_deref()
                 .map(str::trim)
                 .is_some_and(|path| !path.is_empty()))
-        && (receipt.downstream_dispatch_target.as_deref() == Some("closure")
-            || receipt
-                .downstream_dispatch_command
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|command| command.starts_with("vida agent-init")))
+        && downstream_dispatch_command_is_executable(
+            receipt.downstream_dispatch_target.as_deref(),
+            receipt.downstream_dispatch_command.as_deref(),
+        )
+}
+
+fn downstream_dispatch_command_is_executable(target: Option<&str>, command: Option<&str>) -> bool {
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return false;
+    };
+    if target == "closure" {
+        return true;
+    }
+    let Some(command) = command.map(str::trim).filter(|command| !command.is_empty()) else {
+        return false;
+    };
+    command.starts_with("vida agent-init")
+        || (matches!(target, "work-pool-pack" | "dev-pack")
+            && command.starts_with("vida task ensure"))
 }
 
 pub(crate) fn dispatch_summary_has_clean_completed_lane(
