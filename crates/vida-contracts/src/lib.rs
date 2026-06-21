@@ -544,21 +544,60 @@ pub struct VidaEvent {
     pub cursor: VidaEventCursor,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    garde::Validate,
+    typed_builder::TypedBuilder,
+)]
 pub struct VidaReceiptRef {
+    #[garde(length(min = 1))]
     pub receipt_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    #[garde(skip)]
     pub project_id: Option<VidaProjectId>,
+    #[garde(skip)]
     pub operation: VidaOperation,
+    #[garde(skip)]
     pub scope: VidaReceiptScope,
+    #[garde(length(min = 1))]
     pub state_root: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl VidaReceiptRef {
+    pub fn validate_contract(&self) -> Result<(), garde::Report> {
+        garde::Validate::validate(self)
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    garde::Validate,
+    typed_builder::TypedBuilder,
+)]
 pub struct VidaReceiptSummary {
+    #[garde(dive)]
     pub receipt_ref: VidaReceiptRef,
+    #[garde(skip)]
     pub status: VidaResponseStatus,
+    #[garde(length(min = 1))]
     pub recorded_at: String,
+}
+
+impl VidaReceiptSummary {
+    pub fn validate_contract(&self) -> Result<(), garde::Report> {
+        garde::Validate::validate(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -966,6 +1005,64 @@ mod tests {
         let registry_value =
             serde_json::to_value(mvp_operation_registry()).expect("registry should serialize");
         assert_eq!(fixture_value, registry_value);
+    }
+
+    #[test]
+    fn receipt_ref_builder_preserves_public_json_shape() {
+        let receipt = VidaReceiptRef::builder()
+            .receipt_id("receipt-1".to_string())
+            .operation(VidaOperation(operations::SERVICE_HELLO.to_string()))
+            .scope(VidaReceiptScope::Service)
+            .state_root("state-root-1".to_string())
+            .build();
+
+        receipt
+            .validate_contract()
+            .expect("builder output should validate");
+        let json = serde_json::to_value(&receipt).expect("receipt should serialize");
+
+        assert_eq!(json["receipt_id"], "receipt-1");
+        assert!(json.get("project_id").is_none());
+        assert_eq!(json["operation"], "vida.service.hello");
+        assert_eq!(json["scope"], "service");
+        assert_eq!(json["state_root"], "state-root-1");
+    }
+
+    #[test]
+    fn receipt_validation_rejects_empty_boundary_fields() {
+        let receipt = VidaReceiptRef::builder()
+            .receipt_id(String::new())
+            .operation(VidaOperation(operations::SERVICE_HELLO.to_string()))
+            .scope(VidaReceiptScope::Service)
+            .state_root(String::new())
+            .build();
+
+        let report = receipt
+            .validate_contract()
+            .expect_err("empty receipt fields should fail validation");
+        let report = report.to_string();
+
+        assert!(report.contains("receipt_id"), "{report}");
+        assert!(report.contains("state_root"), "{report}");
+    }
+
+    #[test]
+    fn receipt_summary_builder_validates_nested_receipt() {
+        let receipt_ref = VidaReceiptRef::builder()
+            .receipt_id("receipt-1".to_string())
+            .operation(VidaOperation(operations::SERVICE_HELLO.to_string()))
+            .scope(VidaReceiptScope::Service)
+            .state_root("state-root-1".to_string())
+            .build();
+        let summary = VidaReceiptSummary::builder()
+            .receipt_ref(receipt_ref)
+            .status(VidaResponseStatus::Pass)
+            .recorded_at("2026-06-21T09:30:00Z".to_string())
+            .build();
+
+        summary
+            .validate_contract()
+            .expect("summary builder output should validate");
     }
 
     #[test]
